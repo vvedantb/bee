@@ -1,0 +1,49 @@
+name: Release Windows
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (e.g. v0.1.0)"
+        required: true
+        default: "v0.1.0"
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - name: Build Windows installer + zip
+        run: npx electron-builder --win nsis zip --x64
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: bee-windows
+          path: |
+            release/*.exe
+            release/*.zip
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          if [[ "$TAG" != v* ]]; then TAG="v$TAG"; fi
+          gh release create "$TAG" release/Bee*.exe release/Bee*.zip \
+            --title "Bee $TAG" \
+            --notes "Windows installer (NSIS) and portable zip. Unsigned — SmartScreen may warn." \
+            --latest || \
+          gh release upload "$TAG" release/Bee*.exe release/Bee*.zip --clobber

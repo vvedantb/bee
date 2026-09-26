@@ -1,5 +1,18 @@
 # Bee
 
+## Install (Windows)
+
+**Installer (recommended):** download `Bee Setup x.y.z.exe` from [Releases](https://github.com/vvedantb/bee/releases) and run it. The app is not code-signed yet, so Windows SmartScreen may warn — choose More info → Run anyway.
+
+**Portable:** download `Bee-x.y.z-win.zip`, unzip, run `Bee.exe`.
+
+**From source:**
+```powershell
+npm install
+npm run dist:win
+# outputs under release/
+```
+
 Bee is a desktop overlay for meetings. It sits as a small "notch" at the top centre of the screen. It listens to the meeting, finds relevant local notes, ranks them with Jev and shows one or two short tips from GPT-6 Luna.
 
 Windows comes first. macOS support is planned.
