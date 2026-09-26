@@ -3,17 +3,22 @@ import { storage } from "@clerk/electron/storage";
 import { BrowserWindow, Menu, Tray, app, ipcMain, nativeImage, screen, session, shell } from "electron";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { z } from "zod";
 import { RENDERER_HOST, RENDERER_SCHEME, RENDERER_URL } from "../shared/clerk";
-import { IPC, settingsUpdateSchema } from "../shared/ipc";
+import { IPC, settingsUpdateSchema, windowSizeSchema, type WindowSize } from "../shared/ipc";
 import { registerMeetingIpc } from "./meeting-ipc";
 import { ensureNotesDir } from "./notes";
 import { handleRendererProtocol } from "./renderer-protocol";
 import { createSettingsStore } from "./settings";
+import { createTeamsDetector } from "./teams-detector";
+import { inviteFromArgv, registerTeamsIpc, relayUrlFromEnv } from "./teams-sync";
 import { createUpdater } from "./updater";
 
-const COLLAPSED = { width: 440, height: 64 };
-const EXPANDED = { width: 480, height: 640 };
+const SIZES: Record<WindowSize, { width: number; height: number }> = {
+  collapsed: { width: 440, height: 64 },
+  // Notch plus the Teams sync popup.
+  prompt: { width: 440, height: 330 },
+  expanded: { width: 480, height: 640 },
+};
 const TOP_MARGIN = 8;
 
 const outDir = fileURLToPath(new URL(".", import.meta.url));
@@ -38,7 +43,7 @@ function applyMeetingMode(window: BrowserWindow, meetingMode: boolean): void {
 
 function createWindow(meetingMode: boolean): BrowserWindow {
   const window = new BrowserWindow({
-    ...topCentreBounds(COLLAPSED),
+    ...topCentreBounds(SIZES.collapsed),
     frame: false,
     transparent: true,
     backgroundColor: "#00000000",
@@ -102,8 +107,28 @@ const clerk = createClerkBridge({
   userAgent: `Bee/${app.getVersion()}`,
 });
 
+// Set once IPC is registered; bee://team/… links that arrive earlier wait here.
+let pendingInvite: string | null = inviteFromArgv(process.argv);
+let onInvite: ((link: string) => void) | null = null;
+
+function receiveInvite(link: string | null): void {
+  if (!link) return;
+  if (onInvite) onInvite(link);
+  else pendingInvite = link;
+  win?.show();
+}
+
 if (clerk.isPrimaryInstance) {
-  app.on("second-instance", () => win?.show());
+  app.on("second-instance", (_event, argv) => {
+    win?.show();
+    receiveInvite(inviteFromArgv(argv));
+  });
+  // macOS delivers deep links as open-url.
+  app.on("open-url", (event, url) => {
+    if (!/^bee:\/\/team\//i.test(url)) return;
+    event.preventDefault();
+    receiveInvite(url);
+  });
 
   void app.whenReady().then(() => {
     handleRendererProtocol(resolve(outDir, "../renderer"), process.env.ELECTRON_RENDERER_URL);
@@ -132,9 +157,13 @@ if (clerk.isPrimaryInstance) {
 
     registerMeetingIpc({ notesDir, gatewayApiKey: settings.gatewayApiKey });
 
-    ipcMain.handle(IPC.setExpanded, (_event, payload) => {
-      const expanded = z.boolean().parse(payload);
-      win?.setBounds(topCentreBounds(expanded ? EXPANDED : COLLAPSED));
+    const teams = registerTeamsIpc({ relayUrl: relayUrlFromEnv(process.env.BEE_RELAY_URL || import.meta.env.MAIN_VITE_BEE_RELAY_URL), detector: createTeamsDetector() });
+    onInvite = (link) => teams.setPendingInvite(link);
+    if (pendingInvite) teams.setPendingInvite(pendingInvite);
+    pendingInvite = null;
+
+    ipcMain.handle(IPC.setWindowSize, (_event, payload) => {
+      win?.setBounds(topCentreBounds(SIZES[windowSizeSchema.parse(payload)]));
     });
 
     ipcMain.handle(IPC.openNotesFolder, () => shell.openPath(notesDir));

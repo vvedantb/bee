@@ -7,10 +7,12 @@ import {
   IconNotebook,
   IconPlayerPlay,
   IconRefresh,
+  IconUsersGroup,
 } from "@tabler/icons-react";
 import { useState, type FormEvent } from "react";
 import type { SettingsView } from "../../shared/ipc";
 import { actions, useBee, type BeeState, type SummaryState, type UpdateState } from "./store";
+import { SyncCard, SyncSection, TeamSection, syncedWith } from "./Teams";
 
 const ICON = { size: 16, stroke: 1.75 };
 
@@ -27,7 +29,7 @@ function notchStatus(state: BeeState, signedIn: boolean | undefined): string {
   const tip = state.result?.tips[0];
   if (tip) return tip;
   if (state.settings?.gatewayKeySource === "none") return "Add your AI Gateway key in Settings";
-  if (state.mic.on || state.transcript.length > 0) return "Listening for something useful…";
+  if (state.mic.on || state.session.lines.length > 0) return "Listening for something useful…";
   return state.settings?.meetingMode ? "Meeting mode on" : "Bee is ready";
 }
 
@@ -46,6 +48,20 @@ function Notch({ state }: { state: BeeState }) {
       {newVersion ? (
         <button type="button" className="icon-button accent" title={`Bee ${newVersion} is available`} onClick={() => void actions.openSettings()}>
           <IconDownload {...ICON} />
+        </button>
+      ) : null}
+      {state.teams?.room ? (
+        <button
+          type="button"
+          className="icon-button sync-chip"
+          title={`${syncedWith(state.teams)}${state.teams.shareMuted ? " · sharing paused" : ""}`}
+          onClick={() => {
+            actions.setTab("live");
+            if (!open) void actions.setExpanded(true);
+          }}
+        >
+          <IconUsersGroup {...ICON} />
+          {state.teams.room.members.length}
         </button>
       ) : null}
       <Show when="signed-in">
@@ -132,6 +148,8 @@ function LiveTab({ state }: { state: BeeState }) {
         {state.error ? <p className="error">{state.error}</p> : null}
       </section>
 
+      <SyncSection state={state} />
+
       <MeetingSection summary={state.summary} lineCount={state.session.lines.length} />
 
       <section>
@@ -177,6 +195,16 @@ function LiveTab({ state }: { state: BeeState }) {
             Simulate meeting line
           </button>
         </form>
+        {state.teams?.team ? (
+          <label className="toggle">
+            <input
+              type="checkbox"
+              checked={state.teams.detection.source === "simulated"}
+              onChange={(event) => void actions.teams({ type: "simulateMeeting", on: event.currentTarget.checked })}
+            />
+            Simulate Teams meeting (the sync popup shows after about 10 s)
+          </label>
+        ) : null}
       </section>
     </div>
   );
@@ -268,7 +296,8 @@ function UpdateSection({ update }: { update: UpdateState }) {
   );
 }
 
-function SettingsTab({ settings, update, error }: { settings: SettingsView; update: UpdateState; error: string | null }) {
+function SettingsTab({ state, settings }: { state: BeeState; settings: SettingsView }) {
+  const { update, error } = state;
   // Remounting the form after a save clears typed secrets and returns saved fields to their masked state.
   const [formKey, setFormKey] = useState(0);
 
@@ -326,6 +355,8 @@ function SettingsTab({ settings, update, error }: { settings: SettingsView; upda
         Meeting mode (hide Bee from screen sharing, stay above full-screen apps)
       </label>
 
+      <TeamSection state={state} />
+
       <UpdateSection update={update} />
 
       <p className="muted">{STORAGE_LABEL[settings.secretStorage]}</p>
@@ -354,7 +385,7 @@ function Panel({ state }: { state: BeeState }) {
         </span>
       </nav>
       {state.tab === "live" ? <LiveTab state={state} /> : null}
-      {state.tab === "settings" && state.settings ? <SettingsTab settings={state.settings} update={state.update} error={state.error} /> : null}
+      {state.tab === "settings" && state.settings ? <SettingsTab state={state} settings={state.settings} /> : null}
     </main>
   );
 }
@@ -364,6 +395,9 @@ export function App() {
   return (
     <div className={["shell", state.expanded && "expanded", state.collapsing && "collapsing"].filter(Boolean).join(" ")}>
       <Notch state={state} />
+      <Show when="signed-in">
+        <SyncCard state={state} />
+      </Show>
       {state.expanded ? (
         <>
           <Show when="signed-in">

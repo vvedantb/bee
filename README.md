@@ -91,6 +91,62 @@ Bee checks the [latest GitHub release](https://github.com/vvedantb/bee/releases/
 
 The tray icon has Show/hide, Open notes folder and Quit. The avatar in the panel's tab bar manages your account and signs you out.
 
+## Teams mode
+
+Teams mode lets teammates who are in the same Microsoft Teams meeting pool what they say, so each person's Bee sees the whole conversation and writes a speaker-labelled summary. Bee stays a desktop notch. It never joins the call, and it uses no Teams bot, no Teams local API and no Microsoft Graph or calendar access.
+
+### Set up
+
+1. Deploy the relay (`relay/`, a Cloudflare Worker with one Durable Object). See [relay/README.md](relay/README.md).
+2. Start Bee with `BEE_RELAY_URL` set to the relay URL, for example `https://bee-relay.<account>.workers.dev`. Without it, Teams mode is off and Bee works solo as before.
+3. One person opens **Settings → Team**, types a team name and clicks **Create team**. Settings shows the invite link (`bee://team/XXXX-XXXX`) and the code. **Copy** puts the link on the clipboard.
+4. Teammates click the link (Bee opens with the code filled in) or paste the code in **Settings → Team**, then click **Join team**. Team membership is an allowlist of Clerk user ids. **Leave team** removes you.
+
+### In a meeting
+
+1. **Detection.** On Windows, Bee checks every few seconds whether desktop Teams is in a call: a Teams process that holds the microphone (Windows microphone privacy registry) or shows a meeting or call window title. This is a best-effort heuristic. On macOS and Linux there is no detector; use **Live → Manual test → Simulate Teams meeting**.
+2. **Popup.** After about 10 seconds of stable detection, a card opens under the notch:
+   - **Join "Alice, Bob"**: the best open sync on your team. Syncs you were invited to come first, then syncs started within 10 minutes of your meeting whose members are in a meeting now. The subtitle shows who invited you or when it started, and its word code.
+   - **Start new sync** (or **Start meeting sync** when there is nothing to join).
+   - **Other syncs (n)** and **Join by code** (for example `amber-otter`) as secondary links. **×** closes the card for this meeting.
+
+   Nothing joins automatically. Timing and presence only rank the choices; you always click.
+3. **After starting.** An optional **Invite who is here** step lists teammates who are in a meeting now. Nobody is pre-ticked. You can also paste the word code in the Teams chat.
+4. **Synced.** The notch shows a team icon with the member count. **Live → Teams sync** shows "Synced with Alice, Bob", **Pause sharing** / **Resume sharing** and **Leave sync**. Your mic phrases go to the sync only while the Bee mic is on and sharing is not paused. Typed test lines stay on your device. Teammates' phrases join your transcript in spoken order, labelled "Alice: …", and feed tips too.
+5. **Simultaneous starts.** If a teammate in a meeting started a sync within 30 seconds of yours, both of you see **Merge with Bob's sync?**. It merges only once both tap **Merge**.
+6. **Leaving.** When Teams has been out of the call for about 15 seconds, Bee leaves the sync. A new detection always shows a new popup; Bee never rejoins an old sync by itself.
+7. **Summary.** **End meeting & save summary** works as before. Each Bee writes its own markdown file locally. With synced lines, the transcript sent to Luna is `Speaker: text`, action items are attributed to the speaker who committed to them, and the file adds a `## Speakers` section that says the transcript is partial (Bee members only).
+
+If the relay cannot be reached, Bee says "Bee is working solo" and carries on with your own lines only.
+
+### Mute gating
+
+Teams' own mute state cannot be read without the Teams local API, which Bee does not use. Sharing is therefore gated on Bee's side: only while the Bee mic is on, only after you joined a sync, and never while **Pause sharing** is on. Muting in Teams alone does not stop Bee from sharing; turn off the Bee mic or pause sharing as well.
+
+### Environment variables
+
+| Variable | Where | Meaning |
+| --- | --- | --- |
+| `BEE_RELAY_URL` | Bee (main process, run time) | Relay base URL. Overrides the build-time value. |
+| `MAIN_VITE_BEE_RELAY_URL` | Bee (build time) | Relay URL baked into an installer. With neither set, Teams mode is off. |
+| `CLERK_ISSUER` | Relay | Clerk issuer, default `https://clerk.vedantb.com`. |
+| `CLERK_JWKS_URL` | Relay (optional) | JWKS for RS256 checks. Default `<issuer>/.well-known/jwks.json`. |
+| `CLERK_AUTHORIZED_PARTIES` | Relay (optional) | Comma-separated `azp` allowlist. |
+
+To show full names without typing them, add a `name` claim to the Clerk session token (Dashboard → Sessions → Customize session token: `{"name": "{{user.full_name}}"}`).
+
+### Risks and limits
+
+- **Detection false positives and misses.** The Windows heuristic can fire on a Teams call that is not a meeting, or on another app's title that mentions a call inside Teams. It can miss new Teams builds with different window titles. It has not yet been tested on a real Windows machine. Back-to-back meetings with no gap look like one meeting.
+- **Presence privacy.** Everyone on your team can see when your Bee reports "in a meeting", even if you never join a sync. Consider this before rolling out, and consider a privacy review.
+- **Partial summaries.** Only Bee members who joined the sync are captured. Other attendees, and anyone with the Bee mic off, are missing from every summary.
+- **Consent.** Each person's summary contains colleagues' words, stored on each device. Tell participants, and get a privacy or legal review before wide use.
+- **Wrong-room clicks.** A person can join the wrong sync by clicking the wrong button. Names are shown before joining, and **Leave sync** is one click. There is no "Remove" for uninvited joiners yet.
+- **No Microsoft IDs.** Bee cannot tell two concurrent Teams meetings apart by itself. Syncs are grouped only by who clicked.
+- **Display names.** Without a `name` claim, a user can type any name for themselves when joining the team. They cannot change anyone else's.
+- **Unsigned installer.** Windows SmartScreen warns on first run.
+- **Relay scale.** One Durable Object serves every team: fine for a few hundred users. Tokens are checked on every request; phrases are deleted when a sync ends, or 4 hours after it started.
+
 ## Sign-in (Clerk)
 
 Bee uses [`@clerk/electron`](https://www.npmjs.com/package/@clerk/electron) with the **vedantb.com** Clerk production instance.
@@ -129,9 +185,10 @@ On Linux without a keyring (for example, under Xvfb), Electron cannot encrypt to
 ## Tests
 
 ```powershell
-npm test               # unit tests: retrieval, Jev ranking parser, Luna prompt, meeting summary, pipeline, sign-in gate, phrase detection, WAV, STT, update checks
+npm test               # unit tests: retrieval, Jev ranking parser, Luna prompt, meeting summary, pipeline, sign-in gate, phrase detection, WAV, STT, update checks, Teams mode (relay, JWT, room ranking, detection, sync)
 npm run test:gateway   # live smoke test against Vercel AI Gateway (needs BEE_AI_GATEWAY_API_KEY)
-npm run test:e2e       # Electron E2E: fake mic → Grok STT → Jev → Luna, and meeting summary files (needs BEE_AI_GATEWAY_API_KEY; xvfb-run on Linux)
+npm run test:e2e       # Electron E2E: fake mic → Grok STT → Jev → Luna, meeting summary files, Teams sync (needs BEE_AI_GATEWAY_API_KEY; xvfb-run on Linux)
+npm run relay:mock     # in-memory relay on http://127.0.0.1:8787 for local Teams mode
 npm run typecheck
 ```
 
@@ -149,6 +206,10 @@ npm run typecheck
 The summary E2E uses the same harness without a mic. It runs a short fake meeting, ends it, checks the markdown file in a temp notes folder (every section, the notes cited, the named owner), and checks that the next pipeline run retrieves the summary. It runs once with Luna and once without a key (plain summary).
 
 Both fail straight away with a clear message if `BEE_AI_GATEWAY_API_KEY` is not set.
+
+The Teams E2E needs no key. The test serves the in-memory relay over HTTP, with a local RS256 key pair and JWKS, and plays "Bob": it creates the team and a sync. Bee's real preload and main (with a stub detector) run as "Alice". Alice joins by invite link, simulates a meeting, takes the popup's **Join**, shares one mic phrase and one while sharing is paused, and receives Bob's phrase. She then writes the summary and turns the meeting off. The test checks that the relay stamped both speakers from their tokens and that the paused phrase never left Alice's device. It also checks that Alice left the sync after the debounce and that the plain summary lists `Alice: …` and `Bob Jones: …` lines and a `## Speakers` section.
+
+Unit tests cover the relay (JWT signature, issuer, expiry and `azp` checks; team invite and join; room ids, word codes and membership; phrase stamping; stale members and the 4-hour limit; two-tap merge). They also cover room ranking, the detection debounce, the Windows heuristics against sample `tasklist` and registry output, and the share gate. The last group covers the sync controller with two or three devices on one relay, including concurrent meetings, merging, leaving without rejoining, and fail-open.
 
 ## Manual steps and known limits
 

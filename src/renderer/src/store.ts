@@ -1,13 +1,17 @@
 import { getToken } from "@clerk/electron/react";
 import { useSyncExternalStore } from "react";
+import { mergeLines, pipelineText, summaryTranscript, type SessionLine } from "../../core/sync-lines";
 import {
   SESSION_TRANSCRIPT_MAX,
   type MeetingSummaryResult,
   type PipelineResult,
   type SettingsUpdate,
   type SettingsView,
+  type TeamsActionInput,
+  type TeamsView,
   type TranscribeResult,
   type UpdateCheck,
+  type WindowSize,
 } from "../../shared/ipc";
 import { openMic } from "./mic";
 import { startMicSession } from "./speech";
@@ -21,8 +25,12 @@ export type UpdateState = {
   error: string | null;
 };
 
-// Everything since the last saved summary. Lines are internal only: never rendered.
-export type MeetingSession = { lines: string[]; notesCited: string[]; tips: string[] };
+// Everything since the last saved summary: own and synced teammates' lines, merged by time. Never rendered.
+export type MeetingSession = { lines: SessionLine[]; notesCited: string[]; tips: string[] };
+
+
+// The card under the notch: the join/start popup, the optional invite step after starting, or a merge offer.
+export type SyncCard = "prompt" | "invite" | "merge" | null;
 
 // result: the last saved summary, kept so the Live tab can open it.
 export type SummaryState = { saving: boolean; result: MeetingSummaryResult | null; error: string | null };
@@ -34,8 +42,6 @@ export type BeeState = {
   // True while the panel plays its exit animation, before the window shrinks.
   collapsing: boolean;
   tab: Tab;
-  // Recent meeting lines (spoken or typed), sent with each pipeline run. Internal only: never rendered.
-  transcript: string[];
   result: PipelineResult | null;
   session: MeetingSession;
   summary: SummaryState;
@@ -43,6 +49,12 @@ export type BeeState = {
   error: string | null;
   mic: { on: boolean; level: number; error: string | null };
   update: UpdateState;
+  // Teams mode, from main (null until the first tick after sign-in).
+  teams: TeamsView | null;
+  teamsBusy: boolean;
+  teamsError: string | null;
+  // The invite step shows after starting a sync, until Done.
+  inviteOpen: boolean;
 };
 
 const PIPELINE_WINDOW = 8;
@@ -51,6 +63,7 @@ const COLLAPSE_MS = 160;
 const MIC_OFF = { on: false, level: 0 };
 const EMPTY_SESSION: MeetingSession = { lines: [], notesCited: [], tips: [] };
 const SESSION_LIST_MAX = 100;
+const SYNC_TICK_MS = 2000;
 
 export const SAMPLE_LINES = [
   "Let's pick up the Acme renewal. They are asking for a bigger discount.",
@@ -64,7 +77,6 @@ let state: BeeState = {
   expanded: false,
   collapsing: false,
   tab: "live",
-  transcript: [],
   result: null,
   session: EMPTY_SESSION,
   summary: { saving: false, result: null, error: null },
@@ -72,6 +84,10 @@ let state: BeeState = {
   error: null,
   mic: { ...MIC_OFF, error: null },
   update: { status: "idle", check: null, error: null },
+  teams: null,
+  teamsBusy: false,
+  teamsError: null,
+  inviteOpen: false,
 };
 const listeners = new Set<() => void>();
 
@@ -91,7 +107,85 @@ export function useBee(): BeeState {
 
 let latestRun = 0;
 let sampleIndex = 0;
+let localSeq = 0;
 let stopMic: (() => void) | null = null;
+let sentSize: WindowSize = "collapsed";
+let ticking = false;
+
+export function syncCard(current: BeeState): SyncCard {
+  const teams = current.teams;
+  if (!teams) return null;
+  if (teams.prompt) return "prompt";
+  if (teams.room && current.inviteOpen) return "invite";
+  if (teams.merge) return "merge";
+  return null;
+}
+
+/** Resize the window to fit: full panel, notch plus sync card, or notch only. */
+async function applyWindowSize(): Promise<void> {
+  const size: WindowSize = state.expanded && !state.collapsing ? "expanded" : syncCard(state) ? "prompt" : "collapsed";
+  if (size === sentSize) return;
+  sentSize = size;
+  await window.bee.setWindowSize(size);
+}
+
+function setTeams(teams: TeamsView): void {
+  set({ teams, inviteOpen: state.inviteOpen && teams.room !== null });
+  void applyWindowSize();
+}
+
+function selfName(): string {
+  return state.teams?.me?.displayName ?? "You";
+}
+
+function addLines(lines: SessionLine[]): void {
+  set({ session: { ...state.session, lines: mergeLines(state.session.lines, lines, SESSION_TRANSCRIPT_MAX) } });
+}
+
+/** Retrieve → Jev → Luna on the last 8 lines, teammates' lines labelled "Alice: …". */
+async function runPipeline(): Promise<void> {
+  const transcript = state.session.lines.slice(-PIPELINE_WINDOW).map(pipelineText);
+  if (transcript.length === 0) return;
+  const run = ++latestRun;
+  set({ busy: true, error: null });
+  try {
+    const result = await window.bee.runPipeline({ transcript, sessionToken: await sessionToken() });
+    if (run !== latestRun) return;
+    set({ result, busy: false });
+    addToSession(result);
+  } catch (error) {
+    if (run === latestRun) set({ busy: false, error: error instanceof Error ? error.message : "Pipeline failed" });
+  }
+}
+
+/** Shares one mic phrase with the sync. Main applies the share gate; failures leave Bee working solo. */
+async function shareLine(line: SessionLine): Promise<void> {
+  try {
+    await window.bee.teams.publish({ text: line.text, clientTs: line.clientTs, source: "mic", sessionToken: await sessionToken() });
+  } catch {
+    // The next tick reports relay trouble.
+  }
+}
+
+/** Detection, presence and teammates' phrases, every 2 s while signed in. */
+async function teamsTick(): Promise<void> {
+  if (ticking) return;
+  ticking = true;
+  try {
+    const token = await getToken().catch(() => null);
+    if (!token) return;
+    const { view, lines } = await window.bee.teams.tick(token);
+    setTeams(view);
+    if (lines.length > 0) {
+      addLines(lines);
+      void runPipeline();
+    }
+  } catch {
+    // Main or the relay failed this tick; the next one tries again.
+  } finally {
+    ticking = false;
+  }
+}
 
 async function sessionToken(): Promise<string> {
   const token = await getToken();
@@ -151,17 +245,16 @@ export const actions = {
 
   async setExpanded(expanded: boolean): Promise<void> {
     if (expanded) {
-      set({ collapsing: false });
-      await window.bee.setExpanded(true);
-      set({ expanded: true });
+      set({ collapsing: false, expanded: true });
+      await applyWindowSize();
       return;
     }
     // Let the panel fade out before the window shrinks under it.
     set({ collapsing: true });
     await new Promise((resolve) => setTimeout(resolve, COLLAPSE_MS));
     if (!state.collapsing) return;
-    await window.bee.setExpanded(false);
     set({ expanded: false, collapsing: false });
+    await applyWindowSize();
   },
 
   setTab(tab: Tab): void {
@@ -179,22 +272,26 @@ export const actions = {
     return line;
   },
 
-  /** Add a meeting line (typed, or a phrase from Grok STT) and run retrieve → Jev → Luna. */
-  async simulateLine(line: string): Promise<void> {
+  /**
+   * Add a meeting line (typed, or a phrase from Grok STT) and run retrieve → Jev → Luna. Mic phrases are also
+   * shared with the Teams sync, if one is on and sharing is not paused.
+   */
+  async simulateLine(line: string, source: "typed" | "mic" = "typed"): Promise<void> {
     const text = line.trim();
     if (!text) return;
-    const transcript = [...state.transcript, text].slice(-PIPELINE_WINDOW);
-    const lines = [...state.session.lines, text].slice(-SESSION_TRANSCRIPT_MAX);
-    const run = ++latestRun;
-    set({ transcript, session: { ...state.session, lines }, busy: true, error: null });
-    try {
-      const result = await window.bee.runPipeline({ transcript, sessionToken: await sessionToken() });
-      if (run !== latestRun) return;
-      set({ result, busy: false });
-      addToSession(result);
-    } catch (error) {
-      if (run === latestRun) set({ busy: false, error: error instanceof Error ? error.message : "Pipeline failed" });
-    }
+    localSeq += 1;
+    const own: SessionLine = {
+      id: `local-${localSeq}`,
+      own: true,
+      speakerId: state.teams?.me?.userId ?? "local",
+      speakerName: selfName(),
+      text,
+      clientTs: Date.now(),
+      serverTs: null,
+    };
+    addLines([own]);
+    if (source === "mic" && state.teams?.room) void shareLine(own);
+    await runPipeline();
   },
 
   /**
@@ -205,10 +302,10 @@ export const actions = {
     const ended = state.session;
     if (ended.lines.length === 0 || state.summary.saving) return;
     if (stopMic) actions.stopMic(null);
-    set({ session: EMPTY_SESSION, transcript: [], summary: { saving: true, result: null, error: null } });
+    set({ session: EMPTY_SESSION, summary: { saving: true, result: null, error: null } });
     try {
       const result = await window.bee.writeMeetingSummary({
-        transcript: ended.lines,
+        transcript: summaryTranscript(ended.lines, selfName()),
         notesCited: ended.notesCited,
         tips: ended.tips,
         sessionToken: await sessionToken(),
@@ -218,7 +315,7 @@ export const actions = {
       const now = state.session;
       set({
         session: {
-          lines: [...ended.lines, ...now.lines].slice(-SESSION_TRANSCRIPT_MAX),
+          lines: mergeLines(ended.lines, now.lines, SESSION_TRANSCRIPT_MAX),
           notesCited: mergeUnique(ended.notesCited, now.notesCited, SESSION_LIST_MAX),
           tips: mergeUnique(ended.tips, now.tips, SESSION_LIST_MAX),
         },
@@ -249,7 +346,7 @@ export const actions = {
         sampleRate: capture.sampleRate,
         transcribe: transcribePhrase,
         // Same path as a typed line; latestRun drops results from superseded runs.
-        onLine: (line) => void actions.simulateLine(line),
+        onLine: (line) => void actions.simulateLine(line, "mic"),
         onError: (error) => setMic({ error }),
       });
       capture.start((frame) => setMic({ level: Math.min(1, mic.push(frame) * 4) }));
@@ -288,8 +385,29 @@ export const actions = {
     const { error } = await window.bee.installUpdate();
     setUpdate({ error });
   },
+
+  /** Teams mode: team, popup and sync actions. Resolves true on success; errors show in the UI. */
+  async teams(action: TeamsActionInput): Promise<boolean> {
+    set({ teamsBusy: true, teamsError: null });
+    try {
+      const result = await window.bee.teams.act({ ...action, sessionToken: await sessionToken() });
+      set({ teamsBusy: false, teamsError: result.error, inviteOpen: action.type === "startSync" ? !result.error : state.inviteOpen });
+      setTeams(result.view);
+      return result.error === null;
+    } catch (error) {
+      set({ teamsBusy: false, teamsError: error instanceof Error ? error.message : "Teams action failed" });
+      return false;
+    }
+  },
+
+  /** Show or hide the invite step (the roster of teammates in a meeting). */
+  setInviteOpen(inviteOpen: boolean): void {
+    set({ inviteOpen });
+    void applyWindowSize();
+  },
 };
 
 void actions.refreshSettings();
 // Quiet check at start-up; the notch shows an update button only when one is available.
 void actions.checkForUpdate();
+setInterval(() => void teamsTick(), SYNC_TICK_MS);

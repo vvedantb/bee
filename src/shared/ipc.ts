@@ -8,12 +8,19 @@ export const IPC = {
   transcribe: "bee:speech:transcribe",
   writeMeetingSummary: "bee:meeting:write-summary",
   openMeetingSummary: "bee:meeting:open-summary",
-  setExpanded: "bee:window:set-expanded",
+  setWindowSize: "bee:window:set-size",
   openNotesFolder: "bee:notes:open-folder",
   checkForUpdate: "bee:update:check",
   downloadUpdate: "bee:update:download",
   installUpdate: "bee:update:install",
+  teamsTick: "bee:teams:tick",
+  teamsAction: "bee:teams:action",
+  teamsPublish: "bee:teams:publish",
 };
+
+// Collapsed notch, notch plus the sync popup, or the full panel.
+export const windowSizeSchema = z.enum(["collapsed", "prompt", "expanded"]);
+export type WindowSize = z.infer<typeof windowSizeSchema>;
 
 export const secretStorageSchema = z.enum(["os", "weak", "memory"]);
 
@@ -44,8 +51,11 @@ export type PipelineRequest = z.infer<typeof pipelineRequestSchema>;
 // Lines the renderer keeps for the end-of-meeting summary (store.ts); the pipeline still gets only the last 8.
 export const SESSION_TRANSCRIPT_MAX = 200;
 
+// A plain line (solo), or a speaker-labelled one once teammates are synced.
+export const transcriptLineSchema = z.union([z.string().max(2000), z.object({ speaker: z.string().max(100), text: z.string().max(2000) })]);
+
 export const meetingSummaryRequestSchema = z.object({
-  transcript: z.array(z.string().max(2000)).min(1).max(SESSION_TRANSCRIPT_MAX),
+  transcript: z.array(transcriptLineSchema).min(1).max(SESSION_TRANSCRIPT_MAX),
   // Titles of notes cited in tips during the meeting.
   notesCited: z.array(z.string().max(500)).max(100),
   tips: z.array(z.string().max(500)).max(100),
@@ -112,3 +122,108 @@ export type UpdateCheck = z.infer<typeof updateCheckSchema>;
 // Download and install report failures as values, so offline states read cleanly in the UI.
 export const updateActionSchema = z.object({ error: z.string().nullable() });
 export type UpdateAction = z.infer<typeof updateActionSchema>;
+
+// Teams mode (main/teams-sync.ts, core/sync-controller.ts). Bee never joins the call: it only watches for desktop
+// Teams being in a meeting, and syncs mute-gated phrases with teammates who accepted, through the Bee relay.
+
+const memberViewSchema = z.object({ userId: z.string(), displayName: z.string() });
+
+export const roomOptionSchema = z.object({
+  roomId: z.string(),
+  code: z.string(),
+  names: z.array(z.string()),
+  label: z.string(),
+  reason: z.enum(["invited", "recent", "other"]),
+  createdAt: z.number(),
+  ageMinutes: z.number(),
+  invitedBy: z.string().nullable(),
+});
+
+export const teamsViewSchema = z.object({
+  // False when BEE_RELAY_URL is not set: Teams mode is off and Bee works solo.
+  relayConfigured: z.boolean(),
+  // Set while the relay cannot be reached. Bee keeps working solo (fail open).
+  relayError: z.string().nullable(),
+  // Short-lived message, e.g. "The sync ended".
+  notice: z.string().nullable(),
+  me: memberViewSchema.nullable(),
+  team: z
+    .object({ id: z.string(), name: z.string(), inviteCode: z.string(), inviteLink: z.string(), members: z.array(memberViewSchema) })
+    .nullable(),
+  // From a bee://team/… link, waiting for the user to confirm.
+  pendingInvite: z.string().nullable(),
+  detection: z.object({
+    inMeeting: z.boolean(),
+    raw: z.boolean(),
+    epoch: z.number(),
+    source: z.enum(["windows", "simulated", "none"]),
+  }),
+  // The "Join Alice, Bob / Start new" popup for the current detection.
+  prompt: z.object({ epoch: z.number(), primary: roomOptionSchema.nullable(), others: z.array(roomOptionSchema) }).nullable(),
+  room: z
+    .object({
+      id: z.string(),
+      code: z.string(),
+      createdAt: z.number(),
+      startedByMe: z.boolean(),
+      members: z.array(memberViewSchema),
+      invited: z.array(z.string()),
+    })
+    .nullable(),
+  // Teammates in a meeting now and not in my sync, for the optional invite step. Nobody is pre-ticked.
+  roster: z.array(memberViewSchema),
+  // Another sync started within 30 s of mine: "Merge with Bob's sync?". waiting: I tapped, they have not.
+  merge: z.object({ roomId: z.string(), label: z.string(), waiting: z.boolean() }).nullable(),
+  shareMuted: z.boolean(),
+});
+export type TeamsView = z.infer<typeof teamsViewSchema>;
+
+export const sessionLineSchema = z.object({
+  id: z.string(),
+  own: z.boolean(),
+  speakerId: z.string(),
+  speakerName: z.string(),
+  text: z.string(),
+  clientTs: z.number(),
+  serverTs: z.number().nullable(),
+});
+
+export const teamsTickRequestSchema = z.object({ sessionToken: z.string().max(8000) });
+export const teamsTickResultSchema = z.object({ view: teamsViewSchema, lines: z.array(sessionLineSchema) });
+export type TeamsTickResult = z.infer<typeof teamsTickResultSchema>;
+
+const token = { sessionToken: z.string().max(8000) };
+const name = z.string().trim().min(1).max(80);
+export const teamsActionSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("createTeam"), name, displayName: name, ...token }),
+  z.object({ type: z.literal("joinTeam"), code: z.string().trim().min(1).max(200), displayName: name, ...token }),
+  z.object({ type: z.literal("leaveTeam"), ...token }),
+  z.object({ type: z.literal("copyInvite"), ...token }),
+  z.object({ type: z.literal("startSync"), invite: z.array(z.string().max(200)).max(50), ...token }),
+  z.object({ type: z.literal("joinSync"), roomId: z.string().max(100), ...token }),
+  z.object({ type: z.literal("joinSyncByCode"), code: z.string().trim().min(1).max(100), ...token }),
+  z.object({ type: z.literal("leaveSync"), ...token }),
+  z.object({ type: z.literal("invite"), userIds: z.array(z.string().max(200)).min(1).max(50), ...token }),
+  z.object({ type: z.literal("merge"), accept: z.boolean(), ...token }),
+  z.object({ type: z.literal("dismissPrompt"), ...token }),
+  z.object({ type: z.literal("setShareMuted"), muted: z.boolean(), ...token }),
+  // Manual test: pretend desktop Teams is in a meeting (for Linux, macOS and E2E).
+  z.object({ type: z.literal("simulateMeeting"), on: z.boolean(), ...token }),
+]);
+export type TeamsAction = z.infer<typeof teamsActionSchema>;
+type WithoutToken<A> = A extends TeamsAction ? Omit<A, "sessionToken"> : never;
+// Teams actions as the UI sends them; the store adds the session token.
+export type TeamsActionInput = WithoutToken<TeamsAction>;
+
+export const teamsActionResultSchema = z.object({ view: teamsViewSchema, error: z.string().nullable() });
+export type TeamsActionResult = z.infer<typeof teamsActionResultSchema>;
+
+export const teamsPublishRequestSchema = z.object({
+  text: z.string().trim().min(1).max(2000),
+  clientTs: z.number(),
+  // Only mic phrases are shared; typed test lines stay local.
+  source: z.enum(["mic", "typed"]),
+  ...token,
+});
+export type TeamsPublishRequest = z.infer<typeof teamsPublishRequestSchema>;
+export const teamsPublishResultSchema = z.object({ sent: z.boolean(), error: z.string().nullable() });

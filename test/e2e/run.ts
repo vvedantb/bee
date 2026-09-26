@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
@@ -47,10 +47,20 @@ export async function runHarness<T extends z.ZodType>(args: { page: string; env:
   const electron = z.string().parse(createRequire(import.meta.url)("electron"));
   const electronArgs = [main, ...(process.platform === "linux" ? ["--no-sandbox"] : [])];
   const headless = process.platform === "linux" && !process.env.DISPLAY;
-  const run = spawnSync(headless ? "xvfb-run" : electron, headless ? ["-a", electron, ...electronArgs] : electronArgs, {
-    encoding: "utf8",
-    timeout: 90_000,
-    env: { ...process.env, ...args.env, BEE_E2E_PRELOAD: preload, BEE_E2E_PAGE: html },
+  // Async, so the test process can serve a mock relay and play a teammate while Electron runs.
+  const run = await new Promise<{ status: number | null; stdout: string; stderr: string }>((resolve) => {
+    const child = spawn(headless ? "xvfb-run" : electron, headless ? ["-a", electron, ...electronArgs] : electronArgs, {
+      env: { ...process.env, ...args.env, BEE_E2E_PRELOAD: preload, BEE_E2E_PAGE: html },
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk: Buffer) => (stdout += chunk.toString("utf8")));
+    child.stderr.on("data", (chunk: Buffer) => (stderr += chunk.toString("utf8")));
+    const timer = setTimeout(() => child.kill("SIGKILL"), 90_000);
+    child.on("close", (status) => {
+      clearTimeout(timer);
+      resolve({ status, stdout, stderr });
+    });
   });
   const line = run.stdout.split("\n").find((text) => text.startsWith("E2E_RESULT "));
   if (!line) throw new Error(`No E2E result (exit ${run.status}).\n${run.stdout}\n${run.stderr}`);

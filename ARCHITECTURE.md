@@ -4,12 +4,14 @@ Bee is an Electron app built with electron-vite, React and TypeScript.
 
 ```
 src/
-  main/       Electron main process: notch window, tray, IPC, settings, notes folder, bee:// protocol, Clerk bridge
+  main/       Electron main process: notch window, tray, IPC, settings, notes folder, bee:// protocol, Clerk bridge, Teams detector and sync IPC
   preload/    Sandboxed bridge: exposes window.bee (parses every response with zod) and Clerk's bridge
   renderer/   React UI: collapsed notch, sign-in, expanded panel (Live, Settings), mic capture (mic.ts), phrase detection and WAV (speech.ts)
   shared/     IPC channel names and zod schemas, Clerk config (shared/clerk.ts)
-  core/       Pure TypeScript: note chunking, retrieval, Jev ranking, Luna guidance and meeting summaries, Grok STT, pipeline, release version checks
-test/         Live Gateway smoke test (npm run test:gateway), Electron mic and summary E2E (npm run test:e2e, harness in test/e2e)
+  core/       Pure TypeScript: note chunking, retrieval, Jev ranking, Luna guidance and meeting summaries, Grok STT, pipeline, release version checks,
+              Teams mode (relay protocol and client, sync controller, room ranking, detection debounce and heuristics, line merging)
+relay/        Bee relay: Cloudflare Worker + Durable Object (index.ts), shared HTTP handler and state, JWKS verification, in-memory mock
+test/         Live Gateway smoke test (npm run test:gateway), Electron mic, summary and Teams E2E (npm run test:e2e, harness in test/e2e)
 resources/    App and tray icons
 ```
 
@@ -33,7 +35,7 @@ simulateLine(text)  ← also "Simulate meeting line" (Manual test)
   → PipelineResult back to the renderer
 ```
 
-The renderer keeps the last 8 lines (spoken or typed) and sends them with each run. The lines are not rendered: the Live tab shows tips and notes only. The main process holds no meeting state.
+The renderer keeps the last 8 lines (spoken, typed or from synced teammates) and sends them with each run. The lines are not rendered: the Live tab shows tips and notes only. Apart from the Teams sync state (below), the main process holds no meeting state.
 
 ## Meeting summary
 
@@ -47,7 +49,8 @@ End meeting & save summary (Live tab)
   → { path, usedLlm, error } → "Open summary"      main opens it only if it is a .md directly in the notes folder
 ```
 
-- **Session** (`renderer/src/store.ts`): separate from the 8-line pipeline window, the store keeps every line since the last saved summary (up to 200, `SESSION_TRANSCRIPT_MAX`), the titles of notes cited in shown results, and the tips shown (up to 100 each). None of it is rendered. If saving fails, the session is restored.
+- **Session** (`renderer/src/store.ts`): the store keeps every line since the last saved summary (up to 200, `SESSION_TRANSCRIPT_MAX`) as `SessionLine { id, own, speakerId, speakerName, text, clientTs, serverTs }`, merged by spoken time (`core/sync-lines.ts`). It also keeps the titles of notes cited in shown results and the tips shown (up to 100 each). The pipeline window is the last 8 session lines, teammates' lines as `Alice: …`. None of it is rendered. If saving fails, the session is restored.
+- **Speakers**: a solo session is sent as plain strings (the original path). Once any teammate's line is present, every line is sent as `{ speaker, text }`, own lines under your team display name. `core/summary.ts` then writes `Speaker: text` lines, adds speaker rules to the system prompt (attribute owners by speaker; only Bee members are captured) and adds a `## Speakers` section with a partial-transcript note.
 - **File**: `# Meeting summary — YYYY-MM-DD HH:mm` (local time), then `## Decisions`, `## Action items` (owner first when named), `## Topics`, `## Notes cited` and, if any, `## Tips shown`. Bee writes the title, notes cited and tips itself; the model writes only the first three sections. A second summary in the same minute gets `-2`, `-3`… Nothing is overwritten.
 - **Recall**: the file is an ordinary note. `chunkNote` splits it into one snippet per `##` section, so next week's "last time we discussed X" retrieves it like any other note.
 - **Fail-open**: with no key, or if Luna fails, times out or replies without the three sections, Bee writes a plain summary instead: the same headings, "Not extracted" under Decisions and Action items, and the transcript lines under Topics. The meeting is never lost, and the UI says the summary was saved without AI and why. Real failures (sign-in, disk) show as errors and keep the session.
@@ -77,9 +80,39 @@ Streaming (`experimental_streamTranscribe`) was not used. Phrase-level batch cal
 
 Failures (offline, HTTP errors, no release, no asset) come back as values and show in Settings. A 404 means no release is published. The renderer never sees a download path.
 
+## Teams mode
+
+Bee never joins the call and uses no Microsoft identity (no bot, no Teams local API, no Graph or calendar). Teammates' Bees pool their own mute-gated mic phrases through the Bee relay. Without a Microsoft meeting id Bee cannot tell two concurrent meetings apart, so grouping is by explicit click only: timing and presence rank the choices, and membership is whoever clicked.
+
+```
+main/teams-detector.ts  (Windows: tasklist window titles + mic privacy registry; others: none)
+  → core/meeting-tracker   raw reading → stable after 10 s; leave after 15 s false; new epoch per meeting
+renderer store: tick every 2 s → window.bee.teams.tick(token) → main/teams-sync.ts → core/sync-controller
+  → relay GET /v1/me (every 60 s), PUT /v1/presence (on change, heartbeat 20 s)
+  → in a sync: GET /v1/rooms/:id/phrases?after=seq  → teammates' lines → store mergeLines → pipeline + session
+  → popup open or in a sync: GET /v1/rooms (rooms + presence) → core/room-picker rankRooms / inviteRoster / mergeCandidate
+  → TeamsView back: prompt (Join "Alice, Bob" / Start new / Other syncs / Join by code), room, roster, merge, errors
+Popup click → window.bee.teams.act({ type: "joinSync" | "startSync" | … }) → relay POST /v1/rooms[/join]
+Mic phrase → store.simulateLine(text, "mic") → pipeline, and window.bee.teams.publish → shouldShare gate → POST phrases
+  → relay stamps speakerId / speakerName from the verified Clerk JWT, serverTs, clamps spokenAt
+Teams leaves the call (15 s) → controller leaves the sync; next detection → new popup, never an automatic rejoin
+```
+
+- **Relay** (`relay/src`): `handler.ts` routes HTTP to `state.ts` over a string key-value store, one request at a time. `index.ts` runs it in one Durable Object (`BeeRelay`, SQLite storage); `memory.ts` runs it over a `Map` for tests and `npm run relay:mock`. `jwt.ts` checks RS256 against the Clerk JWKS (cached 10 min), then `iss`, `exp`, `nbf` and optionally `azp`. Unauthenticated or bad tokens get 401.
+- **State**: `team:<id>`, `invite:<code>`, `user:<userId>` (membership, persisted); `presence:<teamId>`, `rooms:<teamId>`, `room:<id>`, `roomcode:<teamId>:<code>`, `phrases:<roomId>` (ephemeral). Rooms close when empty or after 4 hours; members that stop polling for 60 s are dropped; phrases are deleted with the room.
+- **Room ids** are `crypto.randomUUID()`. Word codes are two random words, unique within the team while the room is open.
+- **Ranking** (`core/room-picker.ts`): invited rooms (newest first), then rooms started within ±10 min of my detection with a member whose presence says "in a meeting" and is under 60 s old (closest first), then the rest. Only the first two tiers can be the one-click default.
+- **Merge**: another room started within 30 s of mine by a teammate in a meeting. Each room votes (`POST …/merge`); when both have voted, the later room's members move to the earlier room and the later room is marked `mergedInto`.
+- **Clocks**: every relay response carries `serverNow`. The client keeps the lowest-round-trip offset of the last 8 calls. It publishes `spokenAt` in server time and converts teammates' phrases back to its own clock, so lines merge in spoken order.
+- **Share gate** (`core/sync-lines.ts shouldShare`): mic phrases only, only in a sync the user joined, never while **Pause sharing** is on. Teams' own mute is not readable without the Teams local API, so it is not used.
+- **Fail-open**: relay errors never throw into the UI. Unreachable, 401 or 5xx shows "Bee is working solo" and the local pipeline carries on; 403/404 on a room ends the sync locally.
+- **Main holds the relay connection**, so the renderer CSP stays closed to the relay host. The renderer passes a fresh Clerk token with each call; main checks it with `assertSignedIn` and the relay verifies it properly.
+- **Window**: a third size, `prompt` (440 × 330), shows the notch and the sync card without the panel.
+- **Deep links**: `bee://team/XXXX-XXXX` in `argv` (first launch, `second-instance`) or `open-url` (macOS) fills the invite code in **Settings → Team**. The user still clicks **Join team**.
+
 ## Processes and security
 
-- The window is frameless, transparent, always on top and skipped from the taskbar. It sits at the top centre of the primary display's work area. It resizes between 440 × 64 px (collapsed) and 480 × 640 px (expanded).
+- The window is frameless, transparent, always on top and skipped from the taskbar. It sits at the top centre of the primary display's work area. It resizes between 440 × 64 px (collapsed), 440 × 330 px (notch and Teams sync card) and 480 × 640 px (expanded).
 - The renderer runs with `sandbox: true`, `contextIsolation: true` and no Node integration.
 - The renderer is served from `bee://renderer/` by `protocol.handle` (`main/renderer-protocol.ts`), not `file://`, so Clerk sees a stable origin. In development the handler proxies to the Vite dev server. Paths outside `out/renderer` return 404.
 - The same handler sends the content security policy as a response header. Fonts are bundled (Instrument Sans woff2 in `renderer/src/fonts`), so `default-src 'self'` covers them and no font hosts are allowed. Remote scripts are allowed only from the Clerk Frontend API host (derived from the publishable key: `clerk.vedantb.com`) and `challenges.cloudflare.com` (bot protection). Images are allowed from `img.clerk.com`.
@@ -174,10 +207,18 @@ Defined in `src/core/summary.ts`. The system prompt asks for exactly three `##` 
 | STT timeout | `core/transcribe.ts` | 20 s |
 | Update check / download timeout | `main/updater.ts` | 10 s / 10 min |
 | Clerk publishable key (fallback) | `shared/clerk.ts` | vedantb.com production instance |
+| Teams detection stable / leave debounce | `core/meeting-tracker.ts` | 10 s / 15 s |
+| Teams detector poll (minimum) | `main/teams-detector.ts` | 3 s |
+| Sync tick | `renderer/src/store.ts` | 2 s |
+| Presence heartbeat / stale | `core/sync-controller.ts`, `core/room-picker.ts` | 20 s / 60 s |
+| Recent-room window / merge window | `core/room-picker.ts` | ±10 min / 30 s |
+| Room hard limit / stale member / phrases kept | `relay/src/state.ts` | 4 h / 60 s / 400 per room |
+| Spoken-at clamp | `relay/src/state.ts` | up to 30 s before the relay receives it |
+| Relay request timeout / JWKS cache | `core/relay-client.ts`, `relay/src/jwt.ts` | 8 s / 10 min |
 
 ## Renderer state
 
-One small external store (`renderer/src/store.ts`, read with `useSyncExternalStore`) holds settings, the active tab, the recent meeting lines and the meeting session (not rendered), the last result, the summary state, the microphone state and the update state. Forms are uncontrolled and read with `FormData` on submit. There is no `useEffect`. The React Compiler is enabled.
+One small external store (`renderer/src/store.ts`, read with `useSyncExternalStore`) holds settings, the active tab, the meeting session (not rendered), the last result, the summary state, the microphone state, the update state and the Teams view from main. A `setInterval` outside React drives the 2 s sync tick. Forms are uncontrolled and read with `FormData` on submit. There is no `useEffect`. The React Compiler is enabled.
 
 Saved secrets show as a disabled field reading `•••••••• (saved)` with **Replace**. The form remounts after a successful save, so typed secrets clear and saved fields go back to masked.
 

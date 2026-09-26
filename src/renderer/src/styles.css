@@ -442,3 +442,98 @@ code {
     transition-duration: 1ms !important;
   }
 }
+
+/* Teams mode: the sync popup under the notch, the status chip and the team roster. */
+.sync-card {
+  display: flex;
+  flex-direction: column;
+  flex: none;
+  gap: 8px;
+  max-height: 258px;
+  padding: 12px 14px;
+  overflow-y: auto;
+  border-radius: 18px;
+  background: var(--surface);
+  transform-origin: top center;
+  animation: panel-in var(--medium) var(--ease-out);
+}
+
+.shell.expanded .sync-card {
+  max-height: 220px;
+}
+
+.sync-card > button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.sync-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sync-head strong {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.sync-card > button.sync-main {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 8px 12px;
+  text-align: left;
+}
+
+.sync-sub {
+  font-size: 11px;
+  opacity: 0.75;
+}
+
+.sync-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  animation: rise-in var(--medium) var(--ease-out) backwards;
+}
+
+.chip,
+.roster label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--surface-raised);
+}
+
+.roster {
+  flex-direction: row;
+  flex-wrap: wrap;
+}
+
+.roster label {
+  cursor: pointer;
+}
+
+.sync-chip {
+  color: var(--accent);
+  animation: fade-in var(--medium) var(--ease-out);
+}
+
+.members li {
+  padding: 6px 10px;
+  border-radius: 10px;
+  background: var(--surface-sunken);
+}
+
+input[readonly] {
+  color: var(--muted);
+}

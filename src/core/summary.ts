@@ -20,7 +20,27 @@ export const SUMMARY_SYSTEM = [
   "No title, no preamble, no closing remarks.",
 ].join("\n");
 
-export type SummaryInput = { transcript: string[]; notesCited?: string[]; tips?: string[] };
+// Added to the system prompt when the transcript is speaker-labelled (Teams mode sync).
+export const SPEAKER_RULES = [
+  "Each transcript line starts with the speaker's name and a colon.",
+  "Use the names to attribute decisions and action items. When a speaker commits to a task (\"I'll send it\"), that speaker is the owner.",
+  "The transcript only has Bee members who joined the sync. Do not guess what others in the call said.",
+].join("\n");
+
+// A plain line (solo, the speaker is the user) or a speaker-labelled line from a synced meeting.
+export type TranscriptLine = string | { speaker: string; text: string };
+
+export type SummaryInput = { transcript: TranscriptLine[]; notesCited?: string[]; tips?: string[] };
+
+export function lineText(line: TranscriptLine): string {
+  return typeof line === "string" ? line : `${line.speaker.trim()}: ${line.text.trim()}`;
+}
+
+/** Speakers in order of first line, when the transcript is labelled; empty for a solo transcript. */
+export function transcriptSpeakers(transcript: TranscriptLine[]): string[] {
+  const names = transcript.flatMap((line) => (typeof line === "string" ? [] : [line.speaker.trim()]));
+  return [...new Set(names)];
+}
 
 function pad(value: number): string {
   return String(value).padStart(2, "0");
@@ -43,21 +63,28 @@ function bullets(lines: string[], empty: string): string {
 }
 
 export function buildSummaryPrompt(args: SummaryInput): { system: string; prompt: string } {
+  const speakers = transcriptSpeakers(args.transcript);
+  const header = speakers.length > 0 ? [`Speakers: ${speakers.join(", ")}`, "Transcript (oldest first, \"Speaker: words\"):"] : ["Transcript (oldest first):"];
   const prompt = [
-    "Transcript (oldest first):",
-    bullets(args.transcript, "(empty)"),
+    ...header,
+    bullets(args.transcript.map(lineText), "(empty)"),
     "",
     "Notes shown during the meeting:",
     bullets(args.notesCited ?? [], "(none)"),
     "",
     "Summary:",
   ].join("\n");
-  return { system: SUMMARY_SYSTEM, prompt };
+  return { system: speakers.length > 0 ? `${SUMMARY_SYSTEM}\n${SPEAKER_RULES}` : SUMMARY_SYSTEM, prompt };
 }
 
-/** Title first, then the given sections, then the notes and tips from the session. */
+/** Title first, then the given sections, the synced speakers (if any), then the notes and tips from the session. */
 function assemble(when: Date, body: string, args: SummaryInput): string {
-  const parts = [`# Meeting summary — ${summaryStamp(when)}`, body.trim(), `## Notes cited\n${bullets(args.notesCited ?? [], "None.")}`];
+  const parts = [`# Meeting summary — ${summaryStamp(when)}`, body.trim()];
+  const speakers = transcriptSpeakers(args.transcript);
+  if (speakers.length > 0) {
+    parts.push(`## Speakers\n${bullets([...speakers, "Partial: only Bee members who joined the sync are captured."], "None.")}`);
+  }
+  parts.push(`## Notes cited\n${bullets(args.notesCited ?? [], "None.")}`);
   if (args.tips && args.tips.length > 0) parts.push(`## Tips shown\n${bullets(args.tips, "None.")}`);
   return `${parts.join("\n\n")}\n`;
 }
@@ -86,7 +113,7 @@ export function buildLocalSummary(args: SummaryInput & { when?: Date }): string 
   const body = [
     "## Decisions\n- Not extracted: saved without AI.",
     "## Action items\n- Not extracted: saved without AI.",
-    `## Topics\n${bullets(args.transcript, "None recorded.")}`,
+    `## Topics\n${bullets(args.transcript.map(lineText), "None recorded.")}`,
   ].join("\n\n");
   return assemble(args.when ?? new Date(), body, args);
 }

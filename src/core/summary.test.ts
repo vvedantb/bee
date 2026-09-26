@@ -2,6 +2,7 @@ import { MockLanguageModelV4 } from "ai/test";
 import { describe, expect, it } from "vitest";
 import { chunkNote } from "./notes";
 import {
+  SPEAKER_RULES,
   SUMMARY_SYSTEM,
   buildLocalSummary,
   buildSummaryPrompt,
@@ -122,5 +123,40 @@ describe("generateMeetingSummary", () => {
     expect(result.usedLlm).toBe(false);
     expect(result.error).toMatch(/^Luna summary failed: /);
     expect(result.markdown).toBe(buildLocalSummary({ transcript, when }));
+  });
+});
+
+describe("speaker-labelled summaries (Teams sync)", () => {
+  const labelled = [
+    { speaker: "Alice", text: "Let's pick up the Acme renewal." },
+    { speaker: "Bob", text: "I'll send the quote by Friday." },
+    { speaker: "Alice", text: "Great, hold the discount at 10%." },
+  ];
+
+  it("tells Luna who said what", () => {
+    const { system, prompt } = buildSummaryPrompt({ transcript: labelled, notesCited });
+    expect(system).toBe(`${SUMMARY_SYSTEM}\n${SPEAKER_RULES}`);
+    expect(prompt).toContain("Speakers: Alice, Bob");
+    expect(prompt).toContain("- Alice: Let's pick up the Acme renewal.\n- Bob: I'll send the quote by Friday.");
+  });
+
+  it("lists labelled lines under Topics and the speakers in the local summary", () => {
+    const markdown = buildLocalSummary({ transcript: labelled, notesCited, when });
+    expect(markdown).toContain("## Topics\n- Alice: Let's pick up the Acme renewal.\n- Bob: I'll send the quote by Friday.");
+    expect(markdown).toContain("## Speakers\n- Alice\n- Bob\n- Partial: only Bee members who joined the sync are captured.");
+    expect(markdown.indexOf("## Speakers")).toBeLessThan(markdown.indexOf("## Notes cited"));
+  });
+
+  it("adds the speakers to a Luna summary and keeps solo summaries unchanged", async () => {
+    const result = await generateMeetingSummary({ model: mockModel(MODEL_REPLY), transcript: labelled, when });
+    expect(result.usedLlm).toBe(true);
+    expect(result.markdown).toContain("## Speakers\n- Alice\n- Bob");
+    const solo = await generateMeetingSummary({ model: mockModel(MODEL_REPLY), transcript, when });
+    expect(solo.markdown).not.toContain("## Speakers");
+    expect(buildSummaryPrompt({ transcript }).system).toBe(SUMMARY_SYSTEM);
+  });
+
+  it("accepts a mix of plain and labelled lines", () => {
+    expect(buildSummaryPrompt({ transcript: ["Solo line", { speaker: "Bob", text: "Hi" }] }).prompt).toContain("- Solo line\n- Bob: Hi");
   });
 });
