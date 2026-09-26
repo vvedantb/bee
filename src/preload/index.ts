@@ -5,6 +5,8 @@ import {
   IPC,
   pipelineResultSchema,
   settingsViewSchema,
+  updateActionSchema,
+  updateCheckSchema,
   type PipelineRequest,
   type SettingsUpdate,
 } from "../shared/ipc";
@@ -22,6 +24,9 @@ const api = {
   openNotesFolder: async () => {
     z.string().parse(await ipcRenderer.invoke(IPC.openNotesFolder));
   },
+  checkForUpdate: async () => updateCheckSchema.parse(await ipcRenderer.invoke(IPC.checkForUpdate)),
+  downloadUpdate: async () => updateActionSchema.parse(await ipcRenderer.invoke(IPC.downloadUpdate)),
+  installUpdate: async () => updateActionSchema.parse(await ipcRenderer.invoke(IPC.installUpdate)),
 };
 
 export type BeeApi = typeof api;

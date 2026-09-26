@@ -12,6 +12,7 @@ import { assertSignedIn } from "./auth";
 import { ensureNotesDir, loadSnippets } from "./notes";
 import { handleRendererProtocol } from "./renderer-protocol";
 import { createSettingsStore } from "./settings";
+import { createUpdater } from "./updater";
 
 const COLLAPSED = { width: 440, height: 64 };
 const EXPANDED = { width: 480, height: 640 };
@@ -148,6 +149,11 @@ if (clerk.isPrimaryInstance) {
     });
 
     ipcMain.handle(IPC.openNotesFolder, () => shell.openPath(notesDir));
+
+    const updater = createUpdater();
+    ipcMain.handle(IPC.checkForUpdate, () => updater.check());
+    ipcMain.handle(IPC.downloadUpdate, () => updater.download());
+    ipcMain.handle(IPC.installUpdate, () => updater.install());
 
     win = createWindow(settings.view().meetingMode);
     createTray(notesDir);

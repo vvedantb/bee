@@ -7,6 +7,9 @@ export const IPC = {
   runPipeline: "bee:pipeline:run",
   setExpanded: "bee:window:set-expanded",
   openNotesFolder: "bee:notes:open-folder",
+  checkForUpdate: "bee:update:check",
+  downloadUpdate: "bee:update:download",
+  installUpdate: "bee:update:install",
 };
 
 export const secretStorageSchema = z.enum(["os", "weak", "memory"]);
@@ -55,3 +58,18 @@ export const pipelineResultSchema = z.object({
   timingsMs: z.object({ retrieve: z.number(), rank: z.number(), guide: z.number() }),
 });
 export type PipelineResult = z.infer<typeof pipelineResultSchema>;
+
+export const updateCheckSchema = z.object({
+  currentVersion: z.string(),
+  // Null when no release is published (or the check failed).
+  latestVersion: z.string().nullable(),
+  // Newer than the running app and has an installer for this platform.
+  available: z.boolean(),
+  releaseUrl: z.string().nullable(),
+  error: z.string().nullable(),
+});
+export type UpdateCheck = z.infer<typeof updateCheckSchema>;
+
+// Download and install report failures as values, so offline states read cleanly in the UI.
+export const updateActionSchema = z.object({ error: z.string().nullable() });
+export type UpdateAction = z.infer<typeof updateActionSchema>;

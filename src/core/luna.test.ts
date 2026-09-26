@@ -27,6 +27,14 @@ describe("buildLunaPrompt", () => {
   });
 });
 
+describe("LUNA_SYSTEM", () => {
+  it("lets tips answer direct questions from notes or general knowledge", () => {
+    expect(LUNA_SYSTEM).toContain("direct question");
+    expect(LUNA_SYSTEM).toContain("general knowledge");
+    expect(LUNA_SYSTEM).toContain("at most 2 short tips");
+  });
+});
+
 describe("parseLunaTips", () => {
   it("strips bullets and numbering and caps at two tips", () => {
     expect(parseLunaTips("- Offer 10% [n1]\n* Ask about timing\n3. Third")).toEqual(["Offer 10% [n1]", "Ask about timing"]);
