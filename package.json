@@ -19,7 +19,9 @@
   },
   "dependencies": {
     "@ai-sdk/gateway": "^4.0.94",
+    "@clerk/electron": "^0.0.47",
     "ai": "^7.0.116",
+    "electron-store": "^8.2.0",
     "zod": "^4.6.5"
   },
   "devDependencies": {
@@ -48,6 +50,14 @@
       "out/**",
       "resources/**",
       "package.json"
+    ],
+    "protocols": [
+      {
+        "name": "Bee",
+        "schemes": [
+          "bee"
+        ]
+      }
     ],
     "win": {
       "target": [
@@ -81,7 +91,10 @@
       "target": [
         "AppImage"
       ],
-      "icon": "resources/icon.png"
+      "icon": "resources/icon.png",
+      "mimeTypes": [
+        "x-scheme-handler/bee"
+      ]
     }
   },
   "engines": {

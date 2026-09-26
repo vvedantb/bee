@@ -1,3 +1,4 @@
+import { exposeClerkBridge } from "@clerk/electron/preload";
 import { contextBridge, ipcRenderer } from "electron";
 import { z } from "zod";
 import {
@@ -26,3 +27,5 @@ const api = {
 export type BeeApi = typeof api;
 
 contextBridge.exposeInMainWorld("bee", api);
+// Clerk's token cache and OAuth transport, used by @clerk/electron/react.
+exposeClerkBridge();

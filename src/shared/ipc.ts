@@ -30,6 +30,8 @@ export type SettingsUpdate = z.infer<typeof settingsUpdateSchema>;
 
 export const pipelineRequestSchema = z.object({
   transcript: z.array(z.string().max(2000)).min(1).max(50),
+  // Clerk session token; main refuses to run the pipeline without a live one (main/auth.ts).
+  sessionToken: z.string().max(8000),
 });
 export type PipelineRequest = z.infer<typeof pipelineRequestSchema>;
 

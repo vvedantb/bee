@@ -24,6 +24,7 @@ Windows comes first. macOS support is planned.
 - Windows 10 or 11 (x64). macOS and Linux also run in development.
 - Node.js 22 or later, with npm.
 - A Vercel AI Gateway API key with access to `openai/gpt-6-luna` and `typesafe-ai/jev`.
+- A Bee account. Sign-in uses Clerk (the vedantb.com instance). See [Sign-in (Clerk)](#sign-in-clerk).
 
 ## Run on Windows
 
@@ -59,7 +60,7 @@ The installer is not code-signed. Windows SmartScreen will warn on first run unt
 
 ## Use
 
-1. Click **▾** on the notch to open the panel.
+1. Click **▾** on the notch to open the panel, then sign in (or sign up). Bee does not run guidance until you are signed in.
 2. Open **Settings** and paste your AI Gateway key, then click **Save**.
 3. Go back to **Live**. Type a line (or leave the box blank for a sample) and click **Simulate meeting line**.
 4. Bee retrieves matching notes, ranks them with Jev, and shows tips. The first tip also shows in the collapsed notch.
@@ -68,7 +69,28 @@ Notes are markdown files in the notes folder (Settings shows the path and has an
 
 **Meeting mode** hides Bee from screen sharing and keeps it above full-screen apps.
 
-The tray icon has Show/hide, Open notes folder and Quit.
+The tray icon has Show/hide, Open notes folder and Quit. The avatar in the panel's tab bar manages your account and signs you out.
+
+## Sign-in (Clerk)
+
+Bee uses [`@clerk/electron`](https://www.npmjs.com/package/@clerk/electron) with the **vedantb.com** Clerk production instance.
+
+| Setting | Value |
+| --- | --- |
+| Publishable key | `pk_live_Y2xlcmsudmVkYW50Yi5jb20k` (override with `VITE_CLERK_PUBLISHABLE_KEY` at build time) |
+| Frontend API host | `clerk.vedantb.com` |
+| Renderer origin | `bee://renderer` (Bee loads `bee://renderer/`, not `file://`) |
+| OAuth redirect | `bee://renderer/` |
+
+One-off setup in the [Clerk Dashboard](https://dashboard.clerk.com) for the vedantb.com instance:
+
+1. **Native applications → enable Native API.** Without it, Clerk rejects Bee with "Production Keys are only allowed for domain vedantb.com" and the panel shows "Sign-in could not load".
+2. **Allowlist the redirect URLs** `bee://renderer` and `bee://renderer/*` (Native applications → allowlist for mobile SSO redirect).
+3. Turn on the sign-in methods you want (email, Google and so on) under **User & authentication**.
+
+Clerk session tokens are stored by the main process, encrypted with `safeStorage`. Without an OS keyring they are not saved, so you sign in again after each restart.
+
+Social sign-in opens the system browser and returns through the `bee://` deep link. The installer registers the `bee` scheme. In `npm run dev` on Windows, the scheme is registered to the bare Electron binary, so social sign-in may not return to the app; use email sign-in in development, or test social sign-in with a packaged build.
 
 ## Settings and secrets
 
@@ -87,7 +109,7 @@ On Linux without a keyring (for example, under Xvfb), Electron cannot encrypt to
 ## Tests
 
 ```powershell
-npm test               # unit tests: retrieval, Jev ranking parser, Luna prompt builder, pipeline
+npm test               # unit tests: retrieval, Jev ranking parser, Luna prompt builder, pipeline, sign-in gate
 npm run test:gateway   # live smoke test against Vercel AI Gateway (needs BEE_AI_GATEWAY_API_KEY)
 npm run typecheck
 ```
@@ -102,7 +124,8 @@ It fails straight away with a clear message if `BEE_AI_GATEWAY_API_KEY` is not s
 
 ## Manual steps and known limits
 
-- **Gateway key.** Create one in the Vercel dashboard (AI Gateway → API keys). There is no other external setup.
+- **Gateway key.** Create one in the Vercel dashboard (AI Gateway → API keys).
+- **Clerk.** Enable Native API and allowlist `bee://renderer` / `bee://renderer/*`. See [Sign-in (Clerk)](#sign-in-clerk).
 - **Electron binary.** `npm install` does not download Electron itself. It downloads on first `npm run dev` or `npm start`. On a restricted network, allow `github.com` downloads or set `ELECTRON_MIRROR`.
 - **Microphone.** Windows asks for microphone permission the first time you click **Mic**. If it is blocked, allow desktop apps under Settings → Privacy & security → Microphone.
 - **Code signing.** Not configured. Add a certificate to `build.win` in `package.json` before distributing.

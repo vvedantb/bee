@@ -1,3 +1,4 @@
+import { getToken } from "@clerk/electron/react";
 import { useSyncExternalStore } from "react";
 import type { PipelineResult, SettingsUpdate, SettingsView } from "../../shared/ipc";
 
@@ -83,7 +84,9 @@ export const actions = {
     const run = ++latestRun;
     set({ transcript, busy: true, error: null });
     try {
-      const result = await window.bee.runPipeline({ transcript: transcript.slice(-PIPELINE_WINDOW) });
+      const sessionToken = await getToken();
+      if (!sessionToken) throw new Error("Sign in to Bee to get guidance.");
+      const result = await window.bee.runPipeline({ transcript: transcript.slice(-PIPELINE_WINDOW), sessionToken });
       if (run === latestRun) set({ result, busy: false });
     } catch (error) {
       if (run === latestRun) set({ busy: false, error: error instanceof Error ? error.message : "Pipeline failed" });

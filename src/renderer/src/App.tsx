@@ -1,3 +1,4 @@
+import { ClerkFailed, Show, SignIn, UserButton, useAuth } from "@clerk/electron/react";
 import { useState, type FormEvent } from "react";
 import type { SettingsView } from "../../shared/ipc";
 import { actions, useBee, type BeeState } from "./store";
@@ -9,7 +10,9 @@ function formString(form: HTMLFormElement, name: string): string {
   return typeof value === "string" ? value : "";
 }
 
-function notchStatus(state: BeeState): string {
+function notchStatus(state: BeeState, signedIn: boolean | undefined): string {
+  if (signedIn === undefined) return "Loading…";
+  if (!signedIn) return "Sign in to use Bee";
   if (state.busy) return "Thinking…";
   const tip = state.result?.tips[0];
   if (tip) return tip;
@@ -19,21 +22,25 @@ function notchStatus(state: BeeState): string {
 }
 
 function Notch({ state }: { state: BeeState }) {
+  const { isSignedIn } = useAuth();
+  const status = notchStatus(state, isSignedIn);
   return (
     <header className="notch">
       <span className={state.busy ? "notch-dot busy" : "notch-dot"} aria-hidden />
-      <span className="notch-status" title={notchStatus(state)}>
-        {notchStatus(state)}
+      <span className="notch-status" title={status}>
+        {status}
       </span>
-      <button
-        type="button"
-        className={state.mic.on ? "icon-button on" : "icon-button"}
-        title={state.mic.error ?? (state.mic.on ? "Stop microphone" : "Start microphone")}
-        onClick={() => void actions.toggleMic()}
-      >
-        <span className="mic-level" style={{ transform: `scaleY(${0.2 + state.mic.level * 0.8})` }} />
-        Mic
-      </button>
+      <Show when="signed-in">
+        <button
+          type="button"
+          className={state.mic.on ? "icon-button on" : "icon-button"}
+          title={state.mic.error ?? (state.mic.on ? "Stop microphone" : "Start microphone")}
+          onClick={() => void actions.toggleMic()}
+        >
+          <span className="mic-level" style={{ transform: `scaleY(${0.2 + state.mic.level * 0.8})` }} />
+          Mic
+        </button>
+      </Show>
       <button
         type="button"
         className="icon-button"
@@ -222,6 +229,9 @@ function Panel({ state }: { state: BeeState }) {
         <button type="button" className={tab === "settings" ? "active" : ""} onClick={() => setTab("settings")}>
           Settings
         </button>
+        <span className="tabs-account">
+          <UserButton />
+        </span>
       </nav>
       {tab === "live" ? <LiveTab state={state} /> : null}
       {tab === "settings" && state.settings ? <SettingsTab settings={state.settings} /> : null}
@@ -234,7 +244,23 @@ export function App() {
   return (
     <div className={state.expanded ? "shell expanded" : "shell"}>
       <Notch state={state} />
-      {state.expanded ? <Panel state={state} /> : null}
+      {state.expanded ? (
+        <>
+          <Show when="signed-in">
+            <Panel state={state} />
+          </Show>
+          <Show when="signed-out">
+            <main className="panel sign-in">
+              <SignIn routing="hash" withSignUp />
+            </main>
+          </Show>
+          <ClerkFailed>
+            <main className="panel sign-in">
+              <p className="error">Sign-in could not load. Check your connection, then restart Bee.</p>
+            </main>
+          </ClerkFailed>
+        </>
+      ) : null}
     </div>
   );
 }

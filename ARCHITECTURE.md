@@ -4,10 +4,10 @@ Bee is an Electron app built with electron-vite, React and TypeScript.
 
 ```
 src/
-  main/       Electron main process: notch window, tray, IPC, settings, notes folder
-  preload/    Sandboxed bridge: exposes window.bee and parses every response with zod
-  renderer/   React UI: collapsed notch and expanded panel (Live, Settings)
-  shared/     IPC channel names and zod schemas used by all three processes
+  main/       Electron main process: notch window, tray, IPC, settings, notes folder, bee:// protocol, Clerk bridge
+  preload/    Sandboxed bridge: exposes window.bee (parses every response with zod) and Clerk's bridge
+  renderer/   React UI: collapsed notch, sign-in, and expanded panel (Live, Settings)
+  shared/     IPC channel names and zod schemas, Clerk config (shared/clerk.ts)
   core/       Pure TypeScript: note chunking, retrieval, Jev ranking, Luna guidance, pipeline
 test/         Live Gateway smoke test (npm run test:gateway)
 resources/    App and tray icons
@@ -17,7 +17,9 @@ resources/    App and tray icons
 
 ```
 Simulate meeting line (renderer)
-  → window.bee.runPipeline({ transcript })        preload → IPC
+  → Clerk getToken()                               no session → "Sign in to Bee"
+  → window.bee.runPipeline({ transcript, sessionToken })   preload → IPC
+  → main: check session token (main/auth.ts)
   → main: load notes, read API key                 key never leaves main
   → core/retrieve   BM25 keyword search, top 5 snippets
   → core/jev        Jev scores each snippet, re-orders (fails open)
@@ -30,10 +32,24 @@ The renderer keeps the transcript and sends the last 8 lines with each run. The 
 ## Processes and security
 
 - The window is frameless, transparent, always on top and skipped from the taskbar. It sits at the top centre of the primary display's work area. It resizes between 440 × 64 px (collapsed) and 480 × 640 px (expanded).
-- The renderer runs with `sandbox: true`, `contextIsolation: true` and no Node integration. A content security policy blocks remote scripts.
+- The renderer runs with `sandbox: true`, `contextIsolation: true` and no Node integration.
+- The renderer is served from `bee://renderer/` by `protocol.handle` (`main/renderer-protocol.ts`), not `file://`, so Clerk sees a stable origin. In development the handler proxies to the Vite dev server. Paths outside `out/renderer` return 404.
+- The same handler sends the content security policy as a response header. Remote scripts are allowed only from the Clerk Frontend API host (derived from the publishable key: `clerk.vedantb.com`) and `challenges.cloudflare.com` (bot protection). Images are allowed from `img.clerk.com`.
+- Links opened from the renderer are denied; `https://` links (Clerk terms, help) open in the system browser.
 - Only the `media` permission (microphone) is granted.
 - All IPC input is validated with zod in main. All IPC output is validated with zod in preload.
 - Secrets are encrypted with `safeStorage` before they are written. If encryption is unavailable, they stay in memory for the session.
+
+## Authentication
+
+Bee uses `@clerk/electron` against the vedantb.com Clerk production instance (`shared/clerk.ts`; `VITE_CLERK_PUBLISHABLE_KEY` overrides the key at build time).
+
+- **Main:** `createClerkBridge` runs before `app.whenReady()`. It registers the `bee` scheme as privileged, owns Clerk's token-cache and OAuth IPC, and takes the single-instance lock on Windows and Linux. Bee stops booting when `isPrimaryInstance` is false. Tokens persist via `@clerk/electron/storage` (`electron-store` + `safeStorage`; not persisted without OS encryption).
+- **Preload:** `exposeClerkBridge()` alongside `window.bee`.
+- **Renderer:** `ClerkProvider` from `@clerk/electron/react`. Signed out, the panel shows `<SignIn>`; signed in, it shows the Bee panel with a `<UserButton>`. The microphone button shows only when signed in.
+- **Pipeline gate:** the renderer sends `getToken()` with each run. Main checks the token's issuer (`https://clerk.vedantb.com`), subject and expiry. The signature is not verified: this is a sign-in gate, not a security boundary, since the pipeline only uses the user's own key and notes.
+- **OAuth:** the system browser returns through `bee://renderer/`. electron-builder registers the `bee` scheme (`build.protocols`, plus the Linux MIME type).
+- **Dashboard:** Native API must be enabled, and `bee://renderer` / `bee://renderer/*` allowlisted as redirect URLs.
 
 ## AI calls
 
@@ -94,6 +110,7 @@ Defined in `src/core/luna.ts`. The system prompt asks for at most two tips, one 
 | Retrieval query window | `core/retrieve.ts` | last 3 lines, latest counted twice |
 | BM25 k1 / b / title weight | `core/retrieve.ts` | 1.2 / 0.75 / 2 (standard defaults, not tuned) |
 | Snippet length | `core/notes.ts` | 600 characters |
+| Clerk publishable key (fallback) | `shared/clerk.ts` | vedantb.com production instance |
 
 ## Renderer state
 

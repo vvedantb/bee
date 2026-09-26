@@ -1,11 +1,16 @@
+import { createClerkBridge } from "@clerk/electron";
+import { storage } from "@clerk/electron/storage";
 import { BrowserWindow, Menu, Tray, app, ipcMain, nativeImage, screen, session, shell } from "electron";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { createBeeGateway } from "../core/gateway";
 import { runPipeline } from "../core/pipeline";
+import { RENDERER_HOST, RENDERER_SCHEME, RENDERER_URL } from "../shared/clerk";
 import { IPC, pipelineRequestSchema, settingsUpdateSchema } from "../shared/ipc";
+import { assertSignedIn } from "./auth";
 import { ensureNotesDir, loadSnippets } from "./notes";
+import { handleRendererProtocol } from "./renderer-protocol";
 import { createSettingsStore } from "./settings";
 
 const COLLAPSED = { width: 440, height: 64 };
@@ -56,11 +61,12 @@ function createWindow(meetingMode: boolean): BrowserWindow {
   applyMeetingMode(window, meetingMode);
   window.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   window.once("ready-to-show", () => window.show());
-  window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
-
-  const devUrl = process.env.ELECTRON_RENDERER_URL;
-  if (devUrl) void window.loadURL(devUrl);
-  else void window.loadFile(join(outDir, "../renderer/index.html"));
+  // Links in Clerk's UI (terms, help) open in the browser; the overlay never opens windows.
+  window.webContents.setWindowOpenHandler(({ url }) => {
+    if (url.startsWith("https://")) void shell.openExternal(url);
+    return { action: "deny" };
+  });
+  void window.loadURL(RENDERER_URL);
   return window;
 }
 
@@ -90,12 +96,19 @@ function createTray(notesDir: string): void {
   }
 }
 
-if (!app.requestSingleInstanceLock()) {
-  app.quit();
-} else {
+// Before whenReady: registers the bee:// scheme, Clerk's token and OAuth IPC, and the single-instance lock.
+const clerk = createClerkBridge({
+  storage: storage(),
+  renderer: { scheme: RENDERER_SCHEME, host: RENDERER_HOST },
+  userAgent: `Bee/${app.getVersion()}`,
+});
+
+if (clerk.isPrimaryInstance) {
   app.on("second-instance", () => win?.show());
 
   void app.whenReady().then(() => {
+    handleRendererProtocol(resolve(outDir, "../renderer"), process.env.ELECTRON_RENDERER_URL);
+
     const userDataDir = app.getPath("userData");
     const notesDir = join(userDataDir, "notes");
     ensureNotesDir(notesDir);
@@ -120,6 +133,7 @@ if (!app.requestSingleInstanceLock()) {
 
     ipcMain.handle(IPC.runPipeline, (_event, payload) => {
       const request = pipelineRequestSchema.parse(payload);
+      assertSignedIn(request.sessionToken);
       const apiKey = settings.gatewayApiKey();
       return runPipeline({
         transcript: request.transcript,

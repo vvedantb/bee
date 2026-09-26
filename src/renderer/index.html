@@ -3,10 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <title>Bee</title>
-    <meta
-      http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:"
-    />
+    <!-- CSP is sent as a response header by the bee:// protocol handler (src/main/renderer-protocol.ts). -->
   </head>
   <body>
     <div id="root"></div>
