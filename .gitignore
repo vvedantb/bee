@@ -1,0 +1,14 @@
+node_modules/
+out/
+dist/
+release/
+coverage/
+*.log
+
+# Secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
