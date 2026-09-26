@@ -1,34 +1,41 @@
 # Bee relay
 
-Ephemeral sync rooms for Bee's Teams mode. A Cloudflare Worker sends every request to one Durable Object, which
-holds company teams (persisted), presence, rooms and phrases (ephemeral).
+Ephemeral sync rooms for Bee's Teams mode. Deployed as a Convex HTTP backend (`convex/http.ts`)
+that verifies Clerk session tokens (JWKS) and stores teams (persisted), presence, rooms and phrases
+(ephemeral) in a Convex `kv` table — same protocol as the original in-memory / Worker handler in
+`relay/src/`.
 
-Bee never joins the Teams call. Each Bee client sends only its own mute-gated mic phrases, and the relay stamps the
-speaker from the verified Clerk session token. It never trusts a name or id sent by the client.
+Bee never joins the Teams call. Each Bee client sends only its own mute-gated mic phrases, and the
+relay stamps the speaker from the verified Clerk session token. It never trusts a name or id sent by
+the client.
 
 ## Environment
 
 | Variable | Where | Required | Meaning |
 | --- | --- | --- | --- |
-| `CLERK_ISSUER` | Worker (`wrangler.toml` `[vars]`) | Yes | Clerk instance issuer. Default `https://clerk.vedantb.com`. Tokens with another `iss` are rejected. |
-| `CLERK_JWKS_URL` | Worker | No | JWKS used to check RS256 signatures. Default `<CLERK_ISSUER>/.well-known/jwks.json`. Cached for 10 minutes, refetched on an unknown `kid` (at most every 30 s). |
-| `CLERK_AUTHORIZED_PARTIES` | Worker | No | Comma-separated `azp` allowlist, for example `bee://renderer`. Empty skips the check. |
-| `BEE_RELAY_URL` | Bee app (main process env, run time) | For Teams mode | Base URL of this relay, for example `https://bee-relay.<account>.workers.dev`. |
-| `MAIN_VITE_BEE_RELAY_URL` | Bee build (`npm run dist:win`) | For installers | The same URL baked into the build. `BEE_RELAY_URL` overrides it. With neither, Teams mode is off. |
+| `CLERK_ISSUER` | Convex deployment env | Yes | Clerk instance issuer. Default `https://clerk.vedantb.com`. |
+| `CLERK_JWKS_URL` | Convex env | No | JWKS URL. Default `<CLERK_ISSUER>/.well-known/jwks.json`. |
+| `CLERK_AUTHORIZED_PARTIES` | Convex env | No | Comma-separated `azp` allowlist. Empty skips the check. |
+| `BEE_RELAY_URL` | Bee app (main process env, run time) | For Teams mode | Convex HTTP site URL, e.g. `https://<deployment>.eu-west-1.convex.site`. |
+| `MAIN_VITE_BEE_RELAY_URL` | Bee build (`npm run dist:win` / release workflow) | For installers | Same URL baked into the build. `BEE_RELAY_URL` overrides it. |
 
-Display names come from a `name` claim if the Clerk session token has one (Dashboard → Sessions → Customize session
-token: `{"name": "{{user.full_name}}"}`). Otherwise the relay uses the name each user typed when they joined the
-team. Users can only set their own name.
+Display names come from a `name` claim if the Clerk session token has one (Dashboard → Sessions →
+Customize session token: `{"name": "{{user.full_name}}"}`). Otherwise the relay uses the name each
+user typed when they joined the team.
 
 ## Deploy
 
+Convex project: team `vvv` (Vedant personal), project `bee`, production deployment.
+
 ```sh
-cd relay
-npx wrangler login
-npx wrangler deploy
+cd /path/to/bee
+npx convex deploy --prod   # or: CONVEX_DEPLOY_KEY=prod:… npx convex deploy -y
+npx convex env set CLERK_ISSUER https://clerk.vedantb.com
 ```
 
-Then start Bee with `BEE_RELAY_URL=https://bee-relay.<account>.workers.dev`.
+Then start Bee with `BEE_RELAY_URL=https://<deployment>.eu-west-1.convex.site`.
+
+Production (as of 0.2.4): `https://academic-ostrich-889.eu-west-1.convex.site`
 
 ## Local
 
@@ -37,13 +44,13 @@ npm run relay:mock        # in-memory relay on http://127.0.0.1:8787, real Clerk
 BEE_RELAY_URL=http://127.0.0.1:8787 npm run dev
 ```
 
-Unit tests (`relay/src/*.test.ts`, run by `npm test`) use the same handler over a `Map`, with a local RS256 key
-pair and JWKS (`test-issuer.ts`). The Teams E2E serves it over HTTP.
+Unit tests (`relay/src/*.test.ts`, run by `npm test`) use the same handler over a `Map`, with a
+local RS256 key pair and JWKS (`test-issuer.ts`). The Teams E2E serves it over HTTP.
 
 ## API
 
-All routes need `Authorization: Bearer <Clerk session token>`. Every response has `serverNow` (ms) for clock
-offsets. Errors are `{ "error": "…" }` with 400, 401, 403, 404 or 409.
+All routes need `Authorization: Bearer <Clerk session token>`. Every response has `serverNow` (ms)
+for clock offsets. Errors are `{ "error": "…" }` with 400, 401, 403, 404 or 409.
 
 | Method and path | Body | Returns |
 | --- | --- | --- |
@@ -72,5 +79,3 @@ offsets. Errors are `{ "error": "…" }` with 400, 401, 403, 404 or 409.
   member leaves, or 4 hours after it started. A member whose client has not polled for 60 s is dropped. No
   transcript is stored long term.
 - **Late joiners** get phrases from their join onwards only (no backfill).
-- **Scale:** one Durable Object serves every team. That is fine for a few hundred users polling every 2 s. Shard
-  by team (`idFromName(teamId)`) before growing past that.

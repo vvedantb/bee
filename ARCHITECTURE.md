@@ -10,7 +10,7 @@ src/
   shared/     IPC channel names and zod schemas, Clerk config (shared/clerk.ts)
   core/       Pure TypeScript: note chunking, retrieval, Jev ranking, Luna guidance and meeting summaries, Grok STT, pipeline, release version checks,
               Teams mode (relay protocol and client, sync controller, room ranking, detection debounce and heuristics, line merging)
-relay/        Bee relay: Cloudflare Worker + Durable Object (index.ts), shared HTTP handler and state, JWKS verification, in-memory mock
+relay/        Bee relay: shared HTTP handler + state + JWKS (Convex HTTP in convex/; in-memory mock for tests)
 test/         Live Gateway smoke test (npm run test:gateway), Electron mic, summary and Teams E2E (npm run test:e2e, harness in test/e2e)
 resources/    App and tray icons
 ```
@@ -98,7 +98,7 @@ Mic phrase → store.simulateLine(text, "mic") → pipeline, and window.bee.team
 Teams leaves the call (15 s) → controller leaves the sync; next detection → new popup, never an automatic rejoin
 ```
 
-- **Relay** (`relay/src`): `handler.ts` routes HTTP to `state.ts` over a string key-value store, one request at a time. `index.ts` runs it in one Durable Object (`BeeRelay`, SQLite storage); `memory.ts` runs it over a `Map` for tests and `npm run relay:mock`. `jwt.ts` checks RS256 against the Clerk JWKS (cached 10 min), then `iss`, `exp`, `nbf` and optionally `azp`. Unauthenticated or bad tokens get 401.
+- **Relay** (`relay/src` + `convex/`): `handler.ts` routes HTTP to `state.ts` over a string key-value store. Production (`convex/http.ts`) verifies Clerk JWKS then runs `relay.dispatch` against a Convex `kv` table; `memory.ts` runs the same handler over a `Map` for tests and `npm run relay:mock`. `jwt.ts` checks RS256 against the Clerk JWKS (cached 10 min), then `iss`, `exp`, `nbf` and optionally `azp`. Unauthenticated or bad tokens get 401.
 - **State**: `team:<id>`, `invite:<code>`, `user:<userId>` (membership, persisted); `presence:<teamId>`, `rooms:<teamId>`, `room:<id>`, `roomcode:<teamId>:<code>`, `phrases:<roomId>` (ephemeral). Rooms close when empty or after 4 hours; members that stop polling for 60 s are dropped; phrases are deleted with the room.
 - **Room ids** are `crypto.randomUUID()`. Word codes are two random words, unique within the team while the room is open.
 - **Ranking** (`core/room-picker.ts`): invited rooms (newest first), then rooms started within ±10 min of my detection with a member whose presence says "in a meeting" and is under 60 s old (closest first), then the rest. Only the first two tiers can be the one-click default.

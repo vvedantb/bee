@@ -1,6 +1,6 @@
 {
   "name": "bee",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "Bee: a meeting notch overlay that surfaces relevant local notes and short guidance.",
   "license": "MIT",
   "author": "Bee contributors",
@@ -23,6 +23,7 @@
     "@ai-sdk/gateway": "^4.0.94",
     "@clerk/electron": "^0.0.47",
     "ai": "^7.0.116",
+    "convex": "^1.46.0",
     "electron-store": "^8.2.0",
     "zod": "^4.6.5"
   },

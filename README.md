@@ -97,8 +97,8 @@ Teams mode lets teammates who are in the same Microsoft Teams meeting pool what 
 
 ### Set up
 
-1. Deploy the relay (`relay/`, a Cloudflare Worker with one Durable Object). See [relay/README.md](relay/README.md).
-2. Start Bee with `BEE_RELAY_URL` set to the relay URL, for example `https://bee-relay.<account>.workers.dev`. Without it, Teams mode is off and Bee works solo as before.
+1. Deploy the relay (Convex HTTP backend; shared handler in `relay/src`). See [relay/README.md](relay/README.md).
+2. Start Bee with `BEE_RELAY_URL` set to the Convex site URL, for example `https://academic-ostrich-889.eu-west-1.convex.site`. Without it, Teams mode is off and Bee works solo as before.
 3. One person opens **Settings → Team**, types a team name and clicks **Create team**. Settings shows the invite link (`bee://team/XXXX-XXXX`) and the code. **Copy** puts the link on the clipboard.
 4. Teammates click the link (Bee opens with the code filled in) or paste the code in **Settings → Team**, then click **Join team**. Team membership is an allowlist of Clerk user ids. **Leave team** removes you.
 
@@ -145,7 +145,7 @@ To show full names without typing them, add a `name` claim to the Clerk session 
 - **No Microsoft IDs.** Bee cannot tell two concurrent Teams meetings apart by itself. Syncs are grouped only by who clicked.
 - **Display names.** Without a `name` claim, a user can type any name for themselves when joining the team. They cannot change anyone else's.
 - **Unsigned installer.** Windows SmartScreen warns on first run.
-- **Relay scale.** One Durable Object serves every team: fine for a few hundred users. Tokens are checked on every request; phrases are deleted when a sync ends, or 4 hours after it started.
+- **Relay scale.** One Convex deployment serves every team (kv-backed): fine for a few hundred users. Tokens are checked on every request; phrases are deleted when a sync ends, or 4 hours after it started.
 
 ## Sign-in (Clerk)
 
