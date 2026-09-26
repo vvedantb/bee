@@ -6,21 +6,23 @@ Bee is an Electron app built with electron-vite, React and TypeScript.
 src/
   main/       Electron main process: notch window, tray, IPC, settings, notes folder, bee:// protocol, Clerk bridge
   preload/    Sandboxed bridge: exposes window.bee (parses every response with zod) and Clerk's bridge
-  renderer/   React UI: collapsed notch, sign-in, expanded panel (Live, Settings), Web Speech wrapper (speech.ts)
+  renderer/   React UI: collapsed notch, sign-in, expanded panel (Live, Settings), mic capture (mic.ts), phrase detection and WAV (speech.ts)
   shared/     IPC channel names and zod schemas, Clerk config (shared/clerk.ts)
-  core/       Pure TypeScript: note chunking, retrieval, Jev ranking, Luna guidance, pipeline, release version checks
-test/         Live Gateway smoke test (npm run test:gateway)
+  core/       Pure TypeScript: note chunking, retrieval, Jev ranking, Luna guidance, Grok STT, pipeline, release version checks
+test/         Live Gateway smoke test (npm run test:gateway), Electron mic E2E (npm run test:e2e, harness in test/e2e)
 resources/    App and tray icons
 ```
 
 ## Flow
 
 ```
-Mic on (renderer/speech.ts)                        Web Speech API, continuous, en-US, interim results
-  → interim text shown under Transcript
-  → finals within 700 ms joined into one line
+Mic on (renderer/mic.ts)                           getUserMedia → ScriptProcessorNode, 4096-sample frames
+  → renderer/speech.ts                             level meter; phrase detection; 16 kHz WAV
+  → window.bee.transcribe({ audio, sessionToken }) preload → IPC
+  → main/meeting-ipc.ts: check session, read key
+  → core/transcribe                                Grok STT (xai/grok-stt) → text, or null for no words
   ↓
-simulateLine(line)  ← also "Simulate meeting line" (typed)
+simulateLine(text)  ← also "Simulate meeting line" (Manual test)
   → Clerk getToken()                               no session → "Sign in to Bee"
   → window.bee.runPipeline({ transcript, sessionToken })   preload → IPC
   → main: check session token (main/auth.ts)
@@ -31,19 +33,20 @@ simulateLine(line)  ← also "Simulate meeting line" (typed)
   → PipelineResult back to the renderer
 ```
 
-The renderer keeps the transcript and sends the last 8 lines with each run. The main process holds no meeting state. Each run takes a number (`latestRun`); a result is shown only if no newer run has started, so fast speech never shows stale tips.
+The renderer keeps the last 8 lines (spoken or typed) and sends them with each run. The lines are not rendered: the Live tab shows tips and notes only. The main process holds no meeting state. Each run takes a number (`latestRun`); a result is shown only if no newer run has started, so fast speech never shows stale tips.
 
 ## Speech-to-text
 
-`renderer/src/speech.ts` wraps `SpeechRecognition` (or `webkitSpeechRecognition`). It has no window or React imports, so tests drive it with a mock class.
+Production uses **Grok STT** (`xai/grok-stt`) through Vercel AI Gateway, batch mode (`experimental_transcribe`). The Gateway model list names it `spacexai/grok-stt`; on 26 September 2026 both ids returned the same transcript, and Bee uses `xai/grok-stt`. Bee does not use the Web Speech API: in Electron it could not reach Google's speech service and failed with `network`.
 
-- Interim results update `mic.interim`, shown in italics under Transcript. Pending finals stay visible until they are flushed.
-- Finals are buffered and flushed 700 ms (`FINAL_COALESCE_MS`) after the last one, as one line, into `simulateLine`.
-- Chromium ends continuous sessions after a pause. Bee restarts recognition until the user turns the mic off.
-- `no-speech` and `aborted` are ignored. Other errors stop the mic and show a message on the notch and the Live tab. With no Web Speech API, clicking the mic shows an error instead of starting.
-- The level meter (`getUserMedia` + `AnalyserNode`, about 10 renders a second) runs alongside.
+- **Capture** (`renderer/src/mic.ts`): mono `getUserMedia` with echo cancellation and noise suppression, into a `ScriptProcessorNode`. No AudioWorklet, so no extra module under the CSP. Frames are about 85 ms at 48 kHz and also drive the level meter.
+- **Phrases** (`renderer/src/speech.ts`, no window or React imports): a frame at or above RMS 0.01 counts as speech. A phrase starts with 300 ms of pre-roll and ends after 800 ms of silence, or at 15 s. Phrases with under 300 ms of speech are dropped. On mic off, the phrase in progress is still sent.
+- **Upload**: each phrase is encoded as 16 kHz 16-bit mono WAV (about 32 KB a second) and sent over IPC. Main rejects payloads over 2 MB.
+- **Order**: phrases are transcribed one at a time, so lines reach the pipeline in the order they were spoken.
+- **Output**: text is whitespace-normalised. Empty or punctuation-only results (a cough or a click) count as no words and do not run the pipeline.
+- **Errors**: a failed call returns `Speech-to-text failed: <reason>`. The mic stays on, the notch and the Live tab show the message, and it clears after the next successful phrase.
 
-Chromium's recogniser uses a speech service over the network. Whether Electron 44 reaches it on Windows has not been checked on real hardware yet; failures surface as `Speech-to-text service unreachable`.
+Streaming (`experimental_streamTranscribe`) was not used. Phrase-level batch calls are simpler, and one call per phrase matches one pipeline run per line.
 
 ## Updates
 
@@ -84,6 +87,7 @@ All model calls use the Vercel AI SDK (`ai`, `@ai-sdk/gateway`) against Vercel A
 
 | Step | Model | API | Timeout | Retries |
 | --- | --- | --- | --- | --- |
+| Transcribe | `xai/grok-stt` | `experimental_transcribe` (Gateway transcription API) | 20 s | 1 |
 | Rank | `typesafe-ai/jev` | `experimental_evaluate` (Gateway evaluation API) | 15 s | 1 |
 | Guide | `openai/gpt-6-luna` | `generateText`, reasoning effort `low`, max 800 output tokens | 30 s | 1 |
 
@@ -133,18 +137,21 @@ Defined in `src/core/luna.ts`. The system prompt asks for at most two tips, one 
 | Retrieval candidates | `core/pipeline.ts` | 5 |
 | Notes sent to Luna | `core/pipeline.ts` | 3 |
 | Jev minimum score | `core/jev.ts` | 1 (on a 0–3 scale) |
-| Transcript lines per run | `renderer/src/store.ts`, `core/luna.ts` | 8 |
+| Transcript lines kept / per run | `renderer/src/store.ts`, `core/luna.ts` | 8 |
 | Retrieval query window | `core/retrieve.ts` | last 3 lines, latest counted twice |
 | BM25 k1 / b / title weight | `core/retrieve.ts` | 1.2 / 0.75 / 2 (standard defaults, not tuned) |
 | Snippet length | `core/notes.ts` | 600 characters |
-| Speech final coalescing window | `renderer/src/speech.ts` | 700 ms |
-| Speech language | `renderer/src/speech.ts` | `en-US` |
+| Speech threshold (RMS) | `renderer/src/speech.ts` | 0.01, about −40 dBFS (not tuned) |
+| Phrase pre-roll / end silence / minimum speech / maximum | `renderer/src/speech.ts` | 300 ms / 800 ms / 300 ms / 15 s |
+| STT audio format | `renderer/src/speech.ts` | 16 kHz 16-bit mono WAV |
+| STT upload cap | `shared/ipc.ts` | 2 MB |
+| STT timeout | `core/transcribe.ts` | 20 s |
 | Update check / download timeout | `main/updater.ts` | 10 s / 10 min |
 | Clerk publishable key (fallback) | `shared/clerk.ts` | vedantb.com production instance |
 
 ## Renderer state
 
-One small external store (`renderer/src/store.ts`, read with `useSyncExternalStore`) holds settings, the active tab, the transcript, the last result, the microphone state and the update state. Forms are uncontrolled and read with `FormData` on submit. There is no `useEffect`. The React Compiler is enabled.
+One small external store (`renderer/src/store.ts`, read with `useSyncExternalStore`) holds settings, the active tab, the recent meeting lines (not rendered), the last result, the microphone state and the update state. Forms are uncontrolled and read with `FormData` on submit. There is no `useEffect`. The React Compiler is enabled.
 
 Saved secrets show as a disabled field reading `•••••••• (saved)` with **Replace**. The form remounts after a successful save, so typed secrets clear and saved fields go back to masked.
 

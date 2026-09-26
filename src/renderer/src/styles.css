@@ -315,21 +315,6 @@ ol {
   font-size: 14px;
 }
 
-.transcript li {
-  color: var(--muted);
-  animation: fade-in var(--fast) ease-out;
-}
-
-.transcript li:last-child {
-  color: var(--text);
-}
-
-.transcript li.interim {
-  color: var(--muted);
-  font-style: italic;
-  animation: none;
-}
-
 .notes li {
   padding: 8px 10px;
   border-radius: 10px;

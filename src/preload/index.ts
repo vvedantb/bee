@@ -5,10 +5,12 @@ import {
   IPC,
   pipelineResultSchema,
   settingsViewSchema,
+  transcribeResultSchema,
   updateActionSchema,
   updateCheckSchema,
   type PipelineRequest,
   type SettingsUpdate,
+  type TranscribeRequest,
 } from "../shared/ipc";
 
 // The only surface the renderer can reach. Every response is parsed before it crosses the bridge.
@@ -18,6 +20,8 @@ const api = {
     settingsViewSchema.parse(await ipcRenderer.invoke(IPC.saveSettings, update)),
   runPipeline: async (request: PipelineRequest) =>
     pipelineResultSchema.parse(await ipcRenderer.invoke(IPC.runPipeline, request)),
+  transcribe: async (request: TranscribeRequest) =>
+    transcribeResultSchema.parse(await ipcRenderer.invoke(IPC.transcribe, request)),
   setExpanded: async (expanded: boolean) => {
     z.void().parse(await ipcRenderer.invoke(IPC.setExpanded, expanded));
   },

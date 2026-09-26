@@ -1,5 +1,5 @@
 import type { PipelineResult } from "../shared/ipc";
-import { JEV_MODEL, LUNA_MODEL, type BeeGateway } from "./gateway";
+import { JEV_MODEL, LUNA_MODEL, NO_GATEWAY_KEY, type BeeGateway } from "./gateway";
 import { JEV_MIN_SCORE, rankWithJev } from "./jev";
 import { guideWithLuna, noteCitation } from "./luna";
 import type { Snippet } from "./notes";
@@ -20,13 +20,12 @@ export async function runPipeline(args: {
   const t1 = performance.now();
 
   if (!args.gateway) {
-    const missing = "No AI Gateway key. Add one in Settings.";
     return {
       notes: candidates.map((note) => ({ ...note, jevScore: null, cite: null })),
       rankSource: "fallback",
-      rankError: missing,
+      rankError: NO_GATEWAY_KEY,
       tips: [],
-      guideError: missing,
+      guideError: NO_GATEWAY_KEY,
       timingsMs: { retrieve: t1 - t0, rank: 0, guide: 0 },
     };
   }

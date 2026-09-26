@@ -1,6 +1,6 @@
 {
   "name": "bee",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Bee: a meeting notch overlay that surfaces relevant local notes and short guidance.",
   "license": "MIT",
   "author": "Bee contributors",
@@ -14,6 +14,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
     "test:gateway": "vitest run --config vitest.gateway.config.ts",
+    "test:e2e": "electron-vite build && vitest run --config vitest.e2e.config.ts",
     "dist:win": "npm run build && electron-builder --win",
     "dist:mac": "npm run build && electron-builder --mac"
   },
@@ -34,6 +35,7 @@
     "electron": "^44.4.5",
     "electron-builder": "^26.15.3",
     "electron-vite": "^5.0.0",
+    "esbuild": "^0.28.2",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "typescript": "~5.9",

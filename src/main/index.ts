@@ -4,12 +4,10 @@ import { BrowserWindow, Menu, Tray, app, ipcMain, nativeImage, screen, session, 
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
-import { createBeeGateway } from "../core/gateway";
-import { runPipeline } from "../core/pipeline";
 import { RENDERER_HOST, RENDERER_SCHEME, RENDERER_URL } from "../shared/clerk";
-import { IPC, pipelineRequestSchema, settingsUpdateSchema } from "../shared/ipc";
-import { assertSignedIn } from "./auth";
-import { ensureNotesDir, loadSnippets } from "./notes";
+import { IPC, settingsUpdateSchema } from "../shared/ipc";
+import { registerMeetingIpc } from "./meeting-ipc";
+import { ensureNotesDir } from "./notes";
 import { handleRendererProtocol } from "./renderer-protocol";
 import { createSettingsStore } from "./settings";
 import { createUpdater } from "./updater";
@@ -132,16 +130,7 @@ if (clerk.isPrimaryInstance) {
       return view;
     });
 
-    ipcMain.handle(IPC.runPipeline, (_event, payload) => {
-      const request = pipelineRequestSchema.parse(payload);
-      assertSignedIn(request.sessionToken);
-      const apiKey = settings.gatewayApiKey();
-      return runPipeline({
-        transcript: request.transcript,
-        snippets: loadSnippets(notesDir),
-        gateway: apiKey ? createBeeGateway(apiKey) : null,
-      });
-    });
+    registerMeetingIpc({ notesDir, gatewayApiKey: settings.gatewayApiKey });
 
     ipcMain.handle(IPC.setExpanded, (_event, payload) => {
       const expanded = z.boolean().parse(payload);

@@ -85,39 +85,11 @@ function LiveTab({ state }: { state: BeeState }) {
             ))}
           </ul>
         ) : (
-          <p className="muted">{state.busy ? "Thinking…" : "No tips yet."}</p>
+          <p className="muted">{state.busy ? "Thinking…" : state.mic.on ? "Listening…" : "No tips yet. Turn on the mic to start."}</p>
         )}
+        {state.mic.error ? <p className="error">{state.mic.error}</p> : null}
         {result?.guideError ? <p className="error">{result.guideError}</p> : null}
         {state.error ? <p className="error">{state.error}</p> : null}
-      </section>
-
-      <form className="simulate" onSubmit={onSubmit}>
-        <input name="line" placeholder="Type a line, or leave blank for a sample" autoComplete="off" />
-        <button type="submit" disabled={state.busy}>
-          Simulate meeting line
-        </button>
-      </form>
-
-      <section>
-        <h2>
-          Transcript
-          {state.transcript.length > 0 ? (
-            <button type="button" className="link" onClick={actions.clearTranscript}>
-              Clear
-            </button>
-          ) : null}
-        </h2>
-        {state.mic.error ? <p className="error">{state.mic.error}</p> : null}
-        {state.transcript.length > 0 || state.mic.interim ? (
-          <ol className="transcript">
-            {state.transcript.map((line, index) => (
-              <li key={`${index}-${line}`}>{line}</li>
-            ))}
-            {state.mic.interim ? <li className="interim">{state.mic.interim}</li> : null}
-          </ol>
-        ) : (
-          <p className="muted">{state.mic.on ? "Listening…" : "Turn on the mic, or type a line and click “Simulate meeting line”."}</p>
-        )}
       </section>
 
       <section>
@@ -152,6 +124,17 @@ function LiveTab({ state }: { state: BeeState }) {
         ) : (
           <p className="muted">{result ? "No matching notes." : "Matching notes appear here."}</p>
         )}
+      </section>
+
+      {/* Manual test: runs the same pipeline as a spoken phrase. The line is not kept on screen. */}
+      <section>
+        <h2>Manual test</h2>
+        <form className="simulate" onSubmit={onSubmit}>
+          <input name="line" placeholder="Type a line, or leave blank for a sample" autoComplete="off" />
+          <button type="submit" disabled={state.busy}>
+            Simulate meeting line
+          </button>
+        </form>
       </section>
     </div>
   );

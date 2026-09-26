@@ -1,8 +1,10 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { JEV_MODEL, LUNA_MODEL, createBeeGateway } from "../src/core/gateway";
+import { JEV_MODEL, LUNA_MODEL, STT_MODEL, createBeeGateway } from "../src/core/gateway";
 import { rankWithJev } from "../src/core/jev";
 import { guideWithLuna } from "../src/core/luna";
 import type { Snippet } from "../src/core/notes";
+import { transcribeSpeech } from "../src/core/transcribe";
 
 const apiKey = process.env.BEE_AI_GATEWAY_API_KEY?.trim();
 if (!apiKey) {
@@ -27,6 +29,23 @@ const notes: Snippet[] = [
 ];
 
 describe("Vercel AI Gateway smoke", () => {
+  it(`${STT_MODEL} transcribes a spoken question`, async () => {
+    // 16 kHz mono WAV: 1 s silence, a synthesised question, 1.5 s silence.
+    const audio = readFileSync(new URL("./fixtures/sso-question.wav", import.meta.url));
+    const outcome = await transcribeSpeech({ model: gateway.transcription(STT_MODEL), audio });
+    console.log("Grok STT:", outcome);
+    expect(outcome.error).toBeNull();
+    expect(outcome.text).toMatch(/SSO ship/i);
+  });
+
+  it(`${STT_MODEL} reports a rejected key as a short error`, async () => {
+    const audio = readFileSync(new URL("./fixtures/sso-question.wav", import.meta.url));
+    const outcome = await transcribeSpeech({ model: createBeeGateway("invalid-key").transcription(STT_MODEL), audio });
+    console.log("STT error:", outcome.error);
+    expect(outcome.text).toBeNull();
+    expect(outcome.error).toMatch(/^Speech-to-text failed: /);
+  });
+
   it(`${LUNA_MODEL} returns short guidance`, async () => {
     const result = await guideWithLuna({ model: gateway(LUNA_MODEL), transcript, notes: notes.filter((note) => note.id === "acme") });
     console.log("Luna tips:", result.tips);

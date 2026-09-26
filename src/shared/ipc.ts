@@ -5,6 +5,7 @@ export const IPC = {
   getSettings: "bee:settings:get",
   saveSettings: "bee:settings:save",
   runPipeline: "bee:pipeline:run",
+  transcribe: "bee:speech:transcribe",
   setExpanded: "bee:window:set-expanded",
   openNotesFolder: "bee:notes:open-folder",
   checkForUpdate: "bee:update:check",
@@ -37,6 +38,22 @@ export const pipelineRequestSchema = z.object({
   sessionToken: z.string().max(8000),
 });
 export type PipelineRequest = z.infer<typeof pipelineRequestSchema>;
+
+// 15 s of 16 kHz 16-bit mono WAV is about 480 KB; the cap leaves room without letting a runaway buffer through.
+export const TRANSCRIBE_MAX_BYTES = 2_000_000;
+
+export const transcribeRequestSchema = z.object({
+  // One spoken phrase as WAV bytes (renderer/src/speech.ts encodeWav).
+  audio: z.instanceof(Uint8Array).refine((audio) => audio.byteLength > 44 && audio.byteLength <= TRANSCRIBE_MAX_BYTES, {
+    message: "Audio must be a non-empty WAV under 2 MB",
+  }),
+  sessionToken: z.string().max(8000),
+});
+export type TranscribeRequest = z.infer<typeof transcribeRequestSchema>;
+
+// text is null when the phrase had no words. The text never reaches the UI: the renderer feeds it to the pipeline.
+export const transcribeResultSchema = z.object({ text: z.string().nullable(), error: z.string().nullable() });
+export type TranscribeResult = z.infer<typeof transcribeResultSchema>;
 
 export const rankedNoteSchema = z.object({
   id: z.string(),

@@ -1,116 +1,157 @@
-// Web Speech API wrapper: continuous English recognition with interim text and coalesced final utterances.
-// Kept free of window/React so it can be tested with a mock recognition class.
+// Mic audio → spoken phrases → Grok STT (via main) → pipeline lines. The words are never shown.
+// Kept free of window/React/Web Audio so tests can drive it with synthetic frames.
+import type { TranscribeResult } from "../../shared/ipc";
 
-export type RecognitionResult = {
-  readonly isFinal: boolean;
-  readonly length: number;
-  readonly [index: number]: { readonly transcript: string };
-};
+/** A frame at or above this RMS (about −40 dBFS) counts as speech. */
+export const SPEECH_RMS = 0.01;
+/** Audio kept from before speech starts, so the first syllable is not clipped. */
+export const PRE_ROLL_MS = 300;
+/** This much silence after speech ends the phrase. */
+export const END_SILENCE_MS = 800;
+/** Phrases with less speech than this (a click, a cough) are dropped before any Gateway call. */
+export const MIN_SPEECH_MS = 300;
+/** Long monologues are cut here so tips keep up. */
+export const MAX_PHRASE_MS = 15_000;
+/** Grok STT gets 16 kHz 16-bit mono WAV: small uploads, plenty for speech. */
+export const WAV_SAMPLE_RATE = 16_000;
 
-export type RecognitionEvent = { readonly resultIndex: number; readonly results: ArrayLike<RecognitionResult> };
-
-export type Recognition = {
-  continuous: boolean;
-  interimResults: boolean;
-  lang: string;
-  onresult: ((event: RecognitionEvent) => void) | null;
-  onerror: ((event: { readonly error: string }) => void) | null;
-  onend: (() => void) | null;
-  start(): void;
-  stop(): void;
-};
-
-export type RecognitionConstructor = new () => Recognition;
-
-/** Finals arriving within this window are joined into one transcript line, so one sentence runs the pipeline once. */
-export const FINAL_COALESCE_MS = 700;
-
-const ERROR_MESSAGES: Record<string, string> = {
-  "not-allowed": "Microphone access was blocked. Allow it and try again.",
-  "service-not-allowed": "Speech-to-text is blocked in this build. Use Simulate meeting line.",
-  network: "Speech-to-text service unreachable (network error). Use Simulate meeting line.",
-  "audio-capture": "No microphone found.",
-  "language-not-supported": "English speech-to-text is not available.",
-};
-
-export function speechErrorMessage(code: string): string {
-  return ERROR_MESSAGES[code] ?? `Speech-to-text failed: ${code}`;
+export function frameLevel(frame: Float32Array): number {
+  let sum = 0;
+  for (const sample of frame) sum += sample * sample;
+  return frame.length === 0 ? 0 : Math.sqrt(sum / frame.length);
 }
 
-/** Starts recognition. Returns stop(), which forwards any pending final text before ending. */
-export function startSpeech(args: {
-  Recognition: RecognitionConstructor;
-  onInterim: (text: string) => void;
-  onFinal: (line: string) => void;
-  onError: (message: string) => void;
-  coalesceMs?: number;
-}): () => void {
-  const recognition = new args.Recognition();
-  recognition.continuous = true;
-  recognition.interimResults = true;
-  recognition.lang = "en-US";
+function concat(frames: Float32Array[]): Float32Array {
+  const out = new Float32Array(frames.reduce((total, frame) => total + frame.length, 0));
+  let offset = 0;
+  for (const frame of frames) {
+    out.set(frame, offset);
+    offset += frame.length;
+  }
+  return out;
+}
 
-  let pending: string[] = [];
-  let interim = "";
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  let stopped = false;
+/** Energy-based phrase detector. push() returns the frame's RMS level for the meter. */
+export function createSegmenter(args: { sampleRate: number; onPhrase: (samples: Float32Array) => void }) {
+  const msPerSample = 1000 / args.sampleRate;
+  let frames: Float32Array[] = [];
+  let bufferedMs = 0;
+  let active = false;
+  let speechMs = 0;
+  let silenceMs = 0;
 
-  function flush(): void {
-    clearTimeout(timer);
-    timer = undefined;
-    const line = pending.join(" ").trim();
-    pending = [];
-    args.onInterim(interim);
-    if (line) args.onFinal(line);
+  function reset(): void {
+    frames = [];
+    bufferedMs = 0;
+    active = false;
+    speechMs = 0;
+    silenceMs = 0;
   }
 
-  function fail(message: string): void {
-    stopped = true;
-    clearTimeout(timer);
-    args.onError(message);
+  function end(): void {
+    if (speechMs >= MIN_SPEECH_MS) args.onPhrase(concat(frames));
+    reset();
   }
 
-  recognition.onresult = (event) => {
-    let latestInterim = "";
-    for (let index = event.resultIndex; index < event.results.length; index += 1) {
-      const result = event.results[index];
-      const text = result?.[0]?.transcript.trim() ?? "";
-      if (!result || !text) continue;
-      if (result.isFinal) pending.push(text);
-      else latestInterim = `${latestInterim} ${text}`.trim();
-    }
-    interim = latestInterim;
-    // Show pending finals too, so words don't vanish between recognition and the coalesced flush.
-    args.onInterim([...pending, interim].join(" ").trim());
-    if (pending.length > 0) {
-      clearTimeout(timer);
-      timer = setTimeout(flush, args.coalesceMs ?? FINAL_COALESCE_MS);
-    }
+  return {
+    push(frame: Float32Array): number {
+      const level = frameLevel(frame);
+      const ms = frame.length * msPerSample;
+      const voiced = level >= SPEECH_RMS;
+      frames.push(frame);
+      bufferedMs += ms;
+      if (!active && !voiced) {
+        while (frames.length > 1 && bufferedMs - (frames[0]?.length ?? 0) * msPerSample >= PRE_ROLL_MS) {
+          bufferedMs -= (frames.shift()?.length ?? 0) * msPerSample;
+        }
+        return level;
+      }
+      active = true;
+      if (voiced) {
+        speechMs += ms;
+        silenceMs = 0;
+      } else {
+        silenceMs += ms;
+      }
+      if (silenceMs >= END_SILENCE_MS || bufferedMs >= MAX_PHRASE_MS) end();
+      return level;
+    },
+    /** Ends any phrase in progress (mic off). */
+    flush(): void {
+      if (active) end();
+      else reset();
+    },
   };
+}
 
-  recognition.onerror = (event) => {
-    // Silence and our own stop() are not failures.
-    if (event.error === "no-speech" || event.error === "aborted") return;
-    fail(speechErrorMessage(event.error));
+/** Mono float samples → 16 kHz 16-bit PCM WAV. Downsampling averages each output sample's input span. */
+export function encodeWav(samples: Float32Array, sampleRate: number): Uint8Array<ArrayBuffer> {
+  const ratio = sampleRate / WAV_SAMPLE_RATE;
+  const length = Math.floor(samples.length / ratio);
+  const bytes = new Uint8Array(44 + length * 2);
+  const view = new DataView(bytes.buffer);
+  const ascii = (offset: number, text: string): void => {
+    for (let index = 0; index < text.length; index += 1) view.setUint8(offset + index, text.charCodeAt(index));
   };
+  ascii(0, "RIFF");
+  view.setUint32(4, 36 + length * 2, true);
+  ascii(8, "WAVE");
+  ascii(12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true); // PCM
+  view.setUint16(22, 1, true); // mono
+  view.setUint32(24, WAV_SAMPLE_RATE, true);
+  view.setUint32(28, WAV_SAMPLE_RATE * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  ascii(36, "data");
+  view.setUint32(40, length * 2, true);
+  for (let index = 0; index < length; index += 1) {
+    const start = Math.floor(index * ratio);
+    const stop = Math.max(start + 1, Math.floor((index + 1) * ratio));
+    let sum = 0;
+    for (let at = start; at < stop; at += 1) sum += samples[at] ?? 0;
+    const sample = Math.max(-1, Math.min(1, sum / (stop - start)));
+    view.setInt16(44 + index * 2, Math.round(sample < 0 ? sample * 0x8000 : sample * 0x7fff), true);
+  }
+  return bytes;
+}
 
-  // Chromium ends continuous sessions after a pause; restart until the user stops the mic.
-  recognition.onend = () => {
-    if (stopped) return;
+/**
+ * One mic session. Phrases are transcribed one at a time, in order, and each non-empty transcript goes to onLine.
+ * onError gets a short message when a transcription fails, and null once one succeeds again.
+ */
+export function startMicSession(args: {
+  sampleRate: number;
+  transcribe: (wav: Uint8Array<ArrayBuffer>) => Promise<TranscribeResult>;
+  onLine: (text: string) => void;
+  onError: (message: string | null) => void;
+}) {
+  let queue = Promise.resolve();
+
+  async function send(samples: Float32Array): Promise<void> {
     try {
-      recognition.start();
+      const { text, error } = await args.transcribe(encodeWav(samples, args.sampleRate));
+      args.onError(error);
+      if (text) args.onLine(text);
     } catch (error) {
-      fail(`Speech-to-text stopped: ${error instanceof Error ? error.message : String(error)}`);
+      args.onError(error instanceof Error ? error.message : "Speech-to-text failed");
     }
-  };
+  }
 
-  recognition.start();
+  const segmenter = createSegmenter({
+    sampleRate: args.sampleRate,
+    onPhrase: (samples) => {
+      queue = queue.then(() => send(samples));
+    },
+  });
 
-  return () => {
-    stopped = true;
-    interim = "";
-    flush();
-    recognition.onend = null;
-    recognition.stop();
+  return {
+    push: segmenter.push,
+    /** Sends the phrase in progress, then resolves once every queued phrase is done. */
+    stop(): Promise<void> {
+      segmenter.flush();
+      return queue;
+    },
   };
 }

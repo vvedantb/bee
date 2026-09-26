@@ -1,7 +1,8 @@
 import { getToken } from "@clerk/electron/react";
 import { useSyncExternalStore } from "react";
-import type { PipelineResult, SettingsUpdate, SettingsView, UpdateCheck } from "../../shared/ipc";
-import { startSpeech, type RecognitionConstructor } from "./speech";
+import type { PipelineResult, SettingsUpdate, SettingsView, TranscribeResult, UpdateCheck } from "../../shared/ipc";
+import { openMic } from "./mic";
+import { startMicSession } from "./speech";
 
 export type Tab = "live" | "settings";
 
@@ -19,20 +20,19 @@ export type BeeState = {
   // True while the panel plays its exit animation, before the window shrinks.
   collapsing: boolean;
   tab: Tab;
+  // Recent meeting lines (spoken or typed), sent with each pipeline run. Internal only: never rendered.
   transcript: string[];
   result: PipelineResult | null;
   busy: boolean;
   error: string | null;
-  // interim: words the recogniser has heard but not yet finalised.
-  mic: { on: boolean; level: number; interim: string; error: string | null };
+  mic: { on: boolean; level: number; error: string | null };
   update: UpdateState;
 };
 
-const TRANSCRIPT_LIMIT = 50;
 const PIPELINE_WINDOW = 8;
 // Matches the panel exit animation in styles.css.
 const COLLAPSE_MS = 160;
-const MIC_OFF = { on: false, level: 0, interim: "" };
+const MIC_OFF = { on: false, level: 0 };
 
 export const SAMPLE_LINES = [
   "Let's pick up the Acme renewal. They are asking for a bigger discount.",
@@ -73,8 +73,14 @@ let latestRun = 0;
 let sampleIndex = 0;
 let stopMic: (() => void) | null = null;
 
-function speechRecognition(): RecognitionConstructor | null {
-  return window.SpeechRecognition ?? window.webkitSpeechRecognition ?? null;
+async function sessionToken(): Promise<string> {
+  const token = await getToken();
+  if (!token) throw new Error("Sign in to Bee to get guidance.");
+  return token;
+}
+
+async function transcribePhrase(audio: Uint8Array<ArrayBuffer>): Promise<TranscribeResult> {
+  return window.bee.transcribe({ audio, sessionToken: await sessionToken() });
 }
 
 function setUpdate(patch: Partial<UpdateState>): void {
@@ -131,71 +137,43 @@ export const actions = {
     return line;
   },
 
-  /** Append a transcript line (typed, or a final from speech-to-text) and run retrieve → Jev → Luna. */
+  /** Add a meeting line (typed, or a phrase from Grok STT) and run retrieve → Jev → Luna. */
   async simulateLine(line: string): Promise<void> {
     const text = line.trim();
     if (!text) return;
-    const transcript = [...state.transcript, text].slice(-TRANSCRIPT_LIMIT);
+    const transcript = [...state.transcript, text].slice(-PIPELINE_WINDOW);
     const run = ++latestRun;
     set({ transcript, busy: true, error: null });
     try {
-      const sessionToken = await getToken();
-      if (!sessionToken) throw new Error("Sign in to Bee to get guidance.");
-      const result = await window.bee.runPipeline({ transcript: transcript.slice(-PIPELINE_WINDOW), sessionToken });
+      const result = await window.bee.runPipeline({ transcript, sessionToken: await sessionToken() });
       if (run === latestRun) set({ result, busy: false });
     } catch (error) {
       if (run === latestRun) set({ busy: false, error: error instanceof Error ? error.message : "Pipeline failed" });
     }
   },
 
-  clearTranscript(): void {
-    latestRun += 1;
-    set({ transcript: [], result: null, busy: false, error: null });
-  },
-
-  /** Mic on: Web Speech transcription feeds finals into simulateLine, plus a level meter. */
+  /** Mic on: each spoken phrase goes to Grok STT in main, then into simulateLine. The words are not shown. */
   async toggleMic(): Promise<void> {
     if (stopMic) {
       actions.stopMic(null);
       return;
     }
-    const Recognition = speechRecognition();
-    if (!Recognition) {
-      setMic({ ...MIC_OFF, error: "Speech-to-text is not available here (no Web Speech API). Use Simulate meeting line." });
-      return;
-    }
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const context = new AudioContext();
-      const analyser = context.createAnalyser();
-      analyser.fftSize = 512;
-      context.createMediaStreamSource(stream).connect(analyser);
-      const samples = new Uint8Array(analyser.fftSize);
-      let frame = 0;
-      let raf = 0;
-      const tick = (): void => {
-        analyser.getByteTimeDomainData(samples);
-        let sum = 0;
-        for (const sample of samples) sum += ((sample - 128) / 128) ** 2;
-        // Re-render at ~10 fps, not every animation frame.
-        if (frame++ % 6 === 0) setMic({ level: Math.min(1, Math.sqrt(sum / samples.length) * 4) });
-        raf = requestAnimationFrame(tick);
-      };
-      raf = requestAnimationFrame(tick);
-      const stopSpeech = startSpeech({
-        Recognition,
-        onInterim: (interim) => setMic({ interim }),
+      const capture = await openMic();
+      const mic = startMicSession({
+        sampleRate: capture.sampleRate,
+        transcribe: transcribePhrase,
         // Same path as a typed line; latestRun drops results from superseded runs.
-        onFinal: (line) => void actions.simulateLine(line),
-        onError: (message) => actions.stopMic(message),
+        onLine: (line) => void actions.simulateLine(line),
+        onError: (error) => setMic({ error }),
       });
+      capture.start((frame) => setMic({ level: Math.min(1, mic.push(frame) * 4) }));
       stopMic = () => {
-        stopSpeech();
-        cancelAnimationFrame(raf);
-        for (const track of stream.getTracks()) track.stop();
-        void context.close();
+        capture.stop();
+        // The phrase in progress is still transcribed.
+        void mic.stop();
       };
-      set({ mic: { on: true, level: 0, interim: "", error: null } });
+      set({ mic: { on: true, level: 0, error: null } });
     } catch (error) {
       setMic({ ...MIC_OFF, error: `Microphone unavailable: ${error instanceof Error ? error.message : String(error)}` });
     }

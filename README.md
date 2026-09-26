@@ -23,7 +23,7 @@ Typical use: in a weekly meeting someone says "last time we discussed the Acme r
 
 - Windows 10 or 11 (x64). macOS and Linux also run in development.
 - Node.js 22 or later, with npm.
-- A Vercel AI Gateway API key with access to `openai/gpt-6-luna` and `typesafe-ai/jev`.
+- A Vercel AI Gateway API key with access to `xai/grok-stt`, `openai/gpt-6-luna` and `typesafe-ai/jev`.
 - A Bee account. Sign-in uses Clerk (the vedantb.com instance). See [Sign-in (Clerk)](#sign-in-clerk).
 
 ## Run on Windows
@@ -62,21 +62,27 @@ The installer is not code-signed. Windows SmartScreen will warn on first run unt
 
 1. Click **▾** on the notch to open the panel, then sign in (or sign up). Bee does not run guidance until you are signed in.
 2. Open **Settings** and paste your AI Gateway key, then click **Save**.
-3. Click the **microphone** on the notch and talk. Words in progress show in italics under **Transcript** on the **Live** tab. Each finished sentence is added to the transcript and runs the pipeline. Click the microphone again to stop.
-4. Or type a line on **Live** (leave it blank for a sample) and click **Simulate meeting line**. Typed and spoken lines take the same path.
+3. Click the **microphone** on the notch and talk. The bar in the mic button shows the input level. Each phrase you say runs the pipeline. Bee does not show what was said; only tips and notes appear. Click the microphone again to stop.
+4. To test without speaking, use **Manual test** at the bottom of **Live**: type a line (or leave it blank for a sample) and click **Simulate meeting line**. Typed and spoken lines take the same path.
 5. Bee retrieves matching notes, ranks them with Jev, and shows up to two tips. The first tip also shows in the collapsed notch.
 
-Notes are markdown files in the notes folder (Settings shows the path and has an **Open** button). On Windows this is `%APPDATA%\Bee\notes`. Four fictional seed notes are written the first time the folder is empty. Edits are picked up on the next simulated line; no restart is needed.
+Notes are markdown files in the notes folder (Settings shows the path and has an **Open** button). On Windows this is `%APPDATA%\Bee\notes`. Four fictional seed notes are written the first time the folder is empty. Edits are picked up on the next line; no restart is needed.
 
 **Meeting mode** hides Bee from screen sharing and keeps it above full-screen apps.
 
 ### Speech-to-text
 
-Bee transcribes with the browser Web Speech API (`SpeechRecognition`, continuous, English, interim results). Sentences that finish within 0.7 s of each other are joined into one transcript line, so a burst of speech runs the pipeline once. Newer lines replace older results in the panel.
+Bee transcribes with **Grok STT** (`xai/grok-stt`) through Vercel AI Gateway, using the same Gateway key as Luna and Jev.
 
-Chromium's Web Speech API sends audio to a speech service. Some Electron builds cannot reach it. If so, the mic stops and the notch shows the reason (for example "Speech-to-text service unreachable"). **Simulate meeting line** still works. If the API is missing altogether, the notch says so when you click the mic.
+1. The mic is captured with Web Audio. A simple level detector cuts the audio into phrases: speech, then 0.8 s of silence, up to 15 s per phrase. Blips under 0.3 s are dropped without a Gateway call.
+2. Each phrase is sent to the main process as a 16 kHz mono WAV. Main calls Grok STT (flex tier) and returns the text.
+3. The text joins a short internal buffer (the last 8 lines), and the pipeline runs. The words are never shown on screen.
 
-To check it by hand: sign in, click the mic, say "last time we discussed the Acme renewal". Italic text should appear under Transcript, then the line, then the Acme notes and a tip. The unit tests in `src/renderer/src/speech.test.ts` cover the interim, coalescing, restart and error handling with a mock recogniser.
+If a phrase fails to transcribe, the notch shows a short error (for example "Speech-to-text failed: AI Gateway authentication failed…"). The mic stays on and the error clears after the next phrase succeeds. Without a key, the notch says to add one in Settings.
+
+Bee no longer uses the Web Speech API. Electron could not reach Google's speech service, so it failed with a network error.
+
+To check it by hand: sign in, click the mic, say "when does SSO ship for enterprise customers?". The Q4 roadmap notes and a tip should appear. `npm run test:e2e` runs the same path in Electron with a fake microphone (see [Tests](#tests)).
 
 ### Updates
 
@@ -122,25 +128,30 @@ On Linux without a keyring (for example, under Xvfb), Electron cannot encrypt to
 ## Tests
 
 ```powershell
-npm test               # unit tests: retrieval, Jev ranking parser, Luna prompt, pipeline, sign-in gate, speech-to-text, update checks
+npm test               # unit tests: retrieval, Jev ranking parser, Luna prompt, pipeline, sign-in gate, phrase detection, WAV, STT, update checks
 npm run test:gateway   # live smoke test against Vercel AI Gateway (needs BEE_AI_GATEWAY_API_KEY)
+npm run test:e2e       # Electron E2E: fake mic → Grok STT → Jev → Luna (needs BEE_AI_GATEWAY_API_KEY; xvfb-run on Linux)
 npm run typecheck
 ```
 
-`test:gateway` makes three calls:
+`test:gateway` makes five calls:
 
-1. `openai/gpt-6-luna`: one short guidance completion.
-2. `typesafe-ai/jev`: scores three note snippets against a fake transcript and checks that the relevant note ranks first.
-3. `typesafe-ai/jev` with an invalid key: checks that ranking fails open, keeps the original order, and returns a clear error.
+1. `xai/grok-stt`: transcribes `test/fixtures/sso-question.wav` (a synthesised question with silence either side).
+2. `xai/grok-stt` with an invalid key: checks for a short `Speech-to-text failed:` error.
+3. `openai/gpt-6-luna`: one short guidance completion.
+4. `typesafe-ai/jev`: scores three note snippets against a fake transcript and checks that the relevant note ranks first.
+5. `typesafe-ai/jev` with an invalid key: checks that ranking fails open, keeps the original order, and returns a clear error.
 
-It fails straight away with a clear message if `BEE_AI_GATEWAY_API_KEY` is not set.
+`test:e2e` builds the app, then starts Electron with Chromium's fake audio device playing the same WAV. A small harness (`test/e2e/`) loads Bee's real preload and main IPC handlers, and a page that runs Bee's real mic capture and phrase detector. It checks that Grok STT returns the question, the roadmap note ranks first and Luna gives a tip. It skips Clerk and sends an unsigned token with Bee's issuer, which is all the main-process gate checks.
+
+Both fail straight away with a clear message if `BEE_AI_GATEWAY_API_KEY` is not set.
 
 ## Manual steps and known limits
 
 - **Gateway key.** Create one in the Vercel dashboard (AI Gateway → API keys).
 - **Clerk.** Enable Native API and allowlist `bee://renderer` / `bee://renderer/*`. See [Sign-in (Clerk)](#sign-in-clerk).
 - **Electron binary.** `npm install` does not download Electron itself. It downloads on first `npm run dev` or `npm start`. On a restricted network, allow `github.com` downloads or set `ELECTRON_MIRROR`.
-- **Speech-to-text on Windows.** Not yet tested on a real Windows machine with a microphone. The wiring was checked in Electron with a mock recogniser. If the Web Speech service is unreachable in the packaged app, the mic shows the error and typed lines still work.
+- **Speech-to-text on Windows.** Not yet tested on a real Windows machine with a microphone. The full path was checked in Electron on Linux with a fake microphone and live Grok STT. The speech threshold (about −40 dBFS) is fixed and not tuned; a very quiet mic may never start a phrase.
 - **Microphone.** Windows asks for microphone permission the first time you click **Mic**. If it is blocked, allow desktop apps under Settings → Privacy & security → Microphone.
 - **Code signing.** Not configured. Add a certificate to `build.win` in `package.json` before distributing.
 - **Transparency on Linux.** Without a compositor (for example, Xvfb), the area around the notch may show as black rather than transparent.
