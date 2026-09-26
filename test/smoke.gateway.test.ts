@@ -4,6 +4,7 @@ import { JEV_MODEL, LUNA_MODEL, STT_MODEL, createBeeGateway } from "../src/core/
 import { rankWithJev } from "../src/core/jev";
 import { guideWithLuna } from "../src/core/luna";
 import type { Snippet } from "../src/core/notes";
+import { generateMeetingSummary } from "../src/core/summary";
 import { transcribeSpeech } from "../src/core/transcribe";
 
 const apiKey = process.env.BEE_AI_GATEWAY_API_KEY?.trim();
@@ -51,6 +52,24 @@ describe("Vercel AI Gateway smoke", () => {
     console.log("Luna tips:", result.tips);
     expect(result.error).toBeNull();
     expect(result.tips.length).toBeGreaterThan(0);
+  });
+
+  it(`${LUNA_MODEL} writes a meeting summary with every section`, async () => {
+    const result = await generateMeetingSummary({
+      model: gateway(LUNA_MODEL),
+      transcript: [
+        ...transcript,
+        "We agreed to hold the discount at 10% and not go to 15%.",
+        "Priya will send the renewal quote and the support SLA summary by Friday.",
+      ],
+      notesCited: ["Acme renewal › Pricing"],
+      tips: ["Offer the 10% loyalty discount agreed in Q2 [n1]"],
+    });
+    console.log("Luna summary:\n" + result.markdown);
+    expect(result.error).toBeNull();
+    expect(result.usedLlm).toBe(true);
+    for (const heading of ["## Decisions", "## Action items", "## Topics", "## Notes cited"]) expect(result.markdown).toContain(heading);
+    expect(result.markdown).toMatch(/Priya/);
   });
 
   it(`${JEV_MODEL} ranks the relevant note first`, async () => {

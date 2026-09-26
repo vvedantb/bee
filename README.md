@@ -65,6 +65,7 @@ The installer is not code-signed. Windows SmartScreen will warn on first run unt
 3. Click the **microphone** on the notch and talk. The bar in the mic button shows the input level. Each phrase you say runs the pipeline. Bee does not show what was said; only tips and notes appear. Click the microphone again to stop.
 4. To test without speaking, use **Manual test** at the bottom of **Live**: type a line (or leave it blank for a sample) and click **Simulate meeting line**. Typed and spoken lines take the same path.
 5. Bee retrieves matching notes, ranks them with Jev, and shows up to two tips. The first tip also shows in the collapsed notch.
+6. When the meeting ends, click **End meeting & save summary** on **Live**. Bee writes `meeting-YYYY-MM-DD-HHmm.md` to the notes folder, with decisions, action items (with owners), topics and the notes cited. Click **Open summary** to view it. Next time, Bee finds it like any other note. Without a key, or if the AI call fails, Bee saves a plain summary with the meeting lines instead.
 
 Notes are markdown files in the notes folder (Settings shows the path and has an **Open** button). On Windows this is `%APPDATA%\Bee\notes`. Four fictional seed notes are written the first time the folder is empty. Edits are picked up on the next line; no restart is needed.
 
@@ -128,21 +129,24 @@ On Linux without a keyring (for example, under Xvfb), Electron cannot encrypt to
 ## Tests
 
 ```powershell
-npm test               # unit tests: retrieval, Jev ranking parser, Luna prompt, pipeline, sign-in gate, phrase detection, WAV, STT, update checks
+npm test               # unit tests: retrieval, Jev ranking parser, Luna prompt, meeting summary, pipeline, sign-in gate, phrase detection, WAV, STT, update checks
 npm run test:gateway   # live smoke test against Vercel AI Gateway (needs BEE_AI_GATEWAY_API_KEY)
-npm run test:e2e       # Electron E2E: fake mic → Grok STT → Jev → Luna (needs BEE_AI_GATEWAY_API_KEY; xvfb-run on Linux)
+npm run test:e2e       # Electron E2E: fake mic → Grok STT → Jev → Luna, and meeting summary files (needs BEE_AI_GATEWAY_API_KEY; xvfb-run on Linux)
 npm run typecheck
 ```
 
-`test:gateway` makes five calls:
+`test:gateway` makes six calls:
 
 1. `xai/grok-stt`: transcribes `test/fixtures/sso-question.wav` (a synthesised question with silence either side).
 2. `xai/grok-stt` with an invalid key: checks for a short `Speech-to-text failed:` error.
 3. `openai/gpt-6-luna`: one short guidance completion.
-4. `typesafe-ai/jev`: scores three note snippets against a fake transcript and checks that the relevant note ranks first.
-5. `typesafe-ai/jev` with an invalid key: checks that ranking fails open, keeps the original order, and returns a clear error.
+4. `openai/gpt-6-luna`: a meeting summary from a short transcript, checked for every section and the named owner.
+5. `typesafe-ai/jev`: scores three note snippets against a fake transcript and checks that the relevant note ranks first.
+6. `typesafe-ai/jev` with an invalid key: checks that ranking fails open, keeps the original order, and returns a clear error.
 
 `test:e2e` builds the app, then starts Electron with Chromium's fake audio device playing the same WAV. A small harness (`test/e2e/`) loads Bee's real preload and main IPC handlers, and a page that runs Bee's real mic capture and phrase detector. It checks that Grok STT returns the question, the roadmap note ranks first and Luna gives a tip. It skips Clerk and sends an unsigned token with Bee's issuer, which is all the main-process gate checks.
+
+The summary E2E uses the same harness without a mic. It runs a short fake meeting, ends it, checks the markdown file in a temp notes folder (every section, the notes cited, the named owner), and checks that the next pipeline run retrieves the summary. It runs once with Luna and once without a key (plain summary).
 
 Both fail straight away with a clear message if `BEE_AI_GATEWAY_API_KEY` is not set.
 

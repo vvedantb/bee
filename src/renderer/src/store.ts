@@ -1,6 +1,14 @@
 import { getToken } from "@clerk/electron/react";
 import { useSyncExternalStore } from "react";
-import type { PipelineResult, SettingsUpdate, SettingsView, TranscribeResult, UpdateCheck } from "../../shared/ipc";
+import {
+  SESSION_TRANSCRIPT_MAX,
+  type MeetingSummaryResult,
+  type PipelineResult,
+  type SettingsUpdate,
+  type SettingsView,
+  type TranscribeResult,
+  type UpdateCheck,
+} from "../../shared/ipc";
 import { openMic } from "./mic";
 import { startMicSession } from "./speech";
 
@@ -13,6 +21,12 @@ export type UpdateState = {
   error: string | null;
 };
 
+// Everything since the last saved summary. Lines are internal only: never rendered.
+export type MeetingSession = { lines: string[]; notesCited: string[]; tips: string[] };
+
+// result: the last saved summary, kept so the Live tab can open it.
+export type SummaryState = { saving: boolean; result: MeetingSummaryResult | null; error: string | null };
+
 // App-wide state shared by the notch and the panel. Local form input stays in the DOM (uncontrolled forms).
 export type BeeState = {
   settings: SettingsView | null;
@@ -23,6 +37,8 @@ export type BeeState = {
   // Recent meeting lines (spoken or typed), sent with each pipeline run. Internal only: never rendered.
   transcript: string[];
   result: PipelineResult | null;
+  session: MeetingSession;
+  summary: SummaryState;
   busy: boolean;
   error: string | null;
   mic: { on: boolean; level: number; error: string | null };
@@ -33,6 +49,8 @@ const PIPELINE_WINDOW = 8;
 // Matches the panel exit animation in styles.css.
 const COLLAPSE_MS = 160;
 const MIC_OFF = { on: false, level: 0 };
+const EMPTY_SESSION: MeetingSession = { lines: [], notesCited: [], tips: [] };
+const SESSION_LIST_MAX = 100;
 
 export const SAMPLE_LINES = [
   "Let's pick up the Acme renewal. They are asking for a bigger discount.",
@@ -48,6 +66,8 @@ let state: BeeState = {
   tab: "live",
   transcript: [],
   result: null,
+  session: EMPTY_SESSION,
+  summary: { saving: false, result: null, error: null },
   busy: false,
   error: null,
   mic: { ...MIC_OFF, error: null },
@@ -85,6 +105,28 @@ async function transcribePhrase(audio: Uint8Array<ArrayBuffer>): Promise<Transcr
 
 function setUpdate(patch: Partial<UpdateState>): void {
   set({ update: { ...state.update, ...patch } });
+}
+
+function setSummary(patch: Partial<SummaryState>): void {
+  set({ summary: { ...state.summary, ...patch } });
+}
+
+// Adds new items to the end, skipping ones already present, and keeps the newest max.
+function mergeUnique(list: string[], items: string[], max: number): string[] {
+  return [...list, ...items.filter((item, index) => !list.includes(item) && items.indexOf(item) === index)].slice(-max);
+}
+
+/** Record the notes cited and the tips from a shown result. */
+function addToSession(result: PipelineResult): void {
+  const cited = result.notes.filter((note) => note.cite !== null).map((note) => note.title);
+  const session = state.session;
+  set({
+    session: {
+      ...session,
+      notesCited: mergeUnique(session.notesCited, cited, SESSION_LIST_MAX),
+      tips: mergeUnique(session.tips, result.tips, SESSION_LIST_MAX),
+    },
+  });
 }
 
 function setMic(patch: Partial<BeeState["mic"]>): void {
@@ -142,13 +184,56 @@ export const actions = {
     const text = line.trim();
     if (!text) return;
     const transcript = [...state.transcript, text].slice(-PIPELINE_WINDOW);
+    const lines = [...state.session.lines, text].slice(-SESSION_TRANSCRIPT_MAX);
     const run = ++latestRun;
-    set({ transcript, busy: true, error: null });
+    set({ transcript, session: { ...state.session, lines }, busy: true, error: null });
     try {
       const result = await window.bee.runPipeline({ transcript, sessionToken: await sessionToken() });
-      if (run === latestRun) set({ result, busy: false });
+      if (run !== latestRun) return;
+      set({ result, busy: false });
+      addToSession(result);
     } catch (error) {
       if (run === latestRun) set({ busy: false, error: error instanceof Error ? error.message : "Pipeline failed" });
+    }
+  },
+
+  /**
+   * Stop the mic and write the session's summary to the notes folder. The session starts empty for the next
+   * meeting straight away; on failure it is put back, ahead of any lines that arrived meanwhile.
+   */
+  async endMeeting(): Promise<void> {
+    const ended = state.session;
+    if (ended.lines.length === 0 || state.summary.saving) return;
+    if (stopMic) actions.stopMic(null);
+    set({ session: EMPTY_SESSION, transcript: [], summary: { saving: true, result: null, error: null } });
+    try {
+      const result = await window.bee.writeMeetingSummary({
+        transcript: ended.lines,
+        notesCited: ended.notesCited,
+        tips: ended.tips,
+        sessionToken: await sessionToken(),
+      });
+      setSummary({ saving: false, result });
+    } catch (error) {
+      const now = state.session;
+      set({
+        session: {
+          lines: [...ended.lines, ...now.lines].slice(-SESSION_TRANSCRIPT_MAX),
+          notesCited: mergeUnique(ended.notesCited, now.notesCited, SESSION_LIST_MAX),
+          tips: mergeUnique(ended.tips, now.tips, SESSION_LIST_MAX),
+        },
+      });
+      setSummary({ saving: false, error: error instanceof Error ? error.message : "Could not save the summary" });
+    }
+  },
+
+  async openSummary(): Promise<void> {
+    const path = state.summary.result?.path;
+    if (!path) return;
+    try {
+      setSummary({ error: (await window.bee.openMeetingSummary(path)) || null });
+    } catch (error) {
+      setSummary({ error: error instanceof Error ? error.message : "Could not open the summary" });
     }
   },
 

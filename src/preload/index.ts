@@ -3,11 +3,13 @@ import { contextBridge, ipcRenderer } from "electron";
 import { z } from "zod";
 import {
   IPC,
+  meetingSummaryResultSchema,
   pipelineResultSchema,
   settingsViewSchema,
   transcribeResultSchema,
   updateActionSchema,
   updateCheckSchema,
+  type MeetingSummaryRequest,
   type PipelineRequest,
   type SettingsUpdate,
   type TranscribeRequest,
@@ -22,6 +24,10 @@ const api = {
     pipelineResultSchema.parse(await ipcRenderer.invoke(IPC.runPipeline, request)),
   transcribe: async (request: TranscribeRequest) =>
     transcribeResultSchema.parse(await ipcRenderer.invoke(IPC.transcribe, request)),
+  writeMeetingSummary: async (request: MeetingSummaryRequest) =>
+    meetingSummaryResultSchema.parse(await ipcRenderer.invoke(IPC.writeMeetingSummary, request)),
+  // Resolves to shell.openPath's error message, "" on success.
+  openMeetingSummary: async (path: string) => z.string().parse(await ipcRenderer.invoke(IPC.openMeetingSummary, path)),
   setExpanded: async (expanded: boolean) => {
     z.void().parse(await ipcRenderer.invoke(IPC.setExpanded, expanded));
   },

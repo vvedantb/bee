@@ -8,8 +8,8 @@ src/
   preload/    Sandboxed bridge: exposes window.bee (parses every response with zod) and Clerk's bridge
   renderer/   React UI: collapsed notch, sign-in, expanded panel (Live, Settings), mic capture (mic.ts), phrase detection and WAV (speech.ts)
   shared/     IPC channel names and zod schemas, Clerk config (shared/clerk.ts)
-  core/       Pure TypeScript: note chunking, retrieval, Jev ranking, Luna guidance, Grok STT, pipeline, release version checks
-test/         Live Gateway smoke test (npm run test:gateway), Electron mic E2E (npm run test:e2e, harness in test/e2e)
+  core/       Pure TypeScript: note chunking, retrieval, Jev ranking, Luna guidance and meeting summaries, Grok STT, pipeline, release version checks
+test/         Live Gateway smoke test (npm run test:gateway), Electron mic and summary E2E (npm run test:e2e, harness in test/e2e)
 resources/    App and tray icons
 ```
 
@@ -33,7 +33,25 @@ simulateLine(text)  ← also "Simulate meeting line" (Manual test)
   → PipelineResult back to the renderer
 ```
 
-The renderer keeps the last 8 lines (spoken or typed) and sends them with each run. The lines are not rendered: the Live tab shows tips and notes only. The main process holds no meeting state. Each run takes a number (`latestRun`); a result is shown only if no newer run has started, so fast speech never shows stale tips.
+The renderer keeps the last 8 lines (spoken or typed) and sends them with each run. The lines are not rendered: the Live tab shows tips and notes only. The main process holds no meeting state.
+
+## Meeting summary
+
+```
+End meeting & save summary (Live tab)
+  → store.endMeeting()                              stops the mic; session cleared for the next meeting
+  → window.bee.writeMeetingSummary({ transcript, notesCited, tips, sessionToken })
+  → main/meeting-ipc.ts: check session, read key
+  → core/summary                                    Luna writes Decisions / Action items / Topics (fails open)
+  → main/notes.ts writeMeetingSummaryFile          <notes>/meeting-YYYY-MM-DD-HHmm.md
+  → { path, usedLlm, error } → "Open summary"      main opens it only if it is a .md directly in the notes folder
+```
+
+- **Session** (`renderer/src/store.ts`): separate from the 8-line pipeline window, the store keeps every line since the last saved summary (up to 200, `SESSION_TRANSCRIPT_MAX`), the titles of notes cited in shown results, and the tips shown (up to 100 each). None of it is rendered. If saving fails, the session is restored.
+- **File**: `# Meeting summary — YYYY-MM-DD HH:mm` (local time), then `## Decisions`, `## Action items` (owner first when named), `## Topics`, `## Notes cited` and, if any, `## Tips shown`. Bee writes the title, notes cited and tips itself; the model writes only the first three sections. A second summary in the same minute gets `-2`, `-3`… Nothing is overwritten.
+- **Recall**: the file is an ordinary note. `chunkNote` splits it into one snippet per `##` section, so next week's "last time we discussed X" retrieves it like any other note.
+- **Fail-open**: with no key, or if Luna fails, times out or replies without the three sections, Bee writes a plain summary instead: the same headings, "Not extracted" under Decisions and Action items, and the transcript lines under Topics. The meeting is never lost, and the UI says the summary was saved without AI and why. Real failures (sign-in, disk) show as errors and keep the session.
+- The spoken transcript is still never shown on screen. It goes to disk only in the plain summary, inside the user's notes folder. Each run takes a number (`latestRun`); a result is shown only if no newer run has started, so fast speech never shows stale tips.
 
 ## Speech-to-text
 
@@ -90,6 +108,7 @@ All model calls use the Vercel AI SDK (`ai`, `@ai-sdk/gateway`) against Vercel A
 | Transcribe | `xai/grok-stt` | `experimental_transcribe` (Gateway transcription API) | 20 s | 1 |
 | Rank | `typesafe-ai/jev` | `experimental_evaluate` (Gateway evaluation API) | 15 s | 1 |
 | Guide | `openai/gpt-6-luna` | `generateText`, reasoning effort `low`, max 800 output tokens | 30 s | 1 |
+| Summarise | `openai/gpt-6-luna` | `generateText`, reasoning effort `low`, max 2,000 output tokens | 60 s | 1 |
 
 ### Why Jev does not use chat completions
 
@@ -130,6 +149,10 @@ Question keys are positional (`c0`…) rather than note ids. Note ids contain ch
 
 Defined in `src/core/luna.ts`. The system prompt asks for at most two tips, one per line, under 20 words each. If the latest lines ask a direct question, the first tip answers it: from the notes when they cover it (cited as `[n1]`), otherwise from general knowledge, with a brief caveat when the answer may have changed since training. Otherwise tips suggest what to say next, citing notes. Tips must not invent facts about the user's own work. If there is nothing useful, the model replies `NONE`. The user prompt holds the last 8 transcript lines and the notes labelled `[n1]`… The panel shows the same labels next to each note.
 
+### Summary prompt format
+
+Defined in `src/core/summary.ts`. The system prompt asks for exactly three `##` sections (Decisions, Action items, Topics) of short bullets, action items as `- Owner: task` when an owner is named, `- None recorded.` for an empty section, and no facts beyond the transcript and notes. The user prompt holds the session transcript and the titles of the notes cited. `parseSummaryMarkdown` drops code fences, titles and preamble, and rejects a reply missing any section.
+
 ## Hard-coded values
 
 | Value | Where | Setting |
@@ -138,6 +161,9 @@ Defined in `src/core/luna.ts`. The system prompt asks for at most two tips, one 
 | Notes sent to Luna | `core/pipeline.ts` | 3 |
 | Jev minimum score | `core/jev.ts` | 1 (on a 0–3 scale) |
 | Transcript lines kept / per run | `renderer/src/store.ts`, `core/luna.ts` | 8 |
+| Session lines kept for the summary | `shared/ipc.ts` | 200 |
+| Notes cited / tips kept for the summary | `renderer/src/store.ts` | 100 each |
+| Summary timeout | `core/summary.ts` | 60 s |
 | Retrieval query window | `core/retrieve.ts` | last 3 lines, latest counted twice |
 | BM25 k1 / b / title weight | `core/retrieve.ts` | 1.2 / 0.75 / 2 (standard defaults, not tuned) |
 | Snippet length | `core/notes.ts` | 600 characters |
@@ -151,7 +177,7 @@ Defined in `src/core/luna.ts`. The system prompt asks for at most two tips, one 
 
 ## Renderer state
 
-One small external store (`renderer/src/store.ts`, read with `useSyncExternalStore`) holds settings, the active tab, the recent meeting lines (not rendered), the last result, the microphone state and the update state. Forms are uncontrolled and read with `FormData` on submit. There is no `useEffect`. The React Compiler is enabled.
+One small external store (`renderer/src/store.ts`, read with `useSyncExternalStore`) holds settings, the active tab, the recent meeting lines and the meeting session (not rendered), the last result, the summary state, the microphone state and the update state. Forms are uncontrolled and read with `FormData` on submit. There is no `useEffect`. The React Compiler is enabled.
 
 Saved secrets show as a disabled field reading `•••••••• (saved)` with **Replace**. The form remounts after a successful save, so typed secrets clear and saved fields go back to masked.
 
@@ -164,7 +190,3 @@ Saved secrets show as a disabled field reading `•••••••• (saved)
 ## Not yet built
 
 System audio capture and the vmem connector.
-
-## Future
-
-- **Meeting summary export.** At the end of a meeting, write a markdown summary (decisions, owners, notes used) into the notes folder, so next week's "last time we discussed X" finds it. Not implemented.

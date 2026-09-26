@@ -1,12 +1,23 @@
-import { ipcMain } from "electron";
-import { NO_GATEWAY_KEY, STT_MODEL, createBeeGateway } from "../core/gateway";
+import { ipcMain, shell } from "electron";
+import { z } from "zod";
+import { LUNA_MODEL, NO_GATEWAY_KEY, STT_MODEL, createBeeGateway } from "../core/gateway";
 import { runPipeline } from "../core/pipeline";
+import { buildLocalSummary, generateMeetingSummary } from "../core/summary";
 import { transcribeSpeech } from "../core/transcribe";
-import { IPC, pipelineRequestSchema, transcribeRequestSchema } from "../shared/ipc";
+import {
+  IPC,
+  meetingSummaryRequestSchema,
+  pipelineRequestSchema,
+  transcribeRequestSchema,
+  type MeetingSummaryResult,
+} from "../shared/ipc";
 import { assertSignedIn } from "./auth";
-import { loadSnippets } from "./notes";
+import { isNotePath, loadSnippets, writeMeetingSummaryFile } from "./notes";
 
-/** Mic phrases → Grok STT, and lines → retrieve → Jev → Luna. The Gateway key never leaves main. */
+/**
+ * Mic phrases → Grok STT, lines → retrieve → Jev → Luna, and the end-of-meeting summary into the notes folder.
+ * The Gateway key never leaves main.
+ */
 export function registerMeetingIpc(args: { notesDir: string; gatewayApiKey: () => string | undefined }): void {
   ipcMain.handle(IPC.transcribe, (_event, payload) => {
     const request = transcribeRequestSchema.parse(payload);
@@ -25,5 +36,24 @@ export function registerMeetingIpc(args: { notesDir: string; gatewayApiKey: () =
       snippets: loadSnippets(args.notesDir),
       gateway: apiKey ? createBeeGateway(apiKey) : null,
     });
+  });
+
+  // Without a key (or if Luna fails) a plain summary is still written, so the meeting is never lost.
+  ipcMain.handle(IPC.writeMeetingSummary, async (_event, payload): Promise<MeetingSummaryResult> => {
+    const { sessionToken, ...input } = meetingSummaryRequestSchema.parse(payload);
+    assertSignedIn(sessionToken);
+    const when = new Date();
+    const apiKey = args.gatewayApiKey();
+    const summary = apiKey
+      ? await generateMeetingSummary({ ...input, model: createBeeGateway(apiKey)(LUNA_MODEL), when })
+      : { markdown: buildLocalSummary({ ...input, when }), usedLlm: false, error: NO_GATEWAY_KEY };
+    const path = writeMeetingSummaryFile(args.notesDir, summary.markdown, when);
+    return { path, usedLlm: summary.usedLlm, error: summary.error };
+  });
+
+  ipcMain.handle(IPC.openMeetingSummary, (_event, payload) => {
+    const path = z.string().max(4000).parse(payload);
+    if (!isNotePath(args.notesDir, path)) throw new Error("Not a note in the notes folder");
+    return shell.openPath(path);
   });
 }

@@ -1,8 +1,16 @@
 import { ClerkFailed, Show, SignIn, UserButton, useAuth } from "@clerk/electron/react";
-import { IconChevronDown, IconDownload, IconMicrophone, IconPlayerPlay, IconRefresh } from "@tabler/icons-react";
+import {
+  IconChevronDown,
+  IconDownload,
+  IconExternalLink,
+  IconMicrophone,
+  IconNotebook,
+  IconPlayerPlay,
+  IconRefresh,
+} from "@tabler/icons-react";
 import { useState, type FormEvent } from "react";
 import type { SettingsView } from "../../shared/ipc";
-import { actions, useBee, type BeeState, type UpdateState } from "./store";
+import { actions, useBee, type BeeState, type SummaryState, type UpdateState } from "./store";
 
 const ICON = { size: 16, stroke: 1.75 };
 
@@ -63,6 +71,38 @@ function Notch({ state }: { state: BeeState }) {
   );
 }
 
+function summaryLabel(summary: SummaryState, lineCount: number): string {
+  if (summary.saving) return "Writing the summary…";
+  const result = summary.result;
+  if (result) {
+    const name = result.path.split(/[\\/]/).pop() ?? result.path;
+    return result.usedLlm ? `Saved ${name} to your notes.` : `Saved ${name} without AI. ${result.error ?? ""}`.trim();
+  }
+  if (lineCount === 0) return "Once the meeting starts, save decisions, action items and notes cited to your notes folder.";
+  return "Saves decisions, action items and notes cited to your notes folder, so Bee can recall them next time.";
+}
+
+// The spoken lines are sent to main for the summary but never shown here.
+function MeetingSection({ summary, lineCount }: { summary: SummaryState; lineCount: number }) {
+  return (
+    <section>
+      <h2>Meeting</h2>
+      <div className="row actions">
+        <button type="button" className="primary" disabled={lineCount === 0 || summary.saving} onClick={() => void actions.endMeeting()}>
+          <IconNotebook {...ICON} /> End meeting &amp; save summary
+        </button>
+        {summary.result ? (
+          <button type="button" className="link" onClick={() => void actions.openSummary()}>
+            <IconExternalLink {...ICON} /> Open summary
+          </button>
+        ) : null}
+      </div>
+      <p className="muted">{summaryLabel(summary, lineCount)}</p>
+      {summary.error ? <p className="error">{summary.error}</p> : null}
+    </section>
+  );
+}
+
 function LiveTab({ state }: { state: BeeState }) {
   const result = state.result;
 
@@ -91,6 +131,8 @@ function LiveTab({ state }: { state: BeeState }) {
         {result?.guideError ? <p className="error">{result.guideError}</p> : null}
         {state.error ? <p className="error">{state.error}</p> : null}
       </section>
+
+      <MeetingSection summary={state.summary} lineCount={state.session.lines.length} />
 
       <section>
         <h2>

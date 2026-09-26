@@ -1,6 +1,7 @@
-// E2E harness main process: Bee's real preload and meeting IPC (main/meeting-ipc.ts), a page that runs the real
-// mic capture and speech segmenter, and Chromium's fake audio device playing a WAV fixture. Clerk is skipped:
-// the page sends an unsigned token with Bee's issuer, which is all main/auth.ts checks.
+// E2E harness main process: Bee's real preload and meeting IPC (main/meeting-ipc.ts) and one test page.
+// With BEE_E2E_AUDIO, Chromium's fake audio device plays that WAV to the page's mic. BEE_E2E_NOTES_DIR picks the notes
+// folder (default: a new temp folder). Clerk is skipped: the page sends an unsigned token with Bee's issuer, which is
+// all main/auth.ts checks.
 import { BrowserWindow, app, session } from "electron";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -9,13 +10,15 @@ import { CLERK_ISSUER } from "../../src/main/auth";
 import { registerMeetingIpc } from "../../src/main/meeting-ipc";
 import { ensureNotesDir } from "../../src/main/notes";
 
-const [preload, page, audioFile] = [process.env.BEE_E2E_PRELOAD, process.env.BEE_E2E_PAGE, process.env.BEE_E2E_AUDIO];
-if (!preload || !page || !audioFile) throw new Error("BEE_E2E_PRELOAD, BEE_E2E_PAGE and BEE_E2E_AUDIO must be set");
+const { BEE_E2E_PRELOAD: preload, BEE_E2E_PAGE: page, BEE_E2E_AUDIO: audioFile, BEE_E2E_NOTES_DIR: notesDirEnv } = process.env;
+if (!preload || !page) throw new Error("BEE_E2E_PRELOAD and BEE_E2E_PAGE must be set");
 
-app.commandLine.appendSwitch("use-fake-device-for-media-stream");
-app.commandLine.appendSwitch("use-fake-ui-for-media-stream");
-app.commandLine.appendSwitch("use-file-for-fake-audio-capture", audioFile);
-app.commandLine.appendSwitch("autoplay-policy", "no-user-gesture-required");
+if (audioFile) {
+  app.commandLine.appendSwitch("use-fake-device-for-media-stream");
+  app.commandLine.appendSwitch("use-fake-ui-for-media-stream");
+  app.commandLine.appendSwitch("use-file-for-fake-audio-capture", audioFile);
+  app.commandLine.appendSwitch("autoplay-policy", "no-user-gesture-required");
+}
 
 function fakeSessionToken(): string {
   const part = (value: object) => Buffer.from(JSON.stringify(value)).toString("base64url");
@@ -24,7 +27,7 @@ function fakeSessionToken(): string {
 }
 
 void app.whenReady().then(() => {
-  const notesDir = join(mkdtempSync(join(tmpdir(), "bee-e2e-")), "notes");
+  const notesDir = notesDirEnv || join(mkdtempSync(join(tmpdir(), "bee-e2e-")), "notes");
   ensureNotesDir(notesDir);
   registerMeetingIpc({ notesDir, gatewayApiKey: () => process.env.BEE_AI_GATEWAY_API_KEY?.trim() || undefined });
   session.defaultSession.setPermissionRequestHandler((_contents, permission, callback) => callback(permission === "media"));

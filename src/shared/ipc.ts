@@ -6,6 +6,8 @@ export const IPC = {
   saveSettings: "bee:settings:save",
   runPipeline: "bee:pipeline:run",
   transcribe: "bee:speech:transcribe",
+  writeMeetingSummary: "bee:meeting:write-summary",
+  openMeetingSummary: "bee:meeting:open-summary",
   setExpanded: "bee:window:set-expanded",
   openNotesFolder: "bee:notes:open-folder",
   checkForUpdate: "bee:update:check",
@@ -38,6 +40,26 @@ export const pipelineRequestSchema = z.object({
   sessionToken: z.string().max(8000),
 });
 export type PipelineRequest = z.infer<typeof pipelineRequestSchema>;
+
+// Lines the renderer keeps for the end-of-meeting summary (store.ts); the pipeline still gets only the last 8.
+export const SESSION_TRANSCRIPT_MAX = 200;
+
+export const meetingSummaryRequestSchema = z.object({
+  transcript: z.array(z.string().max(2000)).min(1).max(SESSION_TRANSCRIPT_MAX),
+  // Titles of notes cited in tips during the meeting.
+  notesCited: z.array(z.string().max(500)).max(100),
+  tips: z.array(z.string().max(500)).max(100),
+  sessionToken: z.string().max(8000),
+});
+export type MeetingSummaryRequest = z.infer<typeof meetingSummaryRequestSchema>;
+
+// The file is always written. usedLlm is false when Luna was skipped (no key) or failed; error says why.
+export const meetingSummaryResultSchema = z.object({
+  path: z.string(),
+  usedLlm: z.boolean(),
+  error: z.string().nullable(),
+});
+export type MeetingSummaryResult = z.infer<typeof meetingSummaryResultSchema>;
 
 // 15 s of 16 kHz 16-bit mono WAV is about 480 KB; the cap leaves room without letting a runaway buffer through.
 export const TRANSCRIBE_MAX_BYTES = 2_000_000;
