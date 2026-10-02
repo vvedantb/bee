@@ -1,14 +1,18 @@
 import type { TeamsAction, TeamsActionResult, TeamsPublishRequest, TeamsTickResult, TeamsView } from "../shared/ipc";
-import { IDLE_TRACKER, stepTracker, type MeetingTracker } from "./meeting-tracker";
+import { IDLE_TRACKER, LEAVE_DEBOUNCE_MS, stepTracker, type MeetingTracker } from "./meeting-tracker";
 import { RelayError, createRelayClient } from "./relay-client";
 import { formatInviteCode, inviteLink, parseInviteCode, type Member, type Presence, type Room, type Team } from "./relay-protocol";
 import { inviteRoster, mergeCandidate, rankRooms } from "./room-picker";
 import { addClockSample, clockOffset, phraseToLine, shouldShare, type ClockSample, type SessionLine } from "./sync-lines";
+import { meetingCandidate, type MeetingCandidate } from "./teams-heuristics";
 
 // Teams mode state for one device: detection → popup → sync room → phrases. No Electron here, so tests drive it
 // with the in-memory relay and a stub detector. Every relay failure falls back to solo (fail open).
 
-export type DetectorReading = { inMeeting: boolean; source: "windows" | "none" };
+// meetings: the named meeting windows open now (may be empty while inMeeting, e.g. a mic-only call).
+export type DetectorReading = { inMeeting: boolean; source: "windows" | "none"; meetings: MeetingCandidate[] };
+
+const NO_READING: DetectorReading = { inMeeting: false, source: "none", meetings: [] };
 
 // Re-read team membership this often, so removals and renames show up.
 const TEAM_REFRESH_MS = 60_000;
@@ -36,6 +40,12 @@ export function createSyncController(deps: {
   let tracker: MeetingTracker = IDLE_TRACKER;
   let source: DetectorReading["source"] = "none";
   let simulated = false;
+  let simulatedMeetings: MeetingCandidate[] = [];
+  // Named meeting windows in the latest reading.
+  let meetings: MeetingCandidate[] = [];
+  // The meeting window this detection is bound to (picked, or the only one when joining). Other windows are ignored
+  // until it ends. goneSince: when it last vanished from the reading, for the leave debounce.
+  let attached: { key: string; epoch: number; goneSince: number | null } | null = null;
   let dismissedEpoch = 0;
   let room: Room | null = null;
   // Epoch of the detection the room was joined under; null when started by hand. Only those rooms auto-leave.
@@ -55,6 +65,32 @@ export function createSyncController(deps: {
 
   function promptOpen(): boolean {
     return team !== null && room === null && tracker.stable && tracker.epoch !== dismissedEpoch;
+  }
+
+  /** Two or more meeting windows and none picked: ask "Which meeting?" before offering any sync. */
+  function pickingMeeting(): boolean {
+    return meetings.length > 1 && attached === null;
+  }
+
+  /** Binds this detection to the only named meeting, if there is exactly one and nothing is bound yet. */
+  function attachSole(): void {
+    const sole = meetings.length === 1 ? meetings[0] : undefined;
+    if (!attached && sole && tracker.stable) attached = { key: sole.key, epoch: tracker.epoch, goneSince: null };
+  }
+
+  /** The bound meeting window closed for the leave debounce, even if other meetings remain: this session is over. */
+  function attachedEnded(): boolean {
+    if (!attached) return false;
+    if (meetings.some((meeting) => meeting.key === attached?.key)) attached.goneSince = null;
+    else attached.goneSince ??= now();
+    return attached.goneSince !== null && now() - attached.goneSince >= (deps.timing?.leaveMs ?? LEAVE_DEBOUNCE_MS);
+  }
+
+  function prompt(myId: string): TeamsView["prompt"] {
+    const ranked = rankRooms({ rooms, presence, me: myId, mySince: (tracker.since ?? now()) + offset(), now: serverNow() });
+    // No one-click room until the user says which meeting they are in.
+    const choices = pickingMeeting() ? { ...ranked, primary: null, others: ranked.primary ? [ranked.primary, ...ranked.others] : ranked.others } : ranked;
+    return { epoch: tracker.epoch, ...choices, meetings, selectedMeetingKey: attached?.key ?? null };
   }
 
   function candidate(): Room | null {
@@ -77,9 +113,7 @@ export function createSyncController(deps: {
         : null,
       pendingInvite,
       detection: { inMeeting: tracker.stable, raw: tracker.raw, epoch: tracker.epoch, source: simulated ? "simulated" : source },
-      prompt: promptOpen()
-        ? { epoch: tracker.epoch, ...rankRooms({ rooms, presence, me: myId, mySince: (tracker.since ?? now()) + offset(), now: serverNow() }) }
-        : null,
+      prompt: promptOpen() ? prompt(myId) : null,
       room: room
         ? { id: room.id, code: room.code, createdAt: room.createdAt, startedByMe: room.createdBy === myId, members: room.members, invited: room.invited }
         : null,
@@ -160,12 +194,20 @@ export function createSyncController(deps: {
     const error = await attempt(async () => {
       if (teamCheckedAt === 0 || now() - teamCheckedAt > TEAM_REFRESH_MS) await refreshTeam(token);
       // The detector only runs for people on a team (tasklist is not free).
-      const reading = team ? await deps.readDetector().catch((): DetectorReading => ({ inMeeting: false, source: "none" })) : null;
+      const reading = team ? await deps.readDetector().catch((): DetectorReading => NO_READING) : null;
       source = reading?.source ?? "none";
+      meetings = simulated ? simulatedMeetings : (reading?.meetings ?? []);
       tracker = stepTracker(tracker, simulated || (reading?.inMeeting ?? false), now(), deps.timing);
+      if (!tracker.stable || attached?.epoch !== tracker.epoch) attached = null;
       if (team) {
         // Teams left the meeting (after the debounce), or a new meeting began: end the sync. Never auto-rejoin.
         if (room && roomEpoch !== null && (!tracker.stable || tracker.epoch !== roomEpoch)) await leaveRoom(token);
+        // The picked meeting closed while others stay open: end its sync and ignore the rest until this detection ends.
+        if (attachedEnded()) {
+          attached = null;
+          dismissedEpoch = tracker.epoch;
+          if (room && roomEpoch !== null) await leaveRoom(token);
+        }
         const inMeeting = tracker.stable;
         if (!presenceSent || presenceSent.inMeeting !== inMeeting || now() - presenceSent.at > PRESENCE_HEARTBEAT_MS) {
           presence = (await client.setPresence(token, inMeeting)).presence;
@@ -187,6 +229,13 @@ export function createSyncController(deps: {
     const token = action.sessionToken;
     if (action.type === "dismissPrompt") {
       dismissedEpoch = tracker.epoch;
+      if (!room) attached = null;
+      return;
+    }
+    if (action.type === "selectMeeting") {
+      if (!promptOpen() || attached) return;
+      if (!meetings.some((meeting) => meeting.key === action.key)) throw new Error("That meeting window has closed.");
+      attached = { key: action.key, epoch: tracker.epoch, goneSince: null };
       return;
     }
     if (action.type === "setShareMuted") {
@@ -195,6 +244,9 @@ export function createSyncController(deps: {
     }
     if (action.type === "simulateMeeting") {
       simulated = action.on;
+      // Same key and dedupe as real windows.
+      const named = (action.on ? (action.meetings ?? []) : []).map((meeting) => meetingCandidate(meeting.title));
+      simulatedMeetings = [...new Map(named.map((meeting) => [meeting.key, meeting])).values()];
       return;
     }
     if (action.type === "copyInvite") return;
@@ -221,17 +273,21 @@ export function createSyncController(deps: {
         return;
       case "startSync":
         setRoom(await client.createRoom(token, action.invite), epoch);
+        attachSole();
         return;
       case "joinSync":
         setRoom(await client.joinRoom(token, { roomId: action.roomId }), epoch);
+        attachSole();
         return;
       case "joinSyncByCode":
         setRoom(await client.joinRoom(token, { code: action.code }), epoch);
+        attachSole();
         return;
       case "leaveSync":
         await leaveRoom(token);
         // No second popup for the same meeting.
         dismissedEpoch = tracker.epoch;
+        attached = null;
         return;
       case "invite":
         if (room) setRoom(await client.invite(token, room.id, action.userIds), roomEpoch);

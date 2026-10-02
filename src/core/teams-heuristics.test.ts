@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isMeetingTitle, micInUseKeys, parseTasklistCsv, teamsInMeeting } from "./teams-heuristics";
+import { isMeetingTitle, meetingWindows, micInUseKeys, parseTasklistCsv, teamsInMeeting } from "./teams-heuristics";
 
 const TASKLIST = [
   '"ms-teams.exe","14200","Console","1","312,400 K","Running","PC\\alice","0:01:12","Chat | Acme | Microsoft Teams"',
@@ -52,5 +52,27 @@ describe("teamsInMeeting", () => {
     expect(teamsInMeeting({ windows: chatOnly, micKeys: micInUseKeys(REG) })).toBe(true);
     expect(teamsInMeeting({ windows: chatOnly, micKeys: [] })).toBe(false);
     expect(teamsInMeeting({ windows: [], micKeys: micInUseKeys(REG) })).toBe(false);
+  });
+});
+
+describe("meetingWindows", () => {
+  const row = (title: string) => `"ms-teams.exe","15100","Console","1","90,000 K","Running","PC\\alice","0:00:10","${title}"`;
+  it("lists each meeting window once, without Teams' own tabs", () => {
+    expect(meetingWindows(parseTasklistCsv(TASKLIST))).toEqual([
+      { key: 'meeting with bob "q4"', title: 'Meeting with Bob "Q4" | Microsoft Teams', label: 'Meeting with Bob "Q4"' },
+    ]);
+    const two = parseTasklistCsv(
+      [row("Chat | Acme | Microsoft Teams"), row("Calls | Microsoft Teams"), row("Meeting with Bob | Microsoft Teams"), row("Call with Carol | Microsoft Teams"), row("Call  with carol | Microsoft Teams")].join("\r\n"),
+    );
+    const meetings = meetingWindows(two);
+    expect(meetings.map((meeting) => meeting.label)).toEqual(["Meeting with Bob", "Call with Carol"]);
+    expect(meetings.map((meeting) => meeting.key)).toEqual(["meeting with bob", "call with carol"]);
+    expect(meetingWindows([{ image: "notepad.exe", pid: 1, title: "Meeting notes" }])).toEqual([]);
+  });
+
+  it("is empty for a mic-only call: in a meeting, but nothing to name", () => {
+    const chatOnly = parseTasklistCsv(TASKLIST.split("\r\n")[0] ?? "");
+    expect(teamsInMeeting({ windows: chatOnly, micKeys: micInUseKeys(REG) })).toBe(true);
+    expect(meetingWindows(chatOnly)).toEqual([]);
   });
 });

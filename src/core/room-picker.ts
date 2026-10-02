@@ -23,7 +23,8 @@ export type RoomOption = {
   invitedBy: string | null;
 };
 
-export type RoomChoices = { primary: RoomOption | null; others: RoomOption[] };
+// ambiguous: two or more rooms match equally well, so there is no one-click default and the user picks.
+export type RoomChoices = { primary: RoomOption | null; others: RoomOption[]; ambiguous: boolean };
 
 export function namesLabel(names: string[], max = 2): string {
   if (names.length === 0) return "nobody yet";
@@ -44,7 +45,8 @@ function option(room: Room, reason: RoomOption["reason"], me: string, now: numbe
 
 /**
  * Invited rooms first (newest first), then rooms started within ±10 minutes of my detection that have a member
- * currently in a meeting (closest start first), then everything else. The primary button is the top one.
+ * currently in a meeting (closest start first), then everything else. The primary button is the top one, unless
+ * two or more rooms share the top tier (two invites, or two live recent syncs): then nothing is the default.
  */
 export function rankRooms(args: { rooms: Room[]; presence: Presence[]; me: string; mySince: number; now: number }): RoomChoices {
   const live = inMeetingIds(args.presence, args.now);
@@ -65,8 +67,9 @@ export function rankRooms(args: { rooms: Room[]; presence: Presence[]; me: strin
   other.sort((a, b) => b.createdAt - a.createdAt);
   const ranked = [...invited, ...recent, ...other];
   // An "other" room is never the one-click default: it did not match any signal.
-  const primary = ranked[0] && ranked[0].reason !== "other" ? ranked[0] : null;
-  return { primary, others: primary ? ranked.slice(1) : ranked };
+  const ambiguous = (invited.length > 0 ? invited : recent).length > 1;
+  const primary = !ambiguous && ranked[0] && ranked[0].reason !== "other" ? ranked[0] : null;
+  return { primary, others: primary ? ranked.slice(1) : ranked, ambiguous };
 }
 
 /** Invite roster after starting: teammates in a meeting now and not already in my room. Nobody is pre-ticked. */
