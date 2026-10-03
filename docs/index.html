@@ -1,0 +1,1452 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Bee: a meeting overlay that brings your notes to the call</title>
+  <meta name="description" content="Bee is a small notch at the top centre of your screen. It listens to the meeting, finds relevant notes in your local markdown folder, ranks them with Jev and shows one or two short tips. Open source, MIT licence.">
+  <meta name="theme-color" content="#fafafa">
+  <meta property="og:title" content="Bee: your notes, right when the meeting needs them">
+  <meta property="og:description" content="A desktop overlay for meetings. Listens, finds your notes, shows one or two short tips. Open source.">
+  <meta property="og:type" content="website">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M16 3l11 6.5v13L16 29 5 22.5v-13z' fill='%230a0a0a'/%3E%3C/svg%3E">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:ital,wght@0,400..700;1,400..700&family=Instrument+Serif:ital@0;1&display=swap">
+
+  <style>
+    :root {
+      --background: #fafafa;
+      --foreground: #0a0a0a;
+      --muted: #5c5c5c;
+      --separator: #e4e4e4;
+      --surface: #ffffff;
+
+      --bg-rgb: 250 250 250;
+      --fg-rgb: 10 10 10;
+      --surface-rgb: 255 255 255;
+
+      --gray-1: #f0f0f0;
+      --gray-2: #e6e6e6;
+      --gray-3: #d4d4d4;
+      --gray-4: #a8a8a8;
+      --gray-5: #7a7a7a;
+
+      --sans: "Instrument Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      --serif: "Instrument Serif", ui-serif, Georgia, "Times New Roman", serif;
+      --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+
+      --max: 72rem;
+      --gutter: 1.5rem;
+      --nav-h: 60px;
+      --radius: 14px;
+      --shadow: 0 1px 2px rgb(var(--fg-rgb) / 0.04), 0 12px 32px -12px rgb(var(--fg-rgb) / 0.14);
+    }
+
+    *, *::before, *::after { box-sizing: border-box; }
+
+    html {
+      scroll-behavior: smooth;
+      -webkit-text-size-adjust: 100%;
+      text-size-adjust: 100%;
+    }
+
+    body {
+      margin: 0;
+      background: var(--background);
+      color: var(--foreground);
+      font-family: var(--sans);
+      font-size: 1rem;
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+      overflow-x: hidden;
+    }
+
+    img, svg { display: block; }
+    a { color: inherit; }
+    p { margin: 0; }
+
+    :focus-visible {
+      outline: 2px solid var(--foreground);
+      outline-offset: 3px;
+      border-radius: 6px;
+    }
+
+    .skip {
+      position: absolute;
+      left: 1rem;
+      top: -3rem;
+      z-index: 100;
+      padding: 0.5rem 0.875rem;
+      background: var(--foreground);
+      color: var(--background);
+      border-radius: 8px;
+      font-size: 0.875rem;
+      text-decoration: none;
+    }
+    .skip:focus { top: 0.75rem; }
+
+    .container {
+      width: 100%;
+      max-width: var(--max);
+      margin: 0 auto;
+      padding: 0 var(--gutter);
+    }
+
+    .sr-only {
+      position: absolute;
+      width: 1px; height: 1px;
+      padding: 0; margin: -1px;
+      overflow: hidden;
+      clip: rect(0 0 0 0);
+      white-space: nowrap;
+      border: 0;
+    }
+
+    /* ---------- Nav ---------- */
+
+    .nav {
+      position: sticky;
+      top: 0;
+      z-index: 50;
+      background: rgb(var(--bg-rgb) / 0.8);
+      -webkit-backdrop-filter: saturate(140%) blur(12px);
+      backdrop-filter: saturate(140%) blur(12px);
+      border-bottom: 1px solid var(--separator);
+    }
+
+    .nav-inner {
+      display: flex;
+      align-items: center;
+      gap: 1.5rem;
+      height: var(--nav-h);
+    }
+
+    .wordmark {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      font-weight: 600;
+      font-size: 1.0625rem;
+      letter-spacing: -0.01em;
+      text-decoration: none;
+    }
+    .wordmark svg { width: 18px; height: 18px; }
+
+    .nav-links {
+      display: flex;
+      align-items: center;
+      gap: 1.75rem;
+      margin: 0 0 0 auto;
+      padding: 0;
+      list-style: none;
+    }
+    .nav-links a {
+      font-size: 0.875rem;
+      color: var(--muted);
+      text-decoration: none;
+      transition: color 0.15s ease;
+    }
+    .nav-links a:hover { color: var(--foreground); }
+
+    .nav-actions {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .icon-link {
+      display: inline-grid;
+      place-items: center;
+      width: 36px;
+      height: 36px;
+      border-radius: 999px;
+      color: var(--muted);
+      transition: color 0.15s ease, background-color 0.15s ease;
+    }
+    .icon-link:hover { color: var(--foreground); background: rgb(var(--fg-rgb) / 0.05); }
+    .icon-link svg { width: 18px; height: 18px; }
+
+    .menu-toggle {
+      display: none;
+      width: 36px;
+      height: 36px;
+      padding: 0;
+      border: 1px solid var(--separator);
+      border-radius: 999px;
+      background: var(--surface);
+      color: var(--foreground);
+      cursor: pointer;
+      place-items: center;
+    }
+    .menu-toggle svg { width: 16px; height: 16px; }
+
+    /* ---------- Buttons ---------- */
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+      height: 44px;
+      padding: 0 1.25rem;
+      border-radius: 999px;
+      border: 1px solid transparent;
+      font-family: var(--sans);
+      font-size: 0.9375rem;
+      font-weight: 500;
+      line-height: 1;
+      text-decoration: none;
+      white-space: nowrap;
+      transition: background-color 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
+    }
+    .btn svg { width: 16px; height: 16px; flex: none; }
+    .btn:active { transform: translateY(1px); }
+
+    .btn-primary {
+      background: var(--foreground);
+      color: var(--background);
+    }
+    .btn-primary:hover { background: #2a2a2a; }
+
+    .btn-ghost {
+      background: rgb(var(--surface-rgb) / 0.6);
+      color: var(--foreground);
+      border-color: var(--separator);
+    }
+    .btn-ghost:hover { border-color: var(--gray-4); background: var(--surface); }
+
+    .btn-sm {
+      height: 34px;
+      padding: 0 0.875rem;
+      font-size: 0.8125rem;
+    }
+
+    /* ---------- Hero ---------- */
+
+    .hero {
+      position: relative;
+      isolation: isolate;
+      overflow: hidden;
+      border-bottom: 1px solid var(--separator);
+    }
+
+    .atmosphere,
+    .atmosphere > span {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+    }
+    .atmosphere { z-index: -1; }
+
+    .atmo-grid {
+      background-image:
+        linear-gradient(to right, rgb(var(--fg-rgb) / 0.055) 1px, transparent 1px),
+        linear-gradient(to bottom, rgb(var(--fg-rgb) / 0.055) 1px, transparent 1px);
+      background-size: 56px 56px;
+      background-position: center top;
+      -webkit-mask-image: radial-gradient(ellipse 85% 70% at 50% 30%, #000 30%, transparent 85%);
+      mask-image: radial-gradient(ellipse 85% 70% at 50% 30%, #000 30%, transparent 85%);
+    }
+
+    .atmo-glow {
+      background:
+        radial-gradient(ellipse 70% 50% at 50% 0%, rgb(var(--fg-rgb) / 0.08), transparent 70%),
+        radial-gradient(circle 28rem at 100% 100%, rgb(var(--fg-rgb) / 0.04), transparent 70%);
+    }
+
+    .atmo-grain {
+      opacity: 0.22;
+      mix-blend-mode: overlay;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='128' height='128'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+      background-size: 128px 128px;
+    }
+
+    .atmo-scrim {
+      background: radial-gradient(ellipse 46rem 24rem at 50% 15rem, rgb(var(--bg-rgb) / 0.9), rgb(var(--bg-rgb) / 0.55) 50%, transparent 75%);
+    }
+
+    .hero-copy {
+      max-width: 48rem;
+      margin: 0 auto;
+      padding: clamp(4rem, 9vw, 7rem) 0 3.5rem;
+      text-align: center;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.3125rem 0.75rem;
+      border: 1px solid var(--separator);
+      border-radius: 999px;
+      background: rgb(var(--surface-rgb) / 0.7);
+      font-size: 12px;
+      line-height: 1.3;
+      color: var(--muted);
+    }
+    .badge .dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 999px;
+      background: var(--foreground);
+      animation: pulse 2.4s ease-in-out infinite;
+    }
+
+    h1, h2 {
+      font-family: var(--serif);
+      font-weight: 400;
+      margin: 0;
+      text-wrap: balance;
+    }
+
+    h1 {
+      margin-top: 1.5rem;
+      font-size: clamp(2.35rem, 1.3rem + 4.6vw, 4.85rem);
+      line-height: 1;
+      letter-spacing: -0.02em;
+    }
+    h1 em,
+    h2 em {
+      font-style: italic;
+      color: rgb(var(--fg-rgb) / 0.85);
+    }
+
+    .lede {
+      max-width: 36rem;
+      margin: 1.5rem auto 0;
+      font-size: clamp(1.05rem, 1rem + 0.25vw, 1.125rem);
+      line-height: 1.6;
+      color: var(--muted);
+      text-wrap: pretty;
+    }
+
+    .cta-row {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 0.75rem;
+      margin-top: 2rem;
+    }
+
+    .pills {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 0.5rem;
+      margin: 2rem 0 0;
+      padding: 0;
+      list-style: none;
+    }
+    .pills li {
+      padding: 0.25rem 0.625rem;
+      border: 1px solid var(--separator);
+      border-radius: 999px;
+      background: rgb(var(--surface-rgb) / 0.6);
+      font-family: var(--mono);
+      font-size: 11px;
+      line-height: 1.4;
+      color: var(--muted);
+    }
+
+    /* ---------- Product mock ---------- */
+
+    .stage-wrap {
+      padding-bottom: clamp(4rem, 8vw, 6rem);
+    }
+
+    .stage {
+      position: relative;
+      max-width: 60rem;
+      margin: 0 auto;
+      padding: 0.625rem;
+      border: 1px solid var(--separator);
+      border-radius: 22px;
+      background: rgb(var(--surface-rgb) / 0.55);
+      box-shadow: var(--shadow);
+    }
+
+    .screen {
+      position: relative;
+      overflow: hidden;
+      min-height: 30rem;
+      padding: 1rem 1rem 2.5rem;
+      border: 1px solid var(--separator);
+      border-radius: 14px;
+      background: var(--gray-1);
+    }
+
+    /* The meeting behind Bee: abstract call tiles */
+    .call {
+      position: absolute;
+      inset: 4.25rem 1rem 1rem;
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      grid-template-rows: repeat(2, 1fr);
+      gap: 0.625rem;
+    }
+    .call span {
+      position: relative;
+      border-radius: 10px;
+      background: var(--gray-2);
+    }
+    .call span::after {
+      content: "";
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      width: 2.75rem;
+      height: 2.75rem;
+      border-radius: 999px;
+      background: var(--gray-3);
+      transform: translate(-50%, -60%);
+    }
+    .call span::before {
+      content: "";
+      position: absolute;
+      left: 0.625rem;
+      bottom: 0.625rem;
+      width: 3.5rem;
+      height: 0.5rem;
+      border-radius: 999px;
+      background: var(--gray-3);
+    }
+
+    .bee {
+      position: relative;
+      z-index: 1;
+      width: min(100%, 24rem);
+      margin: 0 auto;
+    }
+
+    .notch {
+      display: flex;
+      align-items: center;
+      gap: 0.625rem;
+      height: 40px;
+      padding: 0 0.5rem 0 0.375rem;
+      border-radius: 999px;
+      background: var(--foreground);
+      color: var(--background);
+      box-shadow: 0 6px 18px -6px rgb(var(--fg-rgb) / 0.35);
+    }
+    .notch-mic {
+      position: relative;
+      display: grid;
+      place-items: center;
+      flex: none;
+      width: 28px;
+      height: 28px;
+      border-radius: 999px;
+      background: #2b2b2b;
+    }
+    .notch-mic svg { width: 14px; height: 14px; }
+    .notch-mic::after {
+      content: "";
+      position: absolute;
+      left: 7px;
+      right: 7px;
+      bottom: 4px;
+      height: 2px;
+      border-radius: 2px;
+      background: var(--gray-4);
+    }
+    .notch-tip {
+      flex: 1;
+      min-width: 0;
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+      font-size: 12px;
+      color: var(--gray-3);
+    }
+    .notch-chev {
+      flex: none;
+      width: 14px;
+      height: 14px;
+      color: var(--gray-4);
+    }
+
+    .panel {
+      margin-top: 0.5rem;
+      padding: 0.875rem;
+      border: 1px solid var(--separator);
+      border-radius: 18px;
+      background: var(--surface);
+      box-shadow: var(--shadow);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .tabs {
+      display: flex;
+      align-items: center;
+      gap: 0.25rem;
+      padding-bottom: 0.75rem;
+      border-bottom: 1px solid var(--separator);
+    }
+    .tab {
+      padding: 0.25rem 0.625rem;
+      border-radius: 999px;
+      color: var(--gray-5);
+    }
+    .tab.on {
+      background: var(--gray-1);
+      color: var(--foreground);
+      font-weight: 500;
+    }
+    .avatar {
+      width: 20px;
+      height: 20px;
+      margin-left: auto;
+      border-radius: 999px;
+      background: var(--gray-3);
+    }
+
+    .panel-label {
+      margin: 0.875rem 0 0.5rem;
+      font-size: 10.5px;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--gray-5);
+    }
+
+    .tip {
+      display: flex;
+      gap: 0.625rem;
+      padding: 0.625rem 0.75rem;
+      border: 1px solid var(--separator);
+      border-radius: 12px;
+      background: var(--background);
+    }
+    .tip + .tip { margin-top: 0.5rem; }
+    .tip-mark {
+      flex: none;
+      width: 6px;
+      margin: 0.25rem 0;
+      border-radius: 999px;
+      background: var(--foreground);
+    }
+    .tip:nth-child(2) .tip-mark { background: var(--gray-4); }
+    .tip.live { animation: tip-pulse 2.8s ease-in-out infinite; }
+
+    .bars {
+      flex: 1;
+      display: grid;
+      gap: 0.375rem;
+      padding: 0.125rem 0;
+    }
+    .bar {
+      display: block;
+      height: 7px;
+      border-radius: 999px;
+      background: var(--gray-3);
+    }
+    .bar.dark { background: var(--gray-5); }
+    .bar.w-95 { width: 95%; }
+    .bar.w-80 { width: 80%; }
+    .bar.w-70 { width: 70%; }
+    .bar.w-60 { width: 60%; }
+    .bar.w-45 { width: 45%; }
+    .bar.w-35 { width: 35%; }
+
+    .note {
+      display: flex;
+      gap: 0.625rem;
+      padding: 0.625rem 0.75rem;
+      border: 1px solid var(--separator);
+      border-radius: 12px;
+    }
+    .note-icon {
+      flex: none;
+      display: grid;
+      place-items: center;
+      width: 24px;
+      height: 24px;
+      border-radius: 6px;
+      background: var(--gray-1);
+      color: var(--gray-5);
+    }
+    .note-icon svg { width: 13px; height: 13px; }
+    .note-title {
+      font-weight: 500;
+      color: var(--foreground);
+    }
+    .note .bars { gap: 0.3125rem; padding-top: 0.375rem; }
+
+    .panel-foot {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.5rem;
+      margin-top: 0.875rem;
+      padding-top: 0.75rem;
+      border-top: 1px solid var(--separator);
+    }
+    .fake-btn {
+      padding: 0.375rem 0.75rem;
+      border-radius: 999px;
+      background: var(--foreground);
+      color: var(--background);
+      font-weight: 500;
+      white-space: nowrap;
+    }
+    .fake-meta { color: var(--gray-5); white-space: nowrap; }
+
+    .stage-caption {
+      max-width: 36rem;
+      margin: 1rem auto 0;
+      text-align: center;
+      font-size: 0.8125rem;
+      color: var(--muted);
+    }
+
+    /* ---------- Sections ---------- */
+
+    .section {
+      padding: clamp(5rem, 10vw, 7.5rem) 0;
+      border-bottom: 1px solid var(--separator);
+      scroll-margin-top: var(--nav-h);
+    }
+
+    .overline {
+      margin-bottom: 1rem;
+      font-size: 12px;
+      font-weight: 500;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+
+    h2 {
+      font-size: clamp(2.05rem, 1.4rem + 2.6vw, 3.4rem);
+      line-height: 1.04;
+      letter-spacing: -0.015em;
+    }
+
+    .section-head {
+      max-width: 40rem;
+    }
+    .section-head p:not(.overline) {
+      margin-top: 1.25rem;
+      font-size: 1.0625rem;
+      color: var(--muted);
+      text-wrap: pretty;
+    }
+
+    /* Steps */
+
+    .steps {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 1px;
+      margin: 3.5rem 0 0;
+      padding: 0;
+      list-style: none;
+      border: 1px solid var(--separator);
+      border-radius: var(--radius);
+      background: var(--separator);
+      overflow: hidden;
+    }
+    .step {
+      padding: 1.75rem 1.5rem 2rem;
+      background: var(--surface);
+    }
+    .step-num {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--muted);
+    }
+    .step h3 {
+      margin: 1.75rem 0 0.5rem;
+      font-size: 1.0625rem;
+      font-weight: 600;
+      letter-spacing: -0.005em;
+    }
+    .step p {
+      font-size: 0.9375rem;
+      color: var(--muted);
+    }
+    .step-tag {
+      display: inline-block;
+      margin-top: 1.25rem;
+      padding: 0.1875rem 0.5rem;
+      border: 1px solid var(--separator);
+      border-radius: 999px;
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--muted);
+    }
+
+    .duo {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1.5rem;
+      margin-top: 1.5rem;
+    }
+    .card {
+      padding: 1.75rem;
+      border: 1px solid var(--separator);
+      border-radius: var(--radius);
+      background: var(--surface);
+    }
+    .card h3 {
+      margin: 0 0 0.5rem;
+      font-size: 1.0625rem;
+      font-weight: 600;
+    }
+    .card p {
+      font-size: 0.9375rem;
+      color: var(--muted);
+    }
+    .quotes {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      margin: 1.25rem 0 0;
+      padding: 0;
+      list-style: none;
+    }
+    .quotes li {
+      padding: 0.375rem 0.75rem;
+      border-radius: 999px;
+      background: var(--gray-1);
+      font-size: 0.875rem;
+    }
+
+    /* Split layouts */
+
+    .split {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      gap: clamp(2.5rem, 6vw, 5rem);
+      align-items: center;
+    }
+
+    .facts {
+      display: grid;
+      gap: 0;
+      margin: 2rem 0 0;
+      padding: 0;
+      list-style: none;
+      border-top: 1px solid var(--separator);
+    }
+    .facts li {
+      display: grid;
+      grid-template-columns: 1.25rem 1fr;
+      gap: 0.75rem;
+      padding: 0.875rem 0;
+      border-bottom: 1px solid var(--separator);
+      font-size: 0.9375rem;
+      color: var(--muted);
+    }
+    .facts li strong {
+      color: var(--foreground);
+      font-weight: 600;
+    }
+    .facts svg {
+      width: 16px;
+      height: 16px;
+      margin-top: 0.25rem;
+      color: var(--foreground);
+    }
+
+    /* Markdown document mock */
+
+    .doc {
+      border: 1px solid var(--separator);
+      border-radius: var(--radius);
+      background: var(--surface);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+    .doc-bar {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.75rem 1rem;
+      border-bottom: 1px solid var(--separator);
+      background: var(--background);
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--muted);
+    }
+    .doc-bar i {
+      width: 8px;
+      height: 8px;
+      border-radius: 999px;
+      background: var(--gray-3);
+    }
+    .doc-bar span { margin-left: 0.375rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .doc-body {
+      display: grid;
+      gap: 0.5rem;
+      padding: 1.25rem 1.25rem 1.5rem;
+      font-family: var(--mono);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+    .doc-h1 { font-weight: 600; }
+    .doc-h2 { margin-top: 0.75rem; color: var(--gray-5); }
+    .doc-row {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    .doc-row > b {
+      flex: none;
+      font-weight: 500;
+      color: var(--foreground);
+    }
+    .doc-row .bar { flex: 1; max-width: 70%; }
+    .doc-row .bullet {
+      flex: none;
+      width: 4px;
+      height: 4px;
+      border-radius: 999px;
+      background: var(--gray-4);
+    }
+
+    /* Teams sync card mock */
+
+    .sync {
+      max-width: 26rem;
+      margin: 0 auto;
+    }
+    .sync .notch { margin: 0 auto; max-width: 20rem; }
+    .team-ico {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.25rem;
+      flex: none;
+      padding: 0 0.5rem;
+      height: 22px;
+      border-radius: 999px;
+      background: #2b2b2b;
+      color: var(--gray-3);
+      font-size: 11px;
+    }
+    .team-ico svg { width: 12px; height: 12px; }
+    .sync-card {
+      position: relative;
+      margin-top: 0.5rem;
+      padding: 1.125rem;
+      border: 1px solid var(--separator);
+      border-radius: 18px;
+      background: var(--surface);
+      box-shadow: var(--shadow);
+      font-size: 12.5px;
+    }
+    .sync-close {
+      position: absolute;
+      top: 0.75rem;
+      right: 0.875rem;
+      color: var(--gray-5);
+      font-size: 14px;
+      line-height: 1;
+    }
+    .sync-join {
+      display: block;
+      padding: 0.75rem 0.875rem;
+      border-radius: 12px;
+      background: var(--foreground);
+      color: var(--background);
+    }
+    .sync-join b { display: block; font-weight: 500; font-size: 13px; }
+    .sync-join span { color: var(--gray-4); font-size: 11.5px; }
+    .sync-alt {
+      margin-top: 0.5rem;
+      padding: 0.625rem 0.875rem;
+      border: 1px solid var(--separator);
+      border-radius: 12px;
+      font-weight: 500;
+    }
+    .sync-links {
+      display: flex;
+      gap: 1rem;
+      margin-top: 0.75rem;
+      color: var(--gray-5);
+      font-size: 11.5px;
+    }
+    .sync-links span { text-decoration: underline; text-underline-offset: 2px; text-decoration-color: var(--gray-3); }
+    .sync-lines {
+      display: grid;
+      gap: 0.375rem;
+      margin-top: 1rem;
+      padding-top: 0.875rem;
+      border-top: 1px dashed var(--separator);
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--gray-5);
+    }
+
+    .fineprint {
+      margin-top: 1.5rem;
+      font-size: 0.8125rem;
+      color: var(--muted);
+    }
+
+    /* Privacy grid */
+
+    .grid-3 {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 1px;
+      margin-top: 3.5rem;
+      border: 1px solid var(--separator);
+      border-radius: var(--radius);
+      background: var(--separator);
+      overflow: hidden;
+    }
+    .cell {
+      padding: 1.75rem 1.5rem;
+      background: var(--surface);
+    }
+    .cell svg {
+      width: 20px;
+      height: 20px;
+      color: var(--foreground);
+    }
+    .cell h3 {
+      margin: 1.25rem 0 0.375rem;
+      font-size: 1rem;
+      font-weight: 600;
+    }
+    .cell p {
+      font-size: 0.9375rem;
+      color: var(--muted);
+    }
+    code {
+      font-family: var(--mono);
+      font-size: 0.85em;
+      padding: 0.0625rem 0.3125rem;
+      border-radius: 5px;
+      background: var(--gray-1);
+      color: var(--foreground);
+      overflow-wrap: anywhere;
+    }
+
+    /* Final CTA */
+
+    .final {
+      position: relative;
+      isolation: isolate;
+      overflow: hidden;
+      padding: clamp(6rem, 12vw, 8.5rem) 0;
+      text-align: center;
+      border-bottom: 1px solid var(--separator);
+    }
+    .final .atmo-grid {
+      -webkit-mask-image: radial-gradient(ellipse 60% 70% at 50% 50%, #000 20%, transparent 80%);
+      mask-image: radial-gradient(ellipse 60% 70% at 50% 50%, #000 20%, transparent 80%);
+    }
+    .final .atmo-scrim {
+      background: radial-gradient(ellipse 36rem 14rem at 50% 50%, rgb(var(--bg-rgb) / 0.85), transparent 75%);
+    }
+    .final h2 {
+      max-width: 44rem;
+      margin: 0 auto;
+      font-size: clamp(2.35rem, 1.5rem + 3.6vw, 4.25rem);
+      line-height: 1;
+    }
+    .final .fineprint {
+      max-width: 34rem;
+      margin: 1.5rem auto 0;
+    }
+
+    /* Footer */
+
+    .footer {
+      padding: 2.5rem 0 3rem;
+      font-size: 0.875rem;
+      color: var(--muted);
+    }
+    .footer-inner {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem 2rem;
+    }
+    .footer .wordmark { color: var(--foreground); }
+    .footer-links {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem 1.5rem;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+    .footer-links a { text-decoration: none; }
+    .footer-links a:hover { color: var(--foreground); text-decoration: underline; text-underline-offset: 3px; }
+    .footer-note {
+      width: 100%;
+      margin-top: 0.5rem;
+      font-size: 0.8125rem;
+    }
+
+    /* ---------- Motion ---------- */
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.3; }
+    }
+    @keyframes tip-pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.62; }
+    }
+    @keyframes rise {
+      from { opacity: 0; transform: translateY(10px); }
+      to { opacity: 1; transform: none; }
+    }
+
+    .rise {
+      animation: rise 0.7s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+      animation-delay: calc(var(--i, 0) * 90ms);
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      *, *::before, *::after {
+        animation: none !important;
+        transition: none !important;
+      }
+    }
+
+    /* ---------- Responsive ---------- */
+
+    @media (max-width: 1023px) {
+      .steps { grid-template-columns: repeat(2, 1fr); }
+      .grid-3 { grid-template-columns: repeat(2, 1fr); }
+    }
+
+    @media (max-width: 860px) {
+      .split { grid-template-columns: minmax(0, 1fr); }
+      .split .visual { order: 2; }
+    }
+
+    @media (max-width: 767px) {
+      :root { --gutter: 1.25rem; }
+
+      .menu-toggle { display: inline-grid; }
+      .nav-links {
+        position: absolute;
+        top: var(--nav-h);
+        left: 0;
+        right: 0;
+        display: none;
+        flex-direction: column;
+        align-items: stretch;
+        gap: 0;
+        margin: 0;
+        padding: 0.5rem var(--gutter) 1rem;
+        background: rgb(var(--bg-rgb) / 0.97);
+        border-bottom: 1px solid var(--separator);
+      }
+      .nav-links.open { display: flex; }
+      .nav-links a {
+        display: block;
+        padding: 0.75rem 0;
+        font-size: 1rem;
+        color: var(--foreground);
+      }
+      .nav-links li + li { border-top: 1px solid var(--separator); }
+      .nav-actions { margin-left: auto; }
+
+      .duo { grid-template-columns: 1fr; }
+      .call { grid-template-columns: repeat(2, 1fr); grid-template-rows: repeat(3, 1fr); }
+      .screen { min-height: 0; padding: 0.75rem 0.625rem 1.5rem; }
+    }
+
+    @media (max-width: 599px) {
+      .steps,
+      .grid-3 { grid-template-columns: 1fr; }
+      .cta-row .btn { width: 100%; }
+      .stage { padding: 0.375rem; border-radius: 18px; }
+      .fake-meta { display: none; }
+    }
+
+    @media (max-width: 380px) {
+      .nav-actions .icon-link { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+
+  <!-- Reusable icons -->
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+    <defs>
+      <symbol id="i-mark" viewBox="0 0 32 32"><path d="M16 3l11 6.5v13L16 29 5 22.5v-13z" fill="currentColor"/><path d="M16 11l5 3v5l-5 3-5-3v-5z" fill="var(--background)"/></symbol>
+      <symbol id="i-github" viewBox="0 0 24 24"><path fill="currentColor" d="M12 .5a11.5 11.5 0 0 0-3.64 22.41c.58.1.79-.25.79-.56v-2c-3.2.7-3.88-1.37-3.88-1.37-.53-1.33-1.28-1.69-1.28-1.69-1.05-.71.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.55-.29-5.24-1.28-5.24-5.68 0-1.26.45-2.28 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.17 1.18a11 11 0 0 1 5.77 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.83 1.19 3.09 0 4.41-2.69 5.39-5.25 5.67.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .5z"/></symbol>
+      <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v11m0 0l-4.5-4.5M12 15l4.5-4.5M5 19.5h14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3" fill="none" stroke="currentColor" stroke-width="2"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+      <symbol id="i-chev" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z M14 3v5h5" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></symbol>
+      <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="i-team" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0M16 4.6a3.5 3.5 0 0 1 0 6.8M18 14a6.5 6.5 0 0 1 3.5 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+      <symbol id="i-lock" viewBox="0 0 24 24"><rect x="4.5" y="10.5" width="15" height="10" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3" fill="none" stroke="currentColor" stroke-width="1.8"/></symbol>
+      <symbol id="i-eye-off" viewBox="0 0 24 24"><path d="M3 3l18 18M10.6 5.1A10.4 10.4 0 0 1 12 5c5 0 8.5 4.5 9.5 7a13 13 0 0 1-2.6 3.7M6.5 6.6A13 13 0 0 0 2.5 12c1 2.5 4.5 7 9.5 7a9.9 9.9 0 0 0 4.4-1M9.9 9.9a3 3 0 0 0 4.2 4.2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 6.5A1.5 1.5 0 0 1 4.5 5H9l2 2.5h8.5A1.5 1.5 0 0 1 21 9v9.5a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18.5z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></symbol>
+      <symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8.5" r="4" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M4.5 20.5a7.5 7.5 0 0 1 15 0" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+      <symbol id="i-code" viewBox="0 0 24 24"><path d="M8.5 7L3.5 12l5 5M15.5 7l5 5-5 5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 8h16M4 16h16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+    </defs>
+  </svg>
+
+  <header class="nav">
+    <div class="container nav-inner">
+      <a class="wordmark" href="#top" aria-label="Bee, back to top">
+        <svg aria-hidden="true"><use href="#i-mark"/></svg>
+        Bee
+      </a>
+
+      <ul class="nav-links" id="nav-links">
+        <li><a href="#how">How it works</a></li>
+        <li><a href="#summary">Summaries</a></li>
+        <li><a href="#teams">Teams mode</a></li>
+        <li><a href="#privacy">Privacy</a></li>
+      </ul>
+
+      <div class="nav-actions">
+        <a class="icon-link" href="https://github.com/vvedantb/bee" aria-label="Bee on GitHub">
+          <svg aria-hidden="true"><use href="#i-github"/></svg>
+        </a>
+        <a class="btn btn-primary btn-sm" href="https://github.com/vvedantb/bee/releases/latest">Download</a>
+        <button class="menu-toggle" type="button" aria-controls="nav-links" aria-expanded="false" aria-label="Open menu">
+          <svg aria-hidden="true"><use href="#i-menu"/></svg>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <main id="main">
+    <!-- Hero -->
+    <section class="hero" id="top" aria-labelledby="hero-title">
+      <div class="atmosphere" aria-hidden="true">
+        <span class="atmo-grid"></span>
+        <span class="atmo-glow"></span>
+        <span class="atmo-grain"></span>
+        <span class="atmo-scrim"></span>
+      </div>
+
+      <div class="container">
+        <div class="hero-copy">
+          <p class="badge rise" style="--i:0"><span class="dot" aria-hidden="true"></span>Meeting overlay for Windows</p>
+
+          <h1 id="hero-title" class="rise" style="--i:1">Your own notes, <em>right when the meeting needs them.</em></h1>
+
+          <p class="lede rise" style="--i:2">Bee is a small notch at the top centre of your screen. It listens to the meeting, finds the notes that matter and shows one or two short tips. What people say never appears on screen.</p>
+
+          <div class="cta-row rise" style="--i:3">
+            <a class="btn btn-primary" href="https://github.com/vvedantb/bee/releases/latest">
+              <svg aria-hidden="true"><use href="#i-download"/></svg>
+              Download for Windows
+            </a>
+            <a class="btn btn-ghost" href="https://github.com/vvedantb/bee">
+              <svg aria-hidden="true"><use href="#i-github"/></svg>
+              View on GitHub
+            </a>
+          </div>
+
+          <ul class="pills rise" style="--i:4" aria-label="Capabilities">
+            <li>Grok STT</li>
+            <li>Jev ranking</li>
+            <li>GPT-6 Luna</li>
+            <li>Local notes</li>
+            <li>Teams sync</li>
+          </ul>
+        </div>
+
+        <!-- Product mock -->
+        <div class="stage-wrap rise" style="--i:5">
+          <figure class="stage" style="margin-left:auto;margin-right:auto">
+            <div class="screen" aria-hidden="true">
+              <div class="call"><span></span><span></span><span></span><span></span><span></span><span></span></div>
+
+              <div class="bee">
+                <div class="notch">
+                  <span class="notch-mic"><svg><use href="#i-mic"/></svg></span>
+                  <span class="notch-tip"><span class="bar dark" style="width:85%;background:#7a7a7a"></span></span>
+                  <svg class="notch-chev"><use href="#i-chev"/></svg>
+                </div>
+
+                <div class="panel">
+                  <div class="tabs">
+                    <span class="tab on">Live</span>
+                    <span class="tab">Settings</span>
+                    <span class="avatar"></span>
+                  </div>
+
+                  <p class="panel-label">Tips</p>
+                  <div>
+                    <div class="tip live">
+                      <span class="tip-mark"></span>
+                      <span class="bars"><span class="bar dark w-95"></span><span class="bar dark w-60"></span></span>
+                    </div>
+                    <div class="tip">
+                      <span class="tip-mark"></span>
+                      <span class="bars"><span class="bar w-80"></span><span class="bar w-45"></span></span>
+                    </div>
+                  </div>
+
+                  <p class="panel-label">Notes</p>
+                  <div class="note">
+                    <span class="note-icon"><svg><use href="#i-file"/></svg></span>
+                    <span class="bars">
+                      <span class="note-title">Q4 roadmap</span>
+                      <span class="bar w-95"></span>
+                      <span class="bar w-70"></span>
+                      <span class="bar w-35"></span>
+                    </span>
+                  </div>
+
+                  <div class="panel-foot">
+                    <span class="fake-btn">End meeting &amp; save summary</span>
+                    <span class="fake-meta">Meeting mode</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <figcaption class="stage-caption">A schematic of Bee during a call: the notch at the top centre, opened to show two tips and the note they came from.</figcaption>
+          </figure>
+        </div>
+      </div>
+    </section>
+
+    <!-- How it works -->
+    <section class="section" id="how" aria-labelledby="how-title">
+      <div class="container">
+        <div class="section-head">
+          <p class="overline">How it works</p>
+          <h2 id="how-title">Listen, find, rank, <em>tip.</em></h2>
+          <p>Someone says “last time we discussed the Acme renewal”. Bee hears it, finds your Acme notes and puts a short tip at the top of the screen. Every phrase runs the same four steps.</p>
+        </div>
+
+        <ol class="steps">
+          <li class="step">
+            <span class="step-num">01</span>
+            <h3>Listen</h3>
+            <p>Click the mic on the notch. Bee cuts speech into short phrases and transcribes each one. The words stay off screen.</p>
+            <span class="step-tag">Grok STT</span>
+          </li>
+          <li class="step">
+            <span class="step-num">02</span>
+            <h3>Find</h3>
+            <p>Each phrase searches your notes folder of plain markdown files. Keyword search picks the top five snippets.</p>
+            <span class="step-tag">Local notes</span>
+          </li>
+          <li class="step">
+            <span class="step-num">03</span>
+            <h3>Rank</h3>
+            <p>Jev scores each snippet against the recent conversation and puts the best first. If ranking fails, Bee keeps the original order.</p>
+            <span class="step-tag">Jev</span>
+          </li>
+          <li class="step">
+            <span class="step-num">04</span>
+            <h3>Tip</h3>
+            <p>GPT-6 Luna reads the top three notes and writes up to two short tips. The first one also shows in the collapsed notch.</p>
+            <span class="step-tag">GPT-6 Luna</span>
+          </li>
+        </ol>
+
+        <div class="duo">
+          <div class="card">
+            <h3>Direct questions get direct answers</h3>
+            <p>When someone asks a question, the tip answers it from your notes or from general knowledge.</p>
+            <ul class="quotes">
+              <li>“when does SSO ship?”</li>
+              <li>“what’s 15% of 18,000?”</li>
+            </ul>
+          </div>
+          <div class="card">
+            <h3>Meeting mode</h3>
+            <p>Meeting mode hides Bee from screen sharing and keeps it above full-screen apps. You can present without Bee showing up in the share.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Summary -->
+    <section class="section" id="summary" aria-labelledby="summary-title">
+      <div class="container split">
+        <div>
+          <p class="overline">End of meeting</p>
+          <h2 id="summary-title">One click, <em>one summary.</em></h2>
+          <div class="section-head">
+            <p>Click <strong>End meeting &amp; save summary</strong>. Bee writes a markdown file into your notes folder, so next week it finds this meeting like any other note.</p>
+          </div>
+          <ul class="facts">
+            <li><svg aria-hidden="true"><use href="#i-check"/></svg><span><strong>Decisions</strong> made in the meeting.</span></li>
+            <li><svg aria-hidden="true"><use href="#i-check"/></svg><span><strong>Action items</strong>, with the owner first when one is named.</span></li>
+            <li><svg aria-hidden="true"><use href="#i-check"/></svg><span><strong>Topics</strong> covered, and the <strong>notes cited</strong> in tips.</span></li>
+            <li><svg aria-hidden="true"><use href="#i-check"/></svg><span><strong>Never lost.</strong> If the AI call fails, Bee saves a plain summary with the meeting lines instead.</span></li>
+          </ul>
+        </div>
+
+        <div class="visual" aria-hidden="true">
+          <div class="doc">
+            <div class="doc-bar"><i></i><i></i><i></i><span>notes/meeting-YYYY-MM-DD-HHmm.md</span></div>
+            <div class="doc-body">
+              <div class="doc-h1"># Meeting summary</div>
+              <div class="doc-h2">## Decisions</div>
+              <div class="doc-row"><span class="bullet"></span><span class="bar dark"></span></div>
+              <div class="doc-row"><span class="bullet"></span><span class="bar" style="max-width:52%"></span></div>
+              <div class="doc-h2">## Action items</div>
+              <div class="doc-row"><span class="bullet"></span><b>Alice:</b><span class="bar dark"></span></div>
+              <div class="doc-row"><span class="bullet"></span><b>Bob:</b><span class="bar" style="max-width:48%"></span></div>
+              <div class="doc-h2">## Topics</div>
+              <div class="doc-row"><span class="bullet"></span><span class="bar" style="max-width:60%"></span></div>
+              <div class="doc-h2">## Notes cited</div>
+              <div class="doc-row"><span class="bullet"></span><b>Q4 roadmap</b></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Teams mode -->
+    <section class="section" id="teams" aria-labelledby="teams-title">
+      <div class="container split">
+        <div class="visual" aria-hidden="true">
+          <div class="sync">
+            <div class="notch">
+              <span class="notch-mic"><svg><use href="#i-mic"/></svg></span>
+              <span class="notch-tip">Teams meeting</span>
+              <span class="team-ico"><svg><use href="#i-team"/></svg>3</span>
+              <svg class="notch-chev"><use href="#i-chev"/></svg>
+            </div>
+            <div class="sync-card">
+              <span class="sync-close">×</span>
+              <span class="sync-join"><b>Join “Alice, Bob”</b><span>amber-otter</span></span>
+              <div class="sync-alt">Start new sync</div>
+              <div class="sync-links"><span>Other syncs (1)</span><span>Join by code</span></div>
+              <div class="sync-lines">
+                <div class="doc-row"><b>Alice:</b><span class="bar"></span></div>
+                <div class="doc-row"><b>Bob:</b><span class="bar" style="max-width:45%"></span></div>
+                <div class="doc-row"><b>You:</b><span class="bar dark" style="max-width:58%"></span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div>
+          <p class="overline">Teams mode · optional</p>
+          <h2 id="teams-title">The whole conversation, <em>not just your side.</em></h2>
+          <div class="section-head">
+            <p>Teammates in the same Microsoft Teams meeting can pool what they say. Each Bee then sees the whole conversation and writes a speaker-labelled summary.</p>
+          </div>
+          <ul class="facts">
+            <li><svg aria-hidden="true"><use href="#i-check"/></svg><span><strong>Bee never joins the call.</strong> No Teams bot, no Teams local API, no Microsoft Graph or calendar access.</span></li>
+            <li><svg aria-hidden="true"><use href="#i-check"/></svg><span><strong>Nothing joins automatically.</strong> When a meeting starts, Bee offers a sync to join. You always click.</span></li>
+            <li><svg aria-hidden="true"><use href="#i-check"/></svg><span><strong>You control sharing.</strong> Your phrases go to the sync only while the Bee mic is on and sharing is not paused.</span></li>
+          </ul>
+          <p class="fineprint">Teams mode needs a relay you deploy yourself on Convex. Without it, Bee works solo.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Privacy -->
+    <section class="section" id="privacy" aria-labelledby="privacy-title">
+      <div class="container">
+        <div class="section-head">
+          <p class="overline">Privacy</p>
+          <h2 id="privacy-title">Your notes stay <em>plain files on your machine.</em></h2>
+          <p>Bee reads a folder of markdown files and writes summaries back to it. To transcribe, rank and write tips, it sends phrases and note snippets to Vercel AI Gateway with your own key.</p>
+        </div>
+
+        <div class="grid-3">
+          <div class="cell">
+            <svg aria-hidden="true"><use href="#i-folder"/></svg>
+            <h3>Local markdown notes</h3>
+            <p>Notes live in a normal folder, <code>%APPDATA%\Bee\notes</code> on Windows. Edit them in any editor; Bee picks up changes on the next line.</p>
+          </div>
+          <div class="cell">
+            <svg aria-hidden="true"><use href="#i-eye-off"/></svg>
+            <h3>Words stay off screen</h3>
+            <p>Bee never shows what was said. Only tips and matched notes appear.</p>
+          </div>
+          <div class="cell">
+            <svg aria-hidden="true"><use href="#i-lock"/></svg>
+            <h3>Encrypted key</h3>
+            <p>Your AI Gateway key is encrypted with OS storage: DPAPI on Windows, Keychain on macOS. The interface never sees it.</p>
+          </div>
+          <div class="cell">
+            <svg aria-hidden="true"><use href="#i-user"/></svg>
+            <h3>Sign-in with Clerk</h3>
+            <p>Bee runs guidance only when you are signed in to your Bee account.</p>
+          </div>
+          <div class="cell">
+            <svg aria-hidden="true"><use href="#i-code"/></svg>
+            <h3>Open source</h3>
+            <p>The whole app is on GitHub under the MIT licence. Read it, build it, change it.</p>
+          </div>
+          <div class="cell">
+            <svg aria-hidden="true"><use href="#i-download"/></svg>
+            <h3>Windows first</h3>
+            <p>An installer for Windows 10 and 11 (x64). macOS support is planned.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Final CTA -->
+    <section class="final" aria-labelledby="final-title">
+      <div class="atmosphere" aria-hidden="true">
+        <span class="atmo-grid"></span>
+        <span class="atmo-glow"></span>
+        <span class="atmo-grain"></span>
+        <span class="atmo-scrim"></span>
+      </div>
+      <div class="container">
+        <h2 id="final-title">Bring your notes <em>to the next meeting.</em></h2>
+        <div class="cta-row">
+          <a class="btn btn-primary" href="https://github.com/vvedantb/bee/releases/latest">
+            <svg aria-hidden="true"><use href="#i-download"/></svg>
+            Download for Windows
+          </a>
+          <a class="btn btn-ghost" href="https://github.com/vvedantb/bee">
+            <svg aria-hidden="true"><use href="#i-github"/></svg>
+            View on GitHub
+          </a>
+        </div>
+        <p class="fineprint">Needs a Vercel AI Gateway key and a Bee account. The installer is not code-signed yet, so Windows SmartScreen may warn on first run.</p>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <div class="container footer-inner">
+      <a class="wordmark" href="#top" aria-label="Bee, back to top">
+        <svg aria-hidden="true"><use href="#i-mark"/></svg>
+        Bee
+      </a>
+      <ul class="footer-links">
+        <li>MIT licence</li>
+        <li><a href="https://github.com/vvedantb/bee">GitHub</a></li>
+        <li><a href="https://github.com/vvedantb/bee/releases">Releases</a></li>
+      </ul>
+      <p class="footer-note">Instrument Sans &amp; Instrument Serif under the SIL Open Font License.</p>
+    </div>
+  </footer>
+
+  <script>
+    (function () {
+      var btn = document.querySelector(".menu-toggle");
+      var links = document.getElementById("nav-links");
+      if (!btn || !links) return;
+      function set(open) {
+        links.classList.toggle("open", open);
+        btn.setAttribute("aria-expanded", String(open));
+        btn.setAttribute("aria-label", open ? "Close menu" : "Open menu");
+      }
+      btn.addEventListener("click", function () { set(!links.classList.contains("open")); });
+      links.addEventListener("click", function (e) { if (e.target.closest("a")) set(false); });
+      document.addEventListener("keydown", function (e) { if (e.key === "Escape") set(false); });
+    })();
+  </script>
+</body>
+</html>
