@@ -7,7 +7,7 @@ import { z } from "zod";
 import { startMemoryRelay } from "../relay/src/memory";
 import { createTestIssuer } from "../relay/src/test-issuer";
 import { createRelayClient } from "../src/core/relay-client";
-import { meetingSummaryResultSchema, roomOptionSchema } from "../src/shared/ipc";
+import { meetingSummaryResultSchema, teamsViewSchema } from "../src/shared/ipc";
 import { runHarness } from "./e2e/run";
 
 // Electron E2E of Teams mode, no Gateway key needed: Bee's real preload and main (teams-sync.ts, stub detector) as
@@ -18,7 +18,7 @@ const reportSchema = z.discriminatedUnion("ok", [
   z.object({
     ok: z.literal(true),
     team: z.string().nullable(),
-    prompt: z.object({ epoch: z.number(), primary: roomOptionSchema.nullable(), others: z.array(roomOptionSchema) }),
+    prompt: teamsViewSchema.shape.prompt.unwrap(),
     members: z.array(z.string()),
     sent: z.boolean(),
     mutedSent: z.boolean(),
@@ -82,6 +82,8 @@ describe("Teams mode: popup → join → speaker-labelled sync → leave (Electr
 
     expect(report.team).toBe("Acme");
     expect(report.prompt.primary).toMatchObject({ roomId: room.id, label: "Bob Jones", reason: "recent" });
+    // One unnamed simulated call and one sync: one-click Join, no meeting pick.
+    expect(report.prompt).toMatchObject({ ambiguous: false, meetings: [], selectedMeetingKey: null });
     expect(report.members).toEqual(["Bob Jones", "Alice"]);
     expect(report.sent).toBe(true);
     expect(report.mutedSent).toBe(false);

@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import type { DetectorReading } from "../core/sync-controller";
-import { TEAMS_IMAGES, micInUseKeys, parseTasklistCsv, teamsInMeeting } from "../core/teams-heuristics";
+import { TEAMS_IMAGES, meetingWindows, micInUseKeys, parseTasklistCsv, teamsInMeeting } from "../core/teams-heuristics";
 
 // Desktop Teams meeting detector. Windows only, best-effort (see core/teams-heuristics.ts). Other platforms read
 // "not in a meeting"; use Live → Manual test → Simulate Teams meeting there. Tests inject their own detector.
@@ -24,11 +24,11 @@ async function readWindows(): Promise<DetectorReading> {
     ...TEAMS_IMAGES.map((image) => run("tasklist", ["/v", "/fo", "csv", "/nh", "/fi", `IMAGENAME eq ${image}`])),
   ]);
   const windows = lists.flatMap((text) => parseTasklistCsv(text));
-  return { inMeeting: teamsInMeeting({ windows, micKeys: micInUseKeys(micText ?? "") }), source: "windows" };
+  return { inMeeting: teamsInMeeting({ windows, micKeys: micInUseKeys(micText ?? "") }), source: "windows", meetings: meetingWindows(windows) };
 }
 
 export function createTeamsDetector(platform: NodeJS.Platform = process.platform): TeamsDetector {
-  if (platform !== "win32") return { read: async () => ({ inMeeting: false, source: "none" }) };
+  if (platform !== "win32") return { read: async () => ({ inMeeting: false, source: "none", meetings: [] }) };
   let last: { at: number; reading: Promise<DetectorReading> } | null = null;
   return {
     read: () => {
@@ -42,7 +42,7 @@ export function createTeamsDetector(platform: NodeJS.Platform = process.platform
 export function createStubDetector(initial = false): TeamsDetector & { set: (inMeeting: boolean) => void } {
   let inMeeting = initial;
   return {
-    read: async () => ({ inMeeting, source: "none" }),
+    read: async () => ({ inMeeting, source: "none", meetings: [] }),
     set: (next) => {
       inMeeting = next;
     },

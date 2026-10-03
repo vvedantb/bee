@@ -2,6 +2,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { memoryRelayFetch } from "../../relay/src/memory";
 import { createTestIssuer } from "../../relay/src/test-issuer";
 import { ENTER_STABLE_MS, LEAVE_DEBOUNCE_MS } from "./meeting-tracker";
+import { meetingCandidate, type MeetingCandidate } from "./teams-heuristics";
 import type { TeamsActionInput } from "../shared/ipc";
 import { createSyncController } from "./sync-controller";
 
@@ -17,12 +18,12 @@ async function setup(names: string[]) {
   const fetch = memoryRelayFetch({ verify: issuer.verify, now: () => clock.now });
   const devices = await Promise.all(
     names.map(async (name) => {
-      const detector = { inMeeting: false };
+      const detector: { inMeeting: boolean; meetings: MeetingCandidate[] } = { inMeeting: false, meetings: [] };
       const sync = createSyncController({
         relayUrl: "https://relay.test",
         fetch,
         now: () => clock.now,
-        readDetector: async () => ({ inMeeting: detector.inMeeting, source: "windows" }),
+        readDetector: async () => ({ inMeeting: detector.inMeeting, source: "windows", meetings: detector.meetings }),
       });
       const sessionToken = await issuer.token(`user_${name.toLowerCase()}`);
       return { name, sync, detector, sessionToken };
@@ -85,7 +86,7 @@ describe("sync controller", () => {
     expect((await tick(alice)).view.prompt).toBeNull();
     clock.now += ENTER_STABLE_MS / 2;
     const prompt = (await tick(alice)).view.prompt;
-    expect(prompt).toEqual({ epoch: 1, primary: null, others: [] });
+    expect(prompt).toEqual({ epoch: 1, primary: null, others: [], ambiguous: false, meetings: [], selectedMeetingKey: null });
 
     const started = await act(alice, { type: "startSync", invite: [] });
     expect(started.room).toMatchObject({ startedByMe: true });
@@ -201,13 +202,113 @@ describe("sync controller", () => {
     expect(view.prompt).not.toBeNull();
   });
 
+  it("asks which meeting when two windows look like calls, then joins only the chosen meeting's sync", async () => {
+    const { clock, devices } = await teamOf(["Bob", "Carol", "Alice"]);
+    const [bob, carol, alice] = [need(devices[0]), need(devices[1]), need(devices[2])];
+    await enterMeeting(clock, [bob, carol]);
+    const bobRoom = (await act(bob, { type: "startSync", invite: [] })).room;
+    // 40 s apart: two separate syncs, not a merge offer.
+    clock.now += 40_000;
+    await tick(bob);
+    const carolRoom = (await act(carol, { type: "startSync", invite: [] })).room;
+
+    await act(alice, { type: "simulateMeeting", on: true, meetings: [{ title: "Meeting with Bob | Microsoft Teams" }, { title: "Call with Carol | Microsoft Teams" }] });
+    await tick(alice);
+    clock.now += ENTER_STABLE_MS;
+    await tick(bob);
+    await tick(carol);
+    const picking = (await tick(alice)).view.prompt;
+    expect(picking?.meetings.map((meeting) => meeting.label)).toEqual(["Meeting with Bob", "Call with Carol"]);
+    expect(picking).toMatchObject({ primary: null, selectedMeetingKey: null, ambiguous: true });
+    expect(picking?.others.map((option) => option.roomId).sort()).toEqual([bobRoom?.id, carolRoom?.id].sort());
+
+    expect((await alice.sync.act({ type: "selectMeeting", key: "gone", sessionToken: alice.sessionToken })).error).toMatch(/closed/);
+    const picked = (await act(alice, { type: "selectMeeting", key: "call with carol" })).prompt;
+    expect(picked).toMatchObject({ selectedMeetingKey: "call with carol", primary: null, ambiguous: true });
+    const joined = await act(alice, { type: "joinSync", roomId: carolRoom?.id ?? "" });
+    expect(joined.room?.members.map((member) => member.displayName)).toEqual(["Carol", "Alice"]);
+    expect((await tick(bob)).view.room?.members.map((member) => member.displayName)).toEqual(["Bob"]);
+
+    // A third window opening does not reopen the pick or switch syncs.
+    await act(alice, {
+      type: "simulateMeeting",
+      on: true,
+      meetings: [{ title: "Meeting with Bob | Microsoft Teams" }, { title: "Call with Carol | Microsoft Teams" }, { title: "Meet now | Microsoft Teams" }],
+    });
+    clock.now += ENTER_STABLE_MS;
+    const later = (await tick(alice)).view;
+    expect(later.prompt).toBeNull();
+    expect(later.room?.id).toBe(carolRoom?.id);
+  });
+
+  it("leaves when the chosen meeting closes for the debounce, even though another stays open", async () => {
+    const { clock, devices } = await teamOf(["Bob", "Alice"]);
+    const [bob, alice] = [need(devices[0]), need(devices[1])];
+    await enterMeeting(clock, [bob]);
+    const bobRoom = (await act(bob, { type: "startSync", invite: [] })).room;
+    const bobMeeting = meetingCandidate("Meeting with Bob | Microsoft Teams");
+    const carolCall = meetingCandidate("Call with Carol | Microsoft Teams");
+    alice.detector.meetings = [bobMeeting, carolCall];
+    await enterMeeting(clock, [alice]);
+    await act(alice, { type: "selectMeeting", key: bobMeeting.key });
+    expect((await act(alice, { type: "joinSync", roomId: bobRoom?.id ?? "" })).room?.id).toBe(bobRoom?.id);
+
+    alice.detector.meetings = [carolCall];
+    await tick(alice);
+    clock.now += LEAVE_DEBOUNCE_MS - 1000;
+    await tick(bob);
+    expect((await tick(alice)).view.room?.id).toBe(bobRoom?.id);
+    clock.now += 1000;
+    await tick(bob);
+    const view = (await tick(alice)).view;
+    expect(view.room).toBeNull();
+    // Still "in a meeting" (Carol's call), but no popup and no rejoin until this detection ends.
+    expect(view.detection.inMeeting).toBe(true);
+    expect(view.prompt).toBeNull();
+    clock.now += ENTER_STABLE_MS;
+    expect((await tick(alice)).view.prompt).toBeNull();
+  });
+
+  it("binds a sync to the only meeting window, and keeps one-click Join for a single meeting", async () => {
+    const { clock, devices } = await teamOf(["Bob", "Alice"]);
+    const [bob, alice] = [need(devices[0]), need(devices[1])];
+    await enterMeeting(clock, [bob]);
+    const bobRoom = (await act(bob, { type: "startSync", invite: [] })).room;
+    await act(alice, { type: "simulateMeeting", on: true, meetings: [{ title: "Meeting with Bob | Microsoft Teams" }] });
+    await tick(alice);
+    clock.now += ENTER_STABLE_MS;
+    await tick(bob);
+    const prompt = (await tick(alice)).view.prompt;
+    expect(prompt).toMatchObject({ primary: { roomId: bobRoom?.id }, ambiguous: false, selectedMeetingKey: null });
+    await act(alice, { type: "joinSync", roomId: prompt?.primary?.roomId ?? "" });
+
+    // That window closes and another opens: the sync ends after the debounce.
+    await act(alice, { type: "simulateMeeting", on: true, meetings: [{ title: "Call with Carol | Microsoft Teams" }] });
+    await tick(alice);
+    clock.now += LEAVE_DEBOUNCE_MS;
+    await tick(bob);
+    expect((await tick(alice)).view).toMatchObject({ room: null, prompt: null });
+  });
+
+  it("dismissing the which-meeting pick hides it for this detection", async () => {
+    const { clock, devices } = await teamOf(["Alice"]);
+    const alice = need(devices[0]);
+    alice.detector.meetings = [meetingCandidate("Meeting with Bob | Microsoft Teams"), meetingCandidate("Call with Carol | Microsoft Teams")];
+    await enterMeeting(clock, [alice]);
+    expect((await tick(alice)).view.prompt?.meetings).toHaveLength(2);
+    const view = await act(alice, { type: "dismissPrompt" });
+    expect(view).toMatchObject({ prompt: null, room: null });
+    clock.now += ENTER_STABLE_MS;
+    expect((await tick(alice)).view.prompt).toBeNull();
+  });
+
   it("fails open when the relay is down, and is off without BEE_RELAY_URL", async () => {
     const down = createSyncController({
       relayUrl: "https://relay.test",
       fetch: async () => {
         throw new Error("connect ECONNREFUSED");
       },
-      readDetector: async () => ({ inMeeting: true, source: "windows" }),
+      readDetector: async () => ({ inMeeting: true, source: "windows", meetings: [] }),
     });
     const token = await issuer.token("user_alice");
     const result = await down.tick(token);
@@ -215,7 +316,7 @@ describe("sync controller", () => {
     expect(result.view.relayError).toMatch(/Relay unreachable: connect ECONNREFUSED\. Bee is working solo\./);
     expect(await down.publish({ text: "Hi", clientTs: 0, source: "mic", sessionToken: token })).toEqual({ sent: false, error: null });
 
-    const off = createSyncController({ relayUrl: null, readDetector: async () => ({ inMeeting: false, source: "none" }) });
+    const off = createSyncController({ relayUrl: null, readDetector: async () => ({ inMeeting: false, source: "none", meetings: [] }) });
     expect((await off.tick(token)).view).toMatchObject({ relayConfigured: false, team: null, prompt: null });
     expect((await off.act({ type: "startSync", invite: [], sessionToken: token })).error).toMatch(/BEE_RELAY_URL/);
   });

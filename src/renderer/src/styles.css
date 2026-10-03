@@ -496,6 +496,25 @@ code {
   opacity: 0.75;
 }
 
+/* "Which meeting?" and equal room choices: one full-width button per option, no default. */
+.sync-picks button.sync-main {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 8px 12px;
+  text-align: left;
+}
+
+.sync-picks .sync-main span {
+  max-width: 100%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
 .sync-list li {
   display: flex;
   align-items: center;

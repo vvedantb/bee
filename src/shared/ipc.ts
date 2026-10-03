@@ -139,6 +139,9 @@ export const roomOptionSchema = z.object({
   invitedBy: z.string().nullable(),
 });
 
+// A desktop meeting window, named by its title only (Bee has no Microsoft meeting id). key: normalised label.
+export const meetingCandidateSchema = z.object({ key: z.string(), title: z.string(), label: z.string() });
+
 export const teamsViewSchema = z.object({
   // False when BEE_RELAY_URL is not set: Teams mode is off and Bee works solo.
   relayConfigured: z.boolean(),
@@ -158,8 +161,19 @@ export const teamsViewSchema = z.object({
     epoch: z.number(),
     source: z.enum(["windows", "simulated", "none"]),
   }),
-  // The "Join Alice, Bob / Start new" popup for the current detection.
-  prompt: z.object({ epoch: z.number(), primary: roomOptionSchema.nullable(), others: z.array(roomOptionSchema) }).nullable(),
+  // The "Join Alice, Bob / Start new" popup for the current detection. With two or more meeting windows and none
+  // picked yet (selectedMeetingKey null), it first asks "Which meeting?" and has no primary. ambiguous: two or more
+  // syncs match equally well, so there is no one-click Join.
+  prompt: z
+    .object({
+      epoch: z.number(),
+      primary: roomOptionSchema.nullable(),
+      others: z.array(roomOptionSchema),
+      ambiguous: z.boolean(),
+      meetings: z.array(meetingCandidateSchema),
+      selectedMeetingKey: z.string().nullable(),
+    })
+    .nullable(),
   room: z
     .object({
       id: z.string(),
@@ -206,9 +220,17 @@ export const teamsActionSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("invite"), userIds: z.array(z.string().max(200)).min(1).max(50), ...token }),
   z.object({ type: z.literal("merge"), accept: z.boolean(), ...token }),
   z.object({ type: z.literal("dismissPrompt"), ...token }),
+  // "Which meeting?": the user picks one of the concurrent meeting windows; the sync is bound to it until it ends.
+  z.object({ type: z.literal("selectMeeting"), key: z.string().max(300), ...token }),
   z.object({ type: z.literal("setShareMuted"), muted: z.boolean(), ...token }),
-  // Manual test: pretend desktop Teams is in a meeting (for Linux, macOS and E2E).
-  z.object({ type: z.literal("simulateMeeting"), on: z.boolean(), ...token }),
+  // Manual test: pretend desktop Teams is in a meeting (for Linux, macOS and E2E). meetings: window titles to pretend
+  // are open; none means an unnamed call (mic only).
+  z.object({
+    type: z.literal("simulateMeeting"),
+    on: z.boolean(),
+    meetings: z.array(z.object({ title: z.string().trim().min(1).max(300) })).max(10).optional(),
+    ...token,
+  }),
 ]);
 export type TeamsAction = z.infer<typeof teamsActionSchema>;
 type WithoutToken<A> = A extends TeamsAction ? Omit<A, "sessionToken"> : never;

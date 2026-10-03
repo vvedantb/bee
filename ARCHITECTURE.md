@@ -84,14 +84,18 @@ Failures (offline, HTTP errors, no release, no asset) come back as values and sh
 
 Bee never joins the call and uses no Microsoft identity (no bot, no Teams local API, no Graph or calendar). Teammates' Bees pool their own mute-gated mic phrases through the Bee relay. Without a Microsoft meeting id Bee cannot tell two concurrent meetings apart, so grouping is by explicit click only: timing and presence rank the choices, and membership is whoever clicked.
 
+Concurrent meetings are surfaced, not guessed. The detector also lists each desktop meeting window by title (`meetingWindows`, deduplicated by normalised title). With two or more, the popup first asks **Which meeting?** (`selectMeeting`) and offers no one-click sync. If two or more syncs share the top rank (two invites, or two live recent syncs), `rankRooms` sets `ambiguous` and no `primary`, and the popup lists them all as equal choices. The pick binds this detection to that window title (`attached` in the controller; a sole window is bound on join or start). Other windows are ignored until the session ends. If the bound window is gone for the 15 s leave debounce, Bee leaves the sync and shows no new popup until the detection ends, even if other meeting windows stay open. A mic-only call (no meeting window title) behaves as one unnamed meeting and uses the boolean debounce only. Nothing is sent to the relay about windows; presence stays a boolean.
+
 ```
 main/teams-detector.ts  (Windows: tasklist window titles + mic privacy registry; others: none)
   → core/meeting-tracker   raw reading → stable after 10 s; leave after 15 s false; new epoch per meeting
+  → reading.meetings (window titles) → controller: 2+ unbound → "Which meeting?"; bound title gone 15 s → leave
 renderer store: tick every 2 s → window.bee.teams.tick(token) → main/teams-sync.ts → core/sync-controller
   → relay GET /v1/me (every 60 s), PUT /v1/presence (on change, heartbeat 20 s)
   → in a sync: GET /v1/rooms/:id/phrases?after=seq  → teammates' lines → store mergeLines → pipeline + session
   → popup open or in a sync: GET /v1/rooms (rooms + presence) → core/room-picker rankRooms / inviteRoster / mergeCandidate
-  → TeamsView back: prompt (Join "Alice, Bob" / Start new / Other syncs / Join by code), room, roster, merge, errors
+  → TeamsView back: prompt (meetings + selectedMeetingKey, Join "Alice, Bob" / Start new / Other syncs / Join by code,
+    or an equal list when ambiguous), room, roster, merge, errors
 Popup click → window.bee.teams.act({ type: "joinSync" | "startSync" | … }) → relay POST /v1/rooms[/join]
 Mic phrase → store.simulateLine(text, "mic") → pipeline, and window.bee.teams.publish → shouldShare gate → POST phrases
   → relay stamps speakerId / speakerName from the verified Clerk JWT, serverTs, clamps spokenAt

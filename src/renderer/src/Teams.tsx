@@ -54,19 +54,77 @@ function JoinByCode({ busy }: { busy: boolean }) {
   );
 }
 
+function PromptHead({ title }: { title: string }) {
+  return (
+    <div className="sync-head">
+      <IconUsersGroup {...ICON} />
+      <strong>{title}</strong>
+      <button type="button" className="icon-button" title="Not now" onClick={() => void actions.teams({ type: "dismissPrompt" })}>
+        <IconX {...ICON} />
+      </button>
+    </div>
+  );
+}
+
+// Two or more Teams windows look like calls: the user says which one they are in before any sync is offered.
+function MeetingPick({ prompt, busy }: { prompt: NonNullable<TeamsView["prompt"]>; busy: boolean }) {
+  return (
+    <>
+      <PromptHead title="Which meeting?" />
+      <p className="muted">More than one Teams window looks like a call. Pick the one you are in.</p>
+      <ul className="sync-list sync-picks">
+        {prompt.meetings.map((meeting) => (
+          <li key={meeting.key}>
+            <button type="button" className="primary sync-main" disabled={busy} onClick={() => void actions.teams({ type: "selectMeeting", key: meeting.key })}>
+              <span>{meeting.label}</span>
+              {meeting.title !== meeting.label ? <span className="sync-sub">{meeting.title}</span> : null}
+            </button>
+          </li>
+        ))}
+      </ul>
+    </>
+  );
+}
+
+// Two or more syncs match equally well: list them all, with no default. Nothing joins without a click.
+function RoomPick({ prompt, busy }: { prompt: NonNullable<TeamsView["prompt"]>; busy: boolean }) {
+  const [code, setCode] = useState(false);
+  return (
+    <>
+      <PromptHead title="Teams meeting detected" />
+      <p className="muted">More than one sync is live. Pick the room for your call.</p>
+      <ul className="sync-list sync-picks">
+        {prompt.others.map((option) => (
+          <li key={option.roomId}>
+            <button type="button" className="sync-main" disabled={busy} onClick={() => void actions.teams({ type: "joinSync", roomId: option.roomId })}>
+              <span>Join “{option.label}”</span>
+              <span className="sync-sub">{started(option)}</span>
+            </button>
+          </li>
+        ))}
+      </ul>
+      <div className="row">
+        <button type="button" disabled={busy} onClick={() => void actions.teams({ type: "startSync", invite: [] })}>
+          Start new sync
+        </button>
+        <button type="button" className="link" onClick={() => setCode(!code)}>
+          Join by code
+        </button>
+      </div>
+      {code ? <JoinByCode busy={busy} /> : null}
+    </>
+  );
+}
+
 // Notion-style: one main choice, one alternative, the rest behind links. Nothing joins without a click.
 function SyncPrompt({ prompt, busy }: { prompt: NonNullable<TeamsView["prompt"]>; busy: boolean }) {
   const [more, setMore] = useState<"others" | "code" | null>(null);
   const primary = prompt.primary;
+  if (prompt.meetings.length > 1 && !prompt.selectedMeetingKey) return <MeetingPick prompt={prompt} busy={busy} />;
+  if (prompt.ambiguous && !primary) return <RoomPick prompt={prompt} busy={busy} />;
   return (
     <>
-      <div className="sync-head">
-        <IconUsersGroup {...ICON} />
-        <strong>Teams meeting detected</strong>
-        <button type="button" className="icon-button" title="Not now" onClick={() => void actions.teams({ type: "dismissPrompt" })}>
-          <IconX {...ICON} />
-        </button>
-      </div>
+      <PromptHead title="Teams meeting detected" />
       <p className="muted">Sync notes with teammates in this call? Only Bee members who join are captured.</p>
       {primary ? (
         <button type="button" className="primary sync-main" disabled={busy} onClick={() => void actions.teams({ type: "joinSync", roomId: primary.roomId })}>
