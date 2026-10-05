@@ -52,11 +52,24 @@ describe("rankRooms", () => {
     ]);
   });
 
-  it("orders recent rooms by how close they started to my detection", () => {
+  it("has no default when two recent rooms look equally live, ordered by how close they started", () => {
     const rooms = [room("far", NOW - 9 * MIN, ["bob"]), room("near", NOW - 2 * MIN, ["carol"])];
     const choices = rankRooms({ rooms, presence: [present("bob"), present("carol")], me: "me", mySince, now: NOW });
-    expect(choices.primary?.roomId).toBe("near");
-    expect(choices.others.map((option) => option.roomId)).toEqual(["far"]);
+    expect(choices.primary).toBeNull();
+    expect(choices.ambiguous).toBe(true);
+    expect(choices.others.map((option) => option.roomId)).toEqual(["near", "far"]);
+  });
+
+  it("keeps one recent room as the default, and one invite over several recent rooms", () => {
+    const presence = [present("bob"), present("carol"), present("dan")];
+    const single = rankRooms({ rooms: [room("near", NOW - 2 * MIN, ["bob"])], presence, me: "me", mySince, now: NOW });
+    expect(single).toMatchObject({ primary: { roomId: "near" }, ambiguous: false });
+    const rooms = [room("a", NOW - 2 * MIN, ["bob"]), room("b", NOW - 3 * MIN, ["carol"]), room("inv", NOW - 4 * MIN, ["dan"], { invited: ["me"] })];
+    expect(rankRooms({ rooms, presence, me: "me", mySince, now: NOW })).toMatchObject({ primary: { roomId: "inv" }, ambiguous: false });
+    const twoInvites = [...rooms, room("inv2", NOW - 5 * MIN, ["erin"], { invited: ["me"] })];
+    const choices = rankRooms({ rooms: twoInvites, presence, me: "me", mySince, now: NOW });
+    expect(choices).toMatchObject({ primary: null, ambiguous: true });
+    expect(choices.others.map((option) => option.roomId)).toEqual(["inv", "inv2", "a", "b"]);
   });
 
   it("never makes an unmatched room the one-click default", () => {
@@ -67,7 +80,7 @@ describe("rankRooms", () => {
 
   it("skips my own room, empty rooms and merged rooms", () => {
     const rooms = [room("mine", NOW, ["me", "bob"]), room("empty", NOW, []), room("merged", NOW, ["carol"], { mergedInto: "x" })];
-    expect(rankRooms({ rooms, presence: [present("bob"), present("carol")], me: "me", mySince, now: NOW })).toEqual({ primary: null, others: [] });
+    expect(rankRooms({ rooms, presence: [present("bob"), present("carol")], me: "me", mySince, now: NOW })).toEqual({ primary: null, others: [], ambiguous: false });
   });
 });
 

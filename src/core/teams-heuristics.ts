@@ -55,10 +55,30 @@ export function micInUseKeys(text: string): string[] {
   return inUse;
 }
 
+// One desktop meeting window. No Microsoft meeting id: the key is only the window's own title, normalised.
+export type MeetingCandidate = { key: string; title: string; label: string };
+
+/** "Meeting with Bob | Microsoft Teams" → label "Meeting with Bob", key "meeting with bob". */
+export function meetingCandidate(title: string): MeetingCandidate {
+  const label = title.trim().replace(/\s*[|\u2013\u2014-]\s*Microsoft Teams\b.*$/i, "").trim() || title.trim();
+  return { key: label.toLowerCase().replace(/\s+/g, " "), title, label };
+}
+
+/** Teams windows that read like a call, one per distinct title (a pop-out and the main window count once). */
+export function meetingWindows(windows: WindowRow[]): MeetingCandidate[] {
+  const found = new Map<string, MeetingCandidate>();
+  for (const row of windows) {
+    if (!TEAMS_IMAGES.includes(row.image.toLowerCase()) || !isMeetingTitle(row.title)) continue;
+    const candidate = meetingCandidate(row.title);
+    if (!found.has(candidate.key)) found.set(candidate.key, candidate);
+  }
+  return [...found.values()];
+}
+
 /** Teams is running and either holds the mic or shows a meeting window. */
 export function teamsInMeeting(args: { windows: WindowRow[]; micKeys: string[] }): boolean {
   const teams = args.windows.filter((row) => TEAMS_IMAGES.includes(row.image.toLowerCase()));
   if (teams.length === 0) return false;
   const micByTeams = args.micKeys.some((key) => /teams/i.test(key));
-  return micByTeams || teams.some((row) => isMeetingTitle(row.title));
+  return micByTeams || meetingWindows(teams).length > 0;
 }

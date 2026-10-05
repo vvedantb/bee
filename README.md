@@ -104,13 +104,15 @@ Teams mode lets teammates who are in the same Microsoft Teams meeting pool what 
 
 ### In a meeting
 
-1. **Detection.** On Windows, Bee checks every few seconds whether desktop Teams is in a call: a Teams process that holds the microphone (Windows microphone privacy registry) or shows a meeting or call window title. This is a best-effort heuristic. On macOS and Linux there is no detector; use **Live → Manual test → Simulate Teams meeting**.
+1. **Detection.** On Windows, Bee checks every few seconds whether desktop Teams is in a call: a Teams process that holds the microphone (Windows microphone privacy registry) or shows a meeting or call window title. This is a best-effort heuristic. Bee also lists each open meeting window by its title. On macOS and Linux there is no detector; use **Live → Manual test → Simulate Teams meeting**.
 2. **Popup.** After about 10 seconds of stable detection, a card opens under the notch:
    - **Join "Alice, Bob"**: the best open sync on your team. Syncs you were invited to come first, then syncs started within 10 minutes of your meeting whose members are in a meeting now. The subtitle shows who invited you or when it started, and its word code.
    - **Start new sync** (or **Start meeting sync** when there is nothing to join).
    - **Other syncs (n)** and **Join by code** (for example `amber-otter`) as secondary links. **×** closes the card for this meeting.
 
    Nothing joins automatically. Timing and presence only rank the choices; you always click.
+
+   If two or more Teams windows look like calls, the card first asks **Which meeting?** and lists them by title. Pick the one you are in; only then are syncs offered. If two or more syncs match equally well (two invites, or two live syncs started near your meeting), there is no one-click **Join**: the card lists them all as equal choices. Once you join or start, the sync stays bound to that meeting. Other meeting windows are ignored until it ends. When that window has been closed for 15 seconds, Bee leaves the sync, even if another meeting is still open.
 3. **After starting.** An optional **Invite who is here** step lists teammates who are in a meeting now. Nobody is pre-ticked. You can also paste the word code in the Teams chat.
 4. **Synced.** The notch shows a team icon with the member count. **Live → Teams sync** shows "Synced with Alice, Bob", **Pause sharing** / **Resume sharing** and **Leave sync**. Your mic phrases go to the sync only while the Bee mic is on and sharing is not paused. Typed test lines stay on your device. Teammates' phrases join your transcript in spoken order, labelled "Alice: …", and feed tips too.
 5. **Simultaneous starts.** If a teammate in a meeting started a sync within 30 seconds of yours, both of you see **Merge with Bob's sync?**. It merges only once both tap **Merge**.
@@ -142,7 +144,7 @@ To show full names without typing them, add a `name` claim to the Clerk session 
 - **Partial summaries.** Only Bee members who joined the sync are captured. Other attendees, and anyone with the Bee mic off, are missing from every summary.
 - **Consent.** Each person's summary contains colleagues' words, stored on each device. Tell participants, and get a privacy or legal review before wide use.
 - **Wrong-room clicks.** A person can join the wrong sync by clicking the wrong button. Names are shown before joining, and **Leave sync** is one click. There is no "Remove" for uninvited joiners yet.
-- **No Microsoft IDs.** Bee cannot tell two concurrent Teams meetings apart by itself. Syncs are grouped only by who clicked.
+- **No Microsoft IDs.** Bee has no Microsoft meeting id, so it cannot match a meeting to a sync by itself. It lists concurrent desktop meeting windows (by title) and equally ranked live syncs, and you pick. The session stays bound to that choice until it ends. Syncs are grouped only by who clicked. Two meeting windows with the same title count as one. A mic-only call with no meeting window is treated as one unnamed meeting.
 - **Display names.** Without a `name` claim, a user can type any name for themselves when joining the team. They cannot change anyone else's.
 - **Unsigned installer.** Windows SmartScreen warns on first run.
 - **Relay scale.** One Convex deployment serves every team (kv-backed): fine for a few hundred users. Tokens are checked on every request; phrases are deleted when a sync ends, or 4 hours after it started.
@@ -209,7 +211,9 @@ Both fail straight away with a clear message if `BEE_AI_GATEWAY_API_KEY` is not 
 
 The Teams E2E needs no key. The test serves the in-memory relay over HTTP, with a local RS256 key pair and JWKS, and plays "Bob": it creates the team and a sync. Bee's real preload and main (with a stub detector) run as "Alice". Alice joins by invite link, simulates a meeting, takes the popup's **Join**, shares one mic phrase and one while sharing is paused, and receives Bob's phrase. She then writes the summary and turns the meeting off. The test checks that the relay stamped both speakers from their tokens and that the paused phrase never left Alice's device. It also checks that Alice left the sync after the debounce and that the plain summary lists `Alice: …` and `Bob Jones: …` lines and a `## Speakers` section.
 
-Unit tests cover the relay (JWT signature, issuer, expiry and `azp` checks; team invite and join; room ids, word codes and membership; phrase stamping; stale members and the 4-hour limit; two-tap merge). They also cover room ranking, the detection debounce, the Windows heuristics against sample `tasklist` and registry output, and the share gate. The last group covers the sync controller with two or three devices on one relay, including concurrent meetings, merging, leaving without rejoining, and fail-open.
+The concurrent-meeting E2E (`test/teams-pick.e2e.test.ts`) plays "Bob" and "Carol", each with a live sync. Alice simulates two meeting windows. The test checks that the card asks **Which meeting?** with no one-click sync, and that dismissing it joins nothing. On the next detection Alice picks "Call with Carol" and joins Carol's sync. The test checks that she is only in Carol's sync and that her phrase reached only Carol's.
+
+Unit tests cover the relay (JWT signature, issuer, expiry and `azp` checks; team invite and join; room ids, word codes and membership; phrase stamping; stale members and the 4-hour limit; two-tap merge). They also cover room ranking, the detection debounce, the Windows heuristics against sample `tasklist` and registry output, and the share gate. The last group covers the sync controller with two or three devices on one relay, including concurrent meetings, the "Which meeting?" pick, equally ranked syncs, leaving when the chosen meeting closes, merging, leaving without rejoining, and fail-open.
 
 ## Manual steps and known limits
 
