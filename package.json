@@ -102,7 +102,7 @@
         }
       ],
       "category": "public.app-category.productivity",
-      "icon": "resources/icon.png",
+      "icon": "resources/icon-mac.png",
       "hardenedRuntime": true,
       "notarize": false,
       "gatekeeperAssess": false,
