@@ -766,6 +766,12 @@ textarea {
 /* Switch rows: label and switch on one row, switch right-aligned, description under the label. */
 .switch-row > div {
   flex-wrap: nowrap;
+  align-items: flex-start;
+}
+
+/* Switch wrapper: match the 20px label line instead of the 40px min-h-10, so the switch lines up with the label. */
+.switch-row > div > div:last-child {
+  min-height: 20px;
 }
 
 /* Raised pill behind the mic, chevron and update icons. The notch status button stays transparent. */
