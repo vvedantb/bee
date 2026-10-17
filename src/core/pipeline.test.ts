@@ -14,5 +14,6 @@ describe("runPipeline", () => {
     expect(result.rankSource).toBe("fallback");
     expect(result.guideError).toContain("No AI Gateway key");
     expect(result.tips).toEqual([]);
+    expect(result.sources).toEqual([]);
   });
 });

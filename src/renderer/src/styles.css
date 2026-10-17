@@ -315,6 +315,32 @@ ol {
   font-size: 14px;
 }
 
+.sources {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+}
+
+.sources li {
+  padding: 4px 10px;
+  border-radius: 8px;
+  background: var(--surface-raised);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sources a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.sources a:hover {
+  text-decoration: underline;
+}
+
 .notes li {
   padding: 8px 10px;
   border-radius: 10px;

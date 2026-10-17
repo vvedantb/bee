@@ -21,6 +21,7 @@
   },
   "dependencies": {
     "@ai-sdk/gateway": "^4.0.94",
+    "@ai-sdk/openai": "^4.0.78",
     "@clerk/electron": "^0.0.47",
     "ai": "^7.0.116",
     "convex": "^1.46.0",

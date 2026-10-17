@@ -25,6 +25,7 @@ export async function runPipeline(args: {
       rankSource: "fallback",
       rankError: NO_GATEWAY_KEY,
       tips: [],
+      sources: [],
       guideError: NO_GATEWAY_KEY,
       timingsMs: { retrieve: t1 - t0, rank: 0, guide: 0 },
     };
@@ -57,6 +58,7 @@ export async function runPipeline(args: {
     rankSource: rank.source,
     rankError: rank.error,
     tips: guide.tips,
+    sources: guide.sources,
     guideError: guide.error,
     timingsMs: { retrieve: t1 - t0, rank: t2 - t1, guide: t3 - t2 },
   };

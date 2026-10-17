@@ -33,6 +33,12 @@ describe("LUNA_SYSTEM", () => {
     expect(LUNA_SYSTEM).toContain("general knowledge");
     expect(LUNA_SYSTEM).toContain("at most 2 short tips");
   });
+
+  it("tells Luna when to search the web and when not to", () => {
+    expect(LUNA_SYSTEM).toContain("web_search");
+    expect(LUNA_SYSTEM).toContain("current events");
+    expect(LUNA_SYSTEM).toContain("Do not search for stable general knowledge");
+  });
 });
 
 describe("parseLunaTips", () => {

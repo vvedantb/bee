@@ -103,6 +103,7 @@ export const pipelineResultSchema = z.object({
   rankSource: z.enum(["jev", "fallback"]),
   rankError: z.string().nullable(),
   tips: z.array(z.string()),
+  sources: z.array(z.object({ title: z.string().max(300), url: z.string().url().max(2000) })).max(5),
   guideError: z.string().nullable(),
   timingsMs: z.object({ retrieve: z.number(), rank: z.number(), guide: z.number() }),
 });

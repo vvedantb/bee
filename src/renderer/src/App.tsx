@@ -143,6 +143,20 @@ function LiveTab({ state }: { state: BeeState }) {
         ) : (
           <p className="muted">{state.busy ? "Thinking…" : state.mic.on ? "Listening…" : "No tips yet. Turn on the mic to start."}</p>
         )}
+        {result && result.sources.length > 0 ? (
+          <div className="sources">
+            <span className="muted">Sources</span>
+            <ul>
+              {result.sources.map((source) => (
+                <li key={source.url}>
+                  <a href={source.url} target="_blank" rel="noreferrer">
+                    {source.title}
+                  </a>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
         {state.mic.error ? <p className="error">{state.mic.error}</p> : null}
         {result?.guideError ? <p className="error">{result.guideError}</p> : null}
         {state.error ? <p className="error">{state.error}</p> : null}
