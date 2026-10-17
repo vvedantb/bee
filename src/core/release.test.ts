@@ -27,6 +27,12 @@ describe("pickInstallerAsset", () => {
     expect(pickInstallerAsset(assets, "darwin")?.name).toBe("Bee-0.2.0.dmg");
   });
 
+  it("picks the dmg, not the zip, on macOS", () => {
+    const mac = [asset("Bee-0.2.0-universal-mac.zip"), asset("Bee-0.2.0-universal.dmg")];
+    expect(pickInstallerAsset(mac, "darwin")?.name).toBe("Bee-0.2.0-universal.dmg");
+    expect(pickInstallerAsset([asset("Bee-0.2.0-universal-mac.zip")], "darwin")).toBeNull();
+  });
+
   it("returns null when the platform has no installer", () => {
     expect(pickInstallerAsset(assets, "linux")).toBeNull();
   });

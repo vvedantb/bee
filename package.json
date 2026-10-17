@@ -88,10 +88,32 @@
     },
     "mac": {
       "target": [
-        "dmg"
+        {
+          "target": "dmg",
+          "arch": [
+            "universal"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "universal"
+          ]
+        }
       ],
       "category": "public.app-category.productivity",
-      "icon": "resources/icon.png"
+      "icon": "resources/icon.png",
+      "hardenedRuntime": true,
+      "notarize": false,
+      "gatekeeperAssess": false,
+      "entitlements": "resources/entitlements.mac.plist",
+      "entitlementsInherit": "resources/entitlements.mac.inherit.plist",
+      "extendInfo": {
+        "LSUIElement": true,
+        "NSMicrophoneUsageDescription": "Bee listens to your microphone during meetings to transcribe speech and suggest tips. Audio is sent only for transcription.",
+        "NSAudioCaptureUsageDescription": "Bee can capture meeting audio to transcribe it. This is optional.",
+        "NSScreenCaptureUsageDescription": "Bee can capture system (meeting) audio, which macOS counts as screen recording. This is optional."
+      }
     },
     "linux": {
       "target": [

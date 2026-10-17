@@ -17,6 +17,7 @@ export const IPC = {
   teamsAction: "bee:teams:action",
   teamsPublish: "bee:teams:publish",
   lunaActivity: "bee:luna:activity",
+  systemAudioSource: "bee:audio:system-source",
 };
 
 // Collapsed notch, notch plus the sync popup, notch plus the island response, or the full panel.

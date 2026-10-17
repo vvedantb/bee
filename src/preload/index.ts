@@ -44,6 +44,8 @@ const api = {
   checkForUpdate: async () => updateCheckSchema.parse(await ipcRenderer.invoke(IPC.checkForUpdate)),
   downloadUpdate: async () => updateActionSchema.parse(await ipcRenderer.invoke(IPC.downloadUpdate)),
   installUpdate: async () => updateActionSchema.parse(await ipcRenderer.invoke(IPC.installUpdate)),
+  // A screen source id when system audio may be capturable, else null. The mic path never depends on it.
+  systemAudioSource: async () => z.string().nullable().parse(await ipcRenderer.invoke(IPC.systemAudioSource)),
   // Tool activity while a run is in flight. Returns the unsubscribe function.
   onLunaActivity: (listener: (tool: string) => void): (() => void) => {
     const handler = (_event: unknown, payload: unknown) => {

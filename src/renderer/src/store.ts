@@ -14,7 +14,7 @@ import {
   type WindowSize,
 } from "../../shared/ipc";
 import { ISLAND_IDLE_MS, islandPhase, shouldAutoCollapse } from "./island";
-import { openMic } from "./mic";
+import { openMic, openSystemAudio } from "./mic";
 import { startMicSession } from "./speech";
 
 export type Tab = "live" | "settings";
@@ -425,12 +425,20 @@ export const actions = {
         onError: (error) => setMic({ error }),
       });
       capture.start((frame) => setMic({ level: Math.min(1, mic.push(frame) * 4) }));
+      let micOn = true;
       stopMic = () => {
+        micOn = false;
         capture.stop();
         // The phrase in progress is still transcribed.
         void mic.stop();
       };
       set({ mic: { on: true, level: 0, error: null } });
+      // Best effort and off the critical path: the Screen Recording prompt never blocks the mic.
+      void openSystemAudio().then((extra) => {
+        if (!extra) return;
+        if (micOn) capture.attachExtra(extra);
+        else for (const track of extra.getTracks()) track.stop();
+      });
     } catch (error) {
       setMic({ ...MIC_OFF, error: `Microphone unavailable: ${error instanceof Error ? error.message : String(error)}` });
     }
