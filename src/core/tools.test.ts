@@ -1,4 +1,6 @@
+import { tool } from "ai";
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
 import { lunaTools, sourcesFromGenerateResult } from "./tools";
 
 describe("lunaTools", () => {
@@ -16,6 +18,19 @@ describe("lunaTools", () => {
       "append_note",
     ]);
     expect(Object.keys(lunaTools({ notesDir: "/notes", extraRoots: ["/more"] }))).toHaveLength(5);
+  });
+});
+
+describe("lunaTools extra (MCP)", () => {
+  const ping = tool({ description: "ping", inputSchema: z.object({}), execute: async () => "pong" });
+
+  it("adds namespaced extra tools with or without a notes folder", () => {
+    expect(Object.keys(lunaTools({ extra: { vmem__ping: ping } })).sort()).toEqual(["vmem__ping", "web_search"]);
+    expect(Object.keys(lunaTools({ notesDir: "/notes", extra: { vmem__ping: ping } }))).toHaveLength(6);
+  });
+
+  it("never lets an extra tool replace a built-in", () => {
+    expect(lunaTools({ extra: { web_search: ping } }).web_search).not.toBe(ping);
   });
 });
 

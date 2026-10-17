@@ -4,6 +4,8 @@ import { z } from "zod";
 import {
   IPC,
   lunaActivitySchema,
+  mcpListSchema,
+  mcpTestResultSchema,
   meetingSummaryResultSchema,
   pipelineResultSchema,
   settingsViewSchema,
@@ -13,6 +15,8 @@ import {
   transcribeResultSchema,
   updateActionSchema,
   updateCheckSchema,
+  type McpSave,
+  type McpSetEnabled,
   type MeetingSummaryRequest,
   type PipelineRequest,
   type SettingsUpdate,
@@ -56,6 +60,14 @@ const api = {
     return () => {
       ipcRenderer.removeListener(IPC.lunaActivity, handler);
     };
+  },
+  // MCP servers. Views carry hasAuth and env key names only; secrets never come back.
+  mcp: {
+    list: async () => mcpListSchema.parse(await ipcRenderer.invoke(IPC.mcpList)),
+    save: async (server: McpSave) => mcpListSchema.parse(await ipcRenderer.invoke(IPC.mcpSave, server)),
+    remove: async (id: string) => mcpListSchema.parse(await ipcRenderer.invoke(IPC.mcpRemove, { id })),
+    setEnabled: async (update: McpSetEnabled) => mcpListSchema.parse(await ipcRenderer.invoke(IPC.mcpSetEnabled, update)),
+    test: async (id: string) => mcpTestResultSchema.parse(await ipcRenderer.invoke(IPC.mcpTest, { id })),
   },
   teams: {
     tick: async (sessionToken: string) => teamsTickResultSchema.parse(await ipcRenderer.invoke(IPC.teamsTick, { sessionToken })),

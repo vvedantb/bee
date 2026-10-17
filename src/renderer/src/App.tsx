@@ -11,6 +11,8 @@ import {
   IconX,
 } from "@tabler/icons-react";
 import { useState, type FormEvent } from "react";
+import { McpSettings } from "./McpSettings";
+import { SecretField } from "./SecretField";
 import type { PipelineResult, SettingsView } from "../../shared/ipc";
 import { activityLabel, islandPhase, shouldShowResponse } from "./island";
 import { actions, islandOpen, useBee, type BeeState, type SummaryState, type UpdateState } from "./store";
@@ -291,36 +293,6 @@ const KEY_SOURCE_LABEL: Record<SettingsView["gatewayKeySource"], string> = {
   none: "No key set.",
 };
 
-// Saved secrets never reach the renderer, so a saved field shows placeholder dots until the user replaces it.
-function SecretField(props: { name: string; label: string; placeholder: string; saved: boolean; status: string }) {
-  const [replacing, setReplacing] = useState(false);
-  const masked = props.saved && !replacing;
-  return (
-    <label>
-      {props.label}
-      <span className="row">
-        {masked ? (
-          <input type="text" value="•••••••• (saved)" disabled aria-label={`${props.label} (saved)`} />
-        ) : (
-          <input
-            name={props.name}
-            type="password"
-            placeholder={props.saved ? "Paste a new value" : props.placeholder}
-            autoComplete="off"
-            autoFocus={replacing}
-          />
-        )}
-        {props.saved ? (
-          <button type="button" className="link" onClick={() => setReplacing(!replacing)}>
-            {replacing ? "Cancel" : "Replace"}
-          </button>
-        ) : null}
-      </span>
-      <span className="muted">{props.status}</span>
-    </label>
-  );
-}
-
 function updateLabel(update: UpdateState): string {
   if (update.status === "checking") return "Checking for updates…";
   if (update.status === "downloading") return "Downloading update…";
@@ -425,6 +397,8 @@ function SettingsTab({ state, settings }: { state: BeeState; settings: SettingsV
           ) : null}
         </div>
       </form>
+
+      <McpSettings servers={state.mcp.servers} tests={state.mcp.tests} error={state.mcp.error} />
 
       <label className="toggle">
         <input

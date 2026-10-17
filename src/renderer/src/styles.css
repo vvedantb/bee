@@ -736,3 +736,50 @@ code {
 input[readonly] {
   color: var(--muted);
 }
+
+.mcp-list,
+.mcp-tools {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.mcp-server {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  background: var(--surface-sunken);
+  border-radius: 8px;
+}
+
+.mcp-tools {
+  gap: 4px;
+  max-height: 160px;
+  overflow-y: auto;
+}
+
+.mcp-form {
+  margin-top: 8px;
+}
+
+.spacer {
+  margin-left: auto;
+}
+
+/* KEY=value secrets: drawn as dots while typing, like a password field. */
+.secret-area {
+  -webkit-text-security: disc;
+}
+
+.settings select {
+  font: inherit;
+  color: var(--text);
+  background: var(--surface-sunken);
+  border: none;
+  border-radius: 8px;
+  padding: 7px 10px;
+}

@@ -1,5 +1,6 @@
 import { ipcMain, shell } from "electron";
 import { z } from "zod";
+import { loadMcpTools, type McpServerConfig } from "../core/mcp";
 import { LUNA_MODEL, NO_GATEWAY_KEY, STT_MODEL, createBeeGateway } from "../core/gateway";
 import { runPipeline } from "../core/pipeline";
 import { buildLocalSummary, generateMeetingSummary } from "../core/summary";
@@ -18,7 +19,9 @@ import { isNotePath, loadSnippets, writeMeetingSummaryFile } from "./notes";
  * Mic phrases → Grok STT, lines → retrieve → Jev → Luna, and the end-of-meeting summary into the notes folder.
  * The Gateway key never leaves main.
  */
-export function registerMeetingIpc(args: { notesDir: string; fsRoots: () => string[]; gatewayApiKey: () => string | undefined }): void {
+export function registerMeetingIpc(args: { notesDir: string; fsRoots: () => string[];
+  mcpConfigs: () => McpServerConfig[];
+  gatewayApiKey: () => string | undefined }): void {
   ipcMain.handle(IPC.transcribe, (_event, payload) => {
     const request = transcribeRequestSchema.parse(payload);
     assertSignedIn(request.sessionToken);
@@ -37,6 +40,8 @@ export function registerMeetingIpc(args: { notesDir: string; fsRoots: () => stri
       gateway: apiKey ? createBeeGateway(apiKey) : null,
       notesDir: args.notesDir,
       extraRoots: args.fsRoots(),
+      // Settings are read now, so changes apply without a restart. Servers connect only if Luna will run.
+      loadMcpTools: () => loadMcpTools(args.mcpConfigs()),
       onActivity: (tool) => {
         if (!event.sender.isDestroyed()) event.sender.send(IPC.lunaActivity, { tool });
       },

@@ -25,6 +25,17 @@ describe("activityLabel", () => {
     expect(activityLabel("toString")).toBe("Thinking…");
   });
 
+  it("names the MCP server for namespaced tools", () => {
+    expect(activityLabel("vmem__search")).toBe("Using vmem…");
+    expect(activityLabel("eva__foo")).toBe("Using eva…");
+    expect(activityLabel("my-server__do__it")).toBe("Using my-server…");
+  });
+
+  it("does not treat a bare or trailing double underscore as a server", () => {
+    expect(activityLabel("__x")).toBe("Thinking…");
+    expect(activityLabel("vmem__")).toBe("Thinking…");
+  });
+
   it("maps the tool names Luna's step callback reports", () => {
     const calls = [{ toolName: "web_search" }, { toolName: "read_file" }, { toolName: "append_note" }];
     expect(calls.map((call) => activityLabel(call.toolName))).toEqual(["Searching the web", "Reading notes", "Writing a note"]);
