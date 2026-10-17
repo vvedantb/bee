@@ -20,8 +20,8 @@ import { SecretField } from "./SecretField";
 import { INTERFACE_SCALES } from "../../core/interface-scale";
 import { visibleChips, type LinkChip } from "../../core/link-suggest";
 import type { PipelineResult, SettingsView } from "../../shared/ipc";
-import { activityLabel, islandPhase, shouldShowResponse } from "./island";
-import { actions, islandArgs, islandOpen, useBee, type BeeState, type SummaryState, type UpdateState } from "./store";
+import { activityLabel } from "./island";
+import { actions, islandOpen, useBee, type BeeState, type SummaryState, type UpdateState } from "./store";
 import { SyncCard, SyncSection, TeamSection, syncedWith } from "./Teams";
 
 const ICON = { size: 16, stroke: 1.75 };
@@ -107,8 +107,8 @@ function Island({ state }: { state: BeeState }) {
   const result = state.result;
   const chips = visibleChips(state.chips, state.dismissedChipIds);
   const showBody = islandOpen(state);
-  const phase = islandPhase(islandArgs(state));
-  const canReopen = !state.busy && !state.expanded && phase === "idle" && shouldShowResponse({ ...islandArgs(state), dismissed: false });
+  // Collapsed, the status text opens the panel like the chevron, whatever it says.
+  const canExpand = !state.expanded;
   // While Luna thinks, chips may open the body but the pill keeps its thinking text.
   const status = showBody && !state.busy && !state.mic.error ? "Tips" : notchStatus(state, isSignedIn);
   const newVersion = state.update.check?.available ? state.update.check.latestVersion : null;
@@ -121,7 +121,7 @@ function Island({ state }: { state: BeeState }) {
     >
       <header className="notch">
         <span className={state.busy ? "notch-dot busy" : "notch-dot"} aria-hidden />
-        {canReopen ? (
+        {canExpand ? (
           // Keyed so each new status fades in.
           <Button
             key={status}
