@@ -1,4 +1,4 @@
-name: Release Windows
+name: Release
 
 on:
   push:
@@ -40,16 +40,52 @@ jobs:
           path: |
             release/*.exe
             release/*.zip
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+        env:
+          MAIN_VITE_BEE_RELAY_URL: ${{ vars.BEE_RELAY_URL }}
+      - name: Build macOS dmg + zip
+        env:
+          # Unsigned by default. Set CSC_LINK, CSC_KEY_PASSWORD and the Apple notarisation secrets to sign.
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: npx electron-builder --mac dmg zip --arm64 --x64 --publish never
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: bee-macos
+          path: |
+            release/*.dmg
+            release/*.zip
+
+  publish:
+    needs: [windows, macos]
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
       - name: Publish GitHub Release
-        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        shell: bash
+          GH_REPO: ${{ github.repository }}
         run: |
           TAG="${{ github.event.inputs.tag || github.ref_name }}"
           if [[ "$TAG" != v* ]]; then TAG="v$TAG"; fi
-          gh release create "$TAG" release/Bee*.exe release/Bee*.zip \
+          ls dist
+          gh release create "$TAG" dist/Bee*.exe dist/Bee*.zip dist/Bee*.dmg \
             --title "Bee $TAG" \
-            --notes "Windows installer (NSIS) and portable zip. Unsigned — SmartScreen may warn." \
+            --notes "Windows installer (NSIS) and portable zip, and macOS dmg and zip (separate Apple Silicon arm64 and Intel x64 builds). Builds are unsigned. Windows SmartScreen may warn. On macOS, Gatekeeper will warn: right-click Bee and choose Open." \
             --latest || \
-          gh release upload "$TAG" release/Bee*.exe release/Bee*.zip --clobber
+          gh release upload "$TAG" dist/Bee*.exe dist/Bee*.zip dist/Bee*.dmg --clobber

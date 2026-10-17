@@ -60,7 +60,7 @@ End meeting & save summary (Live tab)
 
 Production uses **Grok STT** (`xai/grok-stt`) through Vercel AI Gateway, batch mode (`experimental_transcribe`). The Gateway model list names it `spacexai/grok-stt`; on 26 September 2026 both ids returned the same transcript, and Bee uses `xai/grok-stt`. Bee does not use the Web Speech API: in Electron it could not reach Google's speech service and failed with `network`.
 
-- **Capture** (`renderer/src/mic.ts`): mono `getUserMedia` with echo cancellation and noise suppression, into a `ScriptProcessorNode`. No AudioWorklet, so no extra module under the CSP. Frames are about 85 ms at 48 kHz and also drive the level meter.
+- **Capture** (`renderer/src/mic.ts`): mono `getUserMedia` with echo cancellation and noise suppression, into a `ScriptProcessorNode`. No AudioWorklet, so no extra module under the CSP. Frames are about 85 ms at 48 kHz and also drive the level meter. The mic is primary; system audio (`openSystemAudio`, via `getDisplayMedia`) is mixed in when loopback or ScreenCaptureKit works, and its failure never blocks the mic.
 - **Phrases** (`renderer/src/speech.ts`, no window or React imports): a frame at or above RMS 0.01 counts as speech. A phrase starts with 300 ms of pre-roll and ends after 800 ms of silence, or at 15 s. Phrases with under 300 ms of speech are dropped. On mic off, the phrase in progress is still sent.
 - **Upload**: each phrase is encoded as 16 kHz 16-bit mono WAV (about 32 KB a second) and sent over IPC. Main rejects payloads over 2 MB.
 - **Order**: phrases are transcribed one at a time, so lines reach the pipeline in the order they were spoken.
@@ -69,9 +69,16 @@ Production uses **Grok STT** (`xai/grok-stt`) through Vercel AI Gateway, batch m
 
 Streaming (`experimental_streamTranscribe`) was not used. Phrase-level batch calls are simpler, and one call per phrase matches one pipeline run per line.
 
+## macOS
+
+- **Overlay.** On macOS the window is a `panel` and stays visible on all workspaces and over full-screen apps. The Dock icon is hidden (`app.dock.hide()` and `LSUIElement`). The tray is a template-image menu bar extra; it has no click handler, so it does not fight its menu. Windows and Linux keep click-to-toggle.
+- **Shortcut.** `CommandOrControl+Shift+Space` toggles the window through `globalShortcut`. Failure to register is logged. It is released on `will-quit`.
+- **Audio.** The mic (`getUserMedia`) is the only capture path in use. Main asks for microphone access at start-up on macOS, allows only `media` and `display-capture` permissions, and `main/system-audio.ts` probes `desktopCapturer` for a screen source over IPC (`bee:audio:system-source`). Mixing system audio into capture is not built; the probe degrades to null on any failure.
+- **Packaging.** `build.mac` makes separate arm64 (Apple Silicon) and x64 (Intel) dmg and zip files with hardened runtime and the plists in `resources/entitlements.mac*.plist`. Unsigned by default.
+
 ## Updates
 
-`main/updater.ts` and `core/release.ts`. No `electron-updater`: v1 downloads the installer by hand.
+`main/updater.ts` and `core/release.ts`. No `electron-updater`: v1 downloads the installer by hand. On macOS it picks the `.dmg`, never the zip.
 
 1. At start-up (and on **Check for updates**), main fetches `https://api.github.com/repos/vvedantb/bee/releases/latest` (10 s timeout) and compares its tag with `app.getVersion()` (major.minor.patch).
 2. It picks the platform installer: Windows `*Setup*.exe` (NSIS), macOS `.dmg`, Linux `.AppImage`. Only URLs under `https://github.com/vvedantb/bee/releases/download/` are accepted.
@@ -254,3 +261,7 @@ Saved secrets show as a disabled field reading `•••••••• (saved)
 ## Not yet built
 
 System audio capture and the vmem connector.
+
+## CI
+
+`.github/workflows/ci.yml` runs on every push and pull request: a `macos` job runs `npm test`, `npm run build` and an unsigned `electron-builder --mac dmg zip --arm64 --x64`, then uploads the artifacts. It runs no E2E (those need a Gateway key). `release-windows.yml` ("Release") builds Windows and macOS in parallel; a final `publish` job downloads both and makes the one GitHub release.

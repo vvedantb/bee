@@ -11,6 +11,7 @@
     "dev": "electron-vite dev",
     "start": "electron-vite preview",
     "build": "npm run typecheck && electron-vite build",
+    "check:asar": "node scripts/check-asar-modules.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
     "test:gateway": "vitest run --config vitest.gateway.config.ts",
@@ -24,17 +25,18 @@
     "@ai-sdk/openai": "^4.0.78",
     "@clerk/electron": "^0.0.47",
     "ai": "^7.0.116",
-    "convex": "^1.46.0",
     "electron-store": "^8.2.0",
     "zod": "^4.6.5"
   },
   "devDependencies": {
+    "@electron/asar": "^4.3.1",
     "@tabler/icons-react": "^3.48.0",
     "@types/node": "^22.20.4",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^5.2.0",
     "babel-plugin-react-compiler": "^1.0.0",
+    "convex": "^1.46.0",
     "electron": "^44.4.5",
     "electron-builder": "^26.15.3",
     "electron-vite": "^5.0.0",
@@ -55,7 +57,22 @@
     "files": [
       "out/**",
       "resources/**",
-      "package.json"
+      "package.json",
+      "!node_modules/esbuild{,/**}",
+      "!node_modules/@esbuild{,/**}",
+      "!node_modules/vite{,/**}",
+      "!node_modules/vitest{,/**}",
+      "!node_modules/electron-vite{,/**}",
+      "!node_modules/electron-builder{,/**}",
+      "!node_modules/typescript{,/**}",
+      "!node_modules/convex{,/**}",
+      "!node_modules/react-native*{,/**}",
+      "!node_modules/@react-native*{,/**}",
+      "!node_modules/metro*{,/**}",
+      "!node_modules/@babel{,/**}",
+      "!node_modules/@solana{,/**}",
+      "!node_modules/@solana-mobile{,/**}",
+      "!node_modules/@wallet-standard{,/**}"
     ],
     "protocols": [
       {
@@ -88,10 +105,34 @@
     },
     "mac": {
       "target": [
-        "dmg"
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
       ],
       "category": "public.app-category.productivity",
-      "icon": "resources/icon.png"
+      "icon": "resources/icon-mac.png",
+      "hardenedRuntime": true,
+      "notarize": false,
+      "gatekeeperAssess": false,
+      "entitlements": "resources/entitlements.mac.plist",
+      "entitlementsInherit": "resources/entitlements.mac.inherit.plist",
+      "extendInfo": {
+        "LSUIElement": true,
+        "NSMicrophoneUsageDescription": "Bee listens to your microphone during meetings to transcribe speech and suggest tips. Audio is sent only for transcription.",
+        "NSAudioCaptureUsageDescription": "Bee can capture meeting audio to transcribe it. This is optional.",
+        "NSScreenCaptureUsageDescription": "Bee can capture system (meeting) audio, which macOS counts as screen recording. This is optional."
+      }
     },
     "linux": {
       "target": [
@@ -101,7 +142,8 @@
       "mimeTypes": [
         "x-scheme-handler/bee"
       ]
-    }
+    },
+    "npmRebuild": false
   },
   "engines": {
     "node": ">=22"

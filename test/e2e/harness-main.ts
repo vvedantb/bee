@@ -3,8 +3,9 @@
 // folder (default: a new temp folder). Clerk is skipped: the page sends an unsigned token with Bee's issuer, which is
 // all main/auth.ts checks. BEE_E2E_TOKEN replaces that token (the Teams E2E signs real RS256 tokens for its mock
 // relay at BEE_RELAY_URL). Teams detection uses a stub the page drives with the simulateMeeting action.
-// With BEE_E2E_SHOTS_DIR, the page is loaded once per name in BEE_E2E_SHOTS (comma-separated, as ?shot=) in a transparent
-// frameless 520 × 360 window, and each capturePage() is written to <dir>/island-<name>.png.
+// With BEE_E2E_SHOTS (the island screenshot test), the page is loaded once per name (comma-separated, as ?shot=) in a transparent
+// frameless 520 × 360 window, and each capturePage() is written to <BEE_E2E_SHOTS_DIR>/island-<name>.png.
+// BEE_E2E_SHOTS_DIR alone does not change the run.
 import { BrowserWindow, app, session } from "electron";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -67,8 +68,9 @@ async function captureShots(dir: string, names: string[]): Promise<string[]> {
 }
 
 void app.whenReady().then(async () => {
-  if (shotsDir) {
-    const files = await captureShots(shotsDir, (shotNames || "collapsed,thinking,expanded").split(","));
+  if (shotNames) {
+    const dir = shotsDir || mkdtempSync(join(tmpdir(), "bee-island-shots-"));
+    const files = await captureShots(dir, shotNames.split(","));
     process.stdout.write(`E2E_RESULT ${JSON.stringify({ ok: true, files })}\n`);
     app.exit(0);
     return;

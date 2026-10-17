@@ -13,15 +13,35 @@ npm run dist:win
 # outputs under release/
 ```
 
+## Install (macOS)
+
+Download `Bee-x.y.z-arm64.dmg` (Apple Silicon) or `Bee-x.y.z.dmg` (Intel), or the matching `-mac.zip` from [Releases](https://github.com/vvedantb/bee/releases). Open the dmg and drag Bee to Applications. Builds are not signed or notarised yet, so Gatekeeper will warn: right-click Bee, choose **Open**, then confirm.
+
+- **Microphone.** macOS asks the first time Bee starts. If you decline, allow Bee under System Settings → Privacy & Security → Microphone.
+- **Screen Recording.** Only needed if system (meeting) audio capture is used. It is best-effort: Bee always keeps the microphone as the main input, and carries on without system audio if it is unavailable.
+- **Menu bar.** Bee has no Dock icon. The tray icon is a menu bar extra: click it for Show / hide, Open notes folder and Quit.
+- **Shortcut.** `Cmd+Shift+Space` shows or hides Bee (`Ctrl+Shift+Space` on Windows and Linux). If another app holds the shortcut, Bee logs a warning and carries on.
+- **Notes folder.** `~/Library/Application Support/Bee/notes`.
+- **Teams detector.** Windows only. On macOS use **Live → Manual test → Simulate Teams meeting**.
+
+**From source:**
+```bash
+npm install
+npm run dist:mac
+# outputs under release/ (dmg and zip, one each for arm64 and x64)
+```
+
+Signing is off by default. To sign and notarise, set `CSC_LINK` and `CSC_KEY_PASSWORD` for electron-builder, and set `build.mac.notarize` to `true` (it is `false` now), with `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD` and `APPLE_TEAM_ID` in the environment.
+
 Bee is a desktop overlay for meetings. It sits as a small "notch" at the top centre of the screen. It listens to the meeting, finds relevant local notes, ranks them with Jev and shows one or two short tips from GPT-6 Luna. When a question is about a public or current fact that the notes do not cover, Luna can search the web, and the Live tab lists the source links under the tips. This uses the same Gateway key.
 
-Windows comes first. macOS support is planned.
+Windows and macOS are supported. The Teams detector is Windows only.
 
 Typical use: in a weekly meeting someone says "last time we discussed the Acme renewal". Bee hears it, finds your Acme notes, ranks them with Jev and shows a tip. If someone asks a direct question ("when does SSO ship?", "what's 15% of 18,000?"), the tip answers it from your notes or general knowledge.
 
 ## Requirements
 
-- Windows 10 or 11 (x64). macOS and Linux also run in development.
+- Windows 10 or 11 (x64), or macOS (Apple Silicon arm64 or Intel x64). Linux runs in development.
 - Node.js 22 or later, with npm.
 - A Vercel AI Gateway API key with access to `xai/grok-stt`, `openai/gpt-6-luna` and `typesafe-ai/jev`.
 - A Bee account. Sign-in uses Clerk (the vedantb.com instance). See [Sign-in (Clerk)](#sign-in-clerk).
@@ -67,7 +87,7 @@ The installer is not code-signed. Windows SmartScreen will warn on first run unt
 5. Bee retrieves matching notes, ranks them with Jev, and shows up to two tips. While Luna works, the notch shows what it is doing (for example "Searching the web"). When the answer arrives, the notch grows downward into an island with the tips and any source links. Click **×** to dismiss it. It closes by itself after about 10 seconds if you leave the pointer off it, and the same tips stay on **Live**. Click the notch text to show the last answer again.
 6. When the meeting ends, click **End meeting & save summary** on **Live**. Bee writes `meeting-YYYY-MM-DD-HHmm.md` to the notes folder, with decisions, action items (with owners), topics and the notes cited. Click **Open summary** to view it. Next time, Bee finds it like any other note. Without a key, or if the AI call fails, Bee saves a plain summary with the meeting lines instead.
 
-Notes are markdown files in the notes folder (Settings shows the path and has an **Open** button). On Windows this is `%APPDATA%\Bee\notes`. Four fictional seed notes are written the first time the folder is empty. Edits are picked up on the next line; no restart is needed.
+Notes are markdown files in the notes folder (Settings shows the path and has an **Open** button). On Windows this is `%APPDATA%\Bee\notes`; on macOS it is `~/Library/Application Support/Bee/notes`. Four fictional seed notes are written the first time the folder is empty. Edits are picked up on the next line; no restart is needed.
 
 Luna can also list, search and read these notes with file tools, for questions the top three notes do not cover. In Settings, **Extra folders Luna may read** takes one absolute path per line; Luna can read them but never write to them. Luna can add to a note (create or append, `.md` only, notes folder only) when you clearly ask it to. It never overwrites a file. Limits: paths must stay inside the notes folder or an approved folder (`..`, either slash style, and symbolic links are refused); binary files and files over 256 KiB are skipped; lists stop at 200 entries, searches at 20 hits, and a read returns at most 64 KiB.
 
@@ -77,7 +97,7 @@ Luna can also list, search and read these notes with file tools, for questions t
 
 Bee transcribes with **Grok STT** (`xai/grok-stt`) through Vercel AI Gateway, using the same Gateway key as Luna and Jev.
 
-1. The mic is captured with Web Audio. A simple level detector cuts the audio into phrases: speech, then 0.8 s of silence, up to 15 s per phrase. Blips under 0.3 s are dropped without a Gateway call.
+1. The mic is captured with Web Audio. A simple level detector cuts the audio into phrases: speech, then 0.8 s of silence, up to 15 s per phrase. Blips under 0.3 s are dropped without a Gateway call. The mic is primary; system audio is mixed in when loopback or ScreenCaptureKit works.
 2. Each phrase is sent to the main process as a 16 kHz mono WAV. Main calls Grok STT (flex tier) and returns the text.
 3. The text joins a short internal buffer (the last 8 lines), and the pipeline runs. The words are never shown on screen.
 
@@ -91,7 +111,7 @@ To check it by hand: sign in, click the mic, say "when does SSO ship for enterpr
 
 Bee checks the [latest GitHub release](https://github.com/vvedantb/bee/releases/latest) at start-up. When a newer version has an installer for your platform, a download icon shows on the notch. **Settings → Updates** shows your version, **Check for updates**, then **Download update** and **Quit & install**. On Windows, Bee downloads the NSIS installer to the temp folder, opens it and quits; the installer replaces Bee and starts it again. On macOS it opens the `.dmg`. Offline, or with no release published, Settings shows a short message and Bee carries on. The installer is unsigned, so SmartScreen may warn.
 
-The tray icon has Show/hide, Open notes folder and Quit. The avatar in the panel's tab bar manages your account and signs you out.
+The tray icon (the menu bar extra on macOS) has Show/hide, Open notes folder and Quit. The avatar in the panel's tab bar manages your account and signs you out.
 
 ## Teams mode
 

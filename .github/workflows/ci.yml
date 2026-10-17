@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+
+jobs:
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      # Typecheck runs inside build.
+      - run: npm run build
+      - name: Package macOS dmg + zip (unsigned)
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: npx electron-builder --mac dmg zip --arm64 --x64 --publish never
+      - name: Check app.asar modules
+        run: node scripts/check-asar-modules.mjs release/mac-arm64/Bee.app/Contents/Resources/app.asar
+      - name: Smoke test packaged app
+        run: |
+          # macOS has no timeout command: kill the app after 30 s.
+          ELECTRON_ENABLE_LOGGING=1 BEE_SMOKE_EXIT=1 release/mac-arm64/Bee.app/Contents/MacOS/Bee > smoke.log 2>&1 &
+          pid=$!
+          ( sleep 30; kill -9 $pid 2>/dev/null ) &
+          status=0
+          wait $pid || status=$?
+          cat smoke.log
+          if [ "$status" -ne 0 ]; then echo "Smoke run exited with $status"; exit 1; fi
+          if grep -q "Cannot find module" smoke.log; then echo "Missing module"; exit 1; fi
+          grep -q BEE_SMOKE_OK smoke.log
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: bee-macos
+          path: |
+            release/*.dmg
+            release/*.zip
+            release/*.blockmap
+            release/*.yml
