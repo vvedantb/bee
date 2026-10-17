@@ -149,6 +149,13 @@ if (clerk.isPrimaryInstance) {
   });
 
   void app.whenReady().then(() => {
+    // CI smoke test: the packaged app loaded every module and Clerk's storage. Skip the window, tray and mic.
+    if (process.env.BEE_SMOKE_EXIT === "1") {
+      process.stdout.write("BEE_SMOKE_OK\n");
+      app.exit(0);
+      return;
+    }
+
     handleRendererProtocol(resolve(outDir, "../renderer"), process.env.ELECTRON_RENDERER_URL);
 
     const userDataDir = app.getPath("userData");
