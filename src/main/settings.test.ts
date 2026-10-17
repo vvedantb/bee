@@ -286,6 +286,45 @@ describe("settings interfaceScale", () => {
   });
 });
 
+describe("settings motionPreference", () => {
+  const onDisk = (value: unknown) => writeFileSync(join(dir, "settings.json"), JSON.stringify({ motionPreference: value }));
+
+  it("defaults to on", () => {
+    expect(create().view().motionPreference).toBe("on");
+  });
+
+  it("round-trips every allowed value", () => {
+    for (const preference of ["system", "on", "off"] as const) {
+      expect(create().save({ motionPreference: preference }).motionPreference).toBe(preference);
+      expect(JSON.parse(readFileSync(join(dir, "settings.json"), "utf8")).motionPreference).toBe(preference);
+      expect(create().view().motionPreference).toBe(preference);
+    }
+  });
+
+  it("keeps the saved value when a save omits it", () => {
+    const store = create();
+    store.save({ motionPreference: "off" });
+    expect(store.save({ meetingMode: true }).motionPreference).toBe("off");
+    expect(create().view().motionPreference).toBe("off");
+  });
+
+  it("reads garbage and a missing field as on", () => {
+    for (const bad of [1, null, true, "reduce", "OFF", {}, ["off"]]) {
+      onDisk(bad);
+      expect(create().view().motionPreference).toBe("on");
+    }
+    writeFileSync(join(dir, "settings.json"), JSON.stringify({ meetingMode: true }));
+    expect(create().view().motionPreference).toBe("on");
+    expect(create().view().meetingMode).toBe(true);
+  });
+
+  it("rejects unlisted values in a save update", async () => {
+    const { settingsUpdateSchema } = await import("../shared/ipc");
+    expect(settingsUpdateSchema.safeParse({ motionPreference: "reduce" }).success).toBe(false);
+    expect(settingsUpdateSchema.safeParse({ motionPreference: "system" }).success).toBe(true);
+  });
+});
+
 describe("settings overlayPosition", () => {
   it("round-trips the last display and stays off the settings view", () => {
     const store = create();

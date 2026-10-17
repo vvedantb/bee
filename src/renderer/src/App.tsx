@@ -13,11 +13,12 @@ import {
 } from "@tabler/icons-react";
 import { Button, Input, LabeledSwitchRow, Textarea } from "@vvedantb/ui";
 import { PillTabs } from "@vvedantb/shell";
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { Favicon } from "./Favicon";
 import { Connectors } from "./Connectors";
 import { SecretField } from "./SecretField";
 import { INTERFACE_SCALES } from "../../core/interface-scale";
+import { DEFAULT_MOTION_PREFERENCE, MOTION_PREFERENCES, resolveReducedMotion, type MotionPreference } from "../../core/motion-preference";
 import { visibleChips, type LinkChip } from "../../core/link-suggest";
 import type { PipelineResult, SettingsView } from "../../shared/ipc";
 import { activityLabel } from "./island";
@@ -470,6 +471,19 @@ function SettingsTab({ state, settings }: { state: BeeState; settings: SettingsV
         />
       </div>
 
+      <div className="field">
+        Animations
+        <PillTabs
+          tabs={MOTION_PREFERENCES.map((preference) => ({ value: preference, label: MOTION_LABEL[preference] }))}
+          value={settings.motionPreference}
+          onValueChange={(value) => {
+            const motionPreference = MOTION_PREFERENCES.find((preference) => preference === value);
+            if (motionPreference) void actions.saveSettings({ motionPreference });
+          }}
+        />
+        <p className="muted">On keeps Bee's motion even when Windows or macOS reduces animations. System follows the OS. Off skips motion.</p>
+      </div>
+
       <TeamSection state={state} />
 
       <UpdateSection update={update} />
@@ -507,8 +521,30 @@ function Panel({ state }: { state: BeeState }) {
   );
 }
 
+const MOTION_LABEL: Record<MotionPreference, string> = { system: "System", on: "On", off: "Off" };
+
+/** Mirrors the Animations setting onto the root's data-motion; styles.css and the store's exit timers read it. */
+function useMotionAttribute(preference: MotionPreference): void {
+  useEffect(() => {
+    const root = document.documentElement;
+    const apply = (systemReduce: boolean) => {
+      root.dataset.motion = resolveReducedMotion(preference, systemReduce) ? "reduce" : "full";
+    };
+    if (preference !== "system") {
+      apply(false);
+      return;
+    }
+    const query = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const onChange = () => apply(query.matches);
+    onChange();
+    query.addEventListener("change", onChange);
+    return () => query.removeEventListener("change", onChange);
+  }, [preference]);
+}
+
 export function App() {
   const state = useBee();
+  useMotionAttribute(state.settings?.motionPreference ?? DEFAULT_MOTION_PREFERENCE);
   return (
     <div className={["shell", state.expanded && "expanded", state.collapsing && "collapsing"].filter(Boolean).join(" ")}>
       <Island state={state} />
