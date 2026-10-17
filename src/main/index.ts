@@ -4,7 +4,7 @@ import { BrowserWindow, Menu, Tray, app, desktopCapturer, globalShortcut, ipcMai
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { RENDERER_HOST, RENDERER_SCHEME, RENDERER_URL } from "../shared/clerk";
-import { fitToWorkArea, scaleSize } from "../core/interface-scale";
+import { displayMatching, placeInWorkArea, restoreOverlayBounds, scaleSize, type DisplayInfo } from "../core/interface-scale";
 import { IPC, settingsUpdateSchema, windowSizeSchema, type WindowSize } from "../shared/ipc";
 import { createVmemSearch } from "../core/vmem-history";
 import { registerFaviconIpc } from "./favicon-ipc";
@@ -14,7 +14,7 @@ import { registerOpenUrlIpc } from "./open-url";
 import { registerMeetingIpc } from "./meeting-ipc";
 import { ensureNotesDir } from "./notes";
 import { handleRendererProtocol } from "./renderer-protocol";
-import { createSettingsStore } from "./settings";
+import { createSettingsStore, type SettingsStore } from "./settings";
 import { findSystemAudioSource, isPermissionAllowed } from "./system-audio";
 import { createTeamsDetector } from "./teams-detector";
 import { inviteFromArgv, registerTeamsIpc, relayUrlFromEnv } from "./teams-sync";
@@ -39,16 +39,33 @@ let win: BrowserWindow | null = null;
 let windowSize: WindowSize = "collapsed";
 let interfaceScale = 1;
 let tray: Tray | null = null;
+// Set at start-up, before the first window.
+let settings: SettingsStore;
 
-function topCentreBounds(size: { width: number; height: number }) {
-  return fitToWorkArea(size, screen.getPrimaryDisplay().workArea, TOP_MARGIN);
+function displayInfos(): DisplayInfo[] {
+  return screen.getAllDisplays().map(({ id, bounds, workArea, scaleFactor }) => ({ id, bounds, workArea, scaleFactor }));
+}
+
+function rememberPosition(window: BrowserWindow): void {
+  const bounds = window.getBounds();
+  const display = displayMatching(bounds, displayInfos());
+  if (display) settings.saveOverlayPosition({ x: bounds.x, y: bounds.y, displayId: display.id });
+}
+
+// Resize in place on the display the window is on; shift only to stay inside that work area.
+function resizeOverlay(window: BrowserWindow, size: { width: number; height: number }): void {
+  const current = window.getBounds();
+  const display = displayMatching(current, displayInfos()) ?? displayInfos().find((item) => item.id === screen.getPrimaryDisplay().id);
+  if (!display) return;
+  window.setBounds(placeInWorkArea({ size, current, area: display.workArea, margin: TOP_MARGIN }));
+  rememberPosition(window);
 }
 
 // Zoom every Bee window; the overlay also grows with its content so nothing clips.
 function applyInterfaceScale(scale: number): void {
   interfaceScale = scale;
   for (const window of BrowserWindow.getAllWindows()) window.webContents.setZoomFactor(scale);
-  win?.setBounds(topCentreBounds(scaleSize(SIZES[windowSize], scale)));
+  if (win) resizeOverlay(win, scaleSize(SIZES[windowSize], scale));
 }
 
 function applyMeetingMode(window: BrowserWindow, meetingMode: boolean): void {
@@ -61,7 +78,13 @@ function createWindow(meetingMode: boolean, scale: number): BrowserWindow {
   interfaceScale = scale;
   windowSize = "collapsed";
   const window = new BrowserWindow({
-    ...topCentreBounds(scaleSize(SIZES.collapsed, scale)),
+    ...restoreOverlayBounds({
+      saved: settings.overlayPosition(),
+      size: scaleSize(SIZES.collapsed, scale),
+      displays: displayInfos(),
+      primaryId: screen.getPrimaryDisplay().id,
+      margin: TOP_MARGIN,
+    }),
     frame: false,
     transparent: true,
     backgroundColor: "#00000000",
@@ -86,6 +109,9 @@ function createWindow(meetingMode: boolean, scale: number): BrowserWindow {
   window.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   // Zoom resets on navigation, so apply again once the page is up.
   window.webContents.on("did-finish-load", () => window.webContents.setZoomFactor(interfaceScale));
+  // `moved` fires once a drag ends on Windows and macOS; Linux only emits `move`.
+  if (process.platform === "linux") window.on("move", () => rememberPosition(window));
+  else window.on("moved", () => rememberPosition(window));
   window.once("ready-to-show", () => window.show());
   // Links in Clerk's UI (terms, help) open in the browser; the overlay never opens windows.
   window.webContents.setWindowOpenHandler(({ url }) => {
@@ -177,7 +203,7 @@ if (clerk.isPrimaryInstance) {
     const userDataDir = app.getPath("userData");
     const notesDir = join(userDataDir, "notes");
     ensureNotesDir(notesDir);
-    const settings = createSettingsStore({
+    settings = createSettingsStore({
       userDataDir,
       notesDir,
       envGatewayKey: process.env.BEE_AI_GATEWAY_API_KEY,
@@ -238,7 +264,7 @@ if (clerk.isPrimaryInstance) {
 
     ipcMain.handle(IPC.setWindowSize, (_event, payload) => {
       windowSize = windowSizeSchema.parse(payload);
-      win?.setBounds(topCentreBounds(scaleSize(SIZES[windowSize], interfaceScale)));
+      if (win) resizeOverlay(win, scaleSize(SIZES[windowSize], interfaceScale));
     });
 
     ipcMain.handle(IPC.systemAudioSource, () => findSystemAudioSource());

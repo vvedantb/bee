@@ -23,3 +23,16 @@ export function isVmemConnector(server: { name: string; url?: string }): boolean
     return false;
   }
 }
+
+const EVA_HOSTS = ["eva.vedantb.com", "dazzling-dogfish-581.eu-west-1.convex.site"];
+
+/** True for the user's Eva connector: a server named eva, or one whose URL host is an Eva host. Callers check `enabled`. */
+export function isEvaConnector(server: { name: string; url?: string }): boolean {
+  if (mcpSlug(server.name).toLowerCase() === "eva") return true;
+  try {
+    const host = new URL(server.url ?? "").hostname.toLowerCase();
+    return EVA_HOSTS.some((eva) => host === eva || host.endsWith(`.${eva}`));
+  } catch {
+    return false;
+  }
+}

@@ -4,6 +4,7 @@ import {
   IconDownload,
   IconExternalLink,
   IconMicrophone,
+  IconMicrophoneOff,
   IconNotebook,
   IconPlayerPlay,
   IconRefresh,
@@ -19,8 +20,8 @@ import { SecretField } from "./SecretField";
 import { INTERFACE_SCALES } from "../../core/interface-scale";
 import { visibleChips, type LinkChip } from "../../core/link-suggest";
 import type { PipelineResult, SettingsView } from "../../shared/ipc";
-import { activityLabel, islandPhase, shouldShowResponse } from "./island";
-import { actions, islandArgs, islandOpen, useBee, type BeeState, type SummaryState, type UpdateState } from "./store";
+import { activityLabel } from "./island";
+import { actions, islandOpen, useBee, type BeeState, type SummaryState, type UpdateState } from "./store";
 import { SyncCard, SyncSection, TeamSection, syncedWith } from "./Teams";
 
 const ICON = { size: 16, stroke: 1.75 };
@@ -106,8 +107,8 @@ function Island({ state }: { state: BeeState }) {
   const result = state.result;
   const chips = visibleChips(state.chips, state.dismissedChipIds);
   const showBody = islandOpen(state);
-  const phase = islandPhase(islandArgs(state));
-  const canReopen = !state.busy && !state.expanded && phase === "idle" && shouldShowResponse({ ...islandArgs(state), dismissed: false });
+  // Collapsed, the status text opens the panel like the chevron, whatever it says.
+  const canExpand = !state.expanded;
   // While Luna thinks, chips may open the body but the pill keeps its thinking text.
   const status = showBody && !state.busy && !state.mic.error ? "Tips" : notchStatus(state, isSignedIn);
   const newVersion = state.update.check?.available ? state.update.check.latestVersion : null;
@@ -120,7 +121,7 @@ function Island({ state }: { state: BeeState }) {
     >
       <header className="notch">
         <span className={state.busy ? "notch-dot busy" : "notch-dot"} aria-hidden />
-        {canReopen ? (
+        {canExpand ? (
           // Keyed so each new status fades in.
           <Button
             key={status}
@@ -128,7 +129,7 @@ function Island({ state }: { state: BeeState }) {
             variant="ghost"
             title={status}
             className={`${statusClass} h-auto justify-start rounded-none p-0 text-[13px] font-normal text-foreground hover:bg-transparent hover:text-foreground hover:underline`}
-            onClick={() => actions.reopenIsland()}
+            onClick={() => void actions.setExpanded(true)}
           >
             {status}
           </Button>
@@ -167,7 +168,7 @@ function Island({ state }: { state: BeeState }) {
             title={state.mic.error ?? (state.mic.on ? "Stop microphone" : "Start microphone")}
             onClick={() => void actions.toggleMic()}
           >
-            <IconMicrophone {...ICON} />
+            {state.mic.on ? <IconMicrophone {...ICON} /> : <IconMicrophoneOff {...ICON} />}
             <span className="mic-level" style={{ transform: `scaleY(${0.2 + state.mic.level * 0.8})` }} />
           </Button>
         </Show>
@@ -392,10 +393,8 @@ function SettingsTab({ state, settings }: { state: BeeState; settings: SettingsV
     event.preventDefault();
     const form = event.currentTarget;
     const gatewayApiKey = formString(form, "gatewayApiKey");
-    const claudeOAuthToken = formString(form, "claudeOAuthToken");
     const saved = await actions.saveSettings({
       gatewayApiKey: gatewayApiKey || undefined,
-      claudeOAuthToken: claudeOAuthToken || undefined,
       fsRoots: formString(form, "fsRoots").split(/\r?\n/),
     });
     if (saved) setFormKey(formKey + 1);
@@ -410,13 +409,6 @@ function SettingsTab({ state, settings }: { state: BeeState; settings: SettingsV
           placeholder="vck_…"
           saved={settings.gatewayKeySource === "saved"}
           status={KEY_SOURCE_LABEL[settings.gatewayKeySource]}
-        />
-        <SecretField
-          name="claudeOAuthToken"
-          label="Claude OAuth token (reserved)"
-          placeholder="Not used in v1"
-          saved={settings.hasClaudeToken}
-          status={settings.hasClaudeToken ? "A token is stored." : "No token stored."}
         />
         <label>
           Extra folders Luna may read (one absolute path per line)
@@ -436,11 +428,6 @@ function SettingsTab({ state, settings }: { state: BeeState; settings: SettingsV
           {settings.gatewayKeySource === "saved" ? (
             <Button type="button" variant="link" size="sm" onClick={() => void actions.saveSettings({ gatewayApiKey: "" })}>
               Remove saved key
-            </Button>
-          ) : null}
-          {settings.hasClaudeToken ? (
-            <Button type="button" variant="link" size="sm" onClick={() => void actions.saveSettings({ claudeOAuthToken: "" })}>
-              Remove token
             </Button>
           ) : null}
         </div>

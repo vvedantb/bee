@@ -2,7 +2,7 @@ import { IconPlug } from "@tabler/icons-react";
 import { Button, Checkbox, Input, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Textarea } from "@vvedantb/ui";
 import { useState, type FormEvent } from "react";
 import type { McpSave, McpServerView } from "../../shared/ipc";
-import { isVmemConnector } from "../../shared/mcp-names";
+import { isEvaConnector, isVmemConnector } from "../../shared/mcp-names";
 import { Favicon } from "./Favicon";
 import { SecretField } from "./SecretField";
 import { actions, type McpTestState } from "./store";
@@ -178,7 +178,10 @@ function McpDetails({ server, test }: { server: McpServerView; test: McpTestStat
 
 // Connectors Bee offers by name. Connect saves the server enabled and signs in through the system browser (MCP OAuth).
 type Preset = { name: string; url: string; domain: string; matches: (server: McpServerView) => boolean };
-const PRESETS: Preset[] = [{ name: "vmem", url: "https://clear-bear-690.eu-west-1.convex.site/mcp", domain: "vmem.projectv.uk", matches: isVmemConnector }];
+const PRESETS: Preset[] = [
+  { name: "vmem", url: "https://clear-bear-690.eu-west-1.convex.site/mcp", domain: "vmem.projectv.uk", matches: isVmemConnector },
+  { name: "Eva", url: "https://dazzling-dogfish-581.eu-west-1.convex.site/mcp", domain: "eva.vedantb.com", matches: isEvaConnector },
+];
 
 function hostOf(url: string | undefined): string | null {
   try {
@@ -269,17 +272,26 @@ export function Connectors(props: { servers: McpServerView[]; tests: Record<stri
             />
           );
         })}
-        {custom.map((server) => (
-          <ConnectorRow
-            key={server.id}
-            name={server.name}
-            domain={server.transport === "http" ? hostOf(server.url) : null}
-            connected={server.enabled}
-            busy={busy === server.id}
-            onToggle={() => void run(server.id, () => (server.enabled ? actions.removeMcpServer(server.id) : actions.setMcpEnabled({ id: server.id, enabled: true })))}
-            onOpen={() => setEditing(server.id)}
-          />
-        ))}
+        {custom.map((server) => {
+          // An HTTP server with no stored secret signs in with OAuth, like a preset; other rows just switch on and off.
+          const oauth = server.transport === "http" && server.auth.type === "none";
+          const connected = oauth ? server.enabled && server.hasAuth : server.enabled;
+          const connect = () =>
+            oauth
+              ? actions.connectMcpServer({ name: server.name, enabled: true, transport: "http", url: server.url, auth: { type: "none" } }, server.id)
+              : actions.setMcpEnabled({ id: server.id, enabled: true });
+          return (
+            <ConnectorRow
+              key={server.id}
+              name={server.name}
+              domain={server.transport === "http" ? hostOf(server.url) : null}
+              connected={connected}
+              busy={busy === server.id}
+              onToggle={() => void run(server.id, () => (connected ? actions.removeMcpServer(server.id) : connect()))}
+              onOpen={() => setEditing(server.id)}
+            />
+          );
+        })}
       </ul>
       {props.error ? <p className="error">{props.error}</p> : null}
       <div className="actions row">

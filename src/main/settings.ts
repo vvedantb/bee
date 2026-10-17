@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
-import { clampInterfaceScale } from "../core/interface-scale";
+import { clampInterfaceScale, type SavedPosition } from "../core/interface-scale";
 import { normalizeFsRoots } from "../core/fs-sandbox";
 import { createMcpOAuthProvider, hasMcpOAuthTokens, mcpOAuthStateSchema, type McpOAuthStorage } from "../core/mcp-oauth";
 import { isVmemConnector, mcpSlug, mcpUrlError, parseMcpArgs, parseMcpEnv, type McpServerConfig } from "../core/mcp";
@@ -26,7 +26,8 @@ const fileSchema = z.object({
   // Interface size factor. Anything unlisted reads as 1 (100%).
   interfaceScale: z.unknown().optional().transform(clampInterfaceScale),
   gatewayApiKey: z.string().optional(),
-  claudeOAuthToken: z.string().optional(),
+  // Where the overlay was last left. Main only; a bad value reads as unset.
+  overlayPosition: z.object({ x: z.number().finite(), y: z.number().finite(), displayId: z.number() }).optional().catch(undefined),
   // Personalised link suggestions. The toggle is stored only once the user sets it; until then it follows whether an enabled vmem connector exists.
   personalisedLinks: z.boolean().optional(),
   fsRoots: z.array(z.string()).default([]),
@@ -42,7 +43,7 @@ const mcpSecretsSchema = z.record(
 );
 type McpSecrets = z.infer<typeof mcpSecretsSchema>;
 type SettingsFile = z.infer<typeof fileSchema>;
-type SecretName = "gatewayApiKey" | "claudeOAuthToken";
+type SecretName = "gatewayApiKey";
 
 export type SettingsStore = ReturnType<typeof createSettingsStore>;
 
@@ -75,6 +76,13 @@ export function createSettingsStore(args: {
 
   function write(file: SettingsFile): void {
     writeFileSync(path, JSON.stringify(file, null, 2), { mode: 0o600 });
+  }
+
+  // The Claude OAuth token was removed. Rewriting through the schema drops the stored key from old files.
+  try {
+    if ("claudeOAuthToken" in JSON.parse(readFileSync(path, "utf8"))) write(read());
+  } catch {
+    // Missing or corrupt file: nothing to migrate.
   }
 
   function getSecret(file: SettingsFile, name: SecretName): string | undefined {
@@ -303,7 +311,6 @@ export function createSettingsStore(args: {
       personalisedLinks: personalisedLinks(file),
       vmemConnected: hasVmemConnector(file),
       gatewayKeySource: saved ? "saved" : args.envGatewayKey?.trim() ? "env" : "none",
-      hasClaudeToken: Boolean(getSecret(file, "claudeOAuthToken")),
       meetingMode: file.meetingMode,
       interfaceScale: file.interfaceScale,
       secretStorage: storageMode(),
@@ -315,8 +322,6 @@ export function createSettingsStore(args: {
   function save(update: SettingsUpdate): SettingsView {
     let file = read();
     if (update.gatewayApiKey !== undefined) file = setSecret(file, "gatewayApiKey", update.gatewayApiKey);
-    // Reserved for a later version: stored securely, never used at runtime in v1.
-    if (update.claudeOAuthToken !== undefined) file = setSecret(file, "claudeOAuthToken", update.claudeOAuthToken);
     if (update.meetingMode !== undefined) file = { ...file, meetingMode: update.meetingMode };
     if (update.interfaceScale !== undefined) file = { ...file, interfaceScale: clampInterfaceScale(update.interfaceScale) };
     if (update.personalisedLinks !== undefined) file = { ...file, personalisedLinks: update.personalisedLinks };
@@ -334,5 +339,13 @@ export function createSettingsStore(args: {
     return normalizeFsRoots(read().fsRoots).roots;
   }
 
-  return { view, save, gatewayApiKey, linkSettings, vmemConfig, fsRoots, mcpList, mcpSave, mcpRemove, mcpSetEnabled, mcpRecordTools, mcpConfigs, mcpConfig, mcpOAuthStorage };
+  function overlayPosition(): SavedPosition | undefined {
+    return read().overlayPosition;
+  }
+
+  function saveOverlayPosition(position: SavedPosition): void {
+    write({ ...read(), overlayPosition: position });
+  }
+
+  return { view, save, overlayPosition, saveOverlayPosition, gatewayApiKey, linkSettings, vmemConfig, fsRoots, mcpList, mcpSave, mcpRemove, mcpSetEnabled, mcpRecordTools, mcpConfigs, mcpConfig, mcpOAuthStorage };
 }

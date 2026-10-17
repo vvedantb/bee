@@ -41,7 +41,6 @@ export const secretStorageSchema = z.enum(["os", "weak", "memory"]);
 
 export const settingsViewSchema = z.object({
   gatewayKeySource: z.enum(["saved", "env", "none"]),
-  hasClaudeToken: z.boolean(),
   // Personalised link suggestions: the effective toggle, and whether an enabled vmem connector (Connectors tab) exists.
   personalisedLinks: z.boolean(),
   vmemConnected: z.boolean(),
@@ -57,7 +56,6 @@ export type SettingsView = z.infer<typeof settingsViewSchema>;
 // Secrets: omitted = unchanged, "" = clear.
 export const settingsUpdateSchema = z.object({
   gatewayApiKey: z.string().max(500).optional(),
-  claudeOAuthToken: z.string().max(4000).optional(),
   meetingMode: z.boolean().optional(),
   interfaceScale: interfaceScaleSchema.optional(),
   personalisedLinks: z.boolean().optional(),

@@ -58,6 +58,17 @@ describe("settings fsRoots", () => {
   });
 });
 
+describe("settings migration", () => {
+  it("wipes a stored Claude OAuth token from an old file on load", () => {
+    writeFileSync(join(dir, "settings.json"), JSON.stringify({ meetingMode: true, gatewayApiKey: "gw-cipher", claudeOAuthToken: "old-cipher" }));
+    const store = create();
+    const file = JSON.parse(readFileSync(join(dir, "settings.json"), "utf8"));
+    expect(file).not.toHaveProperty("claudeOAuthToken");
+    expect(file).toMatchObject({ meetingMode: true, gatewayApiKey: "gw-cipher" });
+    expect(store.view()).not.toHaveProperty("hasClaudeToken");
+  });
+});
+
 const httpServer = { name: "vmem", enabled: true, transport: "http" as const, url: "https://vmem.example.com/mcp", auth: { type: "bearer" as const }, secret: "tok-PLAINTEXT-123" };
 const stdioServer = { name: "local", enabled: true, transport: "stdio" as const, command: "node", args: "server.js\n--flag", env: "API_KEY=env-PLAINTEXT-456\nMODE=x", auth: { type: "none" as const } };
 const onDisk = () => readFileSync(join(dir, "settings.json"), "utf8");
@@ -209,6 +220,7 @@ describe("settings personalised links", () => {
     store.mcpSave({ ...vmemPreset, name: "Memory" });
     expect(store.view().vmemConnected).toBe(true);
     store.mcpRemove(store.mcpList()[0]?.id as string);
+    // Named eva on an unrelated host: an Eva connector, not vmem.
     store.mcpSave({ ...vmemPreset, name: "eva", url: "https://eva.example.com/mcp" });
     expect(store.view()).toMatchObject({ personalisedLinks: false, vmemConnected: false });
   });
@@ -271,5 +283,24 @@ describe("settings interfaceScale", () => {
     expect(settingsUpdateSchema.safeParse({ interfaceScale: 1.3 }).success).toBe(false);
     expect(settingsUpdateSchema.safeParse({ interfaceScale: Number.NaN }).success).toBe(false);
     expect(settingsUpdateSchema.safeParse({ interfaceScale: 1.25 }).success).toBe(true);
+  });
+});
+
+describe("settings overlayPosition", () => {
+  it("round-trips the last display and stays off the settings view", () => {
+    const store = create();
+    const position = { x: -1500, y: 24, displayId: 3 };
+    store.saveOverlayPosition(position);
+    expect(store.overlayPosition()).toEqual(position);
+    expect(JSON.parse(readFileSync(join(dir, "settings.json"), "utf8")).overlayPosition).toEqual(position);
+    expect(create().overlayPosition()).toEqual(position);
+    expect(store.view()).not.toHaveProperty("overlayPosition");
+    store.save({ meetingMode: true });
+    expect(create().overlayPosition()).toEqual(position);
+  });
+
+  it("treats a malformed saved value as unset", () => {
+    writeFileSync(join(dir, "settings.json"), JSON.stringify({ overlayPosition: { x: "left" } }));
+    expect(create().overlayPosition()).toBeUndefined();
   });
 });
