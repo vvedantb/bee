@@ -105,6 +105,7 @@
       "perMachine": false
     },
     "mac": {
+      "artifactName": "Bee-${version}-${arch}.${ext}",
       "target": [
         {
           "target": "dmg",

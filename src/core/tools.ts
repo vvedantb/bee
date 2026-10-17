@@ -40,6 +40,7 @@ function toSource(raw: RawSource): BeeSource | null {
     return null;
   }
   if (parsed.protocol !== "https:") return null;
+  for (const key of [...parsed.searchParams.keys()]) if (key.toLowerCase().startsWith("utm_")) parsed.searchParams.delete(key);
   if (parsed.href.length > MAX_URL_LENGTH) return null;
   const title = typeof raw.title === "string" ? raw.title.trim() : "";
   return {

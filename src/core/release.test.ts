@@ -20,28 +20,28 @@ describe("isNewerVersion", () => {
 });
 
 describe("pickInstallerAsset", () => {
-  const assets = [asset("Bee-0.2.0-win.zip"), asset("Bee.Setup.0.2.0.exe"), asset("Bee-0.2.0.dmg")];
+  const assets = [asset("Bee-0.2.0-win.zip"), asset("Bee.Setup.0.2.0.exe"), asset("Bee-0.2.0-x64.dmg")];
 
   it("picks the NSIS installer (GitHub replaces spaces with dots) on Windows and the dmg on macOS", () => {
     expect(pickInstallerAsset(assets, "win32")?.name).toBe("Bee.Setup.0.2.0.exe");
-    expect(pickInstallerAsset(assets, "darwin", "x64")?.name).toBe("Bee-0.2.0.dmg");
+    expect(pickInstallerAsset(assets, "darwin", "x64")?.name).toBe("Bee-0.2.0-x64.dmg");
   });
 
   it("picks the dmg, not the zip, on macOS", () => {
-    const mac = [asset("Bee-0.2.0-mac.zip"), asset("Bee-0.2.0.dmg")];
-    expect(pickInstallerAsset(mac, "darwin", "x64")?.name).toBe("Bee-0.2.0.dmg");
-    expect(pickInstallerAsset([asset("Bee-0.2.0-mac.zip")], "darwin", "x64")).toBeNull();
+    const mac = [asset("Bee-0.2.0-x64.zip"), asset("Bee-0.2.0-x64.dmg")];
+    expect(pickInstallerAsset(mac, "darwin", "x64")?.name).toBe("Bee-0.2.0-x64.dmg");
+    expect(pickInstallerAsset([asset("Bee-0.2.0-x64.zip")], "darwin", "x64")).toBeNull();
   });
 
   it("matches the dmg to the CPU architecture on macOS", () => {
     const mac = [
-      asset("Bee-0.2.0-arm64-mac.zip"),
+      asset("Bee-0.2.0-arm64.zip"),
       asset("Bee-0.2.0-arm64.dmg"),
-      asset("Bee-0.2.0-mac.zip"),
-      asset("Bee-0.2.0.dmg"),
+      asset("Bee-0.2.0-x64.zip"),
+      asset("Bee-0.2.0-x64.dmg"),
     ];
     expect(pickInstallerAsset(mac, "darwin", "arm64")?.name).toBe("Bee-0.2.0-arm64.dmg");
-    expect(pickInstallerAsset(mac, "darwin", "x64")?.name).toBe("Bee-0.2.0.dmg");
+    expect(pickInstallerAsset(mac, "darwin", "x64")?.name).toBe("Bee-0.2.0-x64.dmg");
     expect(pickInstallerAsset([asset("Bee-0.2.0-arm64.dmg")], "darwin", "x64")).toBeNull();
   });
 
