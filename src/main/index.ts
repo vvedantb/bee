@@ -20,12 +20,13 @@ import { createTeamsDetector } from "./teams-detector";
 import { inviteFromArgv, registerTeamsIpc, relayUrlFromEnv } from "./teams-sync";
 import { createUpdater } from "./updater";
 
+// One width in every state, so expanding only grows the height and the pill row never moves sideways.
 const SIZES: Record<WindowSize, { width: number; height: number }> = {
-  collapsed: { width: 440, height: 64 },
+  collapsed: { width: 480, height: 64 },
   // Notch plus the Teams sync popup.
-  prompt: { width: 440, height: 330 },
+  prompt: { width: 480, height: 330 },
   // Notch plus the island body (tips and sources).
-  response: { width: 440, height: 360 },
+  response: { width: 480, height: 360 },
   expanded: { width: 480, height: 640 },
 };
 const TOP_MARGIN = 8;

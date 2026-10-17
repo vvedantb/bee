@@ -81,6 +81,7 @@ function IslandBody({ result, chips, closing }: { result: PipelineResult | null;
         ) : null}
         <LinkChips chips={chips} />
         {result?.guideError ? <p className="island-error">{result.guideError}</p> : null}
+        {result?.guideNote ? <p className="island-note">{result.guideNote}</p> : null}
         {sources.length > 0 ? (
           <div className="island-sources">
             <h3>Sources</h3>

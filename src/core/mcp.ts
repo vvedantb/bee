@@ -6,6 +6,7 @@ import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { jsonSchema, tool, type ToolSet } from "ai";
 import { MCP_MAX_TOOLS, type McpServer } from "../shared/ipc";
 import { mcpSlug } from "../shared/mcp-names";
+import { sanitizeMcpSchema } from "./mcp-schema";
 
 export { isEvaConnector, isVmemConnector, mcpSlug } from "../shared/mcp-names";
 
@@ -233,7 +234,7 @@ export async function loadMcpTools(configs: readonly McpServerConfig[], options:
       if (config.disabledTools?.includes(item.name)) continue;
       tools[toolKey(slug, item.name, taken)] = tool({
         description: `${item.description || item.name} (via ${config.name})`,
-        inputSchema: jsonSchema(item.inputSchema && item.inputSchema.type === "object" ? item.inputSchema : { type: "object", properties: {} }),
+        inputSchema: jsonSchema(sanitizeMcpSchema(item.inputSchema)),
         // Never throws into generateText: a failed call is text the model can read.
         execute: async (args: unknown) => {
           try {
