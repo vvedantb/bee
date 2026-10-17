@@ -92,6 +92,27 @@ describe("MCP OAuth sign-in", () => {
     expect(hasMcpOAuthTokens(storage.state())).toBe(true);
   });
 
+  it("registers and signs in a custom server (not vmem) through the same flow", async () => {
+    const eva = "https://eva.example.test/mcp";
+    const storage = memoryStorage();
+    const provider = createMcpOAuthProvider({ storage, redirectUrl: REDIRECT, redirectToAuthorization: () => undefined });
+    const { fetchFn, calls } = fakeFetch({
+      [`POST ${eva}`]: () => new Response("", { status: 401, headers: { "www-authenticate": `Bearer resource_metadata="https://eva.example.test/.well-known/oauth-protected-resource"` } }),
+      "GET https://eva.example.test/.well-known/oauth-protected-resource": () => json({ resource: eva, authorization_servers: ["https://eva.example.test"] }),
+      "GET https://eva.example.test/.well-known/oauth-authorization-server": () =>
+        json({ ...asMetadata, issuer: "https://eva.example.test", authorization_endpoint: "https://eva.example.test/authorize", token_endpoint: "https://eva.example.test/token", registration_endpoint: "https://eva.example.test/mcp/oauth/register" }),
+      "POST https://eva.example.test/mcp/oauth/register": (call) => json({ ...JSON.parse(call.body), client_id: "eva-client" }, 201),
+      "POST https://eva.example.test/token": () => json({ access_token: "eva-access", token_type: "Bearer", refresh_token: "eva-refresh" }),
+    });
+
+    await authorizeMcpServer({ url: eva, provider, code: Promise.resolve("code-eva"), fetch: fetchFn });
+
+    expect(calls.some((call) => call.url === "https://eva.example.test/mcp/oauth/register")).toBe(true);
+    expect(storage.state()?.clientInformation?.client_id).toBe("eva-client");
+    expect(storage.state()?.tokens).toMatchObject({ access_token: "eva-access", refresh_token: "eva-refresh" });
+    expect(hasMcpOAuthTokens(storage.state())).toBe(true);
+  });
+
   it("refreshes with the saved refresh token and saves the new access token", async () => {
     const storage = memoryStorage({
       tokens: { access_token: "old", token_type: "Bearer", refresh_token: "refresh-1" },
@@ -133,17 +154,20 @@ describe("MCP OAuth sign-in", () => {
 });
 
 describe("non-interactive provider", () => {
-  it("never opens a browser or registers a client", async () => {
+  it("never opens a browser, and a 401 does not hit the saveable-client error", async () => {
     const storage = memoryStorage();
     const provider = createMcpOAuthProvider({ storage });
-    expect(provider.saveClientInformation).toBeUndefined();
+    expect(provider.saveClientInformation).toBeDefined();
     expect(() => provider.redirectToAuthorization(new URL(`${AS}/authorize`))).toThrow(/Connectors/);
     const { fetchFn, calls } = fakeFetch({
       "GET https://mcp.example.test/.well-known/oauth-protected-resource/mcp": () => json({ resource: MCP_URL, authorization_servers: [AS] }),
       [`GET ${AS}/.well-known/oauth-authorization-server`]: () => json(asMetadata),
+      [`POST ${AS}/register`]: (call) => json({ ...JSON.parse(call.body), client_id: "client-1" }, 201),
     });
-    await expect(auth(provider, { serverUrl: MCP_URL, fetchFn })).rejects.toThrow();
-    expect(calls.some((call) => call.method === "POST")).toBe(false);
+    const failure = await auth(provider, { serverUrl: MCP_URL, fetchFn }).catch((error: unknown) => error);
+    expect(String(failure)).toMatch(/Connectors/);
+    expect(String(failure)).not.toMatch(/saveable/);
+    expect(calls.some((call) => call.url.endsWith("/token"))).toBe(false);
   });
 
   it("registers again when the saved client used another loopback port", async () => {

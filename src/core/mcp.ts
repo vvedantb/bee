@@ -7,7 +7,7 @@ import { jsonSchema, tool, type ToolSet } from "ai";
 import { MCP_MAX_TOOLS, type McpServer } from "../shared/ipc";
 import { mcpSlug } from "../shared/mcp-names";
 
-export { isVmemConnector, mcpSlug } from "../shared/mcp-names";
+export { isEvaConnector, isVmemConnector, mcpSlug } from "../shared/mcp-names";
 
 export const MCP_CONNECT_TIMEOUT_MS = 10_000;
 export const MCP_CALL_TIMEOUT_MS = 15_000;

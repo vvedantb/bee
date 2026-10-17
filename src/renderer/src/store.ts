@@ -463,14 +463,6 @@ export const actions = {
     }
   },
 
-  /** Show the last result again under the pill. */
-  reopenIsland(): void {
-    if (state.expanded) return;
-    set({ dismissed: false, islandClosing: false });
-    touchIsland();
-    void applyWindowSize();
-  },
-
   /** The pointer on the island holds the body open; leaving restarts the clock. */
   setIslandHover(hovered: boolean): void {
     islandHovered = hovered;

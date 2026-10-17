@@ -4,6 +4,7 @@ import {
   IconDownload,
   IconExternalLink,
   IconMicrophone,
+  IconMicrophoneOff,
   IconNotebook,
   IconPlayerPlay,
   IconRefresh,
@@ -128,7 +129,7 @@ function Island({ state }: { state: BeeState }) {
             variant="ghost"
             title={status}
             className={`${statusClass} h-auto justify-start rounded-none p-0 text-[13px] font-normal text-foreground hover:bg-transparent hover:text-foreground hover:underline`}
-            onClick={() => actions.reopenIsland()}
+            onClick={() => void actions.setExpanded(true)}
           >
             {status}
           </Button>
@@ -167,7 +168,7 @@ function Island({ state }: { state: BeeState }) {
             title={state.mic.error ?? (state.mic.on ? "Stop microphone" : "Start microphone")}
             onClick={() => void actions.toggleMic()}
           >
-            <IconMicrophone {...ICON} />
+            {state.mic.on ? <IconMicrophone {...ICON} /> : <IconMicrophoneOff {...ICON} />}
             <span className="mic-level" style={{ transform: `scaleY(${0.2 + state.mic.level * 0.8})` }} />
           </Button>
         </Show>
@@ -392,10 +393,8 @@ function SettingsTab({ state, settings }: { state: BeeState; settings: SettingsV
     event.preventDefault();
     const form = event.currentTarget;
     const gatewayApiKey = formString(form, "gatewayApiKey");
-    const claudeOAuthToken = formString(form, "claudeOAuthToken");
     const saved = await actions.saveSettings({
       gatewayApiKey: gatewayApiKey || undefined,
-      claudeOAuthToken: claudeOAuthToken || undefined,
       fsRoots: formString(form, "fsRoots").split(/\r?\n/),
     });
     if (saved) setFormKey(formKey + 1);
@@ -410,13 +409,6 @@ function SettingsTab({ state, settings }: { state: BeeState; settings: SettingsV
           placeholder="vck_…"
           saved={settings.gatewayKeySource === "saved"}
           status={KEY_SOURCE_LABEL[settings.gatewayKeySource]}
-        />
-        <SecretField
-          name="claudeOAuthToken"
-          label="Claude OAuth token (reserved)"
-          placeholder="Not used in v1"
-          saved={settings.hasClaudeToken}
-          status={settings.hasClaudeToken ? "A token is stored." : "No token stored."}
         />
         <label>
           Extra folders Luna may read (one absolute path per line)
@@ -436,11 +428,6 @@ function SettingsTab({ state, settings }: { state: BeeState; settings: SettingsV
           {settings.gatewayKeySource === "saved" ? (
             <Button type="button" variant="link" size="sm" onClick={() => void actions.saveSettings({ gatewayApiKey: "" })}>
               Remove saved key
-            </Button>
-          ) : null}
-          {settings.hasClaudeToken ? (
-            <Button type="button" variant="link" size="sm" onClick={() => void actions.saveSettings({ claudeOAuthToken: "" })}>
-              Remove token
             </Button>
           ) : null}
         </div>

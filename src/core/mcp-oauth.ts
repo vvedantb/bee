@@ -62,7 +62,8 @@ export function hasMcpOAuthTokens(state: McpOAuthState | undefined): boolean {
 
 /**
  * An OAuthClientProvider over injected storage. Interactive (redirectUrl set): may register a client and open the browser.
- * Not interactive: only uses what is stored (and refreshes it), so a 401 fails fast and never opens a browser or registers a client.
+ * Not interactive: uses what is stored (and refreshes it); a 401 that needs a new sign-in fails fast and never opens a browser.
+ * Both can save client information, so dynamic registration never fails for want of somewhere to keep the result.
  */
 export function createMcpOAuthProvider(options: McpOAuthProviderOptions): McpOAuthProvider {
   const { storage, redirectUrl, redirectToAuthorization } = options;
@@ -115,6 +116,11 @@ export function createMcpOAuthProvider(options: McpOAuthProviderOptions): McpOAu
       if (!interactive || !redirectToAuthorization) throw new UnauthorizedError("Sign in from the Connectors tab");
       return redirectToAuthorization(url);
     },
+    // Always present: without it the SDK throws on any 401 that advertises dynamic registration, interactive or not.
+    saveClientInformation(info) {
+      const registered = (info as { redirect_uris?: string[] }).redirect_uris;
+      update({ clientInformation: { ...info, redirect_uris: registered ?? (redirectUrl ? [redirectUrl] : undefined) } as McpOAuthState["clientInformation"] });
+    },
     invalidateCredentials(scope) {
       if (scope === "all") storage.save(undefined);
       else if (scope === "tokens") update({ tokens: undefined });
@@ -122,13 +128,6 @@ export function createMcpOAuthProvider(options: McpOAuthProviderOptions): McpOAu
       else if (scope === "verifier") verifier = undefined;
     },
   };
-  // Without this the SDK cannot register a client, so a non-interactive 401 stops before any registration request.
-  if (interactive) {
-    provider.saveClientInformation = (info) => {
-      const registered = (info as { redirect_uris?: string[] }).redirect_uris;
-      update({ clientInformation: { ...info, redirect_uris: registered ?? (redirectUrl ? [redirectUrl] : undefined) } as McpOAuthState["clientInformation"] });
-    };
-  }
   return provider;
 }
 

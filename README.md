@@ -99,7 +99,7 @@ When a spoken line or a tip names a website (a URL, `convex.dev`, "convex dot de
 
 **Personalised link suggestions** pick the exact page you mean. For "vercel logs for vibot", the chip can read `vercel.com › vibot › logs` and open that page, taken from your browsing history or bookmarks in [vmem](https://github.com/vedantb2/vmem), when vmem is connected.
 
-1. Open the **Connectors** tab (between **Live** and **Settings**) and click **Connect** on **vmem**. There is no API key: vmem is an MCP connector (`https://clear-bear-690.eu-west-1.convex.site/mcp`) that uses MCP OAuth. Connect opens your system browser to sign in; the browser returns to a one-time server on `127.0.0.1` (random port) and Bee stores the tokens encrypted in the main process. Disconnect removes them. **Add custom** sets up any other MCP server. Any enabled server named `vmem`, or on the `vmem.vedantb.com` or `vmem.projectv.uk` host, counts.
+1. Open the **Connectors** tab (between **Live** and **Settings**) and click **Connect** on **vmem**. There is no API key: vmem is an MCP connector (`https://clear-bear-690.eu-west-1.convex.site/mcp`) that uses MCP OAuth. Connect opens your system browser to sign in; the browser returns to a one-time server on `127.0.0.1` (random port) and Bee stores the tokens encrypted in the main process. Disconnect removes them. **Eva** is a second preset (`https://dazzling-dogfish-581.eu-west-1.convex.site/mcp`) with the same OAuth sign-in and no API key. **Add custom** sets up any other MCP server; a remote one with authentication "None" signs in the same way. Any enabled server named `vmem`, or on the `vmem.vedantb.com` or `vmem.projectv.uk` host, counts.
 2. Keep the **Gateway key** set in **Settings**: Jev, which makes the choice, runs through AI Gateway.
 3. Use the **Personalised link suggestions** switch in **Settings**. It is on by default when an enabled vmem connector exists, and off otherwise. Once you change it, Bee keeps your choice.
 
@@ -217,7 +217,6 @@ Social sign-in opens the system browser and returns through the `bee://` deep li
 | Field | Storage | Used in v1 |
 | --- | --- | --- |
 | AI Gateway API key | Encrypted with Electron `safeStorage` (DPAPI on Windows, Keychain on macOS) | Yes |
-| Claude OAuth token (reserved) | Encrypted the same way | No. Stored only, for a later version |
 | Connector tokens (Connectors tab) | Encrypted the same way | Yes |
 | Personalised links switch, meeting mode | Plain JSON | Yes |
 
