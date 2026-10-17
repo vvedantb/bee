@@ -6,6 +6,7 @@ import {
   enrichLinksResultSchema,
   faviconResultSchema,
   lunaActivitySchema,
+  lunaPartialSchema,
   mcpListSchema,
   mcpTestResultSchema,
   meetingSummaryResultSchema,
@@ -22,6 +23,7 @@ import {
   type McpSave,
   type McpSetEnabled,
   type MeetingSummaryRequest,
+  type PipelineCancel,
   type PipelineRequest,
   type SettingsUpdate,
   type TeamsAction,
@@ -37,6 +39,10 @@ const api = {
     settingsViewSchema.parse(await ipcRenderer.invoke(IPC.saveSettings, update)),
   runPipeline: async (request: PipelineRequest) =>
     pipelineResultSchema.parse(await ipcRenderer.invoke(IPC.runPipeline, request)),
+  // Cancels a run a newer line has superseded. Fire and forget: the run's own result is dropped anyway.
+  cancelPipeline: async (request: PipelineCancel) => {
+    z.void().parse(await ipcRenderer.invoke(IPC.cancelPipeline, request));
+  },
   transcribe: async (request: TranscribeRequest) =>
     transcribeResultSchema.parse(await ipcRenderer.invoke(IPC.transcribe, request)),
   writeMeetingSummary: async (request: MeetingSummaryRequest) =>
@@ -69,6 +75,17 @@ const api = {
     ipcRenderer.on(IPC.lunaActivity, handler);
     return () => {
       ipcRenderer.removeListener(IPC.lunaActivity, handler);
+    };
+  },
+  // Tips so far while Luna streams (finished lines). Returns the unsubscribe function.
+  onLunaPartial: (listener: (partial: { runId?: string | number; tips: string[] }) => void): (() => void) => {
+    const handler = (_event: unknown, payload: unknown) => {
+      const parsed = lunaPartialSchema.safeParse(payload);
+      if (parsed.success) listener(parsed.data);
+    };
+    ipcRenderer.on(IPC.lunaPartial, handler);
+    return () => {
+      ipcRenderer.removeListener(IPC.lunaPartial, handler);
     };
   },
   // MCP servers. Views carry hasAuth and env key names only; secrets never come back.

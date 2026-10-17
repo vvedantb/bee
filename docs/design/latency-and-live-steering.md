@@ -1,6 +1,19 @@
 # Latency and live steering (draft)
 
-**Status:** draft for discussion. No code changed.
+**Status (17 October 2026):** PR A (speed) is being implemented on branch `cursor/latency-speed-a285`. Live steering (section 5) is not started and stays for a later stacked PR.
+
+**Speed PR: what was built.**
+
+- Per-stage `perf` logs (numbers only) and a split `timingsMs` (`guide` is Luna only; `mcp` is separate).
+- "Got it…" ack at end of speech (`onSpeechEnd`), before STT.
+- MCP tool-list cache with lazy, warm connections; MCP load overlaps Jev; MCP close runs in the background.
+- Luna streams line by line (`bee:luna:partial`); previous tips stay visible while busy.
+- Superseded runs are cancelled in main (`bee:pipeline:cancel`). A started tool call is never aborted.
+- Jev no longer gates Luna: Luna gets the BM25 top 3 at once, and Jev runs beside it for the panel.
+
+**Service tier pick (`core/gateway.ts`).** STT and Luna use the Gateway default tier (no `serviceTier` sent). Summary, link Jev and ranking Jev stay on `flex`. `ultrafast` is NOT used: no call in this repo has shown that `xai/grok-stt` or `openai/gpt-6-luna` accept it, and a rejected tier would fail the turn. The default tier is the lowest-risk change that removes flex queueing from the user-facing path. This is a hypothesis, not a measurement: the Phase 0 A/B (flex vs default vs ultrafast, with a real key) has not been run, and the cost effect is unknown.
+
+**Status of the rest of this document.** Sections 1 to 4 describe the code before this PR. The `perf` logs now give the Phase 0 numbers; no real timings have been collected yet.
 **Date:** 17 October 2026.
 **Authorship:** Claude Code produced the first draft by reading the Bee repo at branch `cursor/latency-live-steering-design-1f1a` (HEAD `e09dfee`, Bee 0.3.6). A reviewer then checked claims against the same files and amended section 6 with current Vercel AI Gateway docs (realtime WebSocket and TTS exist). Nothing was run: the environment has no Electron display, mic or Gateway key. Latency figures remain ESTIMATE unless labelled otherwise.
 

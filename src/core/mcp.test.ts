@@ -1,6 +1,6 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { MOCK_TOKEN, startHangingServer, startMockMcpServer } from "../../test/helpers/mock-mcp-server";
-import { connectMcp, loadMcpTools, resultText, mcpSlug, mcpUrlError, parseMcpArgs, parseMcpEnv, testMcpServer, type McpServerConfig } from "./mcp";
+import { connectMcp, createMcpPool, loadMcpTools, mcpConfigHash, resultText, mcpSlug, mcpUrlError, parseMcpArgs, parseMcpEnv, testMcpServer, type McpConnection, type McpServerConfig } from "./mcp";
 
 const cleanup: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -199,5 +199,254 @@ describe("result size", () => {
     const mcp = await loadMcpTools([http("vmem", server.url)]);
     cleanup.push(mcp.close);
     expect(String(await run(mcp.tools, "vmem__echo", { text: big })).length).toBe(8000);
+  });
+});
+
+// A stand-in for connectMcp that counts connections and lets a test break calls.
+function fakeConnect() {
+  const made: Array<McpConnection & { call: ReturnType<typeof vi.fn>; close: ReturnType<typeof vi.fn> }> = [];
+  const connect = vi.fn(async (config: McpServerConfig) => {
+    const connection = {
+      tools: [
+        { name: "echo", description: "Echo", inputSchema: { type: "object", properties: { text: { type: "string" } }, propertyNames: { pattern: "^a" }, $schema: "x" } },
+        { name: "wobble", description: "Wobble", inputSchema: { type: "object" } },
+      ],
+      timingsMs: { connect: 5, list: 3 },
+      call: vi.fn(async (name: string) => `${config.name}:${name}`),
+      close: vi.fn(async () => undefined),
+    };
+    made.push(connection);
+    return connection as McpConnection;
+  });
+  return { connect, made };
+}
+
+const exec = (tools: Awaited<ReturnType<typeof loadMcpTools>>["tools"], name: string) => run(tools, name, {});
+
+describe("tool list cache and lazy connection", () => {
+  it("fills the cache on the first connect, then lists without connecting", async () => {
+    const { connect } = fakeConnect();
+    const pool = createMcpPool({ connect });
+    const config = http("vmem", "https://example.com/mcp");
+    const first = await loadMcpTools([config], { pool });
+    expect(Object.keys(first.tools).sort()).toEqual(["vmem__echo", "vmem__wobble"]);
+    expect(connect).toHaveBeenCalledTimes(1);
+    await pool.closeAll();
+    // A later turn that calls nothing never reconnects.
+    const second = await loadMcpTools([config], { pool });
+    expect(Object.keys(second.tools).sort()).toEqual(["vmem__echo", "vmem__wobble"]);
+    expect(connect).toHaveBeenCalledTimes(1);
+  });
+
+  it("builds tools from a primed cache, and the first call connects", async () => {
+    const { connect, made } = fakeConnect();
+    const pool = createMcpPool({ connect, idleMs: 20 });
+    const config = http("vmem", "https://example.com/mcp");
+    // The Connectors "Test" primes the cache. The warm connection then idles out (stdio children would exit).
+    await pool.refresh(config);
+    await vi.waitFor(() => expect(made[0]?.close).toHaveBeenCalledTimes(1));
+    expect(connect).toHaveBeenCalledTimes(1);
+
+    const mcp = await loadMcpTools([config], { pool });
+    expect(Object.keys(mcp.tools)).toHaveLength(2);
+    expect(connect).toHaveBeenCalledTimes(1);
+
+    expect(await exec(mcp.tools, "vmem__wobble")).toBe("vmem:wobble");
+    expect(connect).toHaveBeenCalledTimes(2);
+    // Calls that follow share that connection.
+    await exec(mcp.tools, "vmem__echo");
+    expect(connect).toHaveBeenCalledTimes(2);
+    await pool.closeAll();
+  });
+
+  it("shares one connection between concurrent first calls", async () => {
+    const { connect } = fakeConnect();
+    const pool = createMcpPool({ connect, idleMs: 10_000 });
+    const config = http("vmem", "https://example.com/mcp");
+    await pool.refresh(config);
+    await pool.closeAll();
+    const mcp = await loadMcpTools([config], { pool });
+    await Promise.all([exec(mcp.tools, "vmem__echo"), exec(mcp.tools, "vmem__wobble"), exec(mcp.tools, "vmem__echo")]);
+    expect(connect).toHaveBeenCalledTimes(2);
+    await pool.closeAll();
+  });
+
+  it("reuses a warm connection on the second load, and close() leaves it open and does not wait", async () => {
+    const { connect, made } = fakeConnect();
+    const pool = createMcpPool({ connect, idleMs: 10_000 });
+    const config = http("vmem", "https://example.com/mcp");
+    const first = await loadMcpTools([config], { pool });
+    await exec(first.tools, "vmem__echo");
+    // Even a close that would hang cannot hold the run: the run's handle is a no-op over a shared pool.
+    made[0]?.close.mockImplementation(() => new Promise<void>(() => undefined));
+    await expect(Promise.race([first.close(), new Promise((resolve) => setTimeout(() => resolve("slow"), 200))])).resolves.toBeUndefined();
+    expect(made[0]?.close).not.toHaveBeenCalled();
+    const second = await loadMcpTools([config], { pool });
+    await exec(second.tools, "vmem__wobble");
+    expect(connect).toHaveBeenCalledTimes(1);
+    expect(made[0]?.call).toHaveBeenCalledTimes(2);
+  });
+
+  it("closes an idle connection after the idle time but keeps the list", async () => {
+    const { connect, made } = fakeConnect();
+    const pool = createMcpPool({ connect, idleMs: 30 });
+    const config = http("vmem", "https://example.com/mcp");
+    const mcp = await loadMcpTools([config], { pool });
+    await exec(mcp.tools, "vmem__echo");
+    await vi.waitFor(() => expect(made[0]?.close).toHaveBeenCalledTimes(1));
+    await exec(mcp.tools, "vmem__echo");
+    expect(connect).toHaveBeenCalledTimes(2);
+    await pool.closeAll();
+  });
+
+  it("caches sanitised schemas and never a secret", async () => {
+    const { connect } = fakeConnect();
+    const pool = createMcpPool({ connect });
+    const config = http("vmem", "https://example.com/mcp", { auth: { type: "bearer" }, secret: "s3cret-token-VALUE", env: { KEY: "env-VALUE-123" } });
+    const entry = await pool.list(config);
+    const echo = entry.tools.find((item) => item.name === "echo");
+    expect(JSON.stringify(echo?.inputSchema)).not.toMatch(/propertyNames|\$schema/);
+    expect(echo?.inputSchema).toMatchObject({ type: "object", properties: { text: { type: "string" } } });
+    expect(Object.keys(entry).sort()).toEqual(["configHash", "fetchedAt", "tools"]);
+    expect(JSON.stringify(entry)).not.toMatch(/s3cret-token-VALUE|env-VALUE-123/);
+    await pool.closeAll();
+  });
+
+  it("keeps the schema-drop path: cached tools are still plain AI SDK tools with a JSON schema", async () => {
+    const { connect } = fakeConnect();
+    const pool = createMcpPool({ connect });
+    const mcp = await loadMcpTools([http("vmem", "https://example.com/mcp")], { pool });
+    const schema = (mcp.tools.vmem__echo as { inputSchema?: { jsonSchema?: unknown } }).inputSchema?.jsonSchema;
+    expect(schema).toMatchObject({ type: "object", properties: { text: { type: "string" } } });
+    await pool.closeAll();
+  });
+
+  it("connects again when the connection settings or a secret change", async () => {
+    const { connect } = fakeConnect();
+    const pool = createMcpPool({ connect });
+    const base = http("vmem", "https://example.com/mcp", { auth: { type: "bearer" }, secret: "one" });
+    await pool.list(base);
+    await pool.list({ ...base });
+    expect(connect).toHaveBeenCalledTimes(1);
+    await pool.list({ ...base, secret: "two" });
+    expect(connect).toHaveBeenCalledTimes(2);
+    await pool.list({ ...base, secret: "two", url: "https://example.com/other" });
+    expect(connect).toHaveBeenCalledTimes(3);
+    await pool.closeAll();
+  });
+
+  it("hashes url, command, args, auth type, secrets and sign-in state, but not the tool switches", () => {
+    const base = http("vmem", "https://example.com/mcp");
+    const hash = mcpConfigHash(base);
+    expect(mcpConfigHash({ ...base, disabledTools: ["echo"] })).toBe(hash);
+    expect(mcpConfigHash({ ...base, name: "renamed" })).toBe(hash);
+    for (const change of [
+      { url: "https://example.com/x" },
+      { args: ["-y"] },
+      { command: "node" },
+      { auth: { type: "bearer" as const } },
+      { auth: { type: "header" as const, headerName: "X-Key" } },
+      { secret: "a" },
+      { env: { A: "1" } },
+      { oauthSignedIn: true },
+    ]) {
+      expect(mcpConfigHash({ ...base, ...change })).not.toBe(hash);
+    }
+    expect(mcpConfigHash({ ...base, env: { A: "1" } })).not.toBe(mcpConfigHash({ ...base, env: { A: "2" } }));
+  });
+
+  it("invalidate drops the list and the warm connection, for one server or all", async () => {
+    const { connect, made } = fakeConnect();
+    const pool = createMcpPool({ connect });
+    const a = http("a", "https://example.com/a");
+    const b = http("b", "https://example.com/b");
+    await pool.list(a);
+    await pool.list(b);
+    await pool.invalidate("a");
+    expect(made[0]?.close).toHaveBeenCalledTimes(1);
+    expect(made[1]?.close).not.toHaveBeenCalled();
+    await pool.list(a);
+    await pool.list(b);
+    expect(connect).toHaveBeenCalledTimes(3);
+    await pool.invalidate();
+    await pool.list(a);
+    await pool.list(b);
+    expect(connect).toHaveBeenCalledTimes(5);
+    await pool.closeAll();
+  });
+
+  it("uses a list past its age at once and refreshes it in the background", async () => {
+    const { connect, made } = fakeConnect();
+    let clock = 1_000;
+    const pool = createMcpPool({ connect, ttlMs: 600, now: () => clock });
+    const config = http("vmem", "https://example.com/mcp");
+    await pool.list(config);
+    clock += 601;
+    const started = performance.now();
+    const stale = await pool.list(config);
+    expect(performance.now() - started).toBeLessThan(50);
+    expect(stale.fetchedAt).toBe(1_000);
+    await vi.waitFor(() => expect(connect).toHaveBeenCalledTimes(2));
+    // The refresh used its own connection and closed it again.
+    await vi.waitFor(() => expect(made[1]?.close).toHaveBeenCalledTimes(1));
+    expect((await pool.list(config)).fetchedAt).toBe(1_601);
+    await pool.closeAll();
+  });
+
+  it("keeps the older list when the background refresh fails", async () => {
+    const { connect } = fakeConnect();
+    let clock = 0;
+    const pool = createMcpPool({ connect, ttlMs: 10, now: () => clock });
+    const config = http("vmem", "https://example.com/mcp");
+    await pool.list(config);
+    clock = 100;
+    connect.mockRejectedValueOnce(new Error("down"));
+    expect((await pool.list(config)).tools).toHaveLength(2);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect((await pool.list(config)).tools).toHaveLength(2);
+    await pool.closeAll();
+  });
+
+  it("does not keep a failed connect, and drops a connection whose call broke", async () => {
+    const { connect, made } = fakeConnect();
+    const pool = createMcpPool({ connect, idleMs: 10_000 });
+    const config = http("vmem", "https://example.com/mcp");
+    connect.mockRejectedValueOnce(new Error("refused"));
+    const failed = await loadMcpTools([config], { pool });
+    expect(failed.errors).toEqual([{ server: "vmem", error: "refused" }]);
+    const mcp = await loadMcpTools([config], { pool });
+    expect(Object.keys(mcp.tools)).toHaveLength(2);
+    made[0]?.call.mockRejectedValueOnce(new Error("socket closed"));
+    expect(await exec(mcp.tools, "vmem__echo")).toBe("Error: socket closed");
+    await exec(mcp.tools, "vmem__echo");
+    expect(connect).toHaveBeenCalledTimes(3);
+    await pool.closeAll();
+  });
+
+  it("returns lazy-connect failures as Error: text and masks secrets", async () => {
+    const { connect } = fakeConnect();
+    const pool = createMcpPool({ connect, idleMs: 10_000 });
+    const config = http("vmem", "https://example.com/mcp", { auth: { type: "bearer" }, secret: "s3cret-token-VALUE" });
+    const mcp = await loadMcpTools([config], { pool });
+    await pool.closeAll();
+    connect.mockRejectedValueOnce(new Error("401 for s3cret-token-VALUE"));
+    const text = String(await exec(mcp.tools, "vmem__echo"));
+    expect(text).toMatch(/^Error: /);
+    expect(text).not.toContain("s3cret-token-VALUE");
+    await pool.closeAll();
+  });
+
+  it("works end to end against a real server with a shared pool", async () => {
+    const server = await mock();
+    const pool = createMcpPool({ idleMs: 10_000 });
+    cleanup.push(() => pool.closeAll());
+    const config = http("vmem", server.url);
+    const outcome = await testMcpServer(config, undefined, pool);
+    expect(outcome.ok && outcome.tools.map((tool) => tool.name).sort()).toEqual(["boom", "echo", "wobble"]);
+    const first = await loadMcpTools([config], { pool });
+    expect(await run(first.tools, "vmem__echo", { text: "hi" })).toBe("echo: hi");
+    await first.close();
+    const second = await loadMcpTools([config], { pool });
+    expect(await run(second.tools, "vmem__wobble", {})).toContain(MOCK_TOKEN);
   });
 });

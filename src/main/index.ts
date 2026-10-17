@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { RENDERER_HOST, RENDERER_SCHEME, RENDERER_URL } from "../shared/clerk";
 import { displayMatching, placeInWorkArea, restoreOverlayBounds, scaleSize, type DisplayInfo } from "../core/interface-scale";
 import { IPC, settingsUpdateSchema, windowSizeSchema, type WindowSize } from "../shared/ipc";
+import { createMcpPool } from "../core/mcp";
 import { createVmemSearch } from "../core/vmem-history";
 import { registerFaviconIpc } from "./favicon-ipc";
 import { registerLinkIpc } from "./link-ipc";
@@ -252,11 +253,14 @@ if (clerk.isPrimaryInstance) {
     const vmemSearch = createVmemSearch(() => settings.vmemConfig());
     vmemSearch.refresh();
     app.on("will-quit", () => void vmemSearch.close());
-    registerMcpIpc(settings, vmemSearch);
+    // Tool lists and warm connections for Luna's MCP tools, shared by the meeting and Connectors handlers.
+    const mcpPool = createMcpPool();
+    app.on("will-quit", () => void mcpPool.closeAll());
+    registerMcpIpc(settings, vmemSearch, mcpPool);
     registerOpenUrlIpc();
     registerLinkIpc(settings, vmemSearch);
     registerFaviconIpc();
-    registerMeetingIpc({ notesDir, fsRoots: settings.fsRoots, mcpConfigs: settings.mcpConfigs, gatewayApiKey: settings.gatewayApiKey });
+    registerMeetingIpc({ notesDir, fsRoots: settings.fsRoots, mcpConfigs: settings.mcpConfigs, mcpPool, gatewayApiKey: settings.gatewayApiKey });
 
     const teams = registerTeamsIpc({ relayUrl: relayUrlFromEnv(process.env.BEE_RELAY_URL || import.meta.env.MAIN_VITE_BEE_RELAY_URL), detector: createTeamsDetector() });
     onInvite = (link) => teams.setPendingInvite(link);

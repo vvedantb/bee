@@ -1,6 +1,7 @@
 import { experimental_evaluate, type Experimental_EvaluationModel, type Experimental_EvaluationQuestion } from "ai";
 import { FLEX_PROVIDER_OPTIONS } from "./gateway";
 import type { Snippet } from "./notes";
+import { withTimeout } from "./abort";
 
 /**
  * Jev prompt format
@@ -23,9 +24,6 @@ export const JEV_RELEVANCE_LEVELS = [
   "Relevant: useful background for the current topic.",
   "Directly useful: answers or informs what is being discussed right now.",
 ];
-
-// Notes scoring below this (on the 0–3 scale) are dropped before guidance.
-export const JEV_MIN_SCORE = 1;
 
 const JEV_TIMEOUT_MS = 15_000;
 
@@ -102,6 +100,8 @@ export async function rankWithJev<T extends Snippet>(args: {
   transcript: string[];
   candidates: T[];
   timeoutMs?: number;
+  /** Cancels the call (a superseded run). Fails open like any other error. */
+  signal?: AbortSignal;
 }): Promise<RankOutcome<T>> {
   if (args.candidates.length === 0) return { ranked: [], source: "jev", error: null };
   try {
@@ -111,7 +111,8 @@ export async function rankWithJev<T extends Snippet>(args: {
       state: request.state,
       questions: request.questions,
       maxRetries: 1,
-      abortSignal: AbortSignal.timeout(args.timeoutMs ?? JEV_TIMEOUT_MS),
+      abortSignal: withTimeout(args.signal, args.timeoutMs ?? JEV_TIMEOUT_MS),
+      // Flex is fine here: Jev only orders the panel's notes and no longer gates Luna.
       providerOptions: FLEX_PROVIDER_OPTIONS,
     });
     const { ranked, scoredCount } = parseJevRanking(args.candidates, result.answers);

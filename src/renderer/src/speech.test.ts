@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { transcribeRequestSchema, type TranscribeResult } from "../../shared/ipc";
-import { END_SILENCE_MS, MAX_PHRASE_MS, WAV_SAMPLE_RATE, createSegmenter, encodeWav, frameLevel, startMicSession } from "./speech";
+import { END_SILENCE_MS, MAX_PHRASE_MS, MIN_SPEECH_MS, WAV_SAMPLE_RATE, createSegmenter, encodeWav, frameLevel, startMicSession } from "./speech";
 
 const RATE = 48_000;
 // 4096 samples at 48 kHz is ~85 ms, the frame size the store uses.
@@ -67,6 +67,106 @@ describe("createSegmenter", () => {
     feed(segmenter.push, frames(600, tone));
     segmenter.flush();
     expect(onPhrase).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("onSpeechEnd", () => {
+  it("fires once the end silence has passed, not before, and before onPhrase", () => {
+    const order: string[] = [];
+    const segmenter = createSegmenter({ sampleRate: RATE, onSpeechEnd: () => order.push("end"), onPhrase: () => order.push("phrase") });
+    feed(segmenter.push, frames(1000, tone), frames(END_SILENCE_MS - 2 * FRAME_MS, silence));
+    expect(order).toEqual([]);
+    feed(segmenter.push, frames(3 * FRAME_MS, silence));
+    expect(order).toEqual(["end", "phrase"]);
+  });
+
+  it("needs at least the minimum speech: a cough or click fires nothing", () => {
+    const onSpeechEnd = vi.fn();
+    const onPhrase = vi.fn();
+    const segmenter = createSegmenter({ sampleRate: RATE, onSpeechEnd, onPhrase });
+    feed(segmenter.push, [tone()], frames(END_SILENCE_MS + 200, silence));
+    expect(onSpeechEnd).not.toHaveBeenCalled();
+    expect(onPhrase).not.toHaveBeenCalled();
+    // Just over the minimum does fire.
+    feed(segmenter.push, frames(MIN_SPEECH_MS + FRAME_MS, tone), frames(END_SILENCE_MS + 200, silence));
+    expect(onSpeechEnd).toHaveBeenCalledTimes(1);
+  });
+
+  it("fires for a flushed phrase and for a phrase cut at the maximum length", () => {
+    const onSpeechEnd = vi.fn();
+    const segmenter = createSegmenter({ sampleRate: RATE, onSpeechEnd, onPhrase: () => undefined });
+    feed(segmenter.push, frames(800, tone));
+    segmenter.flush();
+    expect(onSpeechEnd).toHaveBeenCalledTimes(1);
+    feed(segmenter.push, frames(MAX_PHRASE_MS + 1000, tone));
+    expect(onSpeechEnd).toHaveBeenCalledTimes(2);
+  });
+
+  it("works without a callback", () => {
+    const onPhrase = vi.fn();
+    const segmenter = createSegmenter({ sampleRate: RATE, onPhrase });
+    feed(segmenter.push, frames(800, tone), frames(END_SILENCE_MS + 200, silence));
+    expect(onPhrase).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("ack before speech-to-text", () => {
+  it("acks before a slow transcribe is even called, and settles only after the line", async () => {
+    const events: string[] = [];
+    let finish: (result: TranscribeResult) => void = () => undefined;
+    const transcribe = vi.fn(
+      () =>
+        new Promise<TranscribeResult>((resolve) => {
+          events.push("stt-start");
+          finish = resolve;
+        }),
+    );
+    const mic = startMicSession({
+      sampleRate: RATE,
+      transcribe,
+      onSpeechEnd: () => events.push("ack"),
+      onLine: () => events.push("line"),
+      onError: () => undefined,
+      onSettled: () => events.push("settled"),
+    });
+    feed(mic.push, frames(800, tone), frames(END_SILENCE_MS + 200, silence));
+    // The ack has fired. STT has started but not finished: the transcript is still pending.
+    expect(events[0]).toBe("ack");
+    await vi.waitFor(() => expect(events).toContain("stt-start"));
+    expect(events).not.toContain("line");
+    expect(events).not.toContain("settled");
+    finish({ text: "hello there", error: null });
+    await mic.stop();
+    expect(events).toEqual(["ack", "stt-start", "line", "settled"]);
+  });
+
+  it("settles after a failed or empty transcription too, and a cough never acks", async () => {
+    const onSpeechEnd = vi.fn();
+    const onSettled = vi.fn();
+    const transcribe = vi.fn(async () => ({ text: null, error: "Speech-to-text failed: x" }));
+    const mic = startMicSession({ sampleRate: RATE, transcribe, onSpeechEnd, onLine: vi.fn(), onError: vi.fn(), onSettled });
+    feed(mic.push, [tone()], frames(END_SILENCE_MS + 200, silence));
+    await mic.stop();
+    expect(onSpeechEnd).not.toHaveBeenCalled();
+    expect(onSettled).not.toHaveBeenCalled();
+    feed(mic.push, frames(800, tone), frames(END_SILENCE_MS + 200, silence));
+    await mic.stop();
+    expect(onSpeechEnd).toHaveBeenCalledTimes(1);
+    expect(onSettled).toHaveBeenCalledTimes(1);
+  });
+
+  it("logs timings as numbers only", async () => {
+    const debug = vi.spyOn(console, "debug").mockImplementation(() => undefined);
+    try {
+      const mic = startMicSession({ sampleRate: RATE, transcribe: async () => ({ text: "secret words here", error: null }), onLine: vi.fn(), onError: vi.fn() });
+      feed(mic.push, frames(800, tone), frames(END_SILENCE_MS + 200, silence));
+      await mic.stop();
+      const logged = debug.mock.calls.map((call) => call.join(" ")).join("\n");
+      expect(logged).toMatch(/^perf stt-renderer \d+ms/);
+      expect(logged).not.toContain("secret");
+    } finally {
+      debug.mockRestore();
+    }
   });
 });
 

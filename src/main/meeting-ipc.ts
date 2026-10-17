@@ -1,6 +1,6 @@
 import { ipcMain, shell } from "electron";
 import { z } from "zod";
-import { loadMcpTools, type McpServerConfig } from "../core/mcp";
+import { loadMcpTools, type McpPool, type McpServerConfig } from "../core/mcp";
 import { LUNA_MODEL, NO_GATEWAY_KEY, STT_MODEL, createBeeGateway } from "../core/gateway";
 import { runPipeline } from "../core/pipeline";
 import { buildLocalSummary, generateMeetingSummary } from "../core/summary";
@@ -8,6 +8,7 @@ import { transcribeSpeech } from "../core/transcribe";
 import {
   IPC,
   meetingSummaryRequestSchema,
+  pipelineCancelSchema,
   pipelineRequestSchema,
   transcribeRequestSchema,
   type MeetingSummaryResult,
@@ -21,7 +22,12 @@ import { isNotePath, loadSnippets, writeMeetingSummaryFile } from "./notes";
  */
 export function registerMeetingIpc(args: { notesDir: string; fsRoots: () => string[];
   mcpConfigs: () => McpServerConfig[];
+  /** Tool lists and warm connections, shared across runs. */
+  mcpPool: McpPool;
   gatewayApiKey: () => string | undefined }): void {
+  // One controller per run in flight. The renderer cancels a run when a newer line supersedes it.
+  const runs = new Map<string, AbortController>();
+
   ipcMain.handle(IPC.transcribe, (_event, payload) => {
     const request = transcribeRequestSchema.parse(payload);
     assertSignedIn(request.sessionToken);
@@ -30,22 +36,47 @@ export function registerMeetingIpc(args: { notesDir: string; fsRoots: () => stri
     return transcribeSpeech({ model: createBeeGateway(apiKey).transcription(STT_MODEL), audio: request.audio });
   });
 
-  ipcMain.handle(IPC.runPipeline, (event, payload) => {
+  ipcMain.handle(IPC.runPipeline, async (event, payload) => {
     const request = pipelineRequestSchema.parse(payload);
     assertSignedIn(request.sessionToken);
     const apiKey = args.gatewayApiKey();
-    return runPipeline({
-      transcript: request.transcript,
-      snippets: loadSnippets(args.notesDir),
-      gateway: apiKey ? createBeeGateway(apiKey) : null,
-      notesDir: args.notesDir,
-      extraRoots: args.fsRoots(),
-      // Settings are read now, so changes apply without a restart. Servers connect only if Luna will run.
-      loadMcpTools: () => loadMcpTools(args.mcpConfigs()),
-      onActivity: (tool) => {
-        if (!event.sender.isDestroyed()) event.sender.send(IPC.lunaActivity, { tool });
-      },
-    });
+    const key = request.runId === undefined ? null : String(request.runId);
+    const controller = new AbortController();
+    if (key !== null) {
+      runs.get(key)?.abort();
+      runs.set(key, controller);
+    }
+    const loadStarted = performance.now();
+    const snippets = loadSnippets(args.notesDir);
+    const loadNotes = performance.now() - loadStarted;
+    console.debug(`perf load-notes ${Math.round(loadNotes)}ms`);
+    try {
+      const result = await runPipeline({
+        transcript: request.transcript,
+        snippets,
+        gateway: apiKey ? createBeeGateway(apiKey) : null,
+        notesDir: args.notesDir,
+        extraRoots: args.fsRoots(),
+        // Settings are read now, so changes apply without a restart. Tool lists come from the pool's cache; servers connect on first call.
+        loadMcpTools: () => loadMcpTools(args.mcpConfigs(), { pool: args.mcpPool }),
+        signal: controller.signal,
+        onActivity: (tool) => {
+          if (!event.sender.isDestroyed()) event.sender.send(IPC.lunaActivity, { tool });
+        },
+        onPartial: (tips) => {
+          if (!controller.signal.aborted && !event.sender.isDestroyed()) event.sender.send(IPC.lunaPartial, { runId: request.runId, tips });
+        },
+      });
+      return { ...result, timingsMs: { ...result.timingsMs, loadNotes } };
+    } finally {
+      if (key !== null && runs.get(key) === controller) runs.delete(key);
+    }
+  });
+
+  // Cancels Jev and Luna for a superseded run. A tool call that has started is left to finish (it may be a write).
+  ipcMain.handle(IPC.cancelPipeline, (_event, payload) => {
+    const { runId } = pipelineCancelSchema.parse(payload);
+    runs.get(String(runId))?.abort();
   });
 
   // Without a key (or if Luna fails) a plain summary is still written, so the meeting is never lost.
