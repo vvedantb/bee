@@ -138,7 +138,7 @@ function Island({ state }: { state: BeeState }) {
           </span>
         )}
         {newVersion ? (
-          <Button type="button" variant="ghost" size="icon-sm" className="notch-update" title={`Bee ${newVersion} is available`} onClick={() => void actions.openSettings()}>
+          <Button type="button" variant="ghost" size="icon-sm" className="pill-button notch-update" title={`Bee ${newVersion} is available`} onClick={() => void actions.openSettings()}>
             <IconDownload {...ICON} />
           </Button>
         ) : null}
@@ -163,7 +163,7 @@ function Island({ state }: { state: BeeState }) {
             type="button"
             variant={state.mic.on ? "default" : "ghost"}
             size="sm"
-            className="rounded-full"
+            className={state.mic.on ? "pill-button on rounded-full" : "pill-button rounded-full"}
             title={state.mic.error ?? (state.mic.on ? "Stop microphone" : "Start microphone")}
             onClick={() => void actions.toggleMic()}
           >
@@ -175,7 +175,7 @@ function Island({ state }: { state: BeeState }) {
           type="button"
           variant="ghost"
           size="sm"
-          className={open ? "chevron open rounded-full" : "chevron rounded-full"}
+          className={open ? "pill-button chevron open rounded-full" : "pill-button chevron rounded-full"}
           title={open ? "Collapse" : "Expand"}
           onClick={() => void actions.setExpanded(!open)}
         >
@@ -313,12 +313,14 @@ function LiveTab({ state }: { state: BeeState }) {
           </Button>
         </form>
         {state.teams?.team ? (
-          <LabeledSwitchRow
-            id="simulate-teams"
-            label="Simulate Teams meeting (the sync popup shows after about 10 s)"
-            checked={state.teams.detection.source === "simulated"}
-            onCheckedChange={(on) => void actions.teams({ type: "simulateMeeting", on })}
-          />
+          <div className="switch-row">
+            <LabeledSwitchRow
+              id="simulate-teams"
+              label="Simulate Teams meeting (the sync popup shows after about 10 s)"
+              checked={state.teams.detection.source === "simulated"}
+              onCheckedChange={(on) => void actions.teams({ type: "simulateMeeting", on })}
+            />
+          </div>
         ) : null}
       </section>
     </div>
@@ -444,21 +446,29 @@ function SettingsTab({ state, settings }: { state: BeeState; settings: SettingsV
         </div>
       </form>
 
-      <LabeledSwitchRow
-        id="personalised-links"
-        label="Personalised link suggestions"
-        description="Sends the current line to Jev, and to vmem when connected under Connectors, to pick the exact page. Needs the Gateway key."
-        checked={settings.personalisedLinks}
-        onCheckedChange={(personalisedLinks) => void actions.saveSettings({ personalisedLinks })}
-      />
+      <div className="switch-row">
 
-      <LabeledSwitchRow
-        id="meeting-mode"
-        label="Meeting mode"
-        description="Hide Bee from screen sharing, stay above full-screen apps."
-        checked={settings.meetingMode}
-        onCheckedChange={(meetingMode) => void actions.saveSettings({ meetingMode })}
-      />
+        <LabeledSwitchRow
+          id="personalised-links"
+          label="Personalised link suggestions"
+          description="Sends the current line to Jev, and to vmem when connected under Connectors, to pick the exact page. Needs the Gateway key."
+          checked={settings.personalisedLinks}
+          onCheckedChange={(personalisedLinks) => void actions.saveSettings({ personalisedLinks })}
+        />
+
+      </div>
+
+      <div className="switch-row">
+
+        <LabeledSwitchRow
+          id="meeting-mode"
+          label="Meeting mode"
+          description="Hide Bee from screen sharing, stay above full-screen apps."
+          checked={settings.meetingMode}
+          onCheckedChange={(meetingMode) => void actions.saveSettings({ meetingMode })}
+        />
+
+      </div>
 
       <div className="field">
         Interface size

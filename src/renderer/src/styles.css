@@ -753,3 +753,41 @@ code {
   gap: 8px;
   align-items: center;
 }
+
+/* Narrow-window overrides for @vvedantb/ui. Bee never reaches Tailwind's sm breakpoint (640px), so
+   the desktop-first classes are corrected here. Unlayered, so they win over the utility layer. */
+
+/* Compact 13px fields, placeholders included. */
+input,
+textarea {
+  font-size: 13px;
+}
+
+/* Switch rows: label and switch on one row, switch right-aligned, description under the label. */
+.switch-row > div {
+  flex-wrap: nowrap;
+}
+
+/* Raised pill behind the mic, chevron and update icons. The notch status button stays transparent. */
+.pill-button {
+  background: var(--surface-raised);
+}
+
+.pill-button.on {
+  background: var(--accent);
+  color: var(--surface);
+}
+
+.pill-button:not(:disabled):not(.on):hover {
+  background: #2d271e;
+}
+
+/* Link chips: neutral text, accent on hover and focus. */
+.link-chip > button:first-child {
+  color: var(--text);
+}
+
+.link-chip > button:first-child:hover,
+.link-chip > button:first-child:focus-visible {
+  color: var(--accent);
+}
