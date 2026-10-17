@@ -8,7 +8,7 @@ import { safeExternalUrl } from "./url-safety";
 /** Jev scores run 0–3. A suggestion needs the "should we suggest" score and the chosen URL's score at or above this. */
 export const LINK_MIN_SCORE = 2;
 /** One budget for the whole vmem + Jev enrichment of a turn. */
-export const ENRICH_TIMEOUT_MS = 2000;
+export const ENRICH_TIMEOUT_MS = 2500;
 export const MAX_HISTORY_CANDIDATES = 5;
 const MAX_LABEL_SEGMENTS = 3;
 const MAX_SEGMENT_CHARS = 24;

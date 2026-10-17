@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { MOCK_TOKEN, startHangingServer, startMockMcpServer } from "../../test/helpers/mock-mcp-server";
-import { loadMcpTools, mcpSlug, mcpUrlError, parseMcpArgs, parseMcpEnv, testMcpServer, type McpServerConfig } from "./mcp";
+import { connectMcp, loadMcpTools, resultText, mcpSlug, mcpUrlError, parseMcpArgs, parseMcpEnv, testMcpServer, type McpServerConfig } from "./mcp";
 
 const cleanup: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -171,5 +171,33 @@ describe("parsing", () => {
     expect(parseMcpEnv("A=1\n# note\n\nB=x=y")).toEqual({ A: "1", B: "x=y" });
     expect(() => parseMcpEnv("A=1\nbad value-secret")).toThrow(/line 2/);
     expect(() => parseMcpEnv("bad value-secret")).not.toThrow(/secret/);
+  });
+});
+
+describe("result size", () => {
+  const big = "x".repeat(9000);
+
+  it("cuts text at the default cap, or at a higher one", () => {
+    expect(resultText({ content: [{ type: "text", text: big }] })).toHaveLength(8000);
+    expect(resultText({ content: [{ type: "text", text: big }] }, 20_000)).toHaveLength(9000);
+  });
+
+  it("prefers structuredContent and keeps it whole under the cap, so it stays valid JSON", () => {
+    const structured = { results: Array.from({ length: 300 }, (_, i) => ({ id: i, text: "memory text" })) };
+    const text = resultText({ content: [{ type: "text", text: "cut" }], structuredContent: structured }, 100_000);
+    expect(text.length).toBeGreaterThan(8000);
+    expect(JSON.parse(text)).toEqual(structured);
+  });
+
+  it("caps Luna's tools, but not a call with a higher cap", async () => {
+    const server = await startMockMcpServer();
+    cleanup.push(server.close);
+    const connection = await connectMcp(http("vmem", server.url));
+    cleanup.push(connection.close);
+    expect((await connection.call("echo", { text: big })).length).toBe(8000);
+    expect((await connection.call("echo", { text: big }, undefined, 20_000)).length).toBe(big.length + "echo: ".length);
+    const mcp = await loadMcpTools([http("vmem", server.url)]);
+    cleanup.push(mcp.close);
+    expect(String(await run(mcp.tools, "vmem__echo", { text: big })).length).toBe(8000);
   });
 });

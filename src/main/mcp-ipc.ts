@@ -1,6 +1,6 @@
 import { ipcMain, shell } from "electron";
 import { mcpUrlError, testMcpServer } from "../core/mcp";
-import { authorizeMcpServer, createMcpOAuthProvider } from "../core/mcp-oauth";
+import { authorizeMcpServer, createMcpOAuthProvider, revokeMcpOAuth } from "../core/mcp-oauth";
 import type { VmemSearch } from "../core/vmem-history";
 import {
   IPC,
@@ -30,7 +30,13 @@ export function registerMcpIpc(settings: SettingsStore, vmem: VmemSearch): void 
 
   ipcMain.handle(IPC.mcpList, () => settings.mcpList());
   ipcMain.handle(IPC.mcpSave, (_event, payload) => changed(settings.mcpSave(mcpSaveSchema.parse(payload))));
-  ipcMain.handle(IPC.mcpRemove, (_event, payload) => changed(settings.mcpRemove(mcpIdSchema.parse(payload).id)));
+  // Disconnect: ask the authorization server to revoke the tokens first (best effort, bounded), then clear them locally.
+  ipcMain.handle(IPC.mcpRemove, async (_event, payload) => {
+    const id = mcpIdSchema.parse(payload).id;
+    const url = settings.mcpConfig(id)?.url;
+    if (url) await revokeMcpOAuth({ url, state: settings.mcpOAuthStorage(id).load() });
+    return changed(settings.mcpRemove(id));
+  });
   ipcMain.handle(IPC.mcpSetEnabled, (_event, payload) => changed(settings.mcpSetEnabled(mcpSetEnabledSchema.parse(payload))));
 
   // MCP sign-in: system browser, redirect to a loopback server on 127.0.0.1 (not bee://). Tokens are stored encrypted and never returned.
