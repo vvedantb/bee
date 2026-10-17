@@ -2,11 +2,13 @@ import type { Snippet } from "./notes";
 
 export type Retrieved = { snippet: Snippet; score: number };
 
-const STOPWORDS = new Set(
+// Includes spoken backchannel (yeah, mhm, thanks), so a line of only these has no content words (steering.ts isFiller).
+export const STOPWORDS = new Set(
   (
     "a an and are as at be but by can do for from has have i if in is it its just me my no not of on or " +
     "our so that the their them then there they this to up us was we were what when which who will with " +
-    "you your yes ok okay um uh like get got going gonna about into also been would could should than"
+    "you your yes ok okay um uh like get got going gonna about into also been would could should than " +
+    "yeah yup yep uh-huh huh hmm mm mhm nah nope right sure cool thanks thank please"
   ).split(" "),
 );
 

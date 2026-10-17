@@ -34,6 +34,8 @@ async function timed<T>(work: Promise<T>): Promise<{ value: T; ms: number }> {
  */
 export async function runPipeline(args: {
   transcript: string[];
+  /** Tips already on screen, passed to Luna as a keep list (live steering). */
+  shown?: string[];
   snippets: Snippet[];
   gateway: BeeGateway | null;
   notesDir?: string;
@@ -77,6 +79,7 @@ export async function runPipeline(args: {
     const guide = await guideWithLuna({
       model: args.gateway!(LUNA_MODEL),
       transcript: args.transcript,
+      shown: args.shown,
       notes: guideNotes,
       notesDir: args.notesDir,
       extraRoots: args.extraRoots,

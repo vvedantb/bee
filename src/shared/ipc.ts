@@ -78,6 +78,8 @@ const runIdSchema = z.union([z.string().max(100), z.number()]);
 export const pipelineRequestSchema = z.object({
   transcript: z.array(z.string().max(2000)).min(1).max(50),
   runId: runIdSchema.optional(),
+  // Tips already on screen when a newer line restarts the run (live steering). Complete lines only.
+  shown: z.array(z.string().max(500)).max(3).optional(),
   // Clerk session token; main refuses to run the pipeline without a live one (main/auth.ts).
   sessionToken: z.string().max(8000),
 });

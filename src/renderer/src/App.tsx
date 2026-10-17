@@ -20,6 +20,7 @@ import { SecretField } from "./SecretField";
 import { INTERFACE_SCALES } from "../../core/interface-scale";
 import { DEFAULT_MOTION_PREFERENCE, MOTION_PREFERENCES, resolveReducedMotion, type MotionPreference } from "../../core/motion-preference";
 import { visibleChips, type LinkChip } from "../../core/link-suggest";
+import { tipKey } from "../../core/steering";
 import type { PipelineResult, SettingsView } from "../../shared/ipc";
 import { timingsLabel, timingsTitle } from "./island";
 import { notchStatus } from "./notch";
@@ -53,8 +54,9 @@ function LinkChips({ chips }: { chips: LinkChip[] }) {
   );
 }
 
-function IslandBody({ result, chips, closing }: { result: PipelineResult | null; chips: LinkChip[]; closing: boolean }) {
+function IslandBody({ result, chips, closing, keptTips }: { result: PipelineResult | null; chips: LinkChip[]; closing: boolean; keptTips: string[] }) {
   const tips = result?.tips ?? [];
+  const kept = new Set(keptTips.map(tipKey));
   const sources = result?.sources ?? [];
   return (
     <section className={closing ? "island-body closing" : "island-body"} aria-live="polite">
@@ -64,9 +66,11 @@ function IslandBody({ result, chips, closing }: { result: PipelineResult | null;
         </Button>
         {tips.length > 0 ? (
           <ul className="island-tips">
-            {/* Keyed by position: a streaming line grows in place instead of replaying the entrance. */}
+            {/* Keyed by position: a streaming line grows in place instead of replaying the entrance. Kept tips are dimmed while Bee updates them. */}
             {tips.map((tip, index) => (
-              <li key={index}>{tip}</li>
+              <li key={index} className={kept.has(tipKey(tip)) ? "kept" : undefined}>
+                {tip}
+              </li>
             ))}
           </ul>
         ) : null}
@@ -176,7 +180,7 @@ function Island({ state }: { state: BeeState }) {
         </Button>
       </header>
       {/* While busy the previous tips stay (and streamed tips replace them); displayResult drops the old error. */}
-      {showBody ? <IslandBody result={result} chips={chips} closing={state.islandClosing} /> : null}
+      {showBody ? <IslandBody result={result} chips={chips} closing={state.islandClosing} keptTips={state.revising ? state.keptTips : []} /> : null}
     </div>
   );
 }

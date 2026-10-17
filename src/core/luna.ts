@@ -2,10 +2,10 @@ import { isStepCount, streamText, type LanguageModel, type ToolSet } from "ai";
 import { withTimeout } from "./abort";
 import { gatewayTier } from "./gateway";
 import type { Snippet } from "./notes";
+import { MAX_TIPS, tipCap } from "./steering";
 import { lunaTools, sourcesFromGenerateResult, type BeeSource } from "./tools";
 
 const TRANSCRIPT_WINDOW = 8;
-const MAX_TIPS = 2;
 const LUNA_TIMEOUT_MS = 45_000;
 const MAX_STEPS = 8;
 const SCHEMA_ERROR = /json schema|propertyNames|input_?schema|tools?\b.*\bschema|functionality.*not supported|not supported.*schema/i;
@@ -29,6 +29,19 @@ export const LUNA_SYSTEM = [
   "If nothing useful can be said, reply with exactly NONE.",
 ].join("\n");
 
+/** Added to the system prompt only when tips are already on screen (the user kept talking). */
+export const LUNA_STEERING_SYSTEM = [
+  "If tips are already shown, add tips for new lines.",
+  "Return the full set: copy each shown tip that still stands word for word, then add the new tips.",
+  "Replace a shown tip only if the new line corrects it.",
+  "If the new lines need no tip, copy the shown tips.",
+].join("\n");
+
+// The tip cap is 2 for a fresh turn and 3 while earlier tips are kept (steering.ts tipCap).
+function lunaSystem(maxTips: number): string {
+  return maxTips === MAX_TIPS ? LUNA_SYSTEM : LUNA_SYSTEM.replace("at most 2 short tips", `at most ${maxTips} short tips`);
+}
+
 /** Added to the system prompt only when the user has connected MCP tools. */
 export const LUNA_MCP_SYSTEM = [
   "The user has connected MCP servers, for example vmem or Eva. Their tools are named server__tool, for example vmem__search.",
@@ -45,19 +58,28 @@ export function noteCitation(index: number): string {
 
 export type LunaPrompt = { system: string; prompt: string };
 
-export function buildLunaPrompt(args: { transcript: string[]; notes: Snippet[]; hasMcpTools?: boolean }): LunaPrompt {
+export function buildLunaPrompt(args: { transcript: string[]; notes: Snippet[]; hasMcpTools?: boolean; shown?: string[] }): LunaPrompt {
   const lines = args.transcript.slice(-TRANSCRIPT_WINDOW).map((line) => `- ${line.trim()}`);
+  const shown = (args.shown ?? []).map((tip) => tip.replace(/\s+/g, " ").trim()).filter((tip) => tip.length > 0);
   const notes = args.notes.map((note, index) => `[${noteCitation(index)}] ${note.title}\n${note.text}`);
   const prompt = [
     "Recent transcript (oldest first):",
     lines.join("\n"),
     "",
+    ...(shown.length > 0
+      ? ["Already shown to the user (keep; do not repeat; refine only if the new line changes the answer):", ...shown.map((tip) => `- ${tip}`), ""]
+      : []),
     "Relevant notes:",
     notes.length > 0 ? notes.join("\n\n") : "(none)",
     "",
     "Tips:",
   ].join("\n");
-  return { system: args.hasMcpTools ? `${LUNA_SYSTEM}\n${LUNA_MCP_SYSTEM}` : LUNA_SYSTEM, prompt };
+  const system = [
+    shown.length > 0 ? lunaSystem(tipCap(shown.length)) : LUNA_SYSTEM,
+    ...(args.hasMcpTools ? [LUNA_MCP_SYSTEM] : []),
+    ...(shown.length > 0 ? [LUNA_STEERING_SYSTEM] : []),
+  ];
+  return { system: system.join("\n"), prompt };
 }
 
 /** Removes markdown the model may still emit, keeping plain text and note cites such as [n1]. */
@@ -76,13 +98,13 @@ function stripMarkdown(line: string): string {
     .trim();
 }
 
-export function parseLunaTips(text: string): string[] {
+export function parseLunaTips(text: string, maxTips = MAX_TIPS): string[] {
   if (text.trim().toUpperCase() === "NONE") return [];
   return text
     .split("\n")
     .map((line) => stripMarkdown(line.trim()))
     .filter((line) => line.length > 0 && line.toUpperCase() !== "NONE")
-    .slice(0, MAX_TIPS);
+    .slice(0, maxTips);
 }
 
 /** A streamed line shows once it has this many words, so a lone "NONE" or "- " never flashes. */
@@ -92,13 +114,13 @@ const MIN_LIVE_WORDS = 4;
  * Tips so far from streamed text: every finished line, plus the line in progress once it has a few whole words.
  * Only a hint for the overlay. parseLunaTips on the full text stays the final authority (NONE, 2-tip cap).
  */
-export function streamingTips(text: string): string[] {
+export function streamingTips(text: string, maxTips = MAX_TIPS): string[] {
   const parts = text.split("\n");
   const open = (parts.pop() ?? "").replace(/\S*$/, "");
   const tips = parts.map((line) => stripMarkdown(line.trim())).filter((line) => line.length > 0 && line.toUpperCase() !== "NONE");
   const live = stripMarkdown(open.trim());
   if (live.split(/\s+/).length >= MIN_LIVE_WORDS && live.toUpperCase() !== "NONE") tips.push(live);
-  return tips.slice(0, MAX_TIPS);
+  return tips.slice(0, maxTips);
 }
 
 export type LunaResult = {
@@ -129,6 +151,8 @@ export async function guideWithLuna(args: {
   model: LanguageModel;
   transcript: string[];
   notes: Snippet[];
+  /** Tips already on screen (complete lines). Luna adds tips for the new lines and returns the full set, up to 3. */
+  shown?: string[];
   timeoutMs?: number;
   /** Notes folder and extra approved folders for the file tools. Without notesDir, Luna gets no file tools. */
   notesDir?: string;
@@ -143,6 +167,7 @@ export async function guideWithLuna(args: {
   signal?: AbortSignal;
 }): Promise<LunaResult> {
   const startedAt = performance.now();
+  const maxTips = tipCap(args.shown?.length ?? 0);
   let firstTokenMs: number | null = null;
   let extra: ToolSet = { ...args.extraTools };
   const dropped: string[] = [];
@@ -195,7 +220,7 @@ export async function guideWithLuna(args: {
       } else if (part.type === "text-delta") {
         text += part.text;
         if (firstTokenMs === null && part.text.trim()) firstTokenMs = performance.now() - startedAt;
-        const tips = streamingTips(text);
+        const tips = streamingTips(text, maxTips);
         const key = JSON.stringify(tips);
         if (tips.length > 0 && key !== sent) {
           sent = key;
@@ -215,7 +240,7 @@ export async function guideWithLuna(args: {
   for (let attempt = 0; ; attempt++) {
     try {
       const result = await run();
-      return { tips: parseLunaTips(result.text), sources: sourcesFromGenerateResult(result), error: null, skipped: skipped(), ...timings() };
+      return { tips: parseLunaTips(result.text, maxTips), sources: sourcesFromGenerateResult(result), error: null, skipped: skipped(), ...timings() };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (args.signal?.aborted || !SCHEMA_ERROR.test(message) || attempt >= 2 || Object.keys(extra).length === 0) {

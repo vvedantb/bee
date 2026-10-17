@@ -2,7 +2,7 @@ import { jsonSchema, simulateReadableStream, tool } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import { describe, expect, it, vi } from "vitest";
 import { MOCK_TOKEN, startMockMcpServer } from "../../test/helpers/mock-mcp-server";
-import { LUNA_MCP_SYSTEM, LUNA_SYSTEM, buildLunaPrompt, guideWithLuna, parseLunaTips, streamingTips } from "./luna";
+import { LUNA_MCP_SYSTEM, LUNA_STEERING_SYSTEM, LUNA_SYSTEM, buildLunaPrompt, guideWithLuna, parseLunaTips, streamingTips } from "./luna";
 import { loadMcpTools } from "./mcp";
 
 describe("buildLunaPrompt", () => {
@@ -26,6 +26,23 @@ describe("buildLunaPrompt", () => {
     const { system } = buildLunaPrompt({ transcript: ["a"], notes: [], hasMcpTools: true });
     expect(system).toBe(`${LUNA_SYSTEM}\n${LUNA_MCP_SYSTEM}`);
     expect(system).toMatch(/Never invent a result/);
+  });
+
+  it("adds the shown-tips block and the steering rule only when tips are shown", () => {
+    const plain = buildLunaPrompt({ transcript: ["a"], notes: [] });
+    expect(plain.prompt).not.toContain("Already shown");
+    expect(plain.system).not.toContain(LUNA_STEERING_SYSTEM);
+    const { system, prompt } = buildLunaPrompt({ transcript: ["a", "b"], notes: [], shown: [" SSO ships in Q4 [n1] ", "Ask about\nowners"] });
+    expect(prompt).toContain("Already shown to the user (keep; do not repeat; refine only if the new line changes the answer):\n- SSO ships in Q4 [n1]\n- Ask about owners\n\nRelevant notes:");
+    // The block sits between the transcript and the notes.
+    expect(prompt.indexOf("Recent transcript")).toBeLessThan(prompt.indexOf("Already shown"));
+    expect(system).toContain("If tips are already shown, add tips for new lines.");
+    expect(system).toContain("Replace a shown tip only if the new line corrects it.");
+    expect(system).toContain("at most 3 short tips");
+  });
+
+  it("ignores blank shown tips", () => {
+    expect(buildLunaPrompt({ transcript: ["a"], notes: [], shown: ["  ", ""] }).prompt).not.toContain("Already shown");
   });
 
   it("keeps only the last 8 transcript lines and marks missing notes", () => {
@@ -67,6 +84,7 @@ describe("LUNA_SYSTEM", () => {
 describe("parseLunaTips", () => {
   it("strips bullets and numbering and caps at two tips", () => {
     expect(parseLunaTips("- Offer 10% [n1]\n* Ask about timing\n3. Third")).toEqual(["Offer 10% [n1]", "Ask about timing"]);
+    expect(parseLunaTips("- One\n- Two\n- Three\n- Four", 3)).toEqual(["One", "Two", "Three"]);
   });
 
   it("treats NONE and blank output as no tips", () => {
@@ -111,6 +129,7 @@ describe("streamingTips", () => {
 
   it("caps at two tips", () => {
     expect(streamingTips("- a b c d\n- e f g h\n- i j k l\n")).toHaveLength(2);
+    expect(streamingTips("- a b c d\n- e f g h\n- i j k l\n", 3)).toHaveLength(3);
   });
 });
 

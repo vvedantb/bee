@@ -53,6 +53,7 @@ export function registerMeetingIpc(args: { notesDir: string; fsRoots: () => stri
     try {
       const result = await runPipeline({
         transcript: request.transcript,
+        shown: request.shown,
         snippets,
         gateway: apiKey ? createBeeGateway(apiKey) : null,
         notesDir: args.notesDir,

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { TURN_GAP_MS } from "../../core/steering";
 import { ISLAND_IDLE_MS, activityLabel, islandPhase, islandShowsBody, shouldAutoCollapse, shouldShowResponse, timingsLabel, timingsTitle } from "./island";
 
 const empty = { tips: [], sources: [], guideError: null, dismissed: false };
@@ -89,6 +90,20 @@ describe("islandPhase", () => {
 
   it("is idle once dismissed", () => {
     expect(islandPhase({ ...empty, tips: ["Say yes"], dismissed: true, busy: false })).toBe("idle");
+  });
+});
+
+describe("islandPhase revising", () => {
+  it("reads revising while busy with a newer line over kept tips", () => {
+    const args = { ...empty, tips: ["Kept tip"], busy: true, revising: true };
+    expect(islandPhase(args)).toBe("revising");
+    expect(islandShowsBody(args)).toBe(true);
+    expect(islandPhase({ ...args, revising: false })).toBe("thinking");
+    expect(islandPhase({ ...args, busy: false })).toBe("expanded");
+  });
+
+  it("uses one clock for the island and the turn gap", () => {
+    expect(TURN_GAP_MS).toBe(ISLAND_IDLE_MS);
   });
 });
 

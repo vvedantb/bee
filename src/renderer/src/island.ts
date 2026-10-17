@@ -1,6 +1,7 @@
 // Pure logic for the island: the pill while Luna works, and the response body under it. No React or window here.
 
-export type IslandPhase = "idle" | "thinking" | "expanded";
+// revising: a new line arrived while tips were on screen. They stay (dimmed) while the run updates them.
+export type IslandPhase = "idle" | "thinking" | "revising" | "expanded";
 
 /** Time with no new result, no busy run and no pointer on the island before the body closes. */
 export const ISLAND_IDLE_MS = 10_000;
@@ -48,8 +49,8 @@ export function islandShowsBody(args: ResponseArgs & { busy: boolean }): boolean
 }
 
 /** Thinking wins over the pill's phase: a new run replaces the old answer. */
-export function islandPhase(args: ResponseArgs & { busy: boolean }): IslandPhase {
-  if (args.busy) return "thinking";
+export function islandPhase(args: ResponseArgs & { busy: boolean; revising?: boolean }): IslandPhase {
+  if (args.busy) return args.revising ? "revising" : "thinking";
   return shouldShowResponse(args) ? "expanded" : "idle";
 }
 

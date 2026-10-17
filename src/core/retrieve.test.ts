@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { SEED_NOTES, chunkNote, chunkNotes } from "./notes";
-import { retrieve, tokenize, transcriptQuery } from "./retrieve";
+import { STOPWORDS, retrieve, tokenize, transcriptQuery } from "./retrieve";
 
 const snippets = chunkNotes(SEED_NOTES);
 
@@ -14,6 +14,15 @@ describe("chunkNote", () => {
   it("falls back to the file name and drops empty sections", () => {
     const chunks = chunkNote({ name: "plain.md", content: "## Empty\n\n## Full\ntext" });
     expect(chunks).toEqual([{ id: "plain.md#2", title: "plain › Full", text: "text" }]);
+  });
+});
+
+describe("STOPWORDS", () => {
+  it("holds backchannel words and the earlier stopwords", () => {
+    for (const word of ["yeah", "yup", "yep", "uh-huh", "huh", "hmm", "mm", "mhm", "nah", "nope", "right", "sure", "cool", "thanks", "thank", "please", "okay", "the"]) {
+      expect(STOPWORDS.has(word), word).toBe(true);
+    }
+    expect(tokenize("Yeah, thanks, mhm")).toEqual([]);
   });
 });
 

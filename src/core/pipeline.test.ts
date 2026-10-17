@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { pipelineResultSchema } from "../shared/ipc";
+import { pipelineRequestSchema, pipelineResultSchema } from "../shared/ipc";
 import type { BeeGateway } from "./gateway";
 import { rankWithJev } from "./jev";
 import { guideWithLuna, type LunaResult } from "./luna";
@@ -62,6 +62,20 @@ describe("runPipeline", () => {
     expect(timingsMs.rank).toBeGreaterThanOrEqual(4);
     expect(timingsMs.lunaFirstToken).toBe(12);
     expect(timingsMs.lunaTotal).toBe(30);
+  });
+
+  it("accepts at most 3 shown tips in a pipeline request", () => {
+    const base = { transcript: ["a"], sessionToken: "t" };
+    expect(pipelineRequestSchema.parse({ ...base, shown: ["x", "y", "z"] }).shown).toHaveLength(3);
+    expect(pipelineRequestSchema.parse(base).shown).toBeUndefined();
+    expect(() => pipelineRequestSchema.parse({ ...base, shown: ["a", "b", "c", "d"] })).toThrow();
+  });
+
+  it("passes the shown tips to Luna as a keep list", async () => {
+    jevAfter(1);
+    guide.mockResolvedValue(lunaOk());
+    await runPipeline({ transcript, shown: ["Tip already on screen"], snippets, gateway });
+    expect(guide.mock.calls[0]?.[0].shown).toEqual(["Tip already on screen"]);
   });
 
   it("starts MCP and Luna's prompt while Jev is still running", async () => {
