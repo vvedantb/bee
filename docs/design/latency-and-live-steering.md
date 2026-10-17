@@ -1,6 +1,6 @@
 # Latency and live steering (draft)
 
-**Status (17 October 2026):** PR A (speed) is being implemented on branch `cursor/latency-speed-a285`. Live steering (section 5) is not started and stays for a later stacked PR.
+**Status (17 October 2026):** PR A (speed) is built on branch `cursor/latency-speed-a285`. PR B (branch `cursor/latency-live-steering-a285`, stacked on PR A) implements section 5, Strategy A: debounce (500 ms), commit window, restart cap, keep list, filler gate, dimmed kept tips with an "Updating…" pill, and chip merge inside a turn. Pure rules are in `src/core/steering.ts`. Deviations from the text below: the store uses flags (`heard`, `busy`, `revising`, `keptTips`) instead of one `phase` enum; the debounce applies only while steering (a keep list or a run in flight), so the first line of a turn starts at once, as in PR A; the 3-tip cap applies to runs that carry a keep list. No realtime audio.
 
 **Speed PR: what was built.**
 

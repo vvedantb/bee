@@ -1,6 +1,7 @@
 import { getToken } from "@clerk/electron/react";
 import { useSyncExternalStore } from "react";
 import { detectLinks, mergeChips, visibleChips, type LinkChip } from "../../core/link-suggest";
+import { inCommitWindow, isFiller, isNewTurn, mergeTips, recentRestarts, runDelayMs, tipCap, tipKey } from "../../core/steering";
 import { mergeLines, pipelineText, summaryTranscript, type SessionLine } from "../../core/sync-lines";
 import {
   SESSION_TRANSCRIPT_MAX,
@@ -61,6 +62,10 @@ export type BeeState = {
   heard: boolean;
   // Tips streamed by the run in flight (finished lines). They show before the full result lands, which replaces them.
   partialTips: string[] | null;
+  // Live steering: a newer line came while tips were on screen. keptTips are those tips (complete lines), sent to Luna as the keep
+  // list and shown dimmed; revising turns the pill to "Updating…". Both clear when the run settles. State only, never words beyond the tips.
+  keptTips: string[];
+  revising: boolean;
   // The tool Luna last used in this run (a raw tool name; island.ts activityLabel turns it into text). Null otherwise.
   activity: string | null;
   // Island: the user closed the body for the result on screen. A new result clears it.
@@ -117,6 +122,8 @@ let state: BeeState = {
   busy: false,
   heard: false,
   partialTips: null,
+  keptTips: [],
+  revising: false,
   activity: null,
   dismissed: false,
   islandClosing: false,
@@ -158,6 +165,19 @@ let sampleIndex = 0;
 let localSeq = 0;
 let turnSeq = 0;
 let turnText = "";
+// Live steering. A turn is the lines since the last gap of TURN_GAP_MS or dismissal; inside it a new line keeps the tips on screen.
+let turnOpen = false;
+let lastLineAt = 0;
+// The line that opened this turn has not started a run yet: nothing is kept.
+let pendingFresh = false;
+// A run is waiting out its debounce (runTimer), or waiting for a run in its commit window to finish (deferred).
+let runTimer: ReturnType<typeof setTimeout> | undefined;
+let deferred = false;
+// The run in flight: its keep list, and the tips it has streamed so far (the last may be half written).
+let inFlight: number | null = null;
+let runKept: string[] = [];
+let runTips: string[] = [];
+let restarts: number[] = [];
 let stopMic: (() => void) | null = null;
 let sentSize: WindowSize = "collapsed";
 let ticking = false;
@@ -199,6 +219,8 @@ async function closeIsland(): Promise<void> {
   set({ islandClosing: true });
   await new Promise((resolve) => setTimeout(resolve, motionReduced() ? REDUCED_EXIT_MS : ISLAND_CLOSE_MS));
   if (!state.islandClosing) return;
+  // Dismissed tips are a finished turn: the next line starts afresh. A run in flight carries on.
+  turnOpen = false;
   set({ dismissed: true, islandClosing: false });
   await applyWindowSize();
 }
@@ -225,6 +247,7 @@ export function islandArgs(current: BeeState) {
     chipCount: visibleChips(current.chips, current.dismissedChipIds).length,
     dismissed: current.dismissed,
     busy: current.busy,
+    revising: current.revising,
   };
 }
 
@@ -246,12 +269,20 @@ function selfName(): string {
   return state.teams?.me?.displayName ?? "You";
 }
 
-function addLines(lines: SessionLine[]): void {
+/**
+ * Adds lines to the session. A line with content words starts or extends a turn; one without ("yeah", "okay") only joins the
+ * transcript. Returns true when a run should follow.
+ */
+function addLines(lines: SessionLine[]): boolean {
   const before = state.session.lines;
   const merged = mergeLines(before, lines, SESSION_TRANSCRIPT_MAX);
   set({ session: { ...state.session, lines: merged } });
-  // Lines already seen start no turn. New ones reset chips and dismissals, then fill from what was just said.
-  if (merged !== before) startTurn(lines);
+  // Lines already seen start no turn.
+  if (merged === before) return false;
+  const content = lines.filter((line) => !isFiller(line.text));
+  if (content.length === 0) return false;
+  startTurn(content);
+  return true;
 }
 
 /**
@@ -272,63 +303,172 @@ async function enrichChips(sent: LinkChip[], text: string, seq: number): Promise
   }
 }
 
-/** A new spoken or simulated line. Chips from its links open the island body even before Luna answers. */
+/**
+ * New spoken or simulated lines with content. Chips from their links open the island body even before Luna answers. Inside a turn
+ * the chips merge and turnSeq stays, so enrichChips for earlier chips is not dropped; after a gap or a dismissal they start over.
+ */
 function startTurn(lines: SessionLine[]): void {
-  const chips = mergeChips([], lines.flatMap((line) => detectLinks(line.text)));
-  const seq = ++turnSeq;
-  turnText = lines.map((line) => line.text).join("\n");
-  void enrichChips(chips, turnText, seq);
-  set(chips.length > 0 ? { chips, dismissedChipIds: [], dismissed: false, islandClosing: false } : { chips, dismissedChipIds: [] });
-  if (chips.length > 0) {
-    touchIsland();
-    void applyWindowSize();
+  const now = Date.now();
+  const fresh = isNewTurn({ open: turnOpen, lastLineAt, now });
+  turnOpen = true;
+  lastLineAt = now;
+  const text = lines.map((line) => line.text).join("\n");
+  const found = mergeChips([], lines.flatMap((line) => detectLinks(line.text)));
+  if (fresh) {
+    pendingFresh = true;
+    const seq = ++turnSeq;
+    turnText = text;
+    void enrichChips(found, turnText, seq);
+    set(found.length > 0 ? { chips: found, dismissedChipIds: [], dismissed: false, islandClosing: false } : { chips: found, dismissedChipIds: [] });
+    if (found.length > 0) {
+      touchIsland();
+      void applyWindowSize();
+    }
+    return;
   }
+  turnText = `${turnText}\n${text}`;
+  const chips = mergeChips(state.chips, found);
+  const added = chips.filter((chip) => !state.chips.some((known) => known.id === chip.id));
+  void enrichChips(added, turnText, turnSeq);
+  if (added.length === 0) return;
+  set({ chips, dismissed: false, islandClosing: false });
+  touchIsland();
+  void applyWindowSize();
 }
 
-/** Retrieve → Jev → Luna on the last 8 lines, teammates' lines labelled "Alice: …". */
+/**
+ * The tips a run starts from: those on screen, complete lines only. A run in flight has streamed its tips; the last may be half
+ * written, so it is dropped. Nothing is kept for the first line of a turn.
+ */
+function keepList(): string[] {
+  if (pendingFresh) return [];
+  if (inFlight !== null) {
+    const max = tipCap(runKept.length);
+    return runTips.length > 0 ? mergeTips(runKept, runTips.slice(0, -1), max, false) : runKept;
+  }
+  return state.result?.tips ?? [];
+}
+
+/** A line with content arrived: start at once for the first line of a turn; otherwise debounce, or pause once restarts pile up. */
+function scheduleRun(): void {
+  // A run waits for one in its commit window; it reads the whole transcript when it starts, so this line is already in.
+  if (deferred) return;
+  clearTimeout(runTimer);
+  const keep = keepList();
+  // Busy from now, so the pill never falls back to "Listening…" while the run waits.
+  set({ busy: true, heard: false, keptTips: keep, revising: keep.length > 0 });
+  const steering = keep.length > 0 || inFlight !== null;
+  runTimer = setTimeout(fireRun, runDelayMs(restarts, Date.now(), steering));
+}
+
+function fireRun(): void {
+  runTimer = undefined;
+  // Nearly done: let the answer finish, then start. A new turn has nothing worth finishing.
+  if (inFlight !== null && !pendingFresh && inCommitWindow(runTips.length)) {
+    deferred = true;
+    return;
+  }
+  void runPipeline();
+}
+
+/**
+ * Retrieve → Jev → Luna on the last 8 lines, teammates' lines labelled "Alice: …". Tips already on screen go to Luna as a keep
+ * list; the run's tips merge over them (core/steering.ts mergeTips), so a newer line adds to the answer instead of wiping it.
+ */
 async function runPipeline(): Promise<void> {
   const transcript = state.session.lines.slice(-PIPELINE_WINDOW).map(pipelineText);
   if (transcript.length === 0) return;
+  const fresh = pendingFresh;
+  const keep = keepList();
+  const cap = tipCap(keep.length);
+  const now = Date.now();
+  // A run still in flight is cancelled below: that is a restart.
+  if (inFlight !== null) restarts = [...recentRestarts(restarts, now), now];
   const previous = latestRun;
   const run = ++latestRun;
-  // A newer line supersedes the run in flight: stop its Jev and Luna in main. Fire and forget.
+  // A newer line supersedes the run in flight: stop its Jev and Luna in main. Fire and forget. A started tool call is never aborted.
   if (previous > 0) void window.bee.cancelPipeline({ runId: previous }).catch(() => undefined);
-  set({ busy: true, heard: false, activity: null, error: null });
+  pendingFresh = false;
+  deferred = false;
+  inFlight = run;
+  runKept = keep;
+  runTips = [];
+  // The kept tips stay on screen (dimmed, pill "Updating…"). A new turn drops the old answer.
+  set({
+    busy: true,
+    heard: false,
+    activity: null,
+    error: null,
+    keptTips: keep,
+    revising: keep.length > 0,
+    partialTips: keep.length > 0 ? keep : null,
+    ...(fresh ? { result: null } : {}),
+  });
   void applyWindowSize();
   // Tool events carry no run id; the latest run owns them, and finishing clears the label.
   const stopActivity = window.bee.onLunaActivity((tool) => {
     if (run === latestRun) set({ activity: tool });
   });
-  // Streamed tips show at once, over the previous ones, without waiting for the whole run.
+  // Streamed tips show at once, over the kept ones, without waiting for the whole run.
   const stopPartial = window.bee.onLunaPartial(({ runId, tips }) => {
     if (run !== latestRun || (runId !== undefined && runId !== run)) return;
-    set({ partialTips: tips, dismissed: false, islandClosing: false });
+    runTips = tips;
+    set({ partialTips: keep.length > 0 ? mergeTips(keep, tips, cap, false) : tips, dismissed: false, islandClosing: false });
     touchIsland();
     void applyWindowSize();
   });
   try {
-    const result = await window.bee.runPipeline({ transcript, runId: run, sessionToken: await sessionToken() });
+    const result = await window.bee.runPipeline({
+      transcript,
+      runId: run,
+      ...(keep.length > 0 ? { shown: keep } : {}),
+      sessionToken: await sessionToken(),
+    });
     if (run !== latestRun) return;
+    // Another run follows (a line is in its debounce, or waits for this run): the answer is not settled yet.
+    const waiting = runTimer !== undefined || deferred;
+    // The run returns the full set. A tip it left out was replaced. No tips at all (NONE, an error) leaves the kept ones.
+    const tips = keep.length > 0 ? mergeTips(keep, result.tips, cap, true) : result.tips;
+    const shown = { ...result, tips };
     // The tips' links join this turn's chips (deduped, capped).
-    const chips = mergeChips(state.chips, result.tips.flatMap((tip) => detectLinks(tip)));
+    const chips = mergeChips(state.chips, tips.flatMap((tip) => detectLinks(tip)));
     const added = chips.filter((chip) => !state.chips.some((known) => known.id === chip.id));
-    void enrichChips(added, [turnText, ...result.tips].join("\n"), turnSeq);
+    void enrichChips(added, [turnText, ...tips].join("\n"), turnSeq);
     set({
-      result,
+      result: shown,
       partialTips: null,
       chips,
-      busy: false,
+      busy: waiting,
+      keptTips: waiting ? tips : [],
+      revising: waiting && tips.length > 0,
       activity: null,
       dismissed: false,
       islandClosing: false,
     });
-    addToSession(result);
+    if (!waiting) addToSession(shown);
     touchIsland();
   } catch (error) {
-    if (run === latestRun) set({ busy: false, partialTips: null, activity: null, error: error instanceof Error ? error.message : "Pipeline failed" });
+    if (run === latestRun) {
+      set({
+        busy: runTimer !== undefined || deferred,
+        keptTips: [],
+        revising: false,
+        partialTips: null,
+        activity: null,
+        error: error instanceof Error ? error.message : "Pipeline failed",
+      });
+    }
   } finally {
     stopActivity();
     stopPartial();
+    if (run === latestRun) {
+      inFlight = null;
+      // A line came while this run was nearly done: start its run now, from the settled tips.
+      if (deferred) {
+        deferred = false;
+        void runPipeline();
+      }
+    }
     void applyWindowSize();
   }
 }
@@ -351,10 +491,8 @@ async function teamsTick(): Promise<void> {
     if (!token) return;
     const { view, lines } = await window.bee.teams.tick(token);
     setTeams(view);
-    if (lines.length > 0) {
-      addLines(lines);
-      void runPipeline();
-    }
+    // Teammates' lines follow the same steering rules as the user's own.
+    if (lines.length > 0 && addLines(lines)) scheduleRun();
   } catch {
     // Main or the relay failed this tick; the next one tries again.
   } finally {
@@ -380,9 +518,10 @@ function setSummary(patch: Partial<SummaryState>): void {
   set({ summary: { ...state.summary, ...patch } });
 }
 
-// Adds new items to the end, skipping ones already present, and keeps the newest max.
-function mergeUnique(list: string[], items: string[], max: number): string[] {
-  return [...list, ...items.filter((item, index) => !list.includes(item) && items.indexOf(item) === index)].slice(-max);
+// Adds new items to the end, skipping ones already present (by key), and keeps the newest max.
+function mergeUnique(list: string[], items: string[], max: number, key: (item: string) => string = (item) => item): string[] {
+  const known = new Set(list.map(key));
+  return [...list, ...items.filter((item) => !known.has(key(item)) && known.add(key(item)))].slice(-max);
 }
 
 /** Record the notes cited and the tips from a shown result. */
@@ -393,7 +532,8 @@ function addToSession(result: PipelineResult): void {
     session: {
       ...session,
       notesCited: mergeUnique(session.notesCited, cited, SESSION_LIST_MAX),
-      tips: mergeUnique(session.tips, result.tips, SESSION_LIST_MAX),
+      // Once per settled turn, by tip text: a restart that keeps a tip does not add it again.
+      tips: mergeUnique(session.tips, result.tips, SESSION_LIST_MAX, tipKey),
     },
   });
 }
@@ -547,10 +687,10 @@ export const actions = {
   },
 
   /**
-   * Add a meeting line (typed, or a phrase from Grok STT) and run retrieve → Jev → Luna. Mic phrases are also
-   * shared with the Teams sync, if one is on and sharing is not paused.
+   * Add a meeting line (typed, or a phrase from Grok STT) and, if it has content words, schedule retrieve → Jev → Luna (after a
+   * short debounce). Mic phrases are also shared with the Teams sync, if one is on and sharing is not paused.
    */
-  async simulateLine(line: string, source: "typed" | "mic" = "typed"): Promise<void> {
+  simulateLine(line: string, source: "typed" | "mic" = "typed"): void {
     const text = line.trim();
     if (!text) return;
     localSeq += 1;
@@ -563,9 +703,9 @@ export const actions = {
       clientTs: Date.now(),
       serverTs: null,
     };
-    addLines([own]);
+    const content = addLines([own]);
     if (source === "mic" && state.teams?.room) void shareLine(own);
-    await runPipeline();
+    if (content) scheduleRun();
   },
 
   /**
@@ -576,7 +716,11 @@ export const actions = {
     const ended = state.session;
     if (ended.lines.length === 0 || state.summary.saving) return;
     if (stopMic) actions.stopMic(null);
-    set({ session: EMPTY_SESSION, chips: [], dismissedChipIds: [], summary: { saving: true, result: null, error: null } });
+    clearTimeout(runTimer);
+    runTimer = undefined;
+    deferred = false;
+    turnOpen = false;
+    set({ keptTips: [], revising: false, session: EMPTY_SESSION, chips: [], dismissedChipIds: [], summary: { saving: true, result: null, error: null } });
     try {
       const result = await window.bee.writeMeetingSummary({
         transcript: summaryTranscript(ended.lines, selfName()),

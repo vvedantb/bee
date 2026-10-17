@@ -5,7 +5,8 @@ import type { BeeState } from "./store";
 export function notchStatus(state: BeeState, signedIn: boolean | undefined): string {
   if (signedIn === undefined) return "Loading…";
   if (!signedIn) return "Sign in to use Bee";
-  if (state.busy) return activityLabel(state.activity);
+  // Tips stay on screen while a newer line updates them.
+  if (state.busy) return state.revising ? "Updating…" : activityLabel(state.activity);
   // The phrase ended and speech-to-text is running. No words are shown.
   if (state.heard) return "Got it…";
   if (state.mic.error) return state.mic.error;

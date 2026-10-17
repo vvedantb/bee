@@ -230,6 +230,15 @@ body {
   animation: island-rise 460ms var(--spring) backwards;
 }
 
+/* Tips kept from before the newest line, while Bee updates them. New tips are not dimmed. */
+.island-tips li.kept {
+  opacity: 0.55;
+}
+
+.island-tips li {
+  transition: opacity 200ms ease;
+}
+
 .island-tips li:nth-child(2) {
   animation-delay: 70ms;
 }
