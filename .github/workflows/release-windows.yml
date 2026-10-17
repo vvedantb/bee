@@ -41,7 +41,7 @@ jobs:
             release/*.exe
             release/*.zip
             release/*.blockmap
-            release/*.yml
+            release/latest*.yml
 
   macos:
     runs-on: macos-latest
@@ -69,7 +69,7 @@ jobs:
             release/*.dmg
             release/*.zip
             release/*.blockmap
-            release/*.yml
+            release/latest*.yml
 
   publish:
     needs: [windows, macos]
@@ -88,8 +88,8 @@ jobs:
           TAG="${{ github.event.inputs.tag || github.ref_name }}"
           if [[ "$TAG" != v* ]]; then TAG="v$TAG"; fi
           ls dist
-          gh release create "$TAG" dist/Bee*.exe dist/Bee*.zip dist/Bee*.dmg dist/*.blockmap dist/*.yml \
+          gh release create "$TAG" dist/Bee*.exe dist/Bee*.zip dist/Bee*.dmg dist/*.blockmap dist/latest*.yml \
             --title "Bee $TAG" \
             --notes "Windows installer (NSIS) and portable zip, and macOS dmg and zip (separate Apple Silicon arm64 and Intel x64 builds). Builds are unsigned. Windows SmartScreen may warn. On macOS, Gatekeeper will warn: right-click Bee and choose Open." \
             --latest || \
-          gh release upload "$TAG" dist/Bee*.exe dist/Bee*.zip dist/Bee*.dmg dist/*.blockmap dist/*.yml --clobber
+          gh release upload "$TAG" dist/Bee*.exe dist/Bee*.zip dist/Bee*.dmg dist/*.blockmap dist/latest*.yml --clobber

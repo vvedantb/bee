@@ -101,6 +101,7 @@
       "icon": "resources/icon.png"
     },
     "nsis": {
+      "artifactName": "Bee-Setup-${version}.${ext}",
       "oneClick": true,
       "perMachine": false
     },

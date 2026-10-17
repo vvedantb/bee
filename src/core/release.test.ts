@@ -27,6 +27,12 @@ describe("pickInstallerAsset", () => {
     expect(pickInstallerAsset(assets, "darwin", "x64")?.name).toBe("Bee-0.2.0-x64.dmg");
   });
 
+  it("picks the hyphenated installer name, with or without a zip in the list", () => {
+    expect(pickInstallerAsset([asset("Bee-Setup-0.3.1.exe")], "win32")?.name).toBe("Bee-Setup-0.3.1.exe");
+    expect(pickInstallerAsset([asset("Bee-0.3.1-win.zip"), asset("Bee-Setup-0.3.1.exe")], "win32")?.name).toBe("Bee-Setup-0.3.1.exe");
+    expect(pickInstallerAsset([asset("Bee Setup 0.3.0.exe")], "win32")?.name).toBe("Bee Setup 0.3.0.exe");
+  });
+
   it("picks the dmg, not the zip, on macOS", () => {
     const mac = [asset("Bee-0.2.0-x64.zip"), asset("Bee-0.2.0-x64.dmg")];
     expect(pickInstallerAsset(mac, "darwin", "x64")?.name).toBe("Bee-0.2.0-x64.dmg");

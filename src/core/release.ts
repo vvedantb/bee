@@ -32,8 +32,8 @@ export function isNewerVersion(latest: string, current: string): boolean {
 }
 
 const INSTALLER_PATTERNS: Partial<Record<NodeJS.Platform, RegExp[]>> = {
-  // The NSIS installer ("Bee Setup x.y.z.exe"), not the portable zip.
-  win32: [/setup.*\.exe$/i, /\.exe$/i],
+  // The NSIS installer ("Bee-Setup-x.y.z.exe", or the older "Bee Setup"/"Bee.Setup" names), not the portable zip.
+  win32: [/bee[-. ]setup.*\.exe$/i, /\.exe$/i],
   darwin: [/\.dmg$/i],
   linux: [/\.appimage$/i],
 };
