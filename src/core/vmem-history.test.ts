@@ -74,6 +74,12 @@ describe("parseHistoryHits", () => {
     expect(parseHistoryHits(`Results: ${JSON.stringify([memory({ url: "https://vercel.com/a" })])}`, "vercel.com")).toHaveLength(1);
   });
 
+  it("reads URLs from cut-off JSON text without taking escaped newlines into the URL", () => {
+    const full = JSON.stringify({ memories: [{ title: "Logs", content: "Logs\nhttps://vercel.com/acme/vibot/logs\nVisited 3 times", source: "browsing-history" }, { title: "More", content: "x".repeat(50) }] }, null, 2);
+    const cut = mergeSearchOutputs([full.slice(0, full.length - 40)]);
+    expect(parseHistoryHits(cut, "vercel.com").map((hit) => hit.url)).toEqual(["https://vercel.com/acme/vibot/logs"]);
+  });
+
   it("handles mixed wrapper shapes: top-level array, memories, results, data and wrapped memories", () => {
     const a = memory({ url: "https://vercel.com/a" });
     const b = { score: 0.9, memory: { title: "b", source: "bookmark", url: "https://vercel.com/b" } };

@@ -16,7 +16,8 @@ const HISTORY_SOURCE = /history|bookmark/i;
 const HISTORY_SOURCE_VALUE = "browsing-history";
 // Assumed value for bookmarks when the tool's source is free text: an unknown value only returns nothing.
 const BOOKMARK_SOURCE_VALUE = "bookmark";
-const URL_IN_TEXT = /https?:\/\/[^\s<>"')\]]+/gi;
+// A backslash ends a URL too: in raw JSON text (output cut off at the MCP result limit) "\\n" follows the URL, and must not become "/n…".
+const URL_IN_TEXT = /https?:\/\/[^\s<>"')\]\\]+/gi;
 const TRAILING = /[.,;:!?]+$/;
 const LIST_KEYS = ["memories", "results", "data"];
 // A hit may be the memory itself or a wrapper such as { memory, score }.
