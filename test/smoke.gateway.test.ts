@@ -54,6 +54,20 @@ describe("Vercel AI Gateway smoke", () => {
     expect(result.tips.length).toBeGreaterThan(0);
   });
 
+  it(`${LUNA_MODEL} searches the web for a current-events question and returns sources`, async () => {
+    const result = await guideWithLuna({
+      model: gateway(LUNA_MODEL),
+      transcript: ["Quick aside: who is the current Prime Minister of the UK?"],
+      notes: [],
+    });
+    console.log("Luna search tips:", result.tips);
+    console.log("Luna search sources:", result.sources);
+    expect(result.error).toBeNull();
+    expect(result.tips.length).toBeGreaterThan(0);
+    expect(result.sources.length).toBeGreaterThan(0);
+    for (const source of result.sources) expect(source.url).toMatch(/^https:\/\//);
+  });
+
   it(`${LUNA_MODEL} writes a meeting summary with every section`, async () => {
     const result = await generateMeetingSummary({
       model: gateway(LUNA_MODEL),

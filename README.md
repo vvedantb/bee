@@ -13,7 +13,7 @@ npm run dist:win
 # outputs under release/
 ```
 
-Bee is a desktop overlay for meetings. It sits as a small "notch" at the top centre of the screen. It listens to the meeting, finds relevant local notes, ranks them with Jev and shows one or two short tips from GPT-6 Luna.
+Bee is a desktop overlay for meetings. It sits as a small "notch" at the top centre of the screen. It listens to the meeting, finds relevant local notes, ranks them with Jev and shows one or two short tips from GPT-6 Luna. When a question is about a public or current fact that the notes do not cover, Luna can search the web, and the Live tab lists the source links under the tips. This uses the same Gateway key.
 
 Windows comes first. macOS support is planned.
 
@@ -194,14 +194,15 @@ npm run relay:mock     # in-memory relay on http://127.0.0.1:8787 for local Team
 npm run typecheck
 ```
 
-`test:gateway` makes six calls:
+`test:gateway` makes seven calls:
 
 1. `xai/grok-stt`: transcribes `test/fixtures/sso-question.wav` (a synthesised question with silence either side).
 2. `xai/grok-stt` with an invalid key: checks for a short `Speech-to-text failed:` error.
 3. `openai/gpt-6-luna`: one short guidance completion.
-4. `openai/gpt-6-luna`: a meeting summary from a short transcript, checked for every section and the named owner.
-5. `typesafe-ai/jev`: scores three note snippets against a fake transcript and checks that the relevant note ranks first.
-6. `typesafe-ai/jev` with an invalid key: checks that ranking fails open, keeps the original order, and returns a clear error.
+4. `openai/gpt-6-luna`: a current-events question ("who is the current Prime Minister of the UK?"), checked for a tip and at least one `https://` source.
+5. `openai/gpt-6-luna`: a meeting summary from a short transcript, checked for every section and the named owner.
+6. `typesafe-ai/jev`: scores three note snippets against a fake transcript and checks that the relevant note ranks first.
+7. `typesafe-ai/jev` with an invalid key: checks that ranking fails open, keeps the original order, and returns a clear error.
 
 `test:e2e` builds the app, then starts Electron with Chromium's fake audio device playing the same WAV. A small harness (`test/e2e/`) loads Bee's real preload and main IPC handlers, and a page that runs Bee's real mic capture and phrase detector. It checks that Grok STT returns the question, the roadmap note ranks first and Luna gives a tip. It skips Clerk and sends an unsigned token with Bee's issuer, which is all the main-process gate checks.
 
