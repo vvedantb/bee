@@ -102,7 +102,7 @@ function Island({ state }: { state: BeeState }) {
   // Collapsed, the status text opens the panel like the chevron, whatever it says.
   const canExpand = !state.expanded;
   // While Luna thinks, chips may open the body but the pill keeps its thinking text.
-  const status = showBody && !state.busy && !state.mic.error ? "Tips" : notchStatus(state, isSignedIn);
+  const status = showBody && !state.busy && !state.heard && !state.mic.error ? "Tips" : notchStatus(state, isSignedIn);
   const newVersion = state.update.check?.available ? state.update.check.latestVersion : null;
   const statusClass = state.mic.error ? "notch-status error-text" : "notch-status";
   return (
