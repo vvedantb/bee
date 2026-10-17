@@ -34,10 +34,13 @@ async function bundle(page: string): Promise<{ main: string; html: string }> {
     platform: "browser",
     format: "iife",
     define,
+    // Pages that import styles.css get ${page}.css with the fonts inlined.
+    loader: { ".woff2": "dataurl" },
     logLevel: "error",
   });
   const html = `${outDir}/${page}.html`;
-  writeFileSync(html, `<!doctype html><meta charset="utf-8"><script src="${page}.js"></script>\n`);
+  const css = existsSync(`${outDir}/${page}.css`) ? `<link rel="stylesheet" href="${page}.css">` : "";
+  writeFileSync(html, `<!doctype html><meta charset="utf-8">${css}<script src="${page}.js"></script>\n`);
   return { main: `${outDir}/${page}-main.cjs`, html };
 }
 

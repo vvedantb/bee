@@ -6,7 +6,7 @@ Bee is an Electron app built with electron-vite, React and TypeScript.
 src/
   main/       Electron main process: notch window, tray, IPC, settings, notes folder, bee:// protocol, Clerk bridge, Teams detector and sync IPC
   preload/    Sandboxed bridge: exposes window.bee (parses every response with zod) and Clerk's bridge
-  renderer/   React UI: collapsed notch, sign-in, expanded panel (Live, Settings), mic capture (mic.ts), phrase detection and WAV (speech.ts)
+  renderer/   React UI: island (pill and response body; island.ts holds its pure logic), sign-in, expanded panel (Live, Settings), mic capture (mic.ts), phrase detection and WAV (speech.ts)
   shared/     IPC channel names and zod schemas, Clerk config (shared/clerk.ts)
   core/       Pure TypeScript: note chunking, retrieval, Jev ranking, Luna guidance and meeting summaries, Grok STT, pipeline, release version checks,
               Teams mode (relay protocol and client, sync controller, room ranking, detection debounce and heuristics, line merging)
@@ -112,11 +112,12 @@ Teams leaves the call (15 s) → controller leaves the sync; next detection → 
 - **Fail-open**: relay errors never throw into the UI. Unreachable, 401 or 5xx shows "Bee is working solo" and the local pipeline carries on; 403/404 on a room ends the sync locally.
 - **Main holds the relay connection**, so the renderer CSP stays closed to the relay host. The renderer passes a fresh Clerk token with each call; main checks it with `assertSignedIn` and the relay verifies it properly.
 - **Window**: a third size, `prompt` (440 × 330), shows the notch and the sync card without the panel.
+- **Island size**: a fourth size, `response` (440 × 360), shows the pill and the island body. `applyWindowSize` picks `expanded`, then `prompt`, then `response`, then `collapsed`.
 - **Deep links**: `bee://team/XXXX-XXXX` in `argv` (first launch, `second-instance`) or `open-url` (macOS) fills the invite code in **Settings → Team**. The user still clicks **Join team**.
 
 ## Processes and security
 
-- The window is frameless, transparent, always on top and skipped from the taskbar. It sits at the top centre of the primary display's work area. It resizes between 440 × 64 px (collapsed), 440 × 330 px (notch and Teams sync card) and 480 × 640 px (expanded).
+- The window is frameless, transparent, always on top and skipped from the taskbar. It sits at the top centre of the primary display's work area. It resizes between 440 × 64 px (collapsed), 440 × 330 px (notch and Teams sync card), 440 × 360 px (notch and island response) and 480 × 640 px (expanded).
 - The renderer runs with `sandbox: true`, `contextIsolation: true` and no Node integration.
 - The renderer is served from `bee://renderer/` by `protocol.handle` (`main/renderer-protocol.ts`), not `file://`, so Clerk sees a stable origin. In development the handler proxies to the Vite dev server. Paths outside `out/renderer` return 404.
 - The same handler sends the content security policy as a response header. Fonts are bundled (Instrument Sans woff2 in `renderer/src/fonts`), so `default-src 'self'` covers them and no font hosts are allowed. Remote scripts are allowed only from the Clerk Frontend API host (derived from the publishable key: `clerk.vedantb.com`) and `challenges.cloudflare.com` (bot protection). Images are allowed from `img.clerk.com`.
@@ -247,6 +248,7 @@ Saved secrets show as a disabled field reading `•••••••• (saved)
 
 - Font: Instrument Sans (variable, 400–700), self-hosted woff2 with the SIL OFL licence alongside.
 - Icons: `@tabler/icons-react` (bundled into the renderer; unused icons are tree-shaken).
+- Island: the notch is a pill. While a run is busy it shows the tool Luna is using (`bee:luna:activity`, `{ tool }`, sent from main by `guideWithLuna`'s `onToolExecutionStart` and `onStepFinish`; `activityLabel` maps `web_search` to "Searching the web", the file tools to "Reading notes", `append_note` to "Writing a note", anything else to "Thinking…"). When the answer arrives, the same surface grows downward with the tips (17 px) and sources (14 px). The body closes with the × button, or after `ISLAND_IDLE_MS` (10 s) with no new result, no busy run and no pointer on the island. Opening the full panel cancels the timer. A new result reopens the body; clicking the pill status reopens the last one. The body does not show while the panel or the Teams sync card is open. Tips are not streamed: `generateText` returns them whole, so the finished tips fade and slide in.
 - Motion: CSS only, 150–220 ms, transform and opacity. Panel slides in on expand and fades out before the window shrinks (`COLLAPSE_MS` 160 in the store matches the CSS). Tabs, notch status, tips and notes fade or rise in. `prefers-reduced-motion` turns motion off.
 
 ## Not yet built

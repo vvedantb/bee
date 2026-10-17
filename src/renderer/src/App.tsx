@@ -8,10 +8,12 @@ import {
   IconPlayerPlay,
   IconRefresh,
   IconUsersGroup,
+  IconX,
 } from "@tabler/icons-react";
 import { useState, type FormEvent } from "react";
-import type { SettingsView } from "../../shared/ipc";
-import { actions, useBee, type BeeState, type SummaryState, type UpdateState } from "./store";
+import type { PipelineResult, SettingsView } from "../../shared/ipc";
+import { activityLabel, islandPhase, shouldShowResponse } from "./island";
+import { actions, islandOpen, useBee, type BeeState, type SummaryState, type UpdateState } from "./store";
 import { SyncCard, SyncSection, TeamSection, syncedWith } from "./Teams";
 
 const ICON = { size: 16, stroke: 1.75 };
@@ -24,7 +26,7 @@ function formString(form: HTMLFormElement, name: string): string {
 function notchStatus(state: BeeState, signedIn: boolean | undefined): string {
   if (signedIn === undefined) return "Loading…";
   if (!signedIn) return "Sign in to use Bee";
-  if (state.busy) return "Thinking…";
+  if (state.busy) return activityLabel(state.activity);
   if (state.mic.error) return state.mic.error;
   const tip = state.result?.tips[0];
   if (tip) return tip;
@@ -33,57 +35,110 @@ function notchStatus(state: BeeState, signedIn: boolean | undefined): string {
   return state.settings?.meetingMode ? "Meeting mode on" : "Bee is ready";
 }
 
-function Notch({ state }: { state: BeeState }) {
-  const { isSignedIn } = useAuth();
-  const status = notchStatus(state, isSignedIn);
-  const open = state.expanded && !state.collapsing;
-  const newVersion = state.update.check?.available ? state.update.check.latestVersion : null;
+function IslandBody({ result, closing }: { result: PipelineResult; closing: boolean }) {
   return (
-    <header className="notch">
-      <span className={state.busy ? "notch-dot busy" : "notch-dot"} aria-hidden />
-      {/* Keyed so each new status fades in. */}
-      <span key={status} className={state.mic.error ? "notch-status error-text" : "notch-status"} title={status}>
-        {status}
-      </span>
-      {newVersion ? (
-        <button type="button" className="icon-button accent" title={`Bee ${newVersion} is available`} onClick={() => void actions.openSettings()}>
-          <IconDownload {...ICON} />
+    <section className={closing ? "island-body closing" : "island-body"} aria-live="polite">
+      <div className="island-inner">
+        <button type="button" className="icon-button island-close" title="Dismiss" aria-label="Dismiss" onClick={() => void actions.dismissIsland()}>
+          <IconX {...ICON} />
         </button>
-      ) : null}
-      {state.teams?.room ? (
+        {result.tips.length > 0 ? (
+          <ul className="island-tips">
+            {result.tips.map((tip) => (
+              <li key={tip}>{tip}</li>
+            ))}
+          </ul>
+        ) : null}
+        {result.guideError ? <p className="island-error">{result.guideError}</p> : null}
+        {result.sources.length > 0 ? (
+          <div className="island-sources">
+            <h3>Sources</h3>
+            <ul>
+              {result.sources.map((source) => (
+                <li key={source.url}>
+                  <a href={source.url} target="_blank" rel="noreferrer" title={source.title}>
+                    {source.title}
+                  </a>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
+// The pill, and under it the response body: one dark surface that grows downward when an answer arrives.
+function Island({ state }: { state: BeeState }) {
+  const { isSignedIn } = useAuth();
+  const open = state.expanded && !state.collapsing;
+  const result = state.result;
+  const showBody = islandOpen(state) && result !== null;
+  const phase = islandPhase({ ...(result ?? { tips: [], sources: [], guideError: null }), dismissed: state.dismissed, busy: state.busy });
+  const canReopen = !state.busy && !state.expanded && phase === "idle" && result !== null && shouldShowResponse({ ...result, dismissed: false });
+  const status = showBody && !state.mic.error ? "Tips" : notchStatus(state, isSignedIn);
+  const newVersion = state.update.check?.available ? state.update.check.latestVersion : null;
+  const statusProps = { className: state.mic.error ? "notch-status error-text" : "notch-status", title: status };
+  return (
+    <div
+      className={["island", state.busy && "thinking", showBody && "open"].filter(Boolean).join(" ")}
+      onPointerEnter={() => actions.setIslandHover(true)}
+      onPointerLeave={() => actions.setIslandHover(false)}
+    >
+      <header className="notch">
+        <span className={state.busy ? "notch-dot busy" : "notch-dot"} aria-hidden />
+        {canReopen ? (
+          // Keyed so each new status fades in.
+          <button key={status} type="button" {...statusProps} onClick={() => actions.reopenIsland()}>
+            {status}
+          </button>
+        ) : (
+          <span key={status} {...statusProps}>
+            {status}
+          </span>
+        )}
+        {newVersion ? (
+          <button type="button" className="icon-button accent" title={`Bee ${newVersion} is available`} onClick={() => void actions.openSettings()}>
+            <IconDownload {...ICON} />
+          </button>
+        ) : null}
+        {state.teams?.room ? (
+          <button
+            type="button"
+            className="icon-button sync-chip"
+            title={`${syncedWith(state.teams)}${state.teams.shareMuted ? " · sharing paused" : ""}`}
+            onClick={() => {
+              actions.setTab("live");
+              if (!open) void actions.setExpanded(true);
+            }}
+          >
+            <IconUsersGroup {...ICON} />
+            {state.teams.room.members.length}
+          </button>
+        ) : null}
+        <Show when="signed-in">
+          <button
+            type="button"
+            className={state.mic.on ? "icon-button on" : "icon-button"}
+            title={state.mic.error ?? (state.mic.on ? "Stop microphone" : "Start microphone")}
+            onClick={() => void actions.toggleMic()}
+          >
+            <IconMicrophone {...ICON} />
+            <span className="mic-level" style={{ transform: `scaleY(${0.2 + state.mic.level * 0.8})` }} />
+          </button>
+        </Show>
         <button
           type="button"
-          className="icon-button sync-chip"
-          title={`${syncedWith(state.teams)}${state.teams.shareMuted ? " · sharing paused" : ""}`}
-          onClick={() => {
-            actions.setTab("live");
-            if (!open) void actions.setExpanded(true);
-          }}
+          className={open ? "icon-button chevron open" : "icon-button chevron"}
+          title={open ? "Collapse" : "Expand"}
+          onClick={() => void actions.setExpanded(!open)}
         >
-          <IconUsersGroup {...ICON} />
-          {state.teams.room.members.length}
+          <IconChevronDown {...ICON} />
         </button>
-      ) : null}
-      <Show when="signed-in">
-        <button
-          type="button"
-          className={state.mic.on ? "icon-button on" : "icon-button"}
-          title={state.mic.error ?? (state.mic.on ? "Stop microphone" : "Start microphone")}
-          onClick={() => void actions.toggleMic()}
-        >
-          <IconMicrophone {...ICON} />
-          <span className="mic-level" style={{ transform: `scaleY(${0.2 + state.mic.level * 0.8})` }} />
-        </button>
-      </Show>
-      <button
-        type="button"
-        className={open ? "icon-button chevron open" : "icon-button chevron"}
-        title={open ? "Collapse" : "Expand"}
-        onClick={() => void actions.setExpanded(!open)}
-      >
-        <IconChevronDown {...ICON} />
-      </button>
-    </header>
+      </header>
+      {showBody ? <IslandBody result={result} closing={state.islandClosing} /> : null}
+    </div>
   );
 }
 
@@ -413,7 +468,7 @@ export function App() {
   const state = useBee();
   return (
     <div className={["shell", state.expanded && "expanded", state.collapsing && "collapsing"].filter(Boolean).join(" ")}>
-      <Notch state={state} />
+      <Island state={state} />
       <Show when="signed-in">
         <SyncCard state={state} />
       </Show>

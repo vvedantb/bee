@@ -62,6 +62,8 @@ export async function guideWithLuna(args: {
   /** Notes folder and extra approved folders for the file tools. Without notesDir, Luna gets no file tools. */
   notesDir?: string;
   extraRoots?: readonly string[];
+  /** Called with each tool Luna calls, so the overlay can show what it is doing. */
+  onActivity?: (toolName: string) => void;
 }): Promise<{ tips: string[]; sources: BeeSource[]; error: string | null }> {
   try {
     const { system, prompt } = buildLunaPrompt(args);
@@ -71,6 +73,11 @@ export async function guideWithLuna(args: {
       prompt,
       tools: lunaTools({ notesDir: args.notesDir, extraRoots: args.extraRoots }),
       stopWhen: isStepCount(5),
+      // Local tools report as they start. Provider tools (web_search) report when their step finishes.
+      onToolExecutionStart: ({ toolCall }) => args.onActivity?.(toolCall.toolName),
+      onStepFinish: (step) => {
+        for (const call of step.toolCalls) args.onActivity?.(call.toolName);
+      },
       maxOutputTokens: 800,
       maxRetries: 1,
       abortSignal: AbortSignal.timeout(args.timeoutMs ?? LUNA_TIMEOUT_MS),

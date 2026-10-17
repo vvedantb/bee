@@ -3,6 +3,7 @@ import { contextBridge, ipcRenderer } from "electron";
 import { z } from "zod";
 import {
   IPC,
+  lunaActivitySchema,
   meetingSummaryResultSchema,
   pipelineResultSchema,
   settingsViewSchema,
@@ -43,6 +44,17 @@ const api = {
   checkForUpdate: async () => updateCheckSchema.parse(await ipcRenderer.invoke(IPC.checkForUpdate)),
   downloadUpdate: async () => updateActionSchema.parse(await ipcRenderer.invoke(IPC.downloadUpdate)),
   installUpdate: async () => updateActionSchema.parse(await ipcRenderer.invoke(IPC.installUpdate)),
+  // Tool activity while a run is in flight. Returns the unsubscribe function.
+  onLunaActivity: (listener: (tool: string) => void): (() => void) => {
+    const handler = (_event: unknown, payload: unknown) => {
+      const parsed = lunaActivitySchema.safeParse(payload);
+      if (parsed.success) listener(parsed.data.tool);
+    };
+    ipcRenderer.on(IPC.lunaActivity, handler);
+    return () => {
+      ipcRenderer.removeListener(IPC.lunaActivity, handler);
+    };
+  },
   teams: {
     tick: async (sessionToken: string) => teamsTickResultSchema.parse(await ipcRenderer.invoke(IPC.teamsTick, { sessionToken })),
     act: async (action: TeamsAction) => teamsActionResultSchema.parse(await ipcRenderer.invoke(IPC.teamsAction, action)),

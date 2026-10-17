@@ -27,7 +27,7 @@ export function registerMeetingIpc(args: { notesDir: string; fsRoots: () => stri
     return transcribeSpeech({ model: createBeeGateway(apiKey).transcription(STT_MODEL), audio: request.audio });
   });
 
-  ipcMain.handle(IPC.runPipeline, (_event, payload) => {
+  ipcMain.handle(IPC.runPipeline, (event, payload) => {
     const request = pipelineRequestSchema.parse(payload);
     assertSignedIn(request.sessionToken);
     const apiKey = args.gatewayApiKey();
@@ -37,6 +37,9 @@ export function registerMeetingIpc(args: { notesDir: string; fsRoots: () => stri
       gateway: apiKey ? createBeeGateway(apiKey) : null,
       notesDir: args.notesDir,
       extraRoots: args.fsRoots(),
+      onActivity: (tool) => {
+        if (!event.sender.isDestroyed()) event.sender.send(IPC.lunaActivity, { tool });
+      },
     });
   });
 

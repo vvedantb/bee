@@ -16,10 +16,11 @@ export const IPC = {
   teamsTick: "bee:teams:tick",
   teamsAction: "bee:teams:action",
   teamsPublish: "bee:teams:publish",
+  lunaActivity: "bee:luna:activity",
 };
 
-// Collapsed notch, notch plus the sync popup, or the full panel.
-export const windowSizeSchema = z.enum(["collapsed", "prompt", "expanded"]);
+// Collapsed notch, notch plus the sync popup, notch plus the island response, or the full panel.
+export const windowSizeSchema = z.enum(["collapsed", "prompt", "response", "expanded"]);
 export type WindowSize = z.infer<typeof windowSizeSchema>;
 
 export const secretStorageSchema = z.enum(["os", "weak", "memory"]);
@@ -111,6 +112,10 @@ export const pipelineResultSchema = z.object({
   timingsMs: z.object({ retrieve: z.number(), rank: z.number(), guide: z.number() }),
 });
 export type PipelineResult = z.infer<typeof pipelineResultSchema>;
+
+// Main → renderer while Luna runs: the tool it just used or is using (renderer/src/island.ts: activityLabel).
+export const lunaActivitySchema = z.object({ tool: z.string().max(80) });
+export type LunaActivity = z.infer<typeof lunaActivitySchema>;
 
 export const updateCheckSchema = z.object({
   currentVersion: z.string(),
