@@ -1,9 +1,22 @@
 import { safeStorage } from "electron";
+import { randomUUID } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
 import { normalizeFsRoots } from "../core/fs-sandbox";
-import type { SettingsUpdate, SettingsView } from "../shared/ipc";
+import { mcpSlug, mcpUrlError, parseMcpArgs, parseMcpEnv, type McpServerConfig } from "../core/mcp";
+import {
+  MCP_MAX_SERVERS,
+  MCP_MAX_TOOLS,
+  mcpServerSchema,
+  type McpSave,
+  type McpServer,
+  type McpServerView,
+  type McpSetEnabled,
+  type McpTool,
+  type SettingsUpdate,
+  type SettingsView,
+} from "../shared/ipc";
 
 // On disk: secrets are safeStorage ciphertext (base64). Plain secrets never touch disk.
 const fileSchema = z.object({
@@ -11,7 +24,13 @@ const fileSchema = z.object({
   gatewayApiKey: z.string().optional(),
   claudeOAuthToken: z.string().optional(),
   fsRoots: z.array(z.string()).default([]),
+  // Non-secret MCP settings. A bad entry drops the list, not the whole file.
+  mcpServers: z.array(mcpServerSchema).catch([]).default([]),
+  // One safeStorage ciphertext (base64) for every server's secrets, as JSON keyed by server id.
+  mcpSecrets: z.string().optional(),
 });
+const mcpSecretsSchema = z.record(z.string(), z.object({ auth: z.string().optional(), env: z.record(z.string(), z.string()).optional() }));
+type McpSecrets = z.infer<typeof mcpSecretsSchema>;
 type SettingsFile = z.infer<typeof fileSchema>;
 type SecretName = "gatewayApiKey" | "claudeOAuthToken";
 
@@ -27,6 +46,8 @@ function storageMode(): SettingsView["secretStorage"] {
 export function createSettingsStore(args: { userDataDir: string; notesDir: string; envGatewayKey: string | undefined }) {
   const path = join(args.userDataDir, "settings.json");
   const memorySecrets = new Map<SecretName, string>();
+  // MCP secrets when encryption is unavailable: kept for this session only, like the gateway key.
+  let memoryMcp: McpSecrets = {};
 
   function read(): SettingsFile {
     try {
@@ -35,7 +56,7 @@ export function createSettingsStore(args: { userDataDir: string; notesDir: strin
     } catch {
       // Missing or corrupt file: start from defaults.
     }
-    return { meetingMode: false, fsRoots: [] };
+    return { meetingMode: false, fsRoots: [], mcpServers: [] };
   }
 
   function write(file: SettingsFile): void {
@@ -63,6 +84,157 @@ export function createSettingsStore(args: { userDataDir: string; notesDir: strin
       return { ...file, [name]: undefined };
     }
     return { ...file, [name]: safeStorage.encryptString(trimmed).toString("base64") };
+  }
+
+  function readMcpSecrets(file: SettingsFile): McpSecrets {
+    if (storageMode() === "memory") return memoryMcp;
+    if (!file.mcpSecrets) return {};
+    try {
+      const parsed = mcpSecretsSchema.safeParse(JSON.parse(safeStorage.decryptString(Buffer.from(file.mcpSecrets, "base64"))));
+      return parsed.success ? parsed.data : {};
+    } catch {
+      return {};
+    }
+  }
+
+  function writeMcpSecrets(file: SettingsFile, secrets: McpSecrets): SettingsFile {
+    const kept = Object.fromEntries(Object.entries(secrets).filter(([id, secret]) => file.mcpServers.some((server) => server.id === id) && (secret.auth || Object.keys(secret.env ?? {}).length > 0)));
+    if (storageMode() === "memory") {
+      memoryMcp = kept;
+      return { ...file, mcpSecrets: undefined };
+    }
+    const cipher = Object.keys(kept).length === 0 ? undefined : safeStorage.encryptString(JSON.stringify(kept)).toString("base64");
+    return { ...file, mcpSecrets: cipher };
+  }
+
+  function mcpView(server: McpServer, secrets: McpSecrets): McpServerView {
+    return { ...server, envKeys: server.envKeys ?? [], hasAuth: Boolean(secrets[server.id]?.auth) };
+  }
+
+  function mcpList(): McpServerView[] {
+    const file = read();
+    const secrets = readMcpSecrets(file);
+    return file.mcpServers.map((server) => mcpView(server, secrets));
+  }
+
+  /** Validates and upserts a server. Secrets: omitted = unchanged, "" = clear. */
+  function mcpSave(input: McpSave): McpServerView[] {
+    let file = read();
+    const existing = file.mcpServers.find((server) => server.id === input.id);
+    if (input.id && !existing) throw new Error("That server no longer exists");
+    if (!existing && file.mcpServers.length >= MCP_MAX_SERVERS) throw new Error(`At most ${MCP_MAX_SERVERS} servers`);
+    const slug = mcpSlug(input.name).toLowerCase();
+    if (file.mcpServers.some((server) => server.id !== existing?.id && mcpSlug(server.name).toLowerCase() === slug)) {
+      throw new Error(`Another server is already named "${input.name}"`);
+    }
+
+    const secrets = { ...readMcpSecrets(file) };
+    const id = existing?.id ?? randomUUID();
+    const previous = secrets[id] ?? {};
+    const next: McpServer = {
+      id,
+      name: input.name,
+      enabled: input.enabled,
+      transport: input.transport,
+      auth: { type: "none" },
+      tools: existing?.tools,
+    };
+    let auth = previous.auth;
+    let env = previous.env;
+
+    if (input.transport === "http") {
+      const urlError = mcpUrlError(input.url);
+      if (urlError) throw new Error(urlError);
+      next.url = input.url;
+      const headerName = input.auth.headerName?.trim();
+      if (input.auth.type === "header" && !/^[A-Za-z0-9-]+$/.test(headerName ?? "")) throw new Error("Enter a header name, for example X-API-Key");
+      next.auth = input.auth.type === "header" ? { type: "header", headerName } : { type: input.auth.type };
+      // A stored secret only fits the auth style it was saved for.
+      if (existing && (existing.auth.type !== next.auth.type || existing.transport !== "http")) auth = undefined;
+      if (input.secret !== undefined) auth = input.secret.trim() || undefined;
+      if (next.auth.type === "none") auth = undefined;
+      if (next.auth.type !== "none" && !auth) throw new Error("Enter a token or header value");
+      env = undefined;
+    } else {
+      if (!input.command) throw new Error("Enter a command");
+      next.command = input.command;
+      next.args = parseMcpArgs(input.args ?? "");
+      if (input.env !== undefined) env = parseMcpEnv(input.env);
+      next.envKeys = Object.keys(env ?? {});
+      auth = undefined;
+    }
+    // A different endpoint or command lists different tools: forget the old list.
+    if (existing && (existing.url !== next.url || existing.command !== next.command || existing.transport !== next.transport)) next.tools = undefined;
+
+    secrets[id] = { auth, env };
+    const servers = existing ? file.mcpServers.map((server) => (server.id === id ? next : server)) : [...file.mcpServers, next];
+    file = writeMcpSecrets({ ...file, mcpServers: servers }, secrets);
+    write(file);
+    return mcpList();
+  }
+
+  function mcpRemove(id: string): McpServerView[] {
+    let file = read();
+    file = writeMcpSecrets({ ...file, mcpServers: file.mcpServers.filter((server) => server.id !== id) }, readMcpSecrets(file));
+    write(file);
+    return mcpList();
+  }
+
+  /** Switches a server, or one of its listed tools. */
+  function mcpSetEnabled(update: McpSetEnabled): McpServerView[] {
+    const file = read();
+    const mcpServers = file.mcpServers.map((server) => {
+      if (server.id !== update.id) return server;
+      if (!update.tool) return { ...server, enabled: update.enabled };
+      return { ...server, tools: server.tools?.map((item) => (item.name === update.tool ? { ...item, enabled: update.enabled } : item)) };
+    });
+    write({ ...file, mcpServers });
+    return mcpList();
+  }
+
+  /** Saves a fresh tool list. Tools seen before keep their switch; new ones start on. */
+  function mcpRecordTools(id: string, listed: ReadonlyArray<{ name: string; description: string }>): McpTool[] {
+    const file = read();
+    const server = file.mcpServers.find((item) => item.id === id);
+    if (!server) return [];
+    const known = new Map((server.tools ?? []).map((item) => [item.name, item.enabled]));
+    const tools = listed.slice(0, MCP_MAX_TOOLS).map((item) => ({
+      name: item.name,
+      description: item.description.slice(0, 300),
+      enabled: known.get(item.name) ?? true,
+    }));
+    write({ ...file, mcpServers: file.mcpServers.map((item) => (item.id === id ? { ...item, tools } : item)) });
+    return tools;
+  }
+
+  function toConfig(server: McpServer, secrets: McpSecrets): McpServerConfig {
+    const secret = secrets[server.id];
+    return {
+      id: server.id,
+      name: server.name,
+      transport: server.transport,
+      url: server.url,
+      command: server.command,
+      args: server.args,
+      env: secret?.env,
+      auth: server.auth,
+      secret: secret?.auth,
+      disabledTools: server.tools?.filter((item) => !item.enabled).map((item) => item.name),
+    };
+  }
+
+  /** Enabled servers with decrypted secrets. Read on each pipeline run, like fsRoots. Main only. */
+  function mcpConfigs(): McpServerConfig[] {
+    const file = read();
+    const secrets = readMcpSecrets(file);
+    return file.mcpServers.filter((server) => server.enabled).map((server) => toConfig(server, secrets));
+  }
+
+  /** One server by id, enabled or not, for Test connection. Main only. */
+  function mcpConfig(id: string): McpServerConfig | undefined {
+    const file = read();
+    const server = file.mcpServers.find((item) => item.id === id);
+    return server ? toConfig(server, readMcpSecrets(file)) : undefined;
   }
 
   function gatewayApiKey(): string | undefined {
@@ -102,5 +274,5 @@ export function createSettingsStore(args: { userDataDir: string; notesDir: strin
     return normalizeFsRoots(read().fsRoots).roots;
   }
 
-  return { view, save, gatewayApiKey, fsRoots };
+  return { view, save, gatewayApiKey, fsRoots, mcpList, mcpSave, mcpRemove, mcpSetEnabled, mcpRecordTools, mcpConfigs, mcpConfig };
 }

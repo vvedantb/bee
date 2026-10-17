@@ -1,5 +1,8 @@
+import { MockLanguageModelV4 } from "ai/test";
 import { describe, expect, it } from "vitest";
-import { LUNA_SYSTEM, buildLunaPrompt, parseLunaTips } from "./luna";
+import { MOCK_TOKEN, startMockMcpServer } from "../../test/helpers/mock-mcp-server";
+import { LUNA_MCP_SYSTEM, LUNA_SYSTEM, buildLunaPrompt, guideWithLuna, parseLunaTips } from "./luna";
+import { loadMcpTools } from "./mcp";
 
 describe("buildLunaPrompt", () => {
   it("includes the recent transcript and numbered notes", () => {
@@ -15,6 +18,13 @@ describe("buildLunaPrompt", () => {
     expect(prompt).toContain("[n1] Acme › Pricing\n10% discount");
     expect(prompt).toContain("[n2] Habits\nSummarise decisions");
     expect(prompt.endsWith("Tips:")).toBe(true);
+  });
+
+  it("adds the MCP guidance only when MCP tools are present", () => {
+    expect(buildLunaPrompt({ transcript: ["a"], notes: [], hasMcpTools: false }).system).toBe(LUNA_SYSTEM);
+    const { system } = buildLunaPrompt({ transcript: ["a"], notes: [], hasMcpTools: true });
+    expect(system).toBe(`${LUNA_SYSTEM}\n${LUNA_MCP_SYSTEM}`);
+    expect(system).toMatch(/Never invent a result/);
   });
 
   it("keeps only the last 8 transcript lines and marks missing notes", () => {
@@ -56,5 +66,48 @@ describe("parseLunaTips", () => {
   it("treats NONE and blank output as no tips", () => {
     expect(parseLunaTips("NONE")).toEqual([]);
     expect(parseLunaTips("  \n ")).toEqual([]);
+  });
+});
+
+describe("guideWithLuna with MCP tools", () => {
+  const usage = {
+    inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
+    outputTokens: { total: 1, text: 1, reasoning: undefined },
+  };
+
+  it("lets the model call an MCP tool and reports its activity", async () => {
+    const server = await startMockMcpServer();
+    const mcp = await loadMcpTools([{ id: "v", name: "vmem", transport: "http", url: server.url, auth: { type: "none" } }]);
+    try {
+      let calls = 0;
+      let system = "";
+      let toolResult = "";
+      const model = new MockLanguageModelV4({
+        doGenerate: async (options) => {
+          calls++;
+          system = JSON.stringify(options.prompt[0]);
+          if (calls === 1) {
+            return {
+              content: [{ type: "tool-call", toolCallId: "c1", toolName: "vmem__wobble", input: "{}" }],
+              finishReason: { unified: "tool-calls", raw: undefined },
+              usage,
+              warnings: [],
+            };
+          }
+          toolResult = JSON.stringify(options.prompt);
+          return { content: [{ type: "text", text: `- Code is ${MOCK_TOKEN}` }], finishReason: { unified: "stop", raw: undefined }, usage, warnings: [] };
+        },
+      });
+      const activity: string[] = [];
+      const result = await guideWithLuna({ model, transcript: ["What is the WOBBLE code?"], notes: [], extraTools: mcp.tools, onActivity: (tool) => activity.push(tool) });
+      expect(result.error).toBeNull();
+      expect(result.tips).toEqual([`Code is ${MOCK_TOKEN}`]);
+      expect(toolResult).toContain(MOCK_TOKEN);
+      expect(system).toContain("MCP servers");
+      expect(activity).toContain("vmem__wobble");
+    } finally {
+      await mcp.close();
+      await server.close();
+    }
   });
 });

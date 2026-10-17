@@ -18,6 +18,11 @@ export const IPC = {
   teamsPublish: "bee:teams:publish",
   lunaActivity: "bee:luna:activity",
   systemAudioSource: "bee:audio:system-source",
+  mcpList: "bee:mcp:list",
+  mcpSave: "bee:mcp:save",
+  mcpRemove: "bee:mcp:remove",
+  mcpSetEnabled: "bee:mcp:set-enabled",
+  mcpTest: "bee:mcp:test",
 };
 
 // Collapsed notch, notch plus the sync popup, notch plus the island response, or the full panel.
@@ -259,3 +264,72 @@ export const teamsPublishRequestSchema = z.object({
 });
 export type TeamsPublishRequest = z.infer<typeof teamsPublishRequestSchema>;
 export const teamsPublishResultSchema = z.object({ sent: z.boolean(), error: z.string().nullable() });
+
+// MCP servers (core/mcp.ts, main/settings.ts). Secrets (bearer token, header value, env values) stay in main.
+export const MCP_MAX_SERVERS = 20;
+export const MCP_MAX_TOOLS = 100;
+
+export const mcpToolSchema = z.object({
+  name: z.string().min(1).max(200),
+  description: z.string().max(300),
+  enabled: z.boolean(),
+});
+export type McpTool = z.infer<typeof mcpToolSchema>;
+
+export const mcpAuthSchema = z.object({
+  type: z.enum(["none", "bearer", "header"]),
+  headerName: z.string().max(100).optional(),
+});
+
+// The non-secret record kept in settings.json.
+export const mcpServerSchema = z.object({
+  id: z.string().min(1).max(64),
+  name: z.string().min(1).max(40),
+  enabled: z.boolean(),
+  transport: z.enum(["http", "stdio"]),
+  url: z.string().max(2000).optional(),
+  command: z.string().max(1000).optional(),
+  args: z.array(z.string().max(1000)).max(50).optional(),
+  // Names only. The values are encrypted separately.
+  envKeys: z.array(z.string().max(200)).max(50).optional(),
+  auth: mcpAuthSchema,
+  tools: z.array(mcpToolSchema).max(MCP_MAX_TOOLS).optional(),
+});
+export type McpServer = z.infer<typeof mcpServerSchema>;
+
+// What the renderer sees: hasAuth says a secret is stored, never what it is.
+export const mcpServerViewSchema = mcpServerSchema.extend({ envKeys: z.array(z.string()), hasAuth: z.boolean() });
+export type McpServerView = z.infer<typeof mcpServerViewSchema>;
+export const mcpListSchema = z.array(mcpServerViewSchema);
+
+// Secrets: omitted = unchanged, "" = clear. args and env are text: one per line (args may also be space-separated).
+export const mcpSaveSchema = z.object({
+  id: z.string().max(64).optional(),
+  name: z.string().trim().min(1).max(40),
+  enabled: z.boolean(),
+  transport: z.enum(["http", "stdio"]),
+  url: z.string().trim().max(2000).optional(),
+  command: z.string().trim().max(1000).optional(),
+  args: z.string().max(4000).optional(),
+  env: z.string().max(8000).optional(),
+  auth: mcpAuthSchema,
+  // Bearer token, or the value of the custom header.
+  secret: z.string().max(4000).optional(),
+});
+export type McpSave = z.infer<typeof mcpSaveSchema>;
+
+export const mcpIdSchema = z.object({ id: z.string().min(1).max(64) });
+export const mcpSetEnabledSchema = z.object({
+  id: z.string().min(1).max(64),
+  // Without tool, the whole server is switched.
+  tool: z.string().min(1).max(200).optional(),
+  enabled: z.boolean(),
+});
+export type McpSetEnabled = z.infer<typeof mcpSetEnabledSchema>;
+
+export const mcpTestResultSchema = z.object({
+  ok: z.boolean(),
+  tools: z.array(mcpToolSchema).max(MCP_MAX_TOOLS).optional(),
+  error: z.string().max(400).optional(),
+});
+export type McpTestResult = z.infer<typeof mcpTestResultSchema>;

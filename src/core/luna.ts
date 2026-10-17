@@ -1,4 +1,4 @@
-import { generateText, isStepCount, type LanguageModel } from "ai";
+import { generateText, isStepCount, type LanguageModel, type ToolSet } from "ai";
 import { FLEX_PROVIDER_OPTIONS } from "./gateway";
 import type { Snippet } from "./notes";
 import { lunaTools, sourcesFromGenerateResult, type BeeSource } from "./tools";
@@ -24,13 +24,20 @@ export const LUNA_SYSTEM = [
   "If nothing useful can be said, reply with exactly NONE.",
 ].join("\n");
 
+/** Added to the system prompt only when the user has connected MCP tools. */
+export const LUNA_MCP_SYSTEM = [
+  "The user has connected MCP servers, for example vmem or Eva. Their tools are named server__tool, for example vmem__search.",
+  "Call them when the transcript needs what those servers hold. Use them before guessing about the user's own data.",
+  "If an MCP tool returns an error, say so briefly or skip it. Never invent a result.",
+].join("\n");
+
 export function noteCitation(index: number): string {
   return `n${index + 1}`;
 }
 
 export type LunaPrompt = { system: string; prompt: string };
 
-export function buildLunaPrompt(args: { transcript: string[]; notes: Snippet[] }): LunaPrompt {
+export function buildLunaPrompt(args: { transcript: string[]; notes: Snippet[]; hasMcpTools?: boolean }): LunaPrompt {
   const lines = args.transcript.slice(-TRANSCRIPT_WINDOW).map((line) => `- ${line.trim()}`);
   const notes = args.notes.map((note, index) => `[${noteCitation(index)}] ${note.title}\n${note.text}`);
   const prompt = [
@@ -42,7 +49,7 @@ export function buildLunaPrompt(args: { transcript: string[]; notes: Snippet[] }
     "",
     "Tips:",
   ].join("\n");
-  return { system: LUNA_SYSTEM, prompt };
+  return { system: args.hasMcpTools ? `${LUNA_SYSTEM}\n${LUNA_MCP_SYSTEM}` : LUNA_SYSTEM, prompt };
 }
 
 export function parseLunaTips(text: string): string[] {
@@ -62,16 +69,18 @@ export async function guideWithLuna(args: {
   /** Notes folder and extra approved folders for the file tools. Without notesDir, Luna gets no file tools. */
   notesDir?: string;
   extraRoots?: readonly string[];
+  /** MCP tools from loadMcpTools. The caller closes the connections after the run. */
+  extraTools?: ToolSet;
   /** Called with each tool Luna calls, so the overlay can show what it is doing. */
   onActivity?: (toolName: string) => void;
 }): Promise<{ tips: string[]; sources: BeeSource[]; error: string | null }> {
   try {
-    const { system, prompt } = buildLunaPrompt(args);
+    const { system, prompt } = buildLunaPrompt({ ...args, hasMcpTools: Object.keys(args.extraTools ?? {}).length > 0 });
     const result = await generateText({
       model: args.model,
       system,
       prompt,
-      tools: lunaTools({ notesDir: args.notesDir, extraRoots: args.extraRoots }),
+      tools: lunaTools({ notesDir: args.notesDir, extraRoots: args.extraRoots, extra: args.extraTools }),
       stopWhen: isStepCount(5),
       // Local tools report as they start. Provider tools (web_search) report when their step finishes.
       onToolExecutionStart: ({ toolCall }) => args.onActivity?.(toolCall.toolName),

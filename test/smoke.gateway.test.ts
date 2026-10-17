@@ -5,9 +5,11 @@ import { describe, expect, it } from "vitest";
 import { JEV_MODEL, LUNA_MODEL, STT_MODEL, createBeeGateway } from "../src/core/gateway";
 import { rankWithJev } from "../src/core/jev";
 import { guideWithLuna } from "../src/core/luna";
+import { loadMcpTools } from "../src/core/mcp";
 import type { Snippet } from "../src/core/notes";
 import { generateMeetingSummary } from "../src/core/summary";
 import { transcribeSpeech } from "../src/core/transcribe";
+import { MOCK_TOKEN, startMockMcpServer } from "./helpers/mock-mcp-server";
 
 const apiKey = process.env.BEE_AI_GATEWAY_API_KEY?.trim();
 if (!apiKey) {
@@ -87,6 +89,29 @@ describe("Vercel AI Gateway smoke", () => {
       expect(result.tips.join(" ").toLowerCase()).toContain("4417");
     } finally {
       rmSync(notesDir, { recursive: true, force: true });
+    }
+  });
+
+  it(`${LUNA_MODEL} calls an MCP tool and uses its result`, async () => {
+    const server = await startMockMcpServer();
+    const mcp = await loadMcpTools([{ id: "vmem", name: "vmem", transport: "http", url: server.url, auth: { type: "none" } }]);
+    try {
+      expect(Object.keys(mcp.tools)).toContain("vmem__wobble");
+      const activity: string[] = [];
+      const result = await guideWithLuna({
+        model: gateway(LUNA_MODEL),
+        transcript: ["Can you check vmem for the WOBBLE project code? I need the exact code before we continue."],
+        notes: [],
+        extraTools: mcp.tools,
+        onActivity: (tool) => activity.push(tool),
+      });
+      console.log("Luna MCP tips:", result.tips, "activity:", activity);
+      expect(result.error).toBeNull();
+      expect(activity).toContain("vmem__wobble");
+      expect(result.tips.join(" ")).toContain(MOCK_TOKEN);
+    } finally {
+      await mcp.close();
+      await server.close();
     }
   });
 

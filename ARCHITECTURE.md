@@ -4,11 +4,11 @@ Bee is an Electron app built with electron-vite, React and TypeScript.
 
 ```
 src/
-  main/       Electron main process: notch window, tray, IPC, settings, notes folder, bee:// protocol, Clerk bridge, Teams detector and sync IPC
+  main/       Electron main process: notch window, tray, IPC, settings (including MCP servers), notes folder, bee:// protocol, Clerk bridge, Teams detector and sync IPC
   preload/    Sandboxed bridge: exposes window.bee (parses every response with zod) and Clerk's bridge
   renderer/   React UI: island (pill and response body; island.ts holds its pure logic), sign-in, expanded panel (Live, Settings), mic capture (mic.ts), phrase detection and WAV (speech.ts)
   shared/     IPC channel names and zod schemas, Clerk config (shared/clerk.ts)
-  core/       Pure TypeScript: note chunking, retrieval, Jev ranking, Luna guidance and meeting summaries, Grok STT, pipeline, release version checks,
+  core/       Pure TypeScript: note chunking, retrieval, Jev ranking, Luna guidance and meeting summaries, MCP client and tool wrapping (`mcp.ts`), Grok STT, pipeline, release version checks,
               Teams mode (relay protocol and client, sync controller, room ranking, detection debounce and heuristics, line merging)
 relay/        Bee relay: shared HTTP handler + state + JWKS (Convex HTTP in convex/; in-memory mock for tests)
 test/         Live Gateway smoke test (npm run test:gateway), Electron mic, summary and Teams E2E (npm run test:e2e, harness in test/e2e)
@@ -191,7 +191,7 @@ Defined in `src/core/jev.ts`.
 Question keys are positional (`c0`…) rather than note ids. Note ids contain characters such as `#` and `.`, and positional keys keep the mapping simple.
 
 ### Tools and sources
-`src/core/tools.ts` holds the tool registry. `lunaTools()` returns the `ToolSet` passed to Luna. It always includes `web_search` (`openai.tools.webSearch({ searchContextSize: "low" })` from `@ai-sdk/openai`, sent through the Gateway). The model decides when to search; Bee never forces it. Search runs in one provider-side step. When `notesDir` is passed, the set also includes the four file tools below. New tools go into the same registry.
+`src/core/tools.ts` holds the tool registry. `lunaTools()` returns the `ToolSet` passed to Luna. It always includes `web_search` (`openai.tools.webSearch({ searchContextSize: "low" })` from `@ai-sdk/openai`, sent through the Gateway). The model decides when to search; Bee never forces it. Search runs in one provider-side step. When `notesDir` is passed, the set also includes the four file tools below. New tools go into the same registry. `lunaTools({ notesDir, extraRoots, extra })` also takes `extra`, a `ToolSet` of MCP tools (see below). It stays synchronous; the caller loads MCP tools first. Built-in names win over an `extra` tool of the same name.
 
 The file tools come from `src/core/fs-tools.ts` (`lunaTools({ notesDir, extraRoots })`); without `notesDir` they are omitted. They run in the main process (the pipeline does), so they use Node `fs`. They add to retrieval and Jev; they do not replace them.
 
@@ -205,6 +205,27 @@ The file tools come from `src/core/fs-tools.ts` (`lunaTools({ notesDir, extraRoo
 Sandbox (`src/core/fs-sandbox.ts`): the roots are the notes folder (always first) plus `fsRoots` from `settings.json` (absolute paths, set in Settings, read on each pipeline run). Relative paths start at the notes folder. Backslashes count as separators on every platform. A path is refused if it holds a NUL byte, is empty, or resolves (`node:path`) outside every root. All symlinks are refused, and so is any path whose real location leaves its root. Listings and searches skip dotfiles and symlinks. A file is binary if its extension is on the binary list or its first 4 KiB hold a NUL byte. Tools return a short `Error: …` string instead of throwing.
 
 `sourcesFromGenerateResult` reads `result.sources` and, if that is empty, `output.sources` in `result.toolResults`. It keeps unique `https` URLs, falls back to the hostname for a missing title, and returns at most 5. `PipelineResult.sources` carries them to the Live tab, which lists them under the tips. The list is empty when there is no key or Luna fails. A failed search fails open: Luna still returns tips, or the usual `Luna guidance failed:` error.
+
+### MCP servers
+
+The user connects MCP servers in **Settings → MCP servers** (`renderer/src/McpSettings.tsx`) so Luna can use their tools, for example vmem, Eva or a local command. Two transports, both through the official `@modelcontextprotocol/sdk` (a runtime `dependency`, so it lands in `app.asar`):
+
+- **Streamable HTTP** (`StreamableHTTPClientTransport`): `https`, or `http` on localhost only. Auth is none, a bearer token (`Authorization: Bearer …`) or a custom header (name plus value).
+- **stdio** (`StdioClientTransport`): command, args (one per line, or space-separated) and env `KEY=value`.
+
+There is no OAuth flow. For an OAuth server, authorise elsewhere and paste the token as a bearer token.
+
+`src/core/mcp.ts` (no Electron imports) connects, lists tools and calls them. `loadMcpTools(configs)` connects to every server at once and wraps each enabled tool as an AI SDK `tool()` named `{slug}__{tool}`. The slug is the server name cleaned to `[a-zA-Z0-9_-]` (24 characters at most, no `__`); names are capped at 64 characters and made unique. Connect and list time out after 10 s, each call after 15 s. A server that fails or hangs is skipped (main logs its name and a short reason, never secrets), so the others still load. A tool call that fails returns a short `Error: …` string; it never throws into `generateText`. Error text has every secret value masked.
+
+`runPipeline` calls `loadMcpTools` (passed in by `registerMeetingIpc`, which reads enabled servers and decrypted secrets from settings on each run, like `fsRoots`) only when Luna is about to run, hands the tools to `guideWithLuna({ extraTools })`, and closes every connection (and stdio child process) when the run ends. If MCP tools are present, `LUNA_MCP_SYSTEM` is added to the system prompt: call the namespaced tools, and never invent a result when one returns an error.
+
+Storage (`main/settings.ts`, `settings.json`):
+
+- `mcpServers`: `{ id, name, enabled, transport, url?, command?, args?, envKeys?, auth: { type, headerName? }, tools?: { name, description, enabled }[] }`. At most 20 servers and 100 tools each, validated with zod. Names must be unique after slugging. An invalid list is dropped without losing the other settings.
+- `mcpSecrets`: one `safeStorage` ciphertext (base64) of JSON keyed by server id, holding the bearer token or header value and the stdio env values. Secrets are never written into `mcpServers`. If encryption is unavailable they stay in memory for the session, like the gateway key.
+- `view` objects carry `hasAuth` and env key names only. On save, a secret that is omitted stays as it was and `""` clears it. Changing the auth style drops the old secret.
+
+IPC (`main/mcp-ipc.ts`, zod in main, parsed again in preload): `bee:mcp:list`, `bee:mcp:save`, `bee:mcp:remove`, `bee:mcp:set-enabled` (a server, or one tool) and `bee:mcp:test`. Test connects, lists, saves the list (a known tool keeps its switch, a new tool starts on) and returns `{ ok, tools?, error? }`. The Settings list shows each server's tools with a per-tool toggle.
 
 ### Luna prompt format
 
@@ -239,6 +260,8 @@ Defined in `src/core/summary.ts`. The system prompt asks for exactly three `##` 
 | Teams detection stable / leave debounce | `core/meeting-tracker.ts` | 10 s / 15 s |
 | Teams detector poll (minimum) | `main/teams-detector.ts` | 3 s |
 | Sync tick | `renderer/src/store.ts` | 2 s |
+| MCP connect and list timeout / call timeout | `core/mcp.ts` | 10 s / 15 s |
+| MCP limits: servers / tools per server / result text | `shared/ipc.ts`, `core/mcp.ts` | 20 / 100 / 8000 characters |
 | Presence heartbeat / stale | `core/sync-controller.ts`, `core/room-picker.ts` | 20 s / 60 s |
 | Recent-room window / merge window | `core/room-picker.ts` | ±10 min / 30 s |
 | Room hard limit / stale member / phrases kept | `relay/src/state.ts` | 4 h / 60 s / 400 per room |
@@ -255,12 +278,12 @@ Saved secrets show as a disabled field reading `•••••••• (saved)
 
 - Font: Instrument Sans (variable, 400–700), self-hosted woff2 with the SIL OFL licence alongside.
 - Icons: `@tabler/icons-react` (bundled into the renderer; unused icons are tree-shaken).
-- Island: the notch is a pill. While a run is busy it shows the tool Luna is using (`bee:luna:activity`, `{ tool }`, sent from main by `guideWithLuna`'s `onToolExecutionStart` and `onStepFinish`; `activityLabel` maps `web_search` to "Searching the web", the file tools to "Reading notes", `append_note` to "Writing a note", anything else to "Thinking…"). When the answer arrives, the same surface grows downward with the tips (17 px) and sources (14 px). The body closes with the × button, or after `ISLAND_IDLE_MS` (10 s) with no new result, no busy run and no pointer on the island. Opening the full panel cancels the timer. A new result reopens the body; clicking the pill status reopens the last one. The body does not show while the panel or the Teams sync card is open. Tips are not streamed: `generateText` returns them whole, so the finished tips fade and slide in.
+- Island: the notch is a pill. While a run is busy it shows the tool Luna is using (`bee:luna:activity`, `{ tool }`, sent from main by `guideWithLuna`'s `onToolExecutionStart` and `onStepFinish`; `activityLabel` maps `web_search` to "Searching the web", the file tools to "Reading notes", `append_note` to "Writing a note", an MCP tool named `server__tool` to "Using server…", anything else to "Thinking…"). When the answer arrives, the same surface grows downward with the tips (17 px) and sources (14 px). The body closes with the × button, or after `ISLAND_IDLE_MS` (10 s) with no new result, no busy run and no pointer on the island. Opening the full panel cancels the timer. A new result reopens the body; clicking the pill status reopens the last one. The body does not show while the panel or the Teams sync card is open. Tips are not streamed: `generateText` returns them whole, so the finished tips fade and slide in.
 - Motion: CSS only, 150–220 ms, transform and opacity. Panel slides in on expand and fades out before the window shrinks (`COLLAPSE_MS` 160 in the store matches the CSS). Tabs, notch status, tips and notes fade or rise in. `prefers-reduced-motion` turns motion off.
 
 ## Not yet built
 
-System audio capture and the vmem connector.
+System audio capture. Mixing system audio into the mic stream is not built; only the `desktopCapturer` probe exists.
 
 ## CI
 

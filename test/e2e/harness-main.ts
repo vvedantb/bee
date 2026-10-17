@@ -5,6 +5,7 @@
 // relay at BEE_RELAY_URL). Teams detection uses a stub the page drives with the simulateMeeting action.
 // With BEE_E2E_SHOTS (the island screenshot test), the page is loaded once per name (comma-separated, as ?shot=) in a transparent
 // frameless 520 × 360 window, and each capturePage() is written to <BEE_E2E_SHOTS_DIR>/island-<name>.png.
+// Names starting with mcp- (the MCP settings shots) use a taller 480 × 640 window and are written as <name>.png.
 // BEE_E2E_SHOTS_DIR alone does not change the run.
 import { BrowserWindow, app, session } from "electron";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
@@ -37,11 +38,12 @@ function fakeSessionToken(): string {
 async function captureShots(dir: string, names: string[]): Promise<string[]> {
   mkdirSync(dir, { recursive: true });
   const files: string[] = [];
+  const tall = names.some((name) => name.startsWith("mcp-")) || (page as string).includes("mcp-settings-shots");
   // One window for every shot: closing the only window would quit the app.
   const shotWin = new BrowserWindow({
     show: false,
-    width: 520,
-    height: 360,
+    width: tall ? 480 : 520,
+    height: tall ? 640 : 360,
     frame: false,
     transparent: true,
     backgroundColor: "#00000000",
@@ -60,7 +62,7 @@ async function captureShots(dir: string, names: string[]): Promise<string[]> {
     await shotWin.loadFile(page as string, { query: { shot: name } });
     await rendered;
     const image = await shotWin.webContents.capturePage();
-    const file = join(dir, `island-${name}.png`);
+    const file = join(dir, name.startsWith("mcp-") ? `${name}.png` : `island-${name}.png`);
     writeFileSync(file, image.toPNG());
     files.push(file);
   }
@@ -77,7 +79,7 @@ void app.whenReady().then(async () => {
   }
   const notesDir = notesDirEnv || join(mkdtempSync(join(tmpdir(), "bee-e2e-")), "notes");
   ensureNotesDir(notesDir);
-  registerMeetingIpc({ notesDir, fsRoots: () => [], gatewayApiKey: () => process.env.BEE_AI_GATEWAY_API_KEY?.trim() || undefined });
+  registerMeetingIpc({ notesDir, fsRoots: () => [], mcpConfigs: () => [], gatewayApiKey: () => process.env.BEE_AI_GATEWAY_API_KEY?.trim() || undefined });
   // Short timings so the popup and the debounced leave happen within the test.
   registerTeamsIpc({ relayUrl: relayUrlFromEnv(process.env.BEE_RELAY_URL), detector: createStubDetector(), timing: { enterMs: 300, leaveMs: 1000 } });
   session.defaultSession.setPermissionRequestHandler((_contents, permission, callback) => callback(permission === "media"));

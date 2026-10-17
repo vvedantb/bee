@@ -5,6 +5,7 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { RENDERER_HOST, RENDERER_SCHEME, RENDERER_URL } from "../shared/clerk";
 import { IPC, settingsUpdateSchema, windowSizeSchema, type WindowSize } from "../shared/ipc";
+import { registerMcpIpc } from "./mcp-ipc";
 import { registerMeetingIpc } from "./meeting-ipc";
 import { ensureNotesDir } from "./notes";
 import { handleRendererProtocol } from "./renderer-protocol";
@@ -204,7 +205,8 @@ if (clerk.isPrimaryInstance) {
       return view;
     });
 
-    registerMeetingIpc({ notesDir, fsRoots: settings.fsRoots, gatewayApiKey: settings.gatewayApiKey });
+    registerMcpIpc(settings);
+    registerMeetingIpc({ notesDir, fsRoots: settings.fsRoots, mcpConfigs: settings.mcpConfigs, gatewayApiKey: settings.gatewayApiKey });
 
     const teams = registerTeamsIpc({ relayUrl: relayUrlFromEnv(process.env.BEE_RELAY_URL || import.meta.env.MAIN_VITE_BEE_RELAY_URL), detector: createTeamsDetector() });
     onInvite = (link) => teams.setPendingInvite(link);

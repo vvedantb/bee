@@ -1,4 +1,5 @@
 import { openai } from "@ai-sdk/openai";
+import type { ToolSet } from "ai";
 import { fsTools } from "./fs-tools";
 
 const MAX_SOURCES = 5;
@@ -8,10 +9,11 @@ const MAX_URL_LENGTH = 2000;
 export type BeeSource = { title: string; url: string };
 
 /** Tools Luna may call. Add new tools here; guideWithLuna passes the whole set. */
-export function lunaTools(options: { notesDir?: string; extraRoots?: readonly string[] } = {}) {
+export function lunaTools(options: { notesDir?: string; extraRoots?: readonly string[]; extra?: ToolSet } = {}) {
   const web = { web_search: openai.tools.webSearch({ searchContextSize: "low" }) };
-  if (!options.notesDir) return web;
-  return { ...web, ...fsTools({ notesDir: options.notesDir, extraRoots: options.extraRoots }) };
+  const local = options.notesDir ? { ...web, ...fsTools({ notesDir: options.notesDir, extraRoots: options.extraRoots }) } : web;
+  // MCP tools (core/mcp.ts) are namespaced; spreading them first also means they can never replace a built-in.
+  return { ...options.extra, ...local };
 }
 
 type RawSource = { url?: unknown; title?: unknown };

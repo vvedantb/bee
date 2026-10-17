@@ -3,6 +3,10 @@ import { useSyncExternalStore } from "react";
 import { mergeLines, pipelineText, summaryTranscript, type SessionLine } from "../../core/sync-lines";
 import {
   SESSION_TRANSCRIPT_MAX,
+  type McpSave,
+  type McpServerView,
+  type McpSetEnabled,
+  type McpTestResult,
   type MeetingSummaryResult,
   type PipelineResult,
   type SettingsUpdate,
@@ -36,9 +40,14 @@ export type SyncCard = "prompt" | "invite" | "merge" | null;
 // result: the last saved summary, kept so the Live tab can open it.
 export type SummaryState = { saving: boolean; result: MeetingSummaryResult | null; error: string | null };
 
+// Test connection, per server id. Cleared when the server is edited or removed.
+export type McpTestState = { busy: boolean; result: McpTestResult | null };
+
 // App-wide state shared by the notch and the panel. Local form input stays in the DOM (uncontrolled forms).
 export type BeeState = {
   settings: SettingsView | null;
+  // MCP servers (no secrets) and their last test.
+  mcp: { servers: McpServerView[]; tests: Record<string, McpTestState>; error: string | null };
   expanded: boolean;
   // True while the panel plays its exit animation, before the window shrinks.
   collapsing: boolean;
@@ -83,6 +92,7 @@ export const SAMPLE_LINES = [
 
 let state: BeeState = {
   settings: null,
+  mcp: { servers: [], tests: {}, error: null },
   expanded: false,
   collapsing: false,
   tab: "live",
@@ -281,6 +291,24 @@ function setMic(patch: Partial<BeeState["mic"]>): void {
   set({ mic: { ...state.mic, ...patch } });
 }
 
+function setMcpTest(id: string, test: McpTestState): void {
+  set({ mcp: { ...state.mcp, tests: { ...state.mcp.tests, [id]: test } } });
+}
+
+// Runs an MCP change in main and stores the new list, or the error.
+async function mcpChange(change: () => Promise<McpServerView[]>, staleTestId?: string): Promise<boolean> {
+  try {
+    const servers = await change();
+    const tests = { ...state.mcp.tests };
+    if (staleTestId) delete tests[staleTestId];
+    set({ mcp: { servers, tests, error: null } });
+    return true;
+  } catch (error) {
+    set({ mcp: { ...state.mcp, error: error instanceof Error ? error.message : "Could not save the server" } });
+    return false;
+  }
+}
+
 export const actions = {
   async refreshSettings(): Promise<void> {
     set({ settings: await window.bee.getSettings() });
@@ -294,6 +322,38 @@ export const actions = {
     } catch (error) {
       set({ error: error instanceof Error ? error.message : "Could not save settings" });
       return false;
+    }
+  },
+
+  async refreshMcp(): Promise<void> {
+    try {
+      set({ mcp: { ...state.mcp, servers: await window.bee.mcp.list() } });
+    } catch {
+      // Settings still work without the MCP list.
+    }
+  },
+
+  /** Resolves true when saved. The server's old test result is dropped. */
+  async saveMcpServer(server: McpSave): Promise<boolean> {
+    return mcpChange(() => window.bee.mcp.save(server), server.id);
+  },
+
+  async removeMcpServer(id: string): Promise<void> {
+    await mcpChange(() => window.bee.mcp.remove(id), id);
+  },
+
+  async setMcpEnabled(update: McpSetEnabled): Promise<void> {
+    await mcpChange(() => window.bee.mcp.setEnabled(update));
+  },
+
+  async testMcpServer(id: string): Promise<void> {
+    setMcpTest(id, { busy: true, result: null });
+    try {
+      const result = await window.bee.mcp.test(id);
+      setMcpTest(id, { busy: false, result });
+      await actions.refreshMcp();
+    } catch (error) {
+      setMcpTest(id, { busy: false, result: { ok: false, error: error instanceof Error ? error.message : "Test failed" } });
     }
   },
 
@@ -491,6 +551,7 @@ export const actions = {
 };
 
 void actions.refreshSettings();
+void actions.refreshMcp();
 // Quiet check at start-up; the notch shows an update button only when one is available.
 void actions.checkForUpdate();
 setInterval(() => void teamsTick(), SYNC_TICK_MS);

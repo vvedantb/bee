@@ -13,9 +13,13 @@ const ACTIVITY_LABELS = new Map([
   ["append_note", "Writing a note"],
 ]);
 
-/** Pill text for the tool Luna is using. Anything unknown, or no tool yet, reads as thinking. */
+/** Pill text for the tool Luna is using. MCP tools are named server__tool. Anything unknown reads as thinking. */
 export function activityLabel(toolName: string | null | undefined): string {
-  return (toolName ? ACTIVITY_LABELS.get(toolName) : undefined) ?? "Thinking…";
+  if (!toolName) return "Thinking…";
+  const known = ACTIVITY_LABELS.get(toolName);
+  if (known) return known;
+  const split = toolName.indexOf("__");
+  return split > 0 && split + 2 < toolName.length ? `Using ${toolName.slice(0, split)}…` : "Thinking…";
 }
 
 type ResponseArgs = {
