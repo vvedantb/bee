@@ -1,4 +1,6 @@
-import { readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { JEV_MODEL, LUNA_MODEL, STT_MODEL, createBeeGateway } from "../src/core/gateway";
 import { rankWithJev } from "../src/core/jev";
@@ -66,6 +68,26 @@ describe("Vercel AI Gateway smoke", () => {
     expect(result.tips.length).toBeGreaterThan(0);
     expect(result.sources.length).toBeGreaterThan(0);
     for (const source of result.sources) expect(source.url).toMatch(/^https:\/\//);
+  });
+
+  it(`${LUNA_MODEL} answers from a local note by reading it with the file tools`, async () => {
+    const notesDir = mkdtempSync(join(tmpdir(), "bee-smoke-notes-"));
+    try {
+      mkdirSync(join(notesDir, "projects"));
+      writeFileSync(join(notesDir, "projects", "wobblefinch.md"), "# Project WOBBLEFINCH\n\nLaunch review is on 14 March 2031 in room 4417.\n");
+      writeFileSync(join(notesDir, "lunch.md"), "# Lunch\n\nFriday is pizza.\n");
+      const result = await guideWithLuna({
+        model: gateway(LUNA_MODEL),
+        transcript: ["Can you check my notes: what room is the WOBBLEFINCH launch review in?"],
+        notes: [],
+        notesDir,
+      });
+      console.log("Luna file-tool tips:", result.tips);
+      expect(result.error).toBeNull();
+      expect(result.tips.join(" ").toLowerCase()).toContain("4417");
+    } finally {
+      rmSync(notesDir, { recursive: true, force: true });
+    }
   });
 
   it(`${LUNA_MODEL} writes a meeting summary with every section`, async () => {

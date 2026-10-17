@@ -323,6 +323,7 @@ function SettingsTab({ state, settings }: { state: BeeState; settings: SettingsV
     const saved = await actions.saveSettings({
       gatewayApiKey: gatewayApiKey || undefined,
       claudeOAuthToken: claudeOAuthToken || undefined,
+      fsRoots: formString(form, "fsRoots").split(/\r?\n/),
     });
     if (saved) setFormKey(formKey + 1);
   }
@@ -344,6 +345,16 @@ function SettingsTab({ state, settings }: { state: BeeState; settings: SettingsV
           saved={settings.hasClaudeToken}
           status={settings.hasClaudeToken ? "A token is stored." : "No token stored."}
         />
+        <label>
+          Extra folders Luna may read (one absolute path per line)
+          <textarea name="fsRoots" rows={3} defaultValue={settings.fsRoots.join("\n")} spellCheck={false} />
+        </label>
+        <p className="muted">
+          Notes folder: <code>{settings.notesDir}</code>{" "}
+          <button type="button" className="link" onClick={() => void window.bee.openNotesFolder()}>
+            Open
+          </button>
+        </p>
         {error ? <p className="error">{error}</p> : null}
         <div className="row">
           <button type="submit">Save</button>
@@ -374,12 +385,6 @@ function SettingsTab({ state, settings }: { state: BeeState; settings: SettingsV
       <UpdateSection update={update} />
 
       <p className="muted">{STORAGE_LABEL[settings.secretStorage]}</p>
-      <p className="muted">
-        Notes folder: <code>{settings.notesDir}</code>{" "}
-        <button type="button" className="link" onClick={() => void window.bee.openNotesFolder()}>
-          Open
-        </button>
-      </p>
     </div>
   );
 }

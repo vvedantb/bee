@@ -39,6 +39,13 @@ describe("LUNA_SYSTEM", () => {
     expect(LUNA_SYSTEM).toContain("current events");
     expect(LUNA_SYSTEM).toContain("Do not search for stable general knowledge");
   });
+
+  it("points Luna at the file tools, notes first, and keeps private facts off the web", () => {
+    for (const name of ["list_dir", "search_files", "read_file", "append_note"]) expect(LUNA_SYSTEM).toContain(name);
+    expect(LUNA_SYSTEM).toContain("Prefer the notes above");
+    expect(LUNA_SYSTEM).toContain("Do not use web_search for private facts");
+    expect(LUNA_SYSTEM).toContain("clearly asks to add or save a note");
+  });
 });
 
 describe("parseLunaTips", () => {

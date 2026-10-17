@@ -13,6 +13,8 @@ export async function runPipeline(args: {
   transcript: string[];
   snippets: Snippet[];
   gateway: BeeGateway | null;
+  notesDir?: string;
+  extraRoots?: readonly string[];
 }): Promise<PipelineResult> {
   const t0 = performance.now();
   const retrieved = retrieve(transcriptQuery(args.transcript), args.snippets, RETRIEVE_LIMIT);
@@ -50,6 +52,8 @@ export async function runPipeline(args: {
     model: args.gateway(LUNA_MODEL),
     transcript: args.transcript,
     notes: guideNotes,
+    notesDir: args.notesDir,
+    extraRoots: args.extraRoots,
   });
   const t3 = performance.now();
 

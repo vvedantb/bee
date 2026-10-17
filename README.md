@@ -69,6 +69,8 @@ The installer is not code-signed. Windows SmartScreen will warn on first run unt
 
 Notes are markdown files in the notes folder (Settings shows the path and has an **Open** button). On Windows this is `%APPDATA%\Bee\notes`. Four fictional seed notes are written the first time the folder is empty. Edits are picked up on the next line; no restart is needed.
 
+Luna can also list, search and read these notes with file tools, for questions the top three notes do not cover. In Settings, **Extra folders Luna may read** takes one absolute path per line; Luna can read them but never write to them. Luna can add to a note (create or append, `.md` only, notes folder only) when you clearly ask it to. It never overwrites a file. Limits: paths must stay inside the notes folder or an approved folder (`..`, either slash style, and symbolic links are refused); binary files and files over 256 KiB are skipped; lists stop at 200 entries, searches at 20 hits, and a read returns at most 64 KiB.
+
 **Meeting mode** hides Bee from screen sharing and keeps it above full-screen apps.
 
 ### Speech-to-text
@@ -194,15 +196,16 @@ npm run relay:mock     # in-memory relay on http://127.0.0.1:8787 for local Team
 npm run typecheck
 ```
 
-`test:gateway` makes seven calls:
+`test:gateway` makes eight calls:
 
 1. `xai/grok-stt`: transcribes `test/fixtures/sso-question.wav` (a synthesised question with silence either side).
 2. `xai/grok-stt` with an invalid key: checks for a short `Speech-to-text failed:` error.
 3. `openai/gpt-6-luna`: one short guidance completion.
 4. `openai/gpt-6-luna`: a current-events question ("who is the current Prime Minister of the UK?"), checked for a tip and at least one `https://` source.
-5. `openai/gpt-6-luna`: a meeting summary from a short transcript, checked for every section and the named owner.
-6. `typesafe-ai/jev`: scores three note snippets against a fake transcript and checks that the relevant note ranks first.
-7. `typesafe-ai/jev` with an invalid key: checks that ranking fails open, keeps the original order, and returns a clear error.
+5. `openai/gpt-6-luna`: a question about a local note (a room number in a temp notes folder), checked that the tip holds the answer, so Luna used the file tools.
+6. `openai/gpt-6-luna`: a meeting summary from a short transcript, checked for every section and the named owner.
+7. `typesafe-ai/jev`: scores three note snippets against a fake transcript and checks that the relevant note ranks first.
+8. `typesafe-ai/jev` with an invalid key: checks that ranking fails open, keeps the original order, and returns a clear error.
 
 `test:e2e` builds the app, then starts Electron with Chromium's fake audio device playing the same WAV. A small harness (`test/e2e/`) loads Bee's real preload and main IPC handlers, and a page that runs Bee's real mic capture and phrase detector. It checks that Grok STT returns the question, the roadmap note ranks first and Luna gives a tip. It skips Clerk and sends an unsigned token with Bee's issuer, which is all the main-process gate checks.
 

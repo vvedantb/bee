@@ -1,4 +1,5 @@
 import { openai } from "@ai-sdk/openai";
+import { fsTools } from "./fs-tools";
 
 const MAX_SOURCES = 5;
 const MAX_TITLE_LENGTH = 300;
@@ -7,10 +8,10 @@ const MAX_URL_LENGTH = 2000;
 export type BeeSource = { title: string; url: string };
 
 /** Tools Luna may call. Add new tools here; guideWithLuna passes the whole set. */
-export function lunaTools() {
-  return {
-    web_search: openai.tools.webSearch({ searchContextSize: "low" }),
-  };
+export function lunaTools(options: { notesDir?: string; extraRoots?: readonly string[] } = {}) {
+  const web = { web_search: openai.tools.webSearch({ searchContextSize: "low" }) };
+  if (!options.notesDir) return web;
+  return { ...web, ...fsTools({ notesDir: options.notesDir, extraRoots: options.extraRoots }) };
 }
 
 type RawSource = { url?: unknown; title?: unknown };

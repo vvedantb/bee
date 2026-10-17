@@ -2,8 +2,20 @@ import { describe, expect, it } from "vitest";
 import { lunaTools, sourcesFromGenerateResult } from "./tools";
 
 describe("lunaTools", () => {
-  it("offers web_search", () => {
+  it("offers only web_search without a notes folder", () => {
     expect(Object.keys(lunaTools())).toEqual(["web_search"]);
+    expect(Object.keys(lunaTools({ extraRoots: ["/x"] }))).toEqual(["web_search"]);
+  });
+
+  it("adds the file tools when a notes folder is passed", () => {
+    expect(Object.keys(lunaTools({ notesDir: "/notes" }))).toEqual([
+      "web_search",
+      "list_dir",
+      "search_files",
+      "read_file",
+      "append_note",
+    ]);
+    expect(Object.keys(lunaTools({ notesDir: "/notes", extraRoots: ["/more"] }))).toHaveLength(5);
   });
 });
 

@@ -30,6 +30,7 @@ export const settingsViewSchema = z.object({
   meetingMode: z.boolean(),
   secretStorage: secretStorageSchema,
   notesDir: z.string(),
+  fsRoots: z.array(z.string()),
 });
 export type SettingsView = z.infer<typeof settingsViewSchema>;
 
@@ -38,6 +39,8 @@ export const settingsUpdateSchema = z.object({
   gatewayApiKey: z.string().max(500).optional(),
   claudeOAuthToken: z.string().max(4000).optional(),
   meetingMode: z.boolean().optional(),
+  // Extra absolute folders Luna may read; replaces the saved list.
+  fsRoots: z.array(z.string().max(1000)).max(20).optional(),
 });
 export type SettingsUpdate = z.infer<typeof settingsUpdateSchema>;
 
