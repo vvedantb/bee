@@ -12,8 +12,9 @@ if (root) {
     <StrictMode>
       <ClerkProvider publishableKey={CLERK_PUBLISHABLE_KEY}>
         <App />
-        {/* Top-right, below the 52px notch so toasts never cover it. */}
-        <SonnerToaster theme="dark" position="top-right" offset={64} />
+        {/* Top-right, below the 52px notch so toasts never cover it. Bee's windows are under Sonner's 600px mobile breakpoint, where it
+            ignores offset and uses mobileOffset (full width), so that needs the same top inset. */}
+        <SonnerToaster theme="dark" position="top-right" offset={64} mobileOffset={{ top: 64, right: 16, left: 16 }} />
       </ClerkProvider>
     </StrictMode>,
   );

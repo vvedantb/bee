@@ -49,7 +49,7 @@ function LinkChips({ chips }: { chips: LinkChip[] }) {
     <ul className="link-chips" aria-label="Suggested links">
       {chips.map((chip) => (
         <li key={chip.id} className="chip link-chip">
-          <Button type="button" variant="link" className="h-7 gap-1.5 rounded-full py-0 pr-1 pl-2.5 text-[13px] no-underline" title={chip.url} onClick={() => void actions.openLink(chip.url)}>
+          <Button type="button" variant="link" className="h-6 gap-1.5 rounded-full py-0 pr-1 pl-2.5 text-[13px] no-underline" title={chip.url} onClick={() => void actions.openLink(chip.url)}>
             <Favicon domain={chip.domain} />
             {chip.label}
           </Button>
