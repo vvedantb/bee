@@ -1,3 +1,4 @@
+import { Button, Input, Textarea } from "@vvedantb/ui";
 import { useState } from "react";
 
 // Saved secrets never reach the renderer, so a saved field shows placeholder dots until the user replaces it.
@@ -11,16 +12,16 @@ export function SecretField(props: { name: string; label: string; placeholder: s
       {props.label}
       <span className="row">
         {masked ? (
-          <input key="saved" type="text" value="•••••••• (saved)" disabled aria-label={`${props.label} (saved)`} />
+          <Input key="saved" className="h-9" type="text" value="•••••••• (saved)" disabled aria-label={`${props.label} (saved)`} />
         ) : props.multiline ? (
-          <textarea name={props.name} className="secret-area" rows={3} placeholder={placeholder} autoComplete="off" spellCheck={false} autoFocus={replacing} />
+          <Textarea name={props.name} className="secret-area" rows={3} placeholder={placeholder} autoComplete="off" spellCheck={false} autoFocus={replacing} />
         ) : (
-          <input key="entry" name={props.name} type="password" placeholder={placeholder} autoComplete="off" autoFocus={replacing} />
+          <Input key="entry" className="h-9" name={props.name} type="password" placeholder={placeholder} autoComplete="off" autoFocus={replacing} />
         )}
         {props.saved ? (
-          <button type="button" className="link" onClick={() => setReplacing(!replacing)}>
+          <Button type="button" variant="link" size="sm" onClick={() => setReplacing(!replacing)}>
             {replacing ? "Cancel" : "Replace"}
-          </button>
+          </Button>
         ) : null}
       </span>
       <span className="muted">{props.status}</span>

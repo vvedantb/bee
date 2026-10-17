@@ -1,8 +1,8 @@
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
-import { build } from "esbuild";
+import { build, type Plugin } from "esbuild";
 import { z } from "zod";
 
 // Shared by the Electron E2E tests: bundle harness-main.ts and one page, start Electron (xvfb-run on Linux without a
@@ -11,6 +11,21 @@ import { z } from "zod";
 export const root = fileURLToPath(new URL("../..", import.meta.url));
 const outDir = `${root}out/e2e`;
 const preload = `${root}out/preload/index.cjs`;
+
+// styles.css needs Tailwind, which esbuild cannot run. Pages import it for the look of the app, so stub the import and link
+// the stylesheet that electron-vite build wrote (fonts inlined by Vite as hashed files next to it).
+const stubStyles: Plugin = {
+  name: "stub-styles",
+  setup(b) {
+    b.onLoad({ filter: /src[\\/]renderer[\\/]src[\\/]styles\.css$/ }, () => ({ contents: "", loader: "js" }));
+  },
+};
+
+function builtStyles(): string | null {
+  const dir = `${root}out/renderer/assets`;
+  const file = existsSync(dir) ? readdirSync(dir).find((name) => /^index-.*\.css$/.test(name)) : undefined;
+  return file ? `file://${dir}/${file}` : null;
+}
 
 // Output names are per page, so E2E files running in parallel never write the same bundle.
 async function bundle(page: string): Promise<{ main: string; html: string }> {
@@ -34,12 +49,12 @@ async function bundle(page: string): Promise<{ main: string; html: string }> {
     platform: "browser",
     format: "iife",
     define,
-    // Pages that import styles.css get ${page}.css with the fonts inlined.
-    loader: { ".woff2": "dataurl" },
+    plugins: [stubStyles],
     logLevel: "error",
   });
   const html = `${outDir}/${page}.html`;
-  const css = existsSync(`${outDir}/${page}.css`) ? `<link rel="stylesheet" href="${page}.css">` : "";
+  const styles = builtStyles();
+  const css = styles ? `<link rel="stylesheet" href="${styles}">` : "";
   writeFileSync(html, `<!doctype html><meta charset="utf-8">${css}<script src="${page}.js"></script>\n`);
   return { main: `${outDir}/${page}-main.cjs`, html };
 }

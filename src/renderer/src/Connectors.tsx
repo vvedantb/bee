@@ -1,4 +1,5 @@
 import { IconPlug } from "@tabler/icons-react";
+import { Button, Checkbox, Input, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Textarea } from "@vvedantb/ui";
 import { useState, type FormEvent } from "react";
 import type { McpSave, McpServerView } from "../../shared/ipc";
 import { isVmemConnector } from "../../shared/mcp-names";
@@ -55,35 +56,45 @@ function McpForm({ server, error, onDone }: { server: McpServerView | null; erro
     <form className="settings mcp-form" onSubmit={(event) => void onSubmit(event)}>
       <label>
         Name
-        <input name="name" defaultValue={server?.name} placeholder="vmem" maxLength={40} required spellCheck={false} />
+        <Input className="h-9" name="name" defaultValue={server?.name} placeholder="vmem" maxLength={40} required spellCheck={false} />
         <span className="muted">Luna sees its tools as name__tool.</span>
       </label>
       <label>
         Transport
-        <select value={transport} onChange={(event) => setTransport(event.currentTarget.value as Transport)}>
-          <option value="http">Streamable HTTP (remote)</option>
-          <option value="stdio">stdio (local command)</option>
-        </select>
+        <Select value={transport} onValueChange={(value) => setTransport(value as Transport)}>
+          <SelectTrigger className="h-9">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="http">Streamable HTTP (remote)</SelectItem>
+            <SelectItem value="stdio">stdio (local command)</SelectItem>
+          </SelectContent>
+        </Select>
       </label>
       {transport === "http" ? (
         <>
           <label>
             URL
-            <input name="url" defaultValue={server?.url} placeholder="https://clear-bear-690.eu-west-1.convex.site/mcp" required spellCheck={false} />
+            <Input className="h-9" name="url" defaultValue={server?.url} placeholder="https://clear-bear-690.eu-west-1.convex.site/mcp" required spellCheck={false} />
             <span className="muted">https, or http on localhost.</span>
           </label>
           <label>
             Authentication
-            <select value={authType} onChange={(event) => setAuthType(event.currentTarget.value as AuthType)}>
-              <option value="none">None</option>
-              <option value="bearer">Bearer token</option>
-              <option value="header">Custom header</option>
-            </select>
+            <Select value={authType} onValueChange={(value) => setAuthType(value as AuthType)}>
+              <SelectTrigger className="h-9">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">None</SelectItem>
+                <SelectItem value="bearer">Bearer token</SelectItem>
+                <SelectItem value="header">Custom header</SelectItem>
+              </SelectContent>
+            </Select>
           </label>
           {authType === "header" ? (
             <label>
               Header name
-              <input name="headerName" defaultValue={server?.auth.headerName} placeholder="X-API-Key" spellCheck={false} />
+              <Input className="h-9" name="headerName" defaultValue={server?.auth.headerName} placeholder="X-API-Key" spellCheck={false} />
             </label>
           ) : null}
           {authType !== "none" ? (
@@ -101,11 +112,11 @@ function McpForm({ server, error, onDone }: { server: McpServerView | null; erro
         <>
           <label>
             Command
-            <input name="command" defaultValue={server?.command} placeholder="npx" required spellCheck={false} />
+            <Input className="h-9" name="command" defaultValue={server?.command} placeholder="npx" required spellCheck={false} />
           </label>
           <label>
             Arguments (one per line, or separated by spaces)
-            <textarea name="args" rows={3} defaultValue={server?.args?.join("\n")} placeholder={"-y\n@scope/server"} spellCheck={false} />
+            <Textarea name="args" rows={3} defaultValue={server?.args?.join("\n")} placeholder={"-y\n@scope/server"} spellCheck={false} />
           </label>
           <SecretField
             name="env"
@@ -119,10 +130,12 @@ function McpForm({ server, error, onDone }: { server: McpServerView | null; erro
       )}
       {error ? <p className="error">{error}</p> : null}
       <div className="row">
-        <button type="submit">{server ? "Save server" : "Add server"}</button>
-        <button type="button" className="link" onClick={onDone}>
+        <Button type="submit" size="sm">
+          {server ? "Save server" : "Add server"}
+        </Button>
+        <Button type="button" variant="link" size="sm" onClick={onDone}>
           Cancel
-        </button>
+        </Button>
       </div>
     </form>
   );
@@ -135,10 +148,9 @@ function McpToolList({ server }: { server: McpServerView }) {
       {server.tools.map((item) => (
         <li key={item.name}>
           <label className="toggle" title={item.description}>
-            <input
-              type="checkbox"
+            <Checkbox
               checked={item.enabled}
-              onChange={(event) => void actions.setMcpEnabled({ id: server.id, tool: item.name, enabled: event.currentTarget.checked })}
+              onCheckedChange={(checked) => void actions.setMcpEnabled({ id: server.id, tool: item.name, enabled: checked === true })}
             />
             <code>{item.name}</code>
           </label>
@@ -154,9 +166,9 @@ function McpDetails({ server, test }: { server: McpServerView; test: McpTestStat
   return (
     <div className="mcp-details">
       <div className="row">
-        <button type="button" disabled={test?.busy} onClick={() => void actions.testMcpServer(server.id)}>
+        <Button type="button" variant="secondary" size="sm" disabled={test?.busy} onClick={() => void actions.testMcpServer(server.id)}>
           Test connection
-        </button>
+        </Button>
       </div>
       {status ? <p className={status.failed ? "error" : "muted"}>{status.text}</p> : null}
       <McpToolList server={server} />
@@ -193,15 +205,15 @@ function ConnectorRow({ name, domain, connected, busy, onToggle, onOpen }: Conne
   return (
     <li className="connector">
       {onOpen ? (
-        <button type="button" className="connector-main" onClick={onOpen}>
+        <Button type="button" variant="ghost" className="connector-main h-auto justify-start gap-2.5 p-0 text-foreground hover:bg-transparent" onClick={onOpen}>
           {label}
-        </button>
+        </Button>
       ) : (
         <span className="connector-main">{label}</span>
       )}
-      <button type="button" className={connected ? "connector-disconnect" : "primary"} disabled={busy} onClick={onToggle}>
+      <Button type="button" variant={connected ? "ghost" : "default"} size="sm" disabled={busy} onClick={onToggle}>
         {connected ? "Disconnect" : "Connect"}
-      </button>
+      </Button>
     </li>
   );
 }
@@ -271,9 +283,9 @@ export function Connectors(props: { servers: McpServerView[]; tests: Record<stri
       </ul>
       {props.error ? <p className="error">{props.error}</p> : null}
       <div className="actions row">
-        <button type="button" className="link" onClick={() => setEditing("new")}>
+        <Button type="button" variant="link" size="sm" onClick={() => setEditing("new")}>
           Add custom
-        </button>
+        </Button>
       </div>
     </section>
   );

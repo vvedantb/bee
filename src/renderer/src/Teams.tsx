@@ -8,6 +8,7 @@ import {
   IconUsersGroup,
   IconX,
 } from "@tabler/icons-react";
+import { Button, Checkbox, Input } from "@vvedantb/ui";
 import { useState, type FormEvent } from "react";
 import { namesLabel } from "../../core/room-picker";
 import type { TeamsView } from "../../shared/ipc";
@@ -46,10 +47,10 @@ function JoinByCode({ busy }: { busy: boolean }) {
   }
   return (
     <form className="simulate" onSubmit={onSubmit}>
-      <input name="code" placeholder="Sync code, e.g. amber-otter" autoComplete="off" autoFocus />
-      <button type="submit" disabled={busy}>
+      <Input className="h-9" name="code" placeholder="Sync code, e.g. amber-otter" autoComplete="off" autoFocus />
+      <Button type="submit" disabled={busy} variant="secondary" size="sm">
         Join
-      </button>
+      </Button>
     </form>
   );
 }
@@ -59,9 +60,9 @@ function PromptHead({ title }: { title: string }) {
     <div className="sync-head">
       <IconUsersGroup {...ICON} />
       <strong>{title}</strong>
-      <button type="button" className="icon-button" title="Not now" onClick={() => void actions.teams({ type: "dismissPrompt" })}>
+      <Button type="button" title="Not now" onClick={() => void actions.teams({ type: "dismissPrompt" })} variant="ghost" size="icon-sm">
         <IconX {...ICON} />
-      </button>
+      </Button>
     </div>
   );
 }
@@ -75,10 +76,10 @@ function MeetingPick({ prompt, busy }: { prompt: NonNullable<TeamsView["prompt"]
       <ul className="sync-list sync-picks">
         {prompt.meetings.map((meeting) => (
           <li key={meeting.key}>
-            <button type="button" className="primary sync-main" disabled={busy} onClick={() => void actions.teams({ type: "selectMeeting", key: meeting.key })}>
+            <Button type="button" disabled={busy} onClick={() => void actions.teams({ type: "selectMeeting", key: meeting.key })} size="sm" className="sync-main h-auto">
               <span>{meeting.label}</span>
               {meeting.title !== meeting.label ? <span className="sync-sub">{meeting.title}</span> : null}
-            </button>
+            </Button>
           </li>
         ))}
       </ul>
@@ -96,20 +97,20 @@ function RoomPick({ prompt, busy }: { prompt: NonNullable<TeamsView["prompt"]>; 
       <ul className="sync-list sync-picks">
         {prompt.others.map((option) => (
           <li key={option.roomId}>
-            <button type="button" className="sync-main" disabled={busy} onClick={() => void actions.teams({ type: "joinSync", roomId: option.roomId })}>
+            <Button type="button" disabled={busy} onClick={() => void actions.teams({ type: "joinSync", roomId: option.roomId })} variant="secondary" size="sm" className="sync-main h-auto">
               <span>Join “{option.label}”</span>
               <span className="sync-sub">{started(option)}</span>
-            </button>
+            </Button>
           </li>
         ))}
       </ul>
       <div className="row">
-        <button type="button" disabled={busy} onClick={() => void actions.teams({ type: "startSync", invite: [] })}>
+        <Button type="button" disabled={busy} onClick={() => void actions.teams({ type: "startSync", invite: [] })} variant="secondary" size="sm">
           Start new sync
-        </button>
-        <button type="button" className="link" onClick={() => setCode(!code)}>
+        </Button>
+        <Button type="button" onClick={() => setCode(!code)} variant="link" size="sm">
           Join by code
-        </button>
+        </Button>
       </div>
       {code ? <JoinByCode busy={busy} /> : null}
     </>
@@ -127,31 +128,31 @@ function SyncPrompt({ prompt, busy }: { prompt: NonNullable<TeamsView["prompt"]>
       <PromptHead title="Teams meeting detected" />
       <p className="muted">Sync notes with teammates in this call? Only Bee members who join are captured.</p>
       {primary ? (
-        <button type="button" className="primary sync-main" disabled={busy} onClick={() => void actions.teams({ type: "joinSync", roomId: primary.roomId })}>
+        <Button type="button" disabled={busy} onClick={() => void actions.teams({ type: "joinSync", roomId: primary.roomId })} size="sm" className="sync-main h-auto">
           <span>Join “{primary.label}”</span>
           <span className="sync-sub">{started(primary)}</span>
-        </button>
+        </Button>
       ) : null}
-      <button type="button" className={primary ? "" : "primary"} disabled={busy} onClick={() => void actions.teams({ type: "startSync", invite: [] })}>
+      <Button type="button" disabled={busy} onClick={() => void actions.teams({ type: "startSync", invite: [] })} variant={primary ? "secondary" : "default"} size="sm">
         {primary ? "Start new sync" : "Start meeting sync"}
-      </button>
+      </Button>
       <div className="row">
         {prompt.others.length > 0 ? (
-          <button type="button" className="link" onClick={() => setMore(more === "others" ? null : "others")}>
+          <Button type="button" onClick={() => setMore(more === "others" ? null : "others")} variant="link" size="sm">
             Other syncs ({prompt.others.length})
-          </button>
+          </Button>
         ) : null}
-        <button type="button" className="link" onClick={() => setMore(more === "code" ? null : "code")}>
+        <Button type="button" onClick={() => setMore(more === "code" ? null : "code")} variant="link" size="sm">
           Join by code
-        </button>
+        </Button>
       </div>
       {more === "others" ? (
         <ul className="sync-list">
           {prompt.others.map((option) => (
             <li key={option.roomId}>
-              <button type="button" disabled={busy} onClick={() => void actions.teams({ type: "joinSync", roomId: option.roomId })}>
+              <Button type="button" disabled={busy} onClick={() => void actions.teams({ type: "joinSync", roomId: option.roomId })} variant="secondary" size="sm">
                 Join “{option.label}”
-              </button>
+              </Button>
               <span className="muted">{started(option)}</span>
             </li>
           ))}
@@ -188,7 +189,7 @@ function InviteStep({ teams, busy }: { teams: TeamsView; busy: boolean }) {
             {teams.roster.map((member) => (
               <li key={member.userId}>
                 <label className="toggle">
-                  <input type="checkbox" name="invite" value={member.userId} /> {member.displayName}
+                  <Checkbox name="invite" value={member.userId} /> {member.displayName}
                 </label>
               </li>
             ))}
@@ -198,13 +199,13 @@ function InviteStep({ teams, busy }: { teams: TeamsView; busy: boolean }) {
         )}
         <div className="row">
           {teams.roster.length > 0 ? (
-            <button type="submit" className="primary" disabled={busy}>
+            <Button type="submit" disabled={busy} size="sm">
               <IconUserPlus {...ICON} /> Invite
-            </button>
+            </Button>
           ) : null}
-          <button type="button" onClick={() => actions.setInviteOpen(false)}>
+          <Button type="button" onClick={() => actions.setInviteOpen(false)} variant="secondary" size="sm">
             Done
-          </button>
+          </Button>
         </div>
       </form>
     </>
@@ -223,13 +224,13 @@ function MergeOffer({ merge, busy }: { merge: NonNullable<TeamsView["merge"]>; b
       </p>
       <div className="row">
         {merge.waiting ? null : (
-          <button type="button" className="primary" disabled={busy} onClick={() => void actions.teams({ type: "merge", accept: true })}>
+          <Button type="button" disabled={busy} onClick={() => void actions.teams({ type: "merge", accept: true })} size="sm">
             Merge
-          </button>
+          </Button>
         )}
-        <button type="button" disabled={busy} onClick={() => void actions.teams({ type: "merge", accept: false })}>
+        <Button type="button" disabled={busy} onClick={() => void actions.teams({ type: "merge", accept: false })} variant="secondary" size="sm">
           Keep separate
-        </button>
+        </Button>
       </div>
     </>
   );
@@ -267,16 +268,16 @@ export function SyncSection({ state }: { state: BeeState }) {
             <code>{room.code}</code>
           </div>
           <div className="row actions">
-            <button type="button" onClick={() => void actions.teams({ type: "setShareMuted", muted: !teams.shareMuted })}>
+            <Button type="button" onClick={() => void actions.teams({ type: "setShareMuted", muted: !teams.shareMuted })} variant="secondary" size="sm">
               {teams.shareMuted ? <IconMicrophone {...ICON} /> : <IconMicrophoneOff {...ICON} />}
               {teams.shareMuted ? "Resume sharing" : "Pause sharing"}
-            </button>
-            <button type="button" disabled={state.teamsBusy} onClick={() => void actions.teams({ type: "leaveSync" })}>
+            </Button>
+            <Button type="button" disabled={state.teamsBusy} onClick={() => void actions.teams({ type: "leaveSync" })} variant="secondary" size="sm">
               <IconLogout {...ICON} /> Leave sync
-            </button>
-            <button type="button" className="link" onClick={() => actions.setInviteOpen(true)}>
+            </Button>
+            <Button type="button" onClick={() => actions.setInviteOpen(true)} variant="link" size="sm">
               Invite
-            </button>
+            </Button>
           </div>
           <p className="muted">
             {teams.shareMuted
@@ -292,9 +293,9 @@ export function SyncSection({ state }: { state: BeeState }) {
             {teams.detection.inMeeting ? "Teams meeting detected." : "Bee offers a sync when desktop Teams is in a meeting."}
           </p>
           <div className="row actions">
-            <button type="button" disabled={state.teamsBusy} onClick={() => void actions.teams({ type: "startSync", invite: [] })}>
+            <Button type="button" disabled={state.teamsBusy} onClick={() => void actions.teams({ type: "startSync", invite: [] })} variant="secondary" size="sm">
               <IconUsersGroup {...ICON} /> Start meeting sync
-            </button>
+            </Button>
           </div>
         </>
       )}
@@ -332,25 +333,25 @@ function TeamJoin({ teams, busy }: { teams: TeamsView; busy: boolean }) {
     >
       <label>
         Your name
-        <input name="displayName" defaultValue={defaultName} placeholder="Shown to teammates" autoComplete="off" />
+        <Input className="h-9" name="displayName" defaultValue={defaultName} placeholder="Shown to teammates" autoComplete="off" />
       </label>
       <label>
         Join a team
         <span className="row">
-          <input key={teams.pendingInvite} name="code" defaultValue={teams.pendingInvite ?? ""} placeholder="Invite code or bee://team/ link" autoComplete="off" />
-          <button type="submit" disabled={busy}>
+          <Input className="h-9" key={teams.pendingInvite} name="code" defaultValue={teams.pendingInvite ?? ""} placeholder="Invite code or bee://team/ link" autoComplete="off" />
+          <Button type="submit" disabled={busy} variant="secondary" size="sm">
             Join team
-          </button>
+          </Button>
         </span>
         {teams.pendingInvite ? <span className="muted">Invite link received. Check the name, then Join team.</span> : null}
       </label>
       <label>
         Or create one
         <span className="row">
-          <input name="teamName" placeholder="Company or team name" autoComplete="off" />
-          <button type="button" disabled={busy} onClick={(event) => create(event.currentTarget.form)}>
+          <Input className="h-9" name="teamName" placeholder="Company or team name" autoComplete="off" />
+          <Button type="button" disabled={busy} onClick={(event) => create(event.currentTarget.form)} variant="secondary" size="sm">
             Create team
-          </button>
+          </Button>
         </span>
       </label>
     </form>
@@ -374,10 +375,10 @@ function TeamDetails({ teams, busy }: { teams: TeamsView; busy: boolean }) {
       <label>
         Invite link
         <span className="row">
-          <input type="text" readOnly value={team.inviteLink} aria-label="Invite link" />
-          <button type="button" onClick={() => void copy()}>
+          <Input className="h-9" type="text" readOnly value={team.inviteLink} aria-label="Invite link" />
+          <Button type="button" onClick={() => void copy()} variant="secondary" size="sm">
             <IconCopy {...ICON} /> {copied ? "Copied" : "Copy"}
-          </button>
+          </Button>
         </span>
         <span className="muted">Code {team.inviteCode}. Anyone with it can join, so share it only inside your company.</span>
       </label>
@@ -390,9 +391,9 @@ function TeamDetails({ teams, busy }: { teams: TeamsView; busy: boolean }) {
         ))}
       </ul>
       <div className="row">
-        <button type="button" className="link" disabled={busy} onClick={() => void actions.teams({ type: "leaveTeam" })}>
+        <Button type="button" disabled={busy} onClick={() => void actions.teams({ type: "leaveTeam" })} variant="link" size="sm">
           Leave team
-        </button>
+        </Button>
       </div>
     </div>
   );
