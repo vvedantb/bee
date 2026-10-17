@@ -44,6 +44,11 @@ describe("LUNA_SYSTEM", () => {
     expect(LUNA_SYSTEM).toContain("at most 2 short tips");
   });
 
+  it("asks for plain text without markdown or links", () => {
+    expect(LUNA_SYSTEM).toContain("plain text only");
+    expect(LUNA_SYSTEM).toContain("Do not write links");
+  });
+
   it("tells Luna when to search the web and when not to", () => {
     expect(LUNA_SYSTEM).toContain("web_search");
     expect(LUNA_SYSTEM).toContain("current events");
@@ -66,6 +71,16 @@ describe("parseLunaTips", () => {
   it("treats NONE and blank output as no tips", () => {
     expect(parseLunaTips("NONE")).toEqual([]);
     expect(parseLunaTips("  \n ")).toEqual([]);
+  });
+
+  it("strips bold, italic, backticks and headings", () => {
+    expect(parseLunaTips("- **bold** and __also__ and *it* and _it2_")).toEqual(["bold and also and it and it2"]);
+    expect(parseLunaTips("## Summary\n- Use `read_file` [n1]")).toEqual(["Summary", "Use read_file [n1]"]);
+  });
+
+  it("drops markdown links and citations but keeps the label and note cites", () => {
+    expect(parseLunaTips("- Node 22 is current ([nodejs.org](https://nodejs.org/en?utm_source=openai))")).toEqual(["Node 22 is current nodejs.org"]);
+    expect(parseLunaTips("- See [the docs](https://a.com/x) [n2]")).toEqual(["See the docs [n2]"]);
   });
 });
 
@@ -104,7 +119,7 @@ describe("guideWithLuna with MCP tools", () => {
       expect(result.tips).toEqual([`Code is ${MOCK_TOKEN}`]);
       expect(toolResult).toContain(MOCK_TOKEN);
       expect(system).toContain("MCP servers");
-      expect(activity).toContain("vmem__wobble");
+      expect(activity.filter((name) => name === "vmem__wobble")).toHaveLength(1);
     } finally {
       await mcp.close();
       await server.close();

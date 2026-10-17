@@ -11,10 +11,12 @@ export const LUNA_SYSTEM = [
   "You are Bee, a quiet meeting copilot shown in a small overlay.",
   "Give the user at most 2 short tips.",
   "Each tip is one line, starts with \"- \", and is under 20 words.",
+  "Reply in plain text only. No markdown: no bold, italic, headings or backticks, and no lists other than the \"- \" tip prefix.",
+  "Do not write links or markdown citations. Bee shows the sources separately.",
   "If the latest transcript lines ask a direct question (a fact, a definition, a quick sum), the first tip answers it.",
   "Answer from the notes when they cover it and cite them by id, for example [n1].",
   "If the notes do not cover it and the fact is public, may have changed, or is current events (office holders, news, scores, prices, releases), use the web_search tool.",
-  "After a search, end the tip with a short citation: the site domain, or [web]. Bee lists the source links.",
+  "After a search, you may end the tip with the site domain in plain text, or [web]. Do not add links.",
   "Do not search for stable general knowledge or arithmetic, for example 15% of 18000. Answer those directly.",
   "If the notes do not cover a question about the user's own notes or files, use list_dir, search_files and read_file, then answer from what you read.",
   "Prefer the notes above ([n1]…) first. Do not use web_search for private facts about the user's own work or files.",
@@ -52,11 +54,27 @@ export function buildLunaPrompt(args: { transcript: string[]; notes: Snippet[]; 
   return { system: args.hasMcpTools ? `${LUNA_SYSTEM}\n${LUNA_MCP_SYSTEM}` : LUNA_SYSTEM, prompt };
 }
 
+/** Removes markdown the model may still emit, keeping plain text and note cites such as [n1]. */
+function stripMarkdown(line: string): string {
+  return line
+    .replace(/^#{1,6}\s*/, "")
+    .replace(/^(?:[-*•]|\d+[.)])\s+/, "")
+    .replace(/\(\s*\[([^\]]*)\]\(\s*[^)\s]*\s*\)\s*\)/g, "$1")
+    .replace(/\[([^\]]*)\]\(\s*[^)\s]*\s*\)/g, "$1")
+    .replace(/\(\s*https?:\/\/[^)\s]*\)/g, "")
+    .replace(/(\*\*|__)(.+?)\1/g, "$2")
+    .replace(/(?<![\w*])\*(?=\S)([^*]+?)\*(?![\w*])/g, "$1")
+    .replace(/(?<!\w)_(?=\S)([^_]+?)_(?!\w)/g, "$1")
+    .replace(/`([^`]*)`/g, "$1")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
 export function parseLunaTips(text: string): string[] {
   if (text.trim().toUpperCase() === "NONE") return [];
   return text
     .split("\n")
-    .map((line) => line.trim().replace(/^(?:[-*•]|\d+[.)])\s*/, "").trim())
+    .map((line) => stripMarkdown(line.trim()))
     .filter((line) => line.length > 0 && line.toUpperCase() !== "NONE")
     .slice(0, MAX_TIPS);
 }
@@ -76,16 +94,22 @@ export async function guideWithLuna(args: {
 }): Promise<{ tips: string[]; sources: BeeSource[]; error: string | null }> {
   try {
     const { system, prompt } = buildLunaPrompt({ ...args, hasMcpTools: Object.keys(args.extraTools ?? {}).length > 0 });
+    const reported = new Set<string>();
+    const report = (id: string, name: string) => {
+      if (reported.has(id)) return;
+      reported.add(id);
+      args.onActivity?.(name);
+    };
     const result = await generateText({
       model: args.model,
       system,
       prompt,
       tools: lunaTools({ notesDir: args.notesDir, extraRoots: args.extraRoots, extra: args.extraTools }),
       stopWhen: isStepCount(5),
-      // Local tools report as they start. Provider tools (web_search) report when their step finishes.
-      onToolExecutionStart: ({ toolCall }) => args.onActivity?.(toolCall.toolName),
+      // Local tools report as they start. Provider tools (web_search) report when their step finishes. Each call reports once.
+      onToolExecutionStart: ({ toolCall }) => report(toolCall.toolCallId, toolCall.toolName),
       onStepFinish: (step) => {
-        for (const call of step.toolCalls) args.onActivity?.(call.toolName);
+        for (const call of step.toolCalls) report(call.toolCallId, call.toolName);
       },
       maxOutputTokens: 800,
       maxRetries: 1,

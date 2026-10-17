@@ -95,6 +95,20 @@ describe("sourcesFromGenerateResult", () => {
     expect(sources).toEqual([{ title: "A", url: "https://a.com/x" }]);
   });
 
+  it("strips utm_ params and dedupes after stripping", () => {
+    const sources = sourcesFromGenerateResult({
+      sources: [
+        { sourceType: "url", id: "1", url: "https://a.com/x?utm_source=openai&utm_medium=x&id=3", title: "A" },
+        { sourceType: "url", id: "2", url: "https://a.com/x?id=3" },
+        { sourceType: "url", id: "3", url: "https://b.com/?utm_source=openai" },
+      ],
+    });
+    expect(sources).toEqual([
+      { title: "A", url: "https://a.com/x?id=3" },
+      { title: "b.com", url: "https://b.com/" },
+    ]);
+  });
+
   it("caps the list at five", () => {
     const many = Array.from({ length: 9 }, (_, index) => ({ sourceType: "url", id: `${index}`, url: `https://site${index}.com/` }));
     expect(sourcesFromGenerateResult({ sources: many })).toHaveLength(5);
