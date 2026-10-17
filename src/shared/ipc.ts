@@ -37,12 +37,9 @@ export const secretStorageSchema = z.enum(["os", "weak", "memory"]);
 export const settingsViewSchema = z.object({
   gatewayKeySource: z.enum(["saved", "env", "none"]),
   hasClaudeToken: z.boolean(),
-  // Personalised link suggestions: the effective toggle, and vmem's connection (the key itself never leaves main).
+  // Personalised link suggestions: the effective toggle, and whether an enabled vmem connector (Connectors tab) exists.
   personalisedLinks: z.boolean(),
-  vmemConfigured: z.boolean(),
-  hasVmemKey: z.boolean(),
-  vmemKeySource: z.enum(["saved", "env", "none"]),
-  vmemBaseUrl: z.string(),
+  vmemConnected: z.boolean(),
   meetingMode: z.boolean(),
   secretStorage: secretStorageSchema,
   notesDir: z.string(),
@@ -56,9 +53,6 @@ export const settingsUpdateSchema = z.object({
   claudeOAuthToken: z.string().max(4000).optional(),
   meetingMode: z.boolean().optional(),
   personalisedLinks: z.boolean().optional(),
-  vmemApiKey: z.string().max(500).optional(),
-  // The Convex site URL (https://<deployment>.convex.site). "" clears it.
-  vmemBaseUrl: z.string().max(500).optional(),
   // Extra absolute folders Luna may read; replaces the saved list.
   fsRoots: z.array(z.string().max(1000)).max(20).optional(),
 });

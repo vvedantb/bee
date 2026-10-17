@@ -206,9 +206,9 @@ Sandbox (`src/core/fs-sandbox.ts`): the roots are the notes folder (always first
 
 `sourcesFromGenerateResult` reads `result.sources` and, if that is empty, `output.sources` in `result.toolResults`. It keeps unique `https` URLs, falls back to the hostname for a missing title, and returns at most 5. `PipelineResult.sources` carries them to the Live tab, which lists them under the tips. The list is empty when there is no key or Luna fails. A failed search fails open: Luna still returns tips, or the usual `Luna guidance failed:` error.
 
-### MCP servers
+### MCP servers (Connectors)
 
-The user connects MCP servers in **Settings → MCP servers** (`renderer/src/McpSettings.tsx`) so Luna can use their tools, for example vmem, Eva or a local command. Two transports, both through the official `@modelcontextprotocol/sdk` (a runtime `dependency`, so it lands in `app.asar`):
+The user connects MCP servers in the **Connectors** tab, between **Live** and **Settings** (`renderer/src/Connectors.tsx`), so Luna can use their tools, for example vmem, Eva or a local command. Each connector is one row: icon (site favicon), name, **Connect** or **Disconnect**. **vmem** is a preset (`https://vmem.vedantb.com/mcp`, no auth): Connect saves it enabled, Disconnect removes it. **Add custom**, or a click on a custom row, opens the full form (transport, URL, auth, stdio, tool switches). Two transports, both through the official `@modelcontextprotocol/sdk` (a runtime `dependency`, so it lands in `app.asar`):
 
 - **Streamable HTTP** (`StreamableHTTPClientTransport`): `https`, or `http` on localhost only. Auth is none, a bearer token (`Authorization: Bearer …`) or a custom header (name plus value).
 - **stdio** (`StdioClientTransport`): command, args (one per line, or space-separated) and env `KEY=value`.
@@ -218,6 +218,8 @@ There is no OAuth flow. For an OAuth server, authorise elsewhere and paste the t
 `src/core/mcp.ts` (no Electron imports) connects, lists tools and calls them. `loadMcpTools(configs)` connects to every server at once and wraps each enabled tool as an AI SDK `tool()` named `{slug}__{tool}`. The slug is the server name cleaned to `[a-zA-Z0-9_-]` (24 characters at most, no `__`); names are capped at 64 characters and made unique. Connect and list time out after 10 s, each call after 15 s. A server that fails or hangs is skipped (main logs its name and a short reason, never secrets), so the others still load. A tool call that fails returns a short `Error: …` string; it never throws into `generateText`. Error text has every secret value masked.
 
 `runPipeline` calls `loadMcpTools` (passed in by `registerMeetingIpc`, which reads enabled servers and decrypted secrets from settings on each run, like `fsRoots`) only when Luna is about to run, hands the tools to `guideWithLuna({ extraTools })`, and closes every connection (and stdio child process) when the run ends. If MCP tools are present, `LUNA_MCP_SYSTEM` is added to the system prompt: call the namespaced tools, and never invent a result when one returns an error.
+
+Personalised links use the same client. `isVmemConnector` (`shared/mcp-names.ts`) matches an enabled server whose name slugs to `vmem` or whose URL host is `vmem.vedantb.com`; `settings.vmemConfig()` returns it with its secrets, and `settings.linkSettings()` returns `{ enabled, hasVmem }`. The `personalisedLinks` setting defaults to whether such a server is enabled. `core/vmem-history.ts` (`createMcpSearch`) calls `connectMcp` with an 800 ms limit, picks `memory_search` (else `search`, else a tool with "memory" and "search" in its name), and calls it with 800 ms, so the path fits the 1.5 s enrich budget. `parseHistoryHits` reads the text or JSON output without a schema: it tolerates missing fields, and returns `[]` for anything unreadable. Without a connector, or on failure, history is `[]` and Jev still scores the plain domain chip. `createLinkEnricher` takes an `onFallback(reason)` callback; `link-ipc.ts` logs it with `console.debug("Bee: personalised links fell back:", reason)`, and unexpected MCP errors with `console.warn`.
 
 Storage (`main/settings.ts`, `settings.json`):
 

@@ -86,10 +86,11 @@ describe("applyDecision", () => {
 });
 
 describe("canPersonalise", () => {
-  it("needs the toggle, vmem and the Gateway key", () => {
+  it("needs the toggle and the Gateway key; vmem is optional", () => {
     expect(canPersonalise({ enabled: true, hasVmem: true, hasGatewayKey: true })).toBe(true);
+    expect(canPersonalise({ enabled: true, hasVmem: false, hasGatewayKey: true })).toBe(true);
+    expect(canPersonalise({ enabled: true, hasGatewayKey: true })).toBe(true);
     expect(canPersonalise({ enabled: false, hasVmem: true, hasGatewayKey: true })).toBe(false);
-    expect(canPersonalise({ enabled: true, hasVmem: false, hasGatewayKey: true })).toBe(false);
     expect(canPersonalise({ enabled: true, hasVmem: true, hasGatewayKey: false })).toBe(false);
   });
 });
@@ -129,6 +130,40 @@ describe("createLinkEnricher", () => {
   it("returns the plain chips on timeout", async () => {
     const enrich = createLinkEnricher({ getDeps: () => deps([logs], "hang"), timeoutMs: 20 });
     expect(await enrich(turn, [vercel, github])).toEqual([vercel, github]);
+  });
+
+  it("scores the plain domain chip with Jev alone when history search returns []", async () => {
+    const d = deps([], { suggest: 3, urls: [3] });
+    const enrich = createLinkEnricher({ getDeps: () => d });
+    expect(await enrich(turn, [vercel])).toEqual([vercel]);
+    expect(d.decide).toHaveBeenCalledTimes(1);
+    expect(d.decide.mock.calls[0]?.[1]).toEqual({ domain: "vercel.com", urls: [{ url: "https://vercel.com/", title: "vercel.com" }] });
+    const dropped = deps([], { suggest: 0, urls: [3] });
+    expect(await createLinkEnricher({ getDeps: () => dropped })(`${turn} 2`, [vercel])).toEqual([]);
+  });
+
+  it("reports why it fell back: timeout, Jev failure and history failure", async () => {
+    const onFallback = vi.fn();
+    await createLinkEnricher({ getDeps: () => deps([logs], "hang"), timeoutMs: 20, onFallback })(turn, [vercel]);
+    expect(onFallback).toHaveBeenCalledWith(expect.stringMatching(/timed out/));
+
+    const jev = vi.fn();
+    await createLinkEnricher({ getDeps: () => deps([logs], new Error("gateway down")), onFallback: jev })(turn, [vercel]);
+    expect(jev).toHaveBeenCalledWith("Jev failed: gateway down");
+
+    const history = vi.fn();
+    const d = deps([], { suggest: 3, urls: [3] });
+    d.searchHistory = vi.fn(async (): Promise<HistoryHit[]> => {
+      throw new Error("mcp down");
+    });
+    await createLinkEnricher({ getDeps: () => d, onFallback: history })(turn, [vercel]);
+    expect(history).toHaveBeenCalledWith("history search failed: mcp down");
+  });
+
+  it("does not call onFallback on a clean run", async () => {
+    const onFallback = vi.fn();
+    await createLinkEnricher({ getDeps: () => deps([logs], { suggest: 3, urls: [3, 1] }), onFallback })(turn, [vercel]);
+    expect(onFallback).not.toHaveBeenCalled();
   });
 
   it("makes no calls when the detector found nothing", async () => {

@@ -17,8 +17,7 @@ vi.mock("electron", () => ({
 const { createSettingsStore } = await import("./settings");
 
 let dir: string;
-const create = (env: { envVmemKey?: string; envVmemBaseUrl?: string } = {}) =>
-  createSettingsStore({ userDataDir: dir, notesDir: join(dir, "notes"), envGatewayKey: undefined, ...env });
+const create = () => createSettingsStore({ userDataDir: dir, notesDir: join(dir, "notes"), envGatewayKey: undefined });
 
 beforeEach(() => {
   crypto.on = false;
@@ -159,76 +158,54 @@ describe("settings MCP servers", () => {
 });
 
 describe("settings personalised links", () => {
-  const url = "https://happy-animal-123.convex.site";
+  const vmemPreset = { name: "vmem", enabled: true, transport: "http" as const, url: "https://vmem.vedantb.com/mcp", auth: { type: "none" as const } };
 
-  it("is off and unconfigured by default", () => {
-    const view = create().view();
-    expect(view).toMatchObject({ personalisedLinks: false, vmemConfigured: false, hasVmemKey: false, vmemKeySource: "none", vmemBaseUrl: "" });
-    expect(create().linkSettings()).toEqual({ enabled: false, vmem: undefined });
+  it("is off by default, with no vmem connector", () => {
+    expect(create().view()).toMatchObject({ personalisedLinks: false, vmemConnected: false });
+    expect(create().linkSettings()).toEqual({ enabled: false, hasVmem: false });
   });
 
-  it("defaults on once vmem is configured by saved settings", () => {
+  it("defaults on when an enabled vmem MCP server exists, and off again when it goes", () => {
     const store = create();
-    store.save({ vmemApiKey: "vmem-PLAINTEXT-1" });
-    expect(store.view().personalisedLinks).toBe(false);
-    const view = store.save({ vmemBaseUrl: `${url}/` });
-    expect(view).toMatchObject({ personalisedLinks: true, vmemConfigured: true, hasVmemKey: true, vmemKeySource: "saved", vmemBaseUrl: url });
-    expect(store.linkSettings()).toEqual({ enabled: true, vmem: { apiKey: "vmem-PLAINTEXT-1", baseUrl: url } });
+    store.mcpSave(vmemPreset);
+    expect(store.view()).toMatchObject({ personalisedLinks: true, vmemConnected: true });
+    expect(store.linkSettings()).toEqual({ enabled: true, hasVmem: true });
+    expect(store.vmemConfig()).toMatchObject({ name: "vmem", url: "https://vmem.vedantb.com/mcp" });
+    const id = store.mcpList()[0]?.id as string;
+    store.mcpSetEnabled({ id, enabled: false });
+    expect(store.view()).toMatchObject({ personalisedLinks: false, vmemConnected: false });
+    expect(store.vmemConfig()).toBeUndefined();
+    store.mcpSetEnabled({ id, enabled: true });
+    store.mcpRemove(id);
+    expect(store.linkSettings()).toEqual({ enabled: false, hasVmem: false });
   });
 
-  it("defaults on from the environment, and saved values win", () => {
-    const store = create({ envVmemKey: "env-key", envVmemBaseUrl: url });
-    expect(store.view()).toMatchObject({ personalisedLinks: true, vmemKeySource: "env", vmemBaseUrl: url });
-    store.save({ vmemApiKey: "saved-key", vmemBaseUrl: "https://other.convex.site" });
-    expect(store.view()).toMatchObject({ vmemKeySource: "saved", vmemBaseUrl: "https://other.convex.site" });
-    expect(store.linkSettings().vmem?.apiKey).toBe("saved-key");
+  it("finds the connector by URL host as well as by name, and ignores other servers", () => {
+    const store = create();
+    store.mcpSave({ ...vmemPreset, name: "Memory" });
+    expect(store.view().vmemConnected).toBe(true);
+    store.mcpRemove(store.mcpList()[0]?.id as string);
+    store.mcpSave({ ...vmemPreset, name: "eva", url: "https://eva.example.com/mcp" });
+    expect(store.view()).toMatchObject({ personalisedLinks: false, vmemConnected: false });
   });
 
-  it("needs both the key and the base URL to count as configured", () => {
-    expect(create({ envVmemKey: "env-key" }).view()).toMatchObject({ vmemConfigured: false, personalisedLinks: false });
-    expect(create({ envVmemBaseUrl: url }).linkSettings().vmem).toBeUndefined();
-  });
-
-  it("persists the toggle once set, whatever vmem's state", () => {
-    const store = create({ envVmemKey: "env-key", envVmemBaseUrl: url });
+  it("persists the toggle once set, whatever the connector's state", () => {
+    const store = create();
+    store.mcpSave(vmemPreset);
     store.save({ personalisedLinks: false });
-    expect(create({ envVmemKey: "env-key", envVmemBaseUrl: url }).view().personalisedLinks).toBe(false);
+    expect(create().view().personalisedLinks).toBe(false);
     expect(JSON.parse(onDisk()).personalisedLinks).toBe(false);
     store.save({ meetingMode: true });
     expect(store.view().personalisedLinks).toBe(false);
     store.save({ personalisedLinks: true });
-    expect(create().view().personalisedLinks).toBe(true);
-    expect(create().linkSettings()).toEqual({ enabled: true, vmem: undefined });
+    expect(create().linkSettings()).toEqual({ enabled: true, hasVmem: true });
   });
 
-  for (const encrypted of [false, true]) {
-    it(`never writes the vmem key as plaintext (${encrypted ? "encrypted" : "memory"} mode)`, () => {
-      crypto.on = encrypted;
-      const store = create();
-      store.save({ vmemApiKey: "vmem-PLAINTEXT-2", vmemBaseUrl: url });
-      expect(onDisk()).not.toContain("PLAINTEXT");
-      expect(onDisk()).toContain(url);
-      expect(JSON.stringify(store.view())).not.toContain("PLAINTEXT");
-      expect(store.linkSettings().vmem?.apiKey).toBe("vmem-PLAINTEXT-2");
-      if (encrypted) expect(JSON.parse(onDisk()).vmemApiKey).toEqual(expect.any(String));
-      else expect(JSON.parse(onDisk()).vmemApiKey).toBeUndefined();
-    });
-  }
-
-  it("clears the key and URL with empty strings, and keeps them when omitted", () => {
+  it("leaves no vmem key or base URL behind", () => {
+    writeFileSync(join(dir, "settings.json"), JSON.stringify({ meetingMode: false, vmemApiKey: "old-PLAINTEXT", vmemBaseUrl: "https://x.convex.site" }));
     const store = create();
-    store.save({ vmemApiKey: "k", vmemBaseUrl: url });
+    expect(Object.keys(store.view())).not.toEqual(expect.arrayContaining(["vmemApiKey", "vmemBaseUrl", "vmemKeySource", "hasVmemKey"]));
     store.save({ meetingMode: true });
-    expect(store.view()).toMatchObject({ hasVmemKey: true, vmemBaseUrl: url });
-    expect(store.save({ vmemApiKey: "", vmemBaseUrl: "" })).toMatchObject({ hasVmemKey: false, vmemKeySource: "none", vmemBaseUrl: "", vmemConfigured: false });
-  });
-
-  it("rejects base URLs that are not https, and keeps the saved one", () => {
-    const store = create();
-    store.save({ vmemBaseUrl: url });
-    for (const bad of ["http://x.convex.site", "ftp://x.com", "not a url", "https://127.0.0.1", "https://localhost"]) {
-      expect(() => store.save({ vmemBaseUrl: bad })).toThrow(/https/);
-    }
-    expect(store.view().vmemBaseUrl).toBe(url);
+    expect(onDisk()).not.toMatch(/vmemApiKey|vmemBaseUrl|PLAINTEXT/);
   });
 });

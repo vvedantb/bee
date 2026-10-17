@@ -22,7 +22,7 @@ import { ISLAND_IDLE_MS, islandPhase, islandShowsBody, shouldAutoCollapse } from
 import { openMic, openSystemAudio } from "./mic";
 import { startMicSession } from "./speech";
 
-export type Tab = "live" | "settings";
+export type Tab = "live" | "connectors" | "settings";
 
 // ready: the installer is downloaded. check: the last successful check, kept while downloading.
 export type UpdateState = {
@@ -367,6 +367,8 @@ async function mcpChange(change: () => Promise<McpServerView[]>, staleTestId?: s
     const tests = { ...state.mcp.tests };
     if (staleTestId) delete tests[staleTestId];
     set({ mcp: { servers, tests, error: null } });
+    // The personalised-links default follows the vmem connector, so the settings view changes with it.
+    void actions.refreshSettings().catch(() => undefined);
     return true;
   } catch (error) {
     set({ mcp: { ...state.mcp, error: error instanceof Error ? error.message : "Could not save the server" } });

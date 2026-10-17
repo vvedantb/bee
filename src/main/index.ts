@@ -169,8 +169,6 @@ if (clerk.isPrimaryInstance) {
       userDataDir,
       notesDir,
       envGatewayKey: process.env.BEE_AI_GATEWAY_API_KEY,
-      envVmemKey: process.env.BEE_VMEM_API_KEY || process.env.VMEM_API_KEY,
-      envVmemBaseUrl: process.env.BEE_VMEM_BASE_URL || process.env.VMEM_BASE_URL,
     });
 
     // Menu bar app: no Dock icon.

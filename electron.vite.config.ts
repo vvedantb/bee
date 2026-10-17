@@ -3,8 +3,7 @@ import { defineConfig } from "electron-vite";
 
 export default defineConfig({
   main: {
-    // @vmem/sdk 0.1.3 ships ESM with extensionless imports that Node cannot load, so bundle it instead of externalising it.
-    build: { outDir: "out/main", externalizeDeps: { exclude: ["@vmem/sdk"] } },
+    build: { outDir: "out/main" },
     // Main derives the Clerk issuer and CSP from the same publishable key as the renderer.
     envPrefix: ["MAIN_VITE_", "VITE_CLERK_"],
   },

@@ -4,7 +4,7 @@ import { decideWithJev } from "../core/link-jev";
 import { canPersonalise, createLinkEnricher, sameSite, type EnrichDeps } from "../core/link-rank";
 import type { LinkChip } from "../core/link-suggest";
 import { safeExternalUrl } from "../core/url-safety";
-import { createVmemClient, createVmemHistory } from "../core/vmem-history";
+import { createMcpSearch, createVmemHistory } from "../core/vmem-history";
 import { IPC, enrichLinksRequestSchema } from "../shared/ipc";
 import type { SettingsStore } from "./settings";
 
@@ -14,18 +14,38 @@ function trusted(chip: LinkChip): LinkChip | null {
   return url && sameSite(url, chip.domain) ? { ...chip, url } : null;
 }
 
+/** Why personalising fell back to a plain or Jev-only chip. Debug only: never the turn text or a key. */
+function logFallback(reason: string): void {
+  console.debug("Bee: personalised links fell back:", reason);
+}
+
 /**
- * Personalised link chips. The turn's text goes to vmem and Jev only with the toggle on, vmem set up and a Gateway key;
+ * Personalised link chips. The turn's text goes to Jev (and to the vmem connector, when there is one) only with the toggle on and a Gateway key;
  * otherwise (and on any failure or timeout) the chips come back as they were. Keys never leave main.
  */
 export function registerLinkIpc(settings: SettingsStore): void {
-  // Read on each call, so Settings changes apply without a restart.
+  // Read on each call, so Settings and Connectors changes apply without a restart.
   const enrich = createLinkEnricher({
+    onFallback: logFallback,
     getDeps: (): EnrichDeps | null => {
-      const { enabled, vmem } = settings.linkSettings();
+      const { enabled } = settings.linkSettings();
+      if (!enabled) return null;
       const gatewayKey = settings.gatewayApiKey();
-      if (!vmem || !gatewayKey || !canPersonalise({ enabled, hasVmem: true, hasGatewayKey: true })) return null;
-      const searchHistory = createVmemHistory(createVmemClient(vmem));
+      if (!canPersonalise({ enabled, hasGatewayKey: Boolean(gatewayKey) }) || !gatewayKey) {
+        logFallback("no AI Gateway key");
+        return null;
+      }
+      const vmem = settings.vmemConfig();
+      const mcpSearch = vmem ? createMcpSearch(vmem) : null;
+      const searchHistory = createVmemHistory(async (query) => {
+        if (!mcpSearch) return [];
+        try {
+          return await mcpSearch(query);
+        } catch (error) {
+          console.warn("Bee: vmem connector error:", error instanceof Error ? error.message : String(error));
+          throw error;
+        }
+      }, logFallback);
       const model = createBeeGateway(gatewayKey).evaluationModel(JEV_MODEL);
       return {
         searchHistory: (query, domain) => searchHistory(query, domain),

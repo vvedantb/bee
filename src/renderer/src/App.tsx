@@ -12,7 +12,7 @@ import {
 } from "@tabler/icons-react";
 import { useState, type FormEvent } from "react";
 import { Favicon } from "./Favicon";
-import { McpSettings } from "./McpSettings";
+import { Connectors } from "./Connectors";
 import { SecretField } from "./SecretField";
 import { visibleChips, type LinkChip } from "../../core/link-suggest";
 import type { PipelineResult, SettingsView } from "../../shared/ipc";
@@ -377,11 +377,8 @@ function SettingsTab({ state, settings }: { state: BeeState; settings: SettingsV
     const form = event.currentTarget;
     const gatewayApiKey = formString(form, "gatewayApiKey");
     const claudeOAuthToken = formString(form, "claudeOAuthToken");
-    const vmemApiKey = formString(form, "vmemApiKey");
     const saved = await actions.saveSettings({
       gatewayApiKey: gatewayApiKey || undefined,
-      vmemApiKey: vmemApiKey || undefined,
-      vmemBaseUrl: formString(form, "vmemBaseUrl"),
       claudeOAuthToken: claudeOAuthToken || undefined,
       fsRoots: formString(form, "fsRoots").split(/\r?\n/),
     });
@@ -405,17 +402,6 @@ function SettingsTab({ state, settings }: { state: BeeState; settings: SettingsV
           saved={settings.hasClaudeToken}
           status={settings.hasClaudeToken ? "A token is stored." : "No token stored."}
         />
-        <SecretField
-          name="vmemApiKey"
-          label="vmem API key (personalised links)"
-          placeholder="vmem_…"
-          saved={settings.vmemKeySource === "saved"}
-          status={settings.vmemKeySource === "env" ? "Using BEE_VMEM_API_KEY from the environment." : KEY_SOURCE_LABEL[settings.vmemKeySource]}
-        />
-        <label>
-          vmem base URL (Convex site URL)
-          <input name="vmemBaseUrl" type="text" placeholder="https://<deployment>.convex.site" defaultValue={settings.vmemBaseUrl} autoComplete="off" spellCheck={false} />
-        </label>
         <label>
           Extra folders Luna may read (one absolute path per line)
           <textarea name="fsRoots" rows={3} defaultValue={settings.fsRoots.join("\n")} spellCheck={false} />
@@ -434,11 +420,6 @@ function SettingsTab({ state, settings }: { state: BeeState; settings: SettingsV
               Remove saved key
             </button>
           ) : null}
-          {settings.vmemKeySource === "saved" ? (
-            <button type="button" className="link" onClick={() => void actions.saveSettings({ vmemApiKey: "" })}>
-              Remove vmem key
-            </button>
-          ) : null}
           {settings.hasClaudeToken ? (
             <button type="button" className="link" onClick={() => void actions.saveSettings({ claudeOAuthToken: "" })}>
               Remove token
@@ -447,15 +428,13 @@ function SettingsTab({ state, settings }: { state: BeeState; settings: SettingsV
         </div>
       </form>
 
-      <McpSettings servers={state.mcp.servers} tests={state.mcp.tests} error={state.mcp.error} />
-
       <label className="toggle">
         <input
           type="checkbox"
           checked={settings.personalisedLinks}
           onChange={(event) => void actions.saveSettings({ personalisedLinks: event.currentTarget.checked })}
         />
-        Personalised link suggestions (sends the current line to vmem and Jev to pick the exact page; needs the vmem key, base URL and Gateway key)
+        Personalised link suggestions (sends the current line to Jev, and to vmem when connected under Connectors, to pick the exact page; needs the Gateway key)
       </label>
 
       <label className="toggle">
@@ -483,6 +462,9 @@ function Panel({ state }: { state: BeeState }) {
         <button type="button" className={state.tab === "live" ? "active" : ""} onClick={() => actions.setTab("live")}>
           Live
         </button>
+        <button type="button" className={state.tab === "connectors" ? "active" : ""} onClick={() => actions.setTab("connectors")}>
+          Connectors
+        </button>
         <button type="button" className={state.tab === "settings" ? "active" : ""} onClick={() => actions.setTab("settings")}>
           Settings
         </button>
@@ -491,6 +473,11 @@ function Panel({ state }: { state: BeeState }) {
         </span>
       </nav>
       {state.tab === "live" ? <LiveTab state={state} /> : null}
+      {state.tab === "connectors" ? (
+        <div className="tab-body">
+          <Connectors servers={state.mcp.servers} tests={state.mcp.tests} error={state.mcp.error} />
+        </div>
+      ) : null}
       {state.tab === "settings" && state.settings ? <SettingsTab state={state} settings={state.settings} /> : null}
     </main>
   );

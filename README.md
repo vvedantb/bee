@@ -97,17 +97,19 @@ Luna can also list, search and read these notes with file tools, for questions t
 
 When a spoken line or a tip names a website (a URL, `convex.dev`, "convex dot dev", or a short list of names such as GitHub or Vercel), Bee shows a chip under the tips, with the site's icon. The chip shows at once, even while Luna is still working. A click opens the link in your default browser. **×** hides the chip for this turn. Bee never opens a link by itself.
 
-**Personalised link suggestions** pick the exact page you mean. For "vercel logs for vibot", the chip can read `vercel.com › vibot › logs` and open that page, taken from your browsing history or bookmarks in [vmem](https://github.com/vedantb2/vmem).
+**Personalised link suggestions** pick the exact page you mean. For "vercel logs for vibot", the chip can read `vercel.com › vibot › logs` and open that page, taken from your browsing history or bookmarks in [vmem](https://github.com/vedantb2/vmem), when vmem is connected.
 
-1. In **Settings**, paste the **vmem API key** and the **vmem base URL**. The base URL is your Convex site URL, `https://<deployment>.convex.site` (https only). Bee also reads `BEE_VMEM_API_KEY` and `BEE_VMEM_BASE_URL`, with `VMEM_API_KEY` and `VMEM_BASE_URL` as fallbacks. Saved values win.
-2. Keep the **Gateway key** set: Jev, which makes the choice, runs through AI Gateway.
-3. Use the **Personalised link suggestions** switch. It is on by default when the key and base URL are both set, and off otherwise. Once you change it, Bee keeps your choice.
+1. Open the **Connectors** tab (between **Live** and **Settings**) and click **Connect** on **vmem**. There is no API key: vmem is an MCP connector (`https://vmem.vedantb.com/mcp`). **Add custom** sets up any other MCP server. Any enabled server named `vmem`, or on the `vmem.vedantb.com` host, counts.
+2. Keep the **Gateway key** set in **Settings**: Jev, which makes the choice, runs through AI Gateway.
+3. Use the **Personalised link suggestions** switch in **Settings**. It is on by default when an enabled vmem connector exists, and off otherwise. Once you change it, Bee keeps your choice.
 
-How it works: the cheap detector runs first, and nothing else runs when it finds no site. For each chip, main searches vmem (`@vmem/sdk`, judge off) for history and bookmark pages on that domain, keeps up to five, and asks Jev (`typesafe-ai/jev`) two things on a 0 to 3 scale: should a link show at all, and which page fits best. A chip shows only when both scores are at least 2 (`LINK_MIN_SCORE` in `src/core/link-rank.ts`). A low "should show" score removes the chip. A missing or invalid answer keeps the plain domain chip.
+Without a vmem connector, Jev still scores the plain domain chip, and can remove it when no link helps.
 
-It fails open. The whole step has a 1.5 second limit. With the switch off, vmem or the Gateway key missing, offline, or on any error or timeout, you keep the plain domain chip. Each turn is looked up once.
+How it works: the cheap detector runs first, and nothing else runs when it finds no site. For each chip, main searches the vmem connector through Bee's MCP client (`memory_search`, or the closest search tool) for history and bookmark pages on that domain, keeps up to five, and asks Jev (`typesafe-ai/jev`) two things on a 0 to 3 scale: should a link show at all, and which page fits best. A chip shows only when both scores are at least 2 (`LINK_MIN_SCORE` in `src/core/link-rank.ts`). A low "should show" score removes the chip. A missing or invalid answer keeps the plain domain chip.
 
-**Privacy:** with the switch on, the current line (and the tip text for chips from tips) goes to your vmem deployment and to Jev through AI Gateway. With it off, nothing is sent and plain chips still work. Keys stay in the main process; the vmem key is encrypted like the Gateway key.
+It fails open. The whole step has a 1.5 second limit. With the switch off or the Gateway key missing, you keep the plain domain chip. If vmem is not connected, is offline or is slow (0.8 s each to connect and to search), Jev still runs on the plain domain. On any error or timeout you keep the plain domain chip, and Bee logs a debug line (`Bee: personalised links fell back: …`). Each turn is looked up once.
+
+**Privacy:** with the switch on, the current line (and the tip text for chips from tips) goes to Jev through AI Gateway, and to your vmem connector when one is enabled. With it off, nothing is sent and plain chips still work. Keys and connector tokens stay in the main process and are encrypted like the Gateway key.
 
 **Icons** are fetched by the main process, since the window's content policy blocks remote images. Bee tries `/favicon.ico`, then the icon named in the site's home page, then Google's favicon service (`google.com/s2/favicons`, which sees the domain name). Icons are kept as small data URLs in memory and in the `favicons` folder of the user data folder for 7 days. Until an icon loads, or if none does, the chip shows a globe. Loopback addresses (127.0.0.0/8, 0.0.0.0, ::1) and dotless names are never fetched or opened.
 
@@ -216,12 +218,12 @@ Social sign-in opens the system browser and returns through the `bee://` deep li
 | --- | --- | --- |
 | AI Gateway API key | Encrypted with Electron `safeStorage` (DPAPI on Windows, Keychain on macOS) | Yes |
 | Claude OAuth token (reserved) | Encrypted the same way | No. Stored only, for a later version |
-| vmem API key (optional) | Encrypted the same way | Yes, for personalised link suggestions |
-| vmem base URL, personalised links switch, meeting mode | Plain JSON | Yes |
+| Connector tokens (Connectors tab) | Encrypted the same way | Yes |
+| Personalised links switch, meeting mode | Plain JSON | Yes |
 
 Settings live in `settings.json` in the Electron user data folder. Secrets never reach the renderer: the UI only sees whether a key is set. A saved key shows as `•••••••• (saved)` with a **Replace** button; the real key is never put in the page.
 
-If no key is saved, Bee uses `BEE_AI_GATEWAY_API_KEY` from the environment. A saved key takes precedence. The vmem key and URL work the same way with `BEE_VMEM_API_KEY` and `BEE_VMEM_BASE_URL`.
+If no key is saved, Bee uses `BEE_AI_GATEWAY_API_KEY` from the environment. A saved key takes precedence.
 
 On Linux without a keyring (for example, under Xvfb), Electron cannot encrypt to disk. Bee then keeps secrets in memory for the session only, and Settings says so.
 

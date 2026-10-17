@@ -52,9 +52,12 @@ export function chipLabel(url: string): string {
   return [host, ...segments].join(" › ");
 }
 
-/** Personalising needs the toggle, vmem (key and base URL) and the Gateway key for Jev. Anything less: plain chips. */
-export function canPersonalise(args: { enabled: boolean; hasVmem: boolean; hasGatewayKey: boolean }): boolean {
-  return args.enabled && args.hasVmem && args.hasGatewayKey;
+/**
+ * Personalising needs the toggle and the Gateway key for Jev. Anything less: plain chips.
+ * A vmem connector is optional: it only feeds history pages to Jev, which scores the plain domain chip without it.
+ */
+export function canPersonalise(args: { enabled: boolean; hasVmem?: boolean; hasGatewayKey: boolean }): boolean {
+  return args.enabled && args.hasGatewayKey;
 }
 
 function validScore(score: number | null | undefined): number | null {
@@ -108,35 +111,53 @@ export function applyDecision(chip: LinkChip, candidate: LinkCandidate, decision
   return { ...chip, url: pick.url, label: chipLabel(pick.url) };
 }
 
-async function enrichOne(turn: string, chip: LinkChip, deps: EnrichDeps, signal: AbortSignal): Promise<LinkChip | null> {
+/** Why a step fell back to the plain chip, for a debug line. */
+export type OnFallback = (reason: string) => void;
+
+const reasonOf = (error: unknown): string => (error instanceof Error ? error.message : String(error));
+
+async function enrichOne(turn: string, chip: LinkChip, deps: EnrichDeps, signal: AbortSignal, onFallback?: OnFallback): Promise<LinkChip | null> {
   try {
-    const hits = await deps.searchHistory(turn, chip.domain, signal).catch(() => []);
+    const hits = await deps.searchHistory(turn, chip.domain, signal).catch((error) => {
+      onFallback?.(`history search failed: ${reasonOf(error)}`);
+      return [];
+    });
     const candidate = buildCandidate(chip, hits);
-    const decision = await deps.decide(turn, candidate, signal).catch(() => null);
+    const decision = await deps.decide(turn, candidate, signal).catch((error) => {
+      onFallback?.(`Jev failed: ${reasonOf(error)}`);
+      return null;
+    });
     return applyDecision(chip, candidate, decision);
-  } catch {
+  } catch (error) {
+    onFallback?.(`enrichment failed: ${reasonOf(error)}`);
     return chip;
   }
 }
 
-function withTimeout<T>(work: (signal: AbortSignal) => Promise<T>, ms: number, onTimeout: T): Promise<T> {
+function withTimeout<T>(work: (signal: AbortSignal) => Promise<T>, ms: number, onTimeout: T, onFallback?: OnFallback): Promise<T> {
   const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<T>((resolve) => {
     timer = setTimeout(() => {
       controller.abort();
+      onFallback?.(`timed out after ${ms} ms`);
       resolve(onTimeout);
     }, ms);
   });
-  return Promise.race([work(controller.signal).catch(() => onTimeout), timeout]).finally(() => clearTimeout(timer));
+  const guarded = work(controller.signal).catch((error) => {
+    onFallback?.(`enrichment failed: ${reasonOf(error)}`);
+    return onTimeout;
+  });
+  return Promise.race([guarded, timeout]).finally(() => clearTimeout(timer));
 }
 
 /**
  * Enricher with a per-turn cache: the same turn text and chips never call vmem or Jev twice (in flight or done).
- * getDeps returns null when personalising is off or a key is missing; the chips then come back untouched.
+ * getDeps returns null when personalising is off or the Gateway key is missing; the chips then come back untouched.
+ * onFallback hears why a step kept the plain chip (timeout, search or Jev error).
  * Output keeps the detector's order; chips Jev rejected are left out.
  */
-export function createLinkEnricher(args: { getDeps: () => EnrichDeps | null; timeoutMs?: number }) {
+export function createLinkEnricher(args: { getDeps: () => EnrichDeps | null; timeoutMs?: number; onFallback?: OnFallback }) {
   const cache = new Map<string, Promise<LinkChip[]>>();
   return function enrich(turn: string, chips: readonly LinkChip[]): Promise<LinkChip[]> {
     const plain = [...chips];
@@ -148,11 +169,12 @@ export function createLinkEnricher(args: { getDeps: () => EnrichDeps | null; tim
     if (cached) return cached;
     const run = withTimeout(
       async (signal) => {
-        const results = await Promise.all(plain.map((chip) => enrichOne(turn, chip, deps, signal)));
+        const results = await Promise.all(plain.map((chip) => enrichOne(turn, chip, deps, signal, args.onFallback)));
         return results.filter((chip): chip is LinkChip => chip !== null);
       },
       args.timeoutMs ?? ENRICH_TIMEOUT_MS,
       plain,
+      args.onFallback,
     );
     cache.set(key, run);
     if (cache.size > CACHE_SIZE) cache.delete(cache.keys().next().value as string);

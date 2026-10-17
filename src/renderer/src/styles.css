@@ -762,6 +762,84 @@ input[readonly] {
   overflow-y: auto;
 }
 
+/* Connectors tab: one line per connector, icon and name on the left, Connect or Disconnect on the right. */
+.connector-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.connector {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px 6px 10px;
+  background: var(--surface-sunken);
+  border-radius: 8px;
+}
+
+.connector-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
+button.connector-main {
+  cursor: pointer;
+}
+
+button.connector-main:not(:disabled):hover {
+  background: none;
+}
+
+button.connector-main:not(:disabled):active {
+  transform: none;
+}
+
+button.connector-main:hover strong {
+  color: var(--accent);
+}
+
+.connector-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  flex: none;
+  color: var(--muted);
+}
+
+.connector button {
+  flex: none;
+  padding: 4px 10px;
+}
+
+.connector-disconnect {
+  color: var(--muted);
+}
+
+.connector-disconnect:not(:disabled):hover {
+  color: var(--danger);
+}
+
+.mcp-details {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
 .mcp-form {
   margin-top: 8px;
 }
@@ -828,8 +906,14 @@ input[readonly] {
   filter: brightness(1.2);
 }
 
-/* Chip icons: the site's favicon (a data URL from main) or a globe until it arrives. */
-.link-chip .favicon {
-  border-radius: 3px;
+/* Site icons: the favicon (a data URL from main) or a globe until it arrives. A light square keeps dark glyphs visible on the dark surface. */
+.link-chip .favicon,
+.connector .favicon {
+  box-sizing: border-box;
+  width: 16px;
+  height: 16px;
+  padding: 1px;
+  border-radius: 4px;
+  background: var(--text);
   object-fit: contain;
 }

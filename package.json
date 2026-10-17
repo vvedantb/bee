@@ -25,7 +25,6 @@
     "@ai-sdk/openai": "^4.0.78",
     "@clerk/electron": "^0.0.47",
     "@modelcontextprotocol/sdk": "^1.32.1",
-    "@vmem/sdk": "^0.1.3",
     "ai": "^7.0.116",
     "electron-store": "^8.2.0",
     "zod": "^4.6.5"

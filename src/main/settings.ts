@@ -4,8 +4,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
 import { normalizeFsRoots } from "../core/fs-sandbox";
-import { safeExternalUrl } from "../core/url-safety";
-import { mcpSlug, mcpUrlError, parseMcpArgs, parseMcpEnv, type McpServerConfig } from "../core/mcp";
+import { isVmemConnector, mcpSlug, mcpUrlError, parseMcpArgs, parseMcpEnv, type McpServerConfig } from "../core/mcp";
 import {
   MCP_MAX_SERVERS,
   MCP_MAX_TOOLS,
@@ -24,10 +23,8 @@ const fileSchema = z.object({
   meetingMode: z.boolean().default(false),
   gatewayApiKey: z.string().optional(),
   claudeOAuthToken: z.string().optional(),
-  // Personalised link suggestions. The toggle is stored only once the user sets it; until then it follows whether vmem is configured.
+  // Personalised link suggestions. The toggle is stored only once the user sets it; until then it follows whether an enabled vmem connector exists.
   personalisedLinks: z.boolean().optional(),
-  vmemApiKey: z.string().optional(),
-  vmemBaseUrl: z.string().optional(),
   fsRoots: z.array(z.string()).default([]),
   // Non-secret MCP settings. A bad entry drops the list, not the whole file.
   mcpServers: z.array(mcpServerSchema).catch([]).default([]),
@@ -37,7 +34,7 @@ const fileSchema = z.object({
 const mcpSecretsSchema = z.record(z.string(), z.object({ auth: z.string().optional(), env: z.record(z.string(), z.string()).optional() }));
 type McpSecrets = z.infer<typeof mcpSecretsSchema>;
 type SettingsFile = z.infer<typeof fileSchema>;
-type SecretName = "gatewayApiKey" | "claudeOAuthToken" | "vmemApiKey";
+type SecretName = "gatewayApiKey" | "claudeOAuthToken";
 
 export type SettingsStore = ReturnType<typeof createSettingsStore>;
 
@@ -48,21 +45,10 @@ function storageMode(): SettingsView["secretStorage"] {
   return "os";
 }
 
-/** A vmem base URL to store: https only (the API key goes with every request), no trailing slash. "" clears it. */
-function normaliseVmemUrl(raw: string): string | undefined {
-  const text = raw.trim();
-  if (text === "") return undefined;
-  const safe = safeExternalUrl(text);
-  if (!safe || !safe.startsWith("https://")) throw new Error("vmem base URL must be an https URL, for example https://<deployment>.convex.site");
-  return safe.replace(/\/+$/, "");
-}
-
 export function createSettingsStore(args: {
   userDataDir: string;
   notesDir: string;
   envGatewayKey: string | undefined;
-  envVmemKey?: string;
-  envVmemBaseUrl?: string;
 }) {
   const path = join(args.userDataDir, "settings.json");
   const memorySecrets = new Map<SecretName, string>();
@@ -261,36 +247,33 @@ export function createSettingsStore(args: {
     return getSecret(read(), "gatewayApiKey") ?? (args.envGatewayKey?.trim() || undefined);
   }
 
-  function vmemKey(file: SettingsFile): string | undefined {
-    return getSecret(file, "vmemApiKey") ?? (args.envVmemKey?.trim() || undefined);
-  }
-
-  function vmemUrl(file: SettingsFile): string {
-    return file.vmemBaseUrl ?? (args.envVmemBaseUrl?.trim() || "");
+  function hasVmemConnector(file: SettingsFile): boolean {
+    return file.mcpServers.some((server) => server.enabled && isVmemConnector(server));
   }
 
   function personalisedLinks(file: SettingsFile): boolean {
-    return file.personalisedLinks ?? Boolean(vmemKey(file) && vmemUrl(file));
+    return file.personalisedLinks ?? hasVmemConnector(file);
   }
 
-  /** What link enrichment needs: the effective toggle and vmem's connection (undefined unless both parts are set). Main only. */
-  function linkSettings(): { enabled: boolean; vmem: { apiKey: string; baseUrl: string } | undefined } {
+  /** What link enrichment needs: the effective toggle, and whether an enabled vmem connector can search history. Main only. */
+  function linkSettings(): { enabled: boolean; hasVmem: boolean } {
     const file = read();
-    const apiKey = vmemKey(file);
-    const baseUrl = vmemUrl(file);
-    return { enabled: personalisedLinks(file), vmem: apiKey && baseUrl ? { apiKey, baseUrl } : undefined };
+    return { enabled: personalisedLinks(file), hasVmem: hasVmemConnector(file) };
+  }
+
+  /** The enabled vmem connector with decrypted secrets, or undefined. Main only. */
+  function vmemConfig(): McpServerConfig | undefined {
+    const file = read();
+    const server = file.mcpServers.find((item) => item.enabled && isVmemConnector(item));
+    return server ? toConfig(server, readMcpSecrets(file)) : undefined;
   }
 
   function view(): SettingsView {
     const file = read();
     const saved = getSecret(file, "gatewayApiKey");
-    const savedVmem = getSecret(file, "vmemApiKey");
     return {
       personalisedLinks: personalisedLinks(file),
-      vmemConfigured: Boolean(vmemKey(file) && vmemUrl(file)),
-      hasVmemKey: Boolean(vmemKey(file)),
-      vmemKeySource: savedVmem ? "saved" : args.envVmemKey?.trim() ? "env" : "none",
-      vmemBaseUrl: vmemUrl(file),
+      vmemConnected: hasVmemConnector(file),
       gatewayKeySource: saved ? "saved" : args.envGatewayKey?.trim() ? "env" : "none",
       hasClaudeToken: Boolean(getSecret(file, "claudeOAuthToken")),
       meetingMode: file.meetingMode,
@@ -306,8 +289,6 @@ export function createSettingsStore(args: {
     // Reserved for a later version: stored securely, never used at runtime in v1.
     if (update.claudeOAuthToken !== undefined) file = setSecret(file, "claudeOAuthToken", update.claudeOAuthToken);
     if (update.meetingMode !== undefined) file = { ...file, meetingMode: update.meetingMode };
-    if (update.vmemApiKey !== undefined) file = setSecret(file, "vmemApiKey", update.vmemApiKey);
-    if (update.vmemBaseUrl !== undefined) file = { ...file, vmemBaseUrl: normaliseVmemUrl(update.vmemBaseUrl) };
     if (update.personalisedLinks !== undefined) file = { ...file, personalisedLinks: update.personalisedLinks };
     if (update.fsRoots !== undefined) {
       const { roots, invalid } = normalizeFsRoots(update.fsRoots);
@@ -323,5 +304,5 @@ export function createSettingsStore(args: {
     return normalizeFsRoots(read().fsRoots).roots;
   }
 
-  return { view, save, gatewayApiKey, linkSettings, fsRoots, mcpList, mcpSave, mcpRemove, mcpSetEnabled, mcpRecordTools, mcpConfigs, mcpConfig };
+  return { view, save, gatewayApiKey, linkSettings, vmemConfig, fsRoots, mcpList, mcpSave, mcpRemove, mcpSetEnabled, mcpRecordTools, mcpConfigs, mcpConfig };
 }
