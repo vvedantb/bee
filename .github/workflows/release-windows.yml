@@ -58,7 +58,7 @@ jobs:
         env:
           # Unsigned by default. Set CSC_LINK, CSC_KEY_PASSWORD and the Apple notarisation secrets to sign.
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
-        run: npx electron-builder --mac dmg zip --universal --publish never
+        run: npx electron-builder --mac dmg zip --arm64 --x64 --publish never
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -86,6 +86,6 @@ jobs:
           ls dist
           gh release create "$TAG" dist/Bee*.exe dist/Bee*.zip dist/Bee*.dmg \
             --title "Bee $TAG" \
-            --notes "Windows installer (NSIS) and portable zip, and macOS dmg and zip (universal: Apple Silicon and Intel). Builds are unsigned. Windows SmartScreen may warn. On macOS, Gatekeeper will warn: right-click Bee and choose Open." \
+            --notes "Windows installer (NSIS) and portable zip, and macOS dmg and zip (separate Apple Silicon arm64 and Intel x64 builds). Builds are unsigned. Windows SmartScreen may warn. On macOS, Gatekeeper will warn: right-click Bee and choose Open." \
             --latest || \
           gh release upload "$TAG" dist/Bee*.exe dist/Bee*.zip dist/Bee*.dmg --clobber

@@ -24,8 +24,6 @@
     "@ai-sdk/openai": "^4.0.78",
     "@clerk/electron": "^0.0.47",
     "ai": "^7.0.116",
-    "convex": "^1.46.0",
-    "electron-store": "^8.2.0",
     "zod": "^4.6.5"
   },
   "devDependencies": {
@@ -35,8 +33,10 @@
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^5.2.0",
     "babel-plugin-react-compiler": "^1.0.0",
+    "convex": "^1.46.0",
     "electron": "^44.4.5",
     "electron-builder": "^26.15.3",
+    "electron-store": "^8.2.0",
     "electron-vite": "^5.0.0",
     "esbuild": "^0.28.2",
     "react": "^19.3.0",
@@ -55,7 +55,23 @@
     "files": [
       "out/**",
       "resources/**",
-      "package.json"
+      "package.json",
+      "!node_modules/esbuild{,/**}",
+      "!node_modules/@esbuild{,/**}",
+      "!node_modules/vite{,/**}",
+      "!node_modules/vitest{,/**}",
+      "!node_modules/electron-vite{,/**}",
+      "!node_modules/electron-builder{,/**}",
+      "!node_modules/typescript{,/**}",
+      "!node_modules/convex{,/**}",
+      "!node_modules/electron-store{,/**}",
+      "!node_modules/react-native*{,/**}",
+      "!node_modules/@react-native*{,/**}",
+      "!node_modules/metro*{,/**}",
+      "!node_modules/@babel{,/**}",
+      "!node_modules/@solana{,/**}",
+      "!node_modules/@solana-mobile{,/**}",
+      "!node_modules/@wallet-standard{,/**}"
     ],
     "protocols": [
       {
@@ -91,13 +107,15 @@
         {
           "target": "dmg",
           "arch": [
-            "universal"
+            "arm64",
+            "x64"
           ]
         },
         {
           "target": "zip",
           "arch": [
-            "universal"
+            "arm64",
+            "x64"
           ]
         }
       ],
@@ -123,7 +141,8 @@
       "mimeTypes": [
         "x-scheme-handler/bee"
       ]
-    }
+    },
+    "npmRebuild": false
   },
   "engines": {
     "node": ">=22"

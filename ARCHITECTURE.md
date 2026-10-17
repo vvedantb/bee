@@ -74,7 +74,7 @@ Streaming (`experimental_streamTranscribe`) was not used. Phrase-level batch cal
 - **Overlay.** On macOS the window is a `panel` and stays visible on all workspaces and over full-screen apps. The Dock icon is hidden (`app.dock.hide()` and `LSUIElement`). The tray is a template-image menu bar extra; it has no click handler, so it does not fight its menu. Windows and Linux keep click-to-toggle.
 - **Shortcut.** `CommandOrControl+Shift+Space` toggles the window through `globalShortcut`. Failure to register is logged. It is released on `will-quit`.
 - **Audio.** The mic (`getUserMedia`) is the only capture path in use. Main asks for microphone access at start-up on macOS, allows only `media` and `display-capture` permissions, and `main/system-audio.ts` probes `desktopCapturer` for a screen source over IPC (`bee:audio:system-source`). Mixing system audio into capture is not built; the probe degrades to null on any failure.
-- **Packaging.** `build.mac` makes a universal dmg and zip with hardened runtime and the plists in `resources/entitlements.mac*.plist`. Unsigned by default.
+- **Packaging.** `build.mac` makes separate arm64 (Apple Silicon) and x64 (Intel) dmg and zip files with hardened runtime and the plists in `resources/entitlements.mac*.plist`. Unsigned by default.
 
 ## Updates
 
@@ -264,4 +264,4 @@ System audio capture and the vmem connector.
 
 ## CI
 
-`.github/workflows/ci.yml` runs on every push and pull request: a `macos` job runs `npm test`, `npm run build` and an unsigned universal `electron-builder --mac dmg zip`, then uploads the artifacts. It runs no E2E (those need a Gateway key). `release-windows.yml` ("Release") builds Windows and macOS in parallel; a final `publish` job downloads both and makes the one GitHub release.
+`.github/workflows/ci.yml` runs on every push and pull request: a `macos` job runs `npm test`, `npm run build` and an unsigned `electron-builder --mac dmg zip --arm64 --x64`, then uploads the artifacts. It runs no E2E (those need a Gateway key). `release-windows.yml` ("Release") builds Windows and macOS in parallel; a final `publish` job downloads both and makes the one GitHub release.

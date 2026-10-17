@@ -15,7 +15,7 @@ npm run dist:win
 
 ## Install (macOS)
 
-Download `Bee-x.y.z-universal.dmg` (Apple Silicon and Intel) or the `-mac.zip` from [Releases](https://github.com/vvedantb/bee/releases). Open the dmg and drag Bee to Applications. Builds are not signed or notarised yet, so Gatekeeper will warn: right-click Bee, choose **Open**, then confirm.
+Download `Bee-x.y.z-arm64.dmg` (Apple Silicon) or `Bee-x.y.z.dmg` (Intel), or the matching `-mac.zip` from [Releases](https://github.com/vvedantb/bee/releases). Open the dmg and drag Bee to Applications. Builds are not signed or notarised yet, so Gatekeeper will warn: right-click Bee, choose **Open**, then confirm.
 
 - **Microphone.** macOS asks the first time Bee starts. If you decline, allow Bee under System Settings → Privacy & Security → Microphone.
 - **Screen Recording.** Only needed if system (meeting) audio capture is used. It is best-effort: Bee always keeps the microphone as the main input, and carries on without system audio if it is unavailable.
@@ -28,7 +28,7 @@ Download `Bee-x.y.z-universal.dmg` (Apple Silicon and Intel) or the `-mac.zip` f
 ```bash
 npm install
 npm run dist:mac
-# outputs under release/ (dmg and zip, universal)
+# outputs under release/ (dmg and zip, one each for arm64 and x64)
 ```
 
 Signing is off by default. To sign and notarise, set `CSC_LINK` and `CSC_KEY_PASSWORD` for electron-builder, and set `build.mac.notarize` to `true` (it is `false` now), with `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD` and `APPLE_TEAM_ID` in the environment.
@@ -41,7 +41,7 @@ Typical use: in a weekly meeting someone says "last time we discussed the Acme r
 
 ## Requirements
 
-- Windows 10 or 11 (x64), or macOS (universal build). Linux runs in development.
+- Windows 10 or 11 (x64), or macOS (Apple Silicon arm64 or Intel x64). Linux runs in development.
 - Node.js 22 or later, with npm.
 - A Vercel AI Gateway API key with access to `xai/grok-stt`, `openai/gpt-6-luna` and `typesafe-ai/jev`.
 - A Bee account. Sign-in uses Clerk (the vedantb.com instance). See [Sign-in (Clerk)](#sign-in-clerk).

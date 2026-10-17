@@ -38,9 +38,15 @@ const INSTALLER_PATTERNS: Partial<Record<NodeJS.Platform, RegExp[]>> = {
   linux: [/\.appimage$/i],
 };
 
-/** The installer for this platform, only if it downloads from this repo's releases. */
-export function pickInstallerAsset(assets: ReleaseAsset[], platform: NodeJS.Platform): ReleaseAsset | null {
-  const trusted = assets.filter((asset) => asset.browser_download_url.startsWith(DOWNLOAD_PREFIX));
+/** The installer for this platform (and CPU arch on macOS), only if it downloads from this repo's releases. */
+export function pickInstallerAsset(
+  assets: ReleaseAsset[],
+  platform: NodeJS.Platform,
+  arch: string = process.arch,
+): ReleaseAsset | null {
+  let trusted = assets.filter((asset) => asset.browser_download_url.startsWith(DOWNLOAD_PREFIX));
+  // electron-builder names arm64 dmgs "-arm64" and leaves x64 unsuffixed (or "-x64").
+  if (platform === "darwin") trusted = trusted.filter((asset) => /arm64/i.test(asset.name) === (arch === "arm64"));
   for (const pattern of INSTALLER_PATTERNS[platform] ?? []) {
     const asset = trusted.find((candidate) => pattern.test(candidate.name));
     if (asset) return asset;
