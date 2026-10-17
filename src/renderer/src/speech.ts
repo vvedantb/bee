@@ -31,8 +31,12 @@ function concat(frames: Float32Array[]): Float32Array {
   return out;
 }
 
-/** Energy-based phrase detector. push() returns the frame's RMS level for the meter. */
-export function createSegmenter(args: { sampleRate: number; onPhrase: (samples: Float32Array) => void }) {
+/**
+ * Energy-based phrase detector. push() returns the frame's RMS level for the meter.
+ * onSpeechEnd fires when a phrase ends with at least MIN_SPEECH_MS of speech, just before onPhrase: the moment to show "Got it…".
+ * A cough or click fires neither.
+ */
+export function createSegmenter(args: { sampleRate: number; onPhrase: (samples: Float32Array) => void; onSpeechEnd?: () => void }) {
   const msPerSample = 1000 / args.sampleRate;
   let frames: Float32Array[] = [];
   let bufferedMs = 0;
@@ -49,7 +53,13 @@ export function createSegmenter(args: { sampleRate: number; onPhrase: (samples: 
   }
 
   function end(): void {
-    if (speechMs >= MIN_SPEECH_MS) args.onPhrase(concat(frames));
+    if (speechMs >= MIN_SPEECH_MS) {
+      const samples = concat(frames);
+      reset();
+      args.onSpeechEnd?.();
+      args.onPhrase(samples);
+      return;
+    }
     reset();
   }
 
@@ -120,29 +130,44 @@ export function encodeWav(samples: Float32Array, sampleRate: number): Uint8Array
 /**
  * One mic session. Phrases are transcribed one at a time, in order, and each non-empty transcript goes to onLine.
  * onError gets a short message when a transcription fails, and null once one succeeds again.
+ * onSpeechEnd fires the moment a phrase ends, before any encoding or STT. onSettled fires once that phrase's STT is done and
+ * onLine or onError has run. Timings go to console.debug as numbers only.
  */
 export function startMicSession(args: {
   sampleRate: number;
   transcribe: (wav: Uint8Array<ArrayBuffer>) => Promise<TranscribeResult>;
   onLine: (text: string) => void;
   onError: (message: string | null) => void;
+  onSpeechEnd?: () => void;
+  onSettled?: () => void;
 }) {
   let queue = Promise.resolve();
+  let speechEndAt = 0;
 
-  async function send(samples: Float32Array): Promise<void> {
+  async function send(samples: Float32Array, endedAt: number): Promise<void> {
+    const sttStart = performance.now();
     try {
       const { text, error } = await args.transcribe(encodeWav(samples, args.sampleRate));
+      const done = performance.now();
+      console.debug(`perf stt-renderer ${Math.round(done - sttStart)}ms, ${Math.round(done - endedAt)}ms since speech end`);
       args.onError(error);
       if (text) args.onLine(text);
     } catch (error) {
       args.onError(error instanceof Error ? error.message : "Speech-to-text failed");
+    } finally {
+      args.onSettled?.();
     }
   }
 
   const segmenter = createSegmenter({
     sampleRate: args.sampleRate,
+    onSpeechEnd: () => {
+      speechEndAt = performance.now();
+      args.onSpeechEnd?.();
+    },
     onPhrase: (samples) => {
-      queue = queue.then(() => send(samples));
+      const endedAt = speechEndAt;
+      queue = queue.then(() => send(samples, endedAt));
     },
   });
 

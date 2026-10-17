@@ -19,6 +19,8 @@ export const IPC = {
   teamsAction: "bee:teams:action",
   teamsPublish: "bee:teams:publish",
   lunaActivity: "bee:luna:activity",
+  lunaPartial: "bee:luna:partial",
+  cancelPipeline: "bee:pipeline:cancel",
   systemAudioSource: "bee:audio:system-source",
   mcpList: "bee:mcp:list",
   mcpSave: "bee:mcp:save",
@@ -70,12 +72,19 @@ export const settingsUpdateSchema = z.object({
 });
 export type SettingsUpdate = z.infer<typeof settingsUpdateSchema>;
 
+// Names one pipeline run, so the renderer can cancel it when a newer line supersedes it.
+const runIdSchema = z.union([z.string().max(100), z.number()]);
+
 export const pipelineRequestSchema = z.object({
   transcript: z.array(z.string().max(2000)).min(1).max(50),
+  runId: runIdSchema.optional(),
   // Clerk session token; main refuses to run the pipeline without a live one (main/auth.ts).
   sessionToken: z.string().max(8000),
 });
 export type PipelineRequest = z.infer<typeof pipelineRequestSchema>;
+
+export const pipelineCancelSchema = z.object({ runId: runIdSchema });
+export type PipelineCancel = z.infer<typeof pipelineCancelSchema>;
 
 // Lines the renderer keeps for the end-of-meeting summary (store.ts); the pipeline still gets only the last 8.
 export const SESSION_TRANSCRIPT_MAX = 200;
@@ -136,13 +145,27 @@ export const pipelineResultSchema = z.object({
   guideError: z.string().nullable(),
   /** Muted note when connected tools were skipped. */
   guideNote: z.string().max(300).nullable().optional(),
-  timingsMs: z.object({ retrieve: z.number(), rank: z.number(), guide: z.number() }),
+  // Numbers only, in ms. rank: Jev (runs beside Luna). mcp: MCP connect and list (runs beside Jev). guide: Luna alone, without the MCP wait.
+  // lunaFirstToken is null when no text streamed. loadNotes is added in main.
+  timingsMs: z.object({
+    retrieve: z.number(),
+    rank: z.number(),
+    guide: z.number(),
+    mcp: z.number(),
+    lunaFirstToken: z.number().nullable(),
+    lunaTotal: z.number(),
+    loadNotes: z.number().optional(),
+  }),
 });
 export type PipelineResult = z.infer<typeof pipelineResultSchema>;
 
 // Main → renderer while Luna runs: the tool it just used or is using (renderer/src/island.ts: activityLabel).
 export const lunaActivitySchema = z.object({ tool: z.string().max(80) });
 export type LunaActivity = z.infer<typeof lunaActivitySchema>;
+
+// Main → renderer while Luna streams: the tips so far (finished lines, plus a line with a few words). Never the transcript.
+export const lunaPartialSchema = z.object({ runId: runIdSchema.optional(), tips: z.array(z.string().max(500)).max(5) });
+export type LunaPartial = z.infer<typeof lunaPartialSchema>;
 
 export const updateCheckSchema = z.object({
   currentVersion: z.string(),

@@ -11,6 +11,7 @@ import { BrowserWindow, app, session } from "electron";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createMcpPool } from "../../src/core/mcp";
 import { CLERK_ISSUER } from "../../src/main/auth";
 import { registerMeetingIpc } from "../../src/main/meeting-ipc";
 import { ensureNotesDir } from "../../src/main/notes";
@@ -79,7 +80,7 @@ void app.whenReady().then(async () => {
   }
   const notesDir = notesDirEnv || join(mkdtempSync(join(tmpdir(), "bee-e2e-")), "notes");
   ensureNotesDir(notesDir);
-  registerMeetingIpc({ notesDir, fsRoots: () => [], mcpConfigs: () => [], gatewayApiKey: () => process.env.BEE_AI_GATEWAY_API_KEY?.trim() || undefined });
+  registerMeetingIpc({ notesDir, fsRoots: () => [], mcpConfigs: () => [], mcpPool: createMcpPool(), gatewayApiKey: () => process.env.BEE_AI_GATEWAY_API_KEY?.trim() || undefined });
   // Short timings so the popup and the debounced leave happen within the test.
   registerTeamsIpc({ relayUrl: relayUrlFromEnv(process.env.BEE_RELAY_URL), detector: createStubDetector(), timing: { enterMs: 300, leaveMs: 1000 } });
   session.defaultSession.setPermissionRequestHandler((_contents, permission, callback) => callback(permission === "media"));

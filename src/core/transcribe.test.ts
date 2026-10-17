@@ -23,12 +23,14 @@ function result(text: string): Awaited<ReturnType<Generate>> {
 const audio = new Uint8Array(100);
 
 describe("transcribeSpeech", () => {
-  it("returns tidy text and sends flex tier with no sampling options", async () => {
+  it("returns tidy text and does not send flex tier (user-facing), with no sampling options", async () => {
     const doGenerate = vi.fn<Generate>(async () => result("  When does SSO\n ship? "));
     const outcome = await transcribeSpeech({ model: model(doGenerate), audio });
     expect(outcome).toEqual({ text: "When does SSO ship?", error: null });
     const call = doGenerate.mock.calls[0]?.[0];
-    expect(call?.providerOptions).toEqual({ gateway: { serviceTier: "flex" } });
+    // Gateway default tier: no serviceTier at all. Flex may queue, and ultrafast may be rejected.
+    expect(call?.providerOptions).toEqual({});
+    expect(JSON.stringify(call?.providerOptions)).not.toMatch(/flex|ultrafast/);
     expect(call?.audio).toEqual(audio);
   });
 

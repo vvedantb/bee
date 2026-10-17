@@ -57,6 +57,10 @@ export type BeeState = {
   session: MeetingSession;
   summary: SummaryState;
   busy: boolean;
+  // True from the end of a spoken phrase until its speech-to-text is done: the pill reads "Got it…". State only, never words.
+  heard: boolean;
+  // Tips streamed by the run in flight (finished lines). They show before the full result lands, which replaces them.
+  partialTips: string[] | null;
   // The tool Luna last used in this run (a raw tool name; island.ts activityLabel turns it into text). Null otherwise.
   activity: string | null;
   // Island: the user closed the body for the result on screen. A new result clears it.
@@ -111,6 +115,8 @@ let state: BeeState = {
   session: EMPTY_SESSION,
   summary: { saving: false, result: null, error: null },
   busy: false,
+  heard: false,
+  partialTips: null,
   activity: null,
   dismissed: false,
   islandClosing: false,
@@ -136,11 +142,18 @@ function subscribe(listener: () => void): () => void {
   return () => listeners.delete(listener);
 }
 
+/** The current state outside React (tests, event handlers). */
+export function getBeeState(): BeeState {
+  return state;
+}
+
 export function useBee(): BeeState {
   return useSyncExternalStore(subscribe, () => state);
 }
 
 let latestRun = 0;
+// Phrases heard whose speech-to-text is still running.
+let heardPending = 0;
 let sampleIndex = 0;
 let localSeq = 0;
 let turnSeq = 0;
@@ -152,6 +165,20 @@ let islandHovered = false;
 let islandActivityAt = 0;
 let islandTimer: ReturnType<typeof setTimeout> | undefined;
 const EMPTY_RESULT = { tips: [], sources: [], guideError: null };
+
+/**
+ * What the island and panel show: the last result, with the streamed tips over it while a run is in flight.
+ * Old tips stay visible while busy. An old error and note do not, and streamed tips drop the old sources.
+ */
+export function displayResult(current: Pick<BeeState, "result" | "partialTips" | "busy">): PipelineResult | null {
+  const { result, partialTips, busy } = current;
+  if (partialTips) {
+    return { ...(result ?? { notes: [], rankSource: "fallback", rankError: null, timingsMs: ZERO_TIMINGS }), tips: partialTips, sources: [], guideError: null, guideNote: null };
+  }
+  return result && busy ? { ...result, guideError: null, guideNote: null } : result;
+}
+
+const ZERO_TIMINGS = { retrieve: 0, rank: 0, guide: 0, mcp: 0, lunaFirstToken: null, lunaTotal: 0 };
 
 /** Restart the inactivity clock. The body closes ISLAND_IDLE_MS after the last result or pointer leave. */
 function touchIsland(): void {
@@ -194,7 +221,7 @@ export function islandOpen(current: BeeState): boolean {
 /** What island.ts needs from the state: the result (or an empty one), the chips still shown, and the flags. */
 export function islandArgs(current: BeeState) {
   return {
-    ...(current.result ?? EMPTY_RESULT),
+    ...(displayResult(current) ?? EMPTY_RESULT),
     chipCount: visibleChips(current.chips, current.dismissedChipIds).length,
     dismissed: current.dismissed,
     busy: current.busy,
@@ -262,15 +289,25 @@ function startTurn(lines: SessionLine[]): void {
 async function runPipeline(): Promise<void> {
   const transcript = state.session.lines.slice(-PIPELINE_WINDOW).map(pipelineText);
   if (transcript.length === 0) return;
+  const previous = latestRun;
   const run = ++latestRun;
-  set({ busy: true, activity: null, error: null });
+  // A newer line supersedes the run in flight: stop its Jev and Luna in main. Fire and forget.
+  if (previous > 0) void window.bee.cancelPipeline({ runId: previous }).catch(() => undefined);
+  set({ busy: true, heard: false, activity: null, error: null });
   void applyWindowSize();
   // Tool events carry no run id; the latest run owns them, and finishing clears the label.
   const stopActivity = window.bee.onLunaActivity((tool) => {
     if (run === latestRun) set({ activity: tool });
   });
+  // Streamed tips show at once, over the previous ones, without waiting for the whole run.
+  const stopPartial = window.bee.onLunaPartial(({ runId, tips }) => {
+    if (run !== latestRun || (runId !== undefined && runId !== run)) return;
+    set({ partialTips: tips, dismissed: false, islandClosing: false });
+    touchIsland();
+    void applyWindowSize();
+  });
   try {
-    const result = await window.bee.runPipeline({ transcript, sessionToken: await sessionToken() });
+    const result = await window.bee.runPipeline({ transcript, runId: run, sessionToken: await sessionToken() });
     if (run !== latestRun) return;
     // The tips' links join this turn's chips (deduped, capped).
     const chips = mergeChips(state.chips, result.tips.flatMap((tip) => detectLinks(tip)));
@@ -278,6 +315,7 @@ async function runPipeline(): Promise<void> {
     void enrichChips(added, [turnText, ...result.tips].join("\n"), turnSeq);
     set({
       result,
+      partialTips: null,
       chips,
       busy: false,
       activity: null,
@@ -287,9 +325,10 @@ async function runPipeline(): Promise<void> {
     addToSession(result);
     touchIsland();
   } catch (error) {
-    if (run === latestRun) set({ busy: false, activity: null, error: error instanceof Error ? error.message : "Pipeline failed" });
+    if (run === latestRun) set({ busy: false, partialTips: null, activity: null, error: error instanceof Error ? error.message : "Pipeline failed" });
   } finally {
     stopActivity();
+    stopPartial();
     void applyWindowSize();
   }
 }
@@ -580,9 +619,19 @@ export const actions = {
       const mic = startMicSession({
         sampleRate: capture.sampleRate,
         transcribe: transcribePhrase,
+        // The phrase is over: show "Got it…" now, before speech-to-text. A cough never gets here.
+        onSpeechEnd: () => {
+          heardPending += 1;
+          set({ heard: true });
+        },
         // Same path as a typed line; latestRun drops results from superseded runs.
         onLine: (line) => void actions.simulateLine(line, "mic"),
         onError: (error) => setMic({ error }),
+        // After onLine, so busy is already set when the ack ends and the pill never falls back to "Listening…".
+        onSettled: () => {
+          heardPending = Math.max(0, heardPending - 1);
+          if (heardPending === 0 && state.heard) set({ heard: false });
+        },
       });
       capture.start((frame) => setMic({ level: Math.min(1, mic.push(frame) * 4) }));
       let micOn = true;

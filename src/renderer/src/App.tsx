@@ -21,8 +21,9 @@ import { INTERFACE_SCALES } from "../../core/interface-scale";
 import { DEFAULT_MOTION_PREFERENCE, MOTION_PREFERENCES, resolveReducedMotion, type MotionPreference } from "../../core/motion-preference";
 import { visibleChips, type LinkChip } from "../../core/link-suggest";
 import type { PipelineResult, SettingsView } from "../../shared/ipc";
-import { activityLabel } from "./island";
-import { actions, islandOpen, useBee, type BeeState, type SummaryState, type UpdateState } from "./store";
+import { timingsLabel, timingsTitle } from "./island";
+import { notchStatus } from "./notch";
+import { actions, displayResult, islandOpen, useBee, type BeeState, type SummaryState, type UpdateState } from "./store";
 import { SyncCard, SyncSection, TeamSection, syncedWith } from "./Teams";
 
 const ICON = { size: 16, stroke: 1.75 };
@@ -30,18 +31,6 @@ const ICON = { size: 16, stroke: 1.75 };
 function formString(form: HTMLFormElement, name: string): string {
   const value = new FormData(form).get(name);
   return typeof value === "string" ? value : "";
-}
-
-function notchStatus(state: BeeState, signedIn: boolean | undefined): string {
-  if (signedIn === undefined) return "Loading…";
-  if (!signedIn) return "Sign in to use Bee";
-  if (state.busy) return activityLabel(state.activity);
-  if (state.mic.error) return state.mic.error;
-  const tip = state.result?.tips[0];
-  if (tip) return tip;
-  if (state.settings?.gatewayKeySource === "none") return "Add your AI Gateway key in Settings";
-  if (state.mic.on || state.session.lines.length > 0) return "Listening for something useful…";
-  return state.settings?.meetingMode ? "Meeting mode on" : "Bee is ready";
 }
 
 // Suggestions only: a click asks main to open the link in the default browser. Nothing opens by itself.
@@ -75,8 +64,9 @@ function IslandBody({ result, chips, closing }: { result: PipelineResult | null;
         </Button>
         {tips.length > 0 ? (
           <ul className="island-tips">
-            {tips.map((tip) => (
-              <li key={tip}>{tip}</li>
+            {/* Keyed by position: a streaming line grows in place instead of replaying the entrance. */}
+            {tips.map((tip, index) => (
+              <li key={index}>{tip}</li>
             ))}
           </ul>
         ) : null}
@@ -106,13 +96,13 @@ function IslandBody({ result, chips, closing }: { result: PipelineResult | null;
 function Island({ state }: { state: BeeState }) {
   const { isSignedIn } = useAuth();
   const open = state.expanded && !state.collapsing;
-  const result = state.result;
+  const result = displayResult(state);
   const chips = visibleChips(state.chips, state.dismissedChipIds);
   const showBody = islandOpen(state);
   // Collapsed, the status text opens the panel like the chevron, whatever it says.
   const canExpand = !state.expanded;
   // While Luna thinks, chips may open the body but the pill keeps its thinking text.
-  const status = showBody && !state.busy && !state.mic.error ? "Tips" : notchStatus(state, isSignedIn);
+  const status = showBody && !state.busy && !state.heard && !state.mic.error ? "Tips" : notchStatus(state, isSignedIn);
   const newVersion = state.update.check?.available ? state.update.check.latestVersion : null;
   const statusClass = state.mic.error ? "notch-status error-text" : "notch-status";
   return (
@@ -185,8 +175,8 @@ function Island({ state }: { state: BeeState }) {
           <IconChevronDown {...ICON} />
         </Button>
       </header>
-      {/* While busy, pass no result: the body shows only the new chips, never the previous turn's tips, sources or error. */}
-      {showBody ? <IslandBody result={state.busy ? null : result} chips={chips} closing={state.islandClosing} /> : null}
+      {/* While busy the previous tips stay (and streamed tips replace them); displayResult drops the old error. */}
+      {showBody ? <IslandBody result={result} chips={chips} closing={state.islandClosing} /> : null}
     </div>
   );
 }
@@ -224,7 +214,9 @@ function MeetingSection({ summary, lineCount }: { summary: SummaryState; lineCou
 }
 
 function LiveTab({ state }: { state: BeeState }) {
-  const result = state.result;
+  const result = displayResult(state);
+  // The notes list and its timings belong to the last finished run, not to streamed tips.
+  const done = state.result;
   const chips = visibleChips(state.chips, state.dismissedChipIds);
 
   function onSubmit(event: FormEvent<HTMLFormElement>): void {
@@ -241,12 +233,12 @@ function LiveTab({ state }: { state: BeeState }) {
         <h2>Tips</h2>
         {result && result.tips.length > 0 ? (
           <ul className="tips">
-            {result.tips.map((tip) => (
-              <li key={tip}>{tip}</li>
+            {result.tips.map((tip, index) => (
+              <li key={index}>{tip}</li>
             ))}
           </ul>
         ) : (
-          <p className="muted">{state.busy ? "Thinking…" : state.mic.on ? "Listening…" : "No tips yet. Turn on the mic to start."}</p>
+          <p className="muted">{state.busy ? "Thinking…" : state.heard ? "Got it…" : state.mic.on ? "Listening…" : "No tips yet. Turn on the mic to start."}</p>
         )}
         <LinkChips chips={chips} />
         {result && result.sources.length > 0 ? (
@@ -275,17 +267,16 @@ function LiveTab({ state }: { state: BeeState }) {
       <section>
         <h2>
           Notes
-          {result ? (
-            <span className="badge">
-              {result.rankSource === "jev" ? "ranked by Jev" : "retrieval order"} ·{" "}
-              {Math.round(result.timingsMs.rank + result.timingsMs.guide)} ms
+          {done ? (
+            <span className="badge" title={timingsTitle(done.timingsMs)}>
+              {done.rankSource === "jev" ? "ranked by Jev" : "retrieval order"} · {timingsLabel(done.timingsMs)}
             </span>
           ) : null}
         </h2>
-        {result?.rankError ? <p className="error">{result.rankError}</p> : null}
-        {result && result.notes.length > 0 ? (
+        {done?.rankError ? <p className="error">{done.rankError}</p> : null}
+        {done && done.notes.length > 0 ? (
           <ul className="notes">
-            {result.notes.map((note) => (
+            {done.notes.map((note) => (
               <li key={note.id}>
                 <div className="note-head">
                   <strong>
@@ -302,7 +293,7 @@ function LiveTab({ state }: { state: BeeState }) {
             ))}
           </ul>
         ) : (
-          <p className="muted">{result ? "No matching notes." : "Matching notes appear here."}</p>
+          <p className="muted">{done ? "No matching notes." : "Matching notes appear here."}</p>
         )}
       </section>
 

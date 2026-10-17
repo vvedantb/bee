@@ -39,12 +39,12 @@ export function shouldShowResponse(args: ResponseArgs): boolean {
 }
 
 /**
- * Whether the island body is on screen. Link chips belong to the new turn, so they show while Luna thinks (the pill keeps
- * its text). Without chips the body stays closed while busy: the old answer must not pass for the new one.
+ * Whether the island body is on screen. While Luna thinks, the tips already shown stay (the pill says "Thinking…", and streamed
+ * tips replace them line by line), and so do link chips. A stale error or sources alone do not open the body while busy.
  */
 export function islandShowsBody(args: ResponseArgs & { busy: boolean }): boolean {
   if (!args.busy) return shouldShowResponse(args);
-  return !args.dismissed && (args.chipCount ?? 0) > 0;
+  return !args.dismissed && (args.tips.length > 0 || (args.chipCount ?? 0) > 0);
 }
 
 /** Thinking wins over the pill's phase: a new run replaces the old answer. */
@@ -60,4 +60,17 @@ export function islandPhase(args: ResponseArgs & { busy: boolean }): IslandPhase
 export function shouldAutoCollapse(args: { phase: IslandPhase; hovered: boolean; lastActivityAt: number; now: number }): boolean {
   if (args.phase !== "expanded" || args.hovered) return false;
   return args.now - args.lastActivityAt >= ISLAND_IDLE_MS;
+}
+
+export type PipelineTimings = { retrieve: number; rank: number; guide: number; mcp: number };
+
+/** Wall time of a run in ms: retrieval, then Jev beside MCP and Luna. Jev and Luna overlap, so the sum would overstate it. */
+export function timingsLabel(timings: PipelineTimings): string {
+  return `${Math.round(timings.retrieve + Math.max(timings.rank, timings.mcp + timings.guide))} ms`;
+}
+
+/** Each stage in ms, so MCP is never hidden inside Luna's time. */
+export function timingsTitle(timings: PipelineTimings): string {
+  const ms = (value: number) => `${Math.round(value)} ms`;
+  return `retrieve ${ms(timings.retrieve)} · Jev ${ms(timings.rank)} · MCP ${ms(timings.mcp)} · Luna ${ms(timings.guide)} (Jev runs beside MCP and Luna)`;
 }

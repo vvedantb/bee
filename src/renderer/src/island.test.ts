@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ISLAND_IDLE_MS, activityLabel, islandPhase, islandShowsBody, shouldAutoCollapse, shouldShowResponse } from "./island";
+import { ISLAND_IDLE_MS, activityLabel, islandPhase, islandShowsBody, shouldAutoCollapse, shouldShowResponse, timingsLabel, timingsTitle } from "./island";
 
 const empty = { tips: [], sources: [], guideError: null, dismissed: false };
 const source = { title: "Example", url: "https://example.com/" };
@@ -99,9 +99,23 @@ describe("islandShowsBody", () => {
     expect(islandPhase(args)).toBe("thinking");
   });
 
-  it("stays closed while busy without chips, even over an old answer", () => {
+  it("stays closed while busy with nothing to show", () => {
     expect(islandShowsBody({ ...empty, busy: true })).toBe(false);
-    expect(islandShowsBody({ ...empty, tips: ["Old tip"], sources: [source], busy: true })).toBe(false);
+    // Sources or an error alone are stale detail, not an answer to keep on screen.
+    expect(islandShowsBody({ ...empty, sources: [source], busy: true })).toBe(false);
+    expect(islandShowsBody({ ...empty, guideError: "Luna guidance failed: x", busy: true })).toBe(false);
+  });
+
+  it("keeps the body open while busy when tips exist, with the pill still thinking", () => {
+    const args = { ...empty, tips: ["Old tip"], busy: true };
+    expect(islandShowsBody(args)).toBe(true);
+    expect(islandPhase(args)).toBe("thinking");
+    expect(islandShowsBody({ ...args, chipCount: 1 })).toBe(true);
+  });
+
+  it("closes a busy body the user dismissed, even with tips", () => {
+    expect(islandShowsBody({ ...empty, tips: ["Old tip"], dismissed: true, busy: true })).toBe(false);
+    expect(islandShowsBody({ ...empty, tips: ["Old tip"], chipCount: 1, dismissed: true, busy: true })).toBe(false);
   });
 
   it("stays closed while busy when the chips were dismissed", () => {
@@ -152,5 +166,21 @@ describe("shouldAutoCollapse", () => {
     // The idle clock restarts with that result.
     const arrivedAt = 50_000;
     expect(shouldAutoCollapse({ phase: "expanded", hovered: false, lastActivityAt: arrivedAt, now: arrivedAt + 1_000 })).toBe(false);
+  });
+});
+
+describe("timingsLabel", () => {
+  const timings = { retrieve: 10, rank: 900, guide: 2000, mcp: 400 };
+
+  it("is wall time: retrieval, then the slower of Jev and MCP plus Luna", () => {
+    expect(timingsLabel(timings)).toBe("2410 ms");
+    expect(timingsLabel({ ...timings, rank: 5000 })).toBe("5010 ms");
+  });
+
+  it("shows MCP on its own, not inside Luna's time", () => {
+    const title = timingsTitle(timings);
+    expect(title).toContain("MCP 400 ms");
+    expect(title).toContain("Luna 2000 ms");
+    expect(title).toContain("Jev 900 ms");
   });
 });
