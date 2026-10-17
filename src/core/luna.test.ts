@@ -161,6 +161,33 @@ describe("guideWithLuna with MCP tools", () => {
     }
   });
 
+  it("drops only the tools whose schema uses the keyword a real provider error names", async () => {
+    const calls: string[][] = [];
+    const model = new MockLanguageModelV4({
+      doGenerate: async (options) => {
+        const names = (options.tools ?? []).map((item) => item.name);
+        calls.push(names);
+        // The AI Gateway's wording for Eva's evaluate schema: it names the keyword, not the tool.
+        if (names.includes("eva__evaluate")) throw new Error("'JSON Schema propertyNames that does not use a string schema' functionality not supported.");
+        return { content: [{ type: "text", text: "- 42 users" }], finishReason: { unified: "stop", raw: undefined }, usage, warnings: [] };
+      },
+    });
+    const extraTools = {
+      eva__evaluate: tool({ inputSchema: jsonSchema({ type: "object", properties: { ctx: { type: "object", propertyNames: { pattern: "^a" } } } }), execute: async () => "x" }),
+      eva__count_table: tool({ inputSchema: jsonSchema({ type: "object", properties: { table: { type: "string" } } }), execute: async () => "42" }),
+    };
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const result = await guideWithLuna({ model, transcript: ["How many users do we have?"], notes: [], extraTools });
+      expect(result.tips).toEqual(["42 users"]);
+      expect(result.skipped).toBe("Skipped connected tool: eva__evaluate.");
+      expect(calls[1]).toContain("eva__count_table");
+      expect(calls[1]).not.toContain("eva__evaluate");
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it("drops every MCP tool when the error names none, and keeps other errors", async () => {
     const seen: number[] = [];
     const model = new MockLanguageModelV4({

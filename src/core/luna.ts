@@ -86,11 +86,17 @@ export function parseLunaTips(text: string): string[] {
 
 export type LunaResult = { tips: string[]; sources: BeeSource[]; error: string | null; /** Short muted note when connected tools were skipped. */ skipped: string | null };
 
-/** Tools the error names, else every extra tool. */
+/** Tools the error names; else tools whose schema has a key the error names (providers name the keyword, not the tool); else every extra tool. */
 function toolsToDrop(message: string, extra: ToolSet): string[] {
   const names = Object.keys(extra);
   const named = names.filter((name) => message.includes(name));
-  return named.length > 0 ? named : names;
+  if (named.length > 0) return named;
+  const words = [...new Set(message.match(/\$?[A-Za-z_][A-Za-z0-9_]{3,}/g) ?? [])];
+  const usesKeyword = names.filter((name) => {
+    const schema = JSON.stringify((extra[name] as { inputSchema?: { jsonSchema?: unknown } }).inputSchema?.jsonSchema ?? {});
+    return words.some((word) => schema.includes(`"${word}":`));
+  });
+  return usesKeyword.length > 0 ? usesKeyword : names;
 }
 
 export async function guideWithLuna(args: {
