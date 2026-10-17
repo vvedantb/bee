@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { UnauthorizedError, type OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
+import { discoverAuthorizationServerMetadata, discoverOAuthServerInfo, UnauthorizedError, type OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { z } from "zod";
@@ -157,4 +157,44 @@ export async function authorizeMcpServer(args: {
     await client.close().catch(() => undefined);
   }
   await transport.finishAuth(await args.code);
+}
+
+// Disconnect waits for this at most: a slow authorization server must not hold it up.
+const REVOKE_TIMEOUT_MS = 3000;
+
+/**
+ * Best-effort token revocation (RFC 7009) before the local tokens are cleared. Only when the authorization server advertises a
+ * `revocation_endpoint`. Never opens a browser and never throws: a missing endpoint, a network error or a 4xx/5xx is ignored.
+ * Returns true when at least one token was revoked.
+ */
+export async function revokeMcpOAuth(args: { url: string; state: McpOAuthState | undefined; fetch?: FetchLike }): Promise<boolean> {
+  const { tokens, clientInformation } = args.state ?? {};
+  if (!tokens?.access_token) return false;
+  const signal = AbortSignal.timeout(REVOKE_TIMEOUT_MS);
+  const fetchFn: FetchLike = (input, init) => (args.fetch ?? fetch)(input, { ...init, signal });
+  try {
+    // The stored issuer is the server the tokens came from; without one, discover it from the MCP server.
+    const issuer = tokens.issuer ?? clientInformation?.issuer;
+    const metadata = issuer
+      ? await discoverAuthorizationServerMetadata(issuer, { fetchFn })
+      : (await discoverOAuthServerInfo(args.url, { fetchFn })).authorizationServerMetadata;
+    // The OpenID metadata type has no field for it, though a server may send one.
+    const endpoint = (metadata as { revocation_endpoint?: string } | undefined)?.revocation_endpoint;
+    if (!endpoint) return false;
+    const revoke = async (token: string, hint: string): Promise<boolean> => {
+      const body = new URLSearchParams({ token, token_type_hint: hint });
+      if (clientInformation?.client_id) body.set("client_id", clientInformation.client_id);
+      if (clientInformation?.client_secret) body.set("client_secret", clientInformation.client_secret);
+      const response = await fetchFn(endpoint, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body });
+      return response.ok;
+    };
+    // The refresh token first: revoking it may also end the access token, and it is the longer-lived one.
+    const outcomes = await Promise.all([
+      ...(tokens.refresh_token ? [revoke(tokens.refresh_token, "refresh_token")] : []),
+      revoke(tokens.access_token, "access_token"),
+    ].map((work) => work.catch(() => false)));
+    return outcomes.some(Boolean);
+  } catch {
+    return false;
+  }
 }

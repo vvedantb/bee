@@ -5,12 +5,15 @@ import { MAX_HISTORY_CANDIDATES, sameSite, type HistoryHit } from "./link-rank";
 // Browsing history and bookmarks from the user's vmem MCP connector, for one site. The search goes through Bee's own MCP client.
 // Tool output is free-form text, so parsing is tolerant: a missing field skips that item, never throws.
 
-const SEARCH_LIMIT = 20;
+// 8 results is about 7 KB of JSON; 20 was 17.6 KB and passed the old 8,000 character cap, which cut the JSON.
+const SEARCH_LIMIT = 8;
+// Room for a full result list. Cut-off JSON cannot be parsed, so this internal call does not use Luna's 8,000 character cap.
+const MAX_RESULT_CHARS = 100_000;
 const MAX_QUERY = 300;
-// Searches run on a connection that is already open, inside the 2 s enrich budget (ENRICH_TIMEOUT_MS), so a call gets about 1 s.
+// Searches run on a connection that is already open, inside the 2.5 s enrich budget (ENRICH_TIMEOUT_MS), so a call gets about 1.5 s (live calls took 450–790 ms).
 // Connecting happens in the background (app start, sign-in), outside that budget: a slow connect only costs the chip that waited for it.
 export const VMEM_CONNECT_TIMEOUT_MS = 5000;
-export const VMEM_CALL_TIMEOUT_MS = 1000;
+export const VMEM_CALL_TIMEOUT_MS = 1500;
 const HISTORY_SOURCE = /history|bookmark/i;
 // vmem stores history as source "browsing-history" and matches the filter exactly ("browsing history" returns nothing).
 const HISTORY_SOURCE_VALUE = "browsing-history";
@@ -115,7 +118,8 @@ export function createVmemHistory(
       return [];
     }
     const hits = parseHistoryHits(result, domain);
-    if (hits.length === 0 && typeof result === "string" && result.trim() !== "" && parseJsonLoose(result) === undefined) {
+    const unparsed = typeof result === "string" ? result.trim() !== "" && parseJsonLoose(result) === undefined : isRecord(result) && result.unparsed === true;
+    if (hits.length === 0 && unparsed) {
       onFallback?.("vmem search output could not be parsed");
     }
     return hits;
@@ -150,14 +154,17 @@ export function searchArguments(tool: McpTool, query: string, source?: string): 
   return args;
 }
 
-/** One result list from several tool outputs. Text that is not JSON becomes a single item, so its URLs are still read. */
-export function mergeSearchOutputs(outputs: readonly string[]): { results: unknown[] } {
+/** One result list from several tool outputs. Text that is not JSON becomes a single item, so its URLs are still read, and sets `unparsed`. */
+export function mergeSearchOutputs(outputs: readonly string[]): { results: unknown[]; unparsed?: true } {
+  let unparsed = false;
   const results = outputs.flatMap((output) => {
     const parsed = parseJsonLoose(output);
     if (parsed !== undefined) return itemsOf(parsed);
-    return output.trim() ? [{ content: output }] : [];
+    if (!output.trim()) return [];
+    unparsed = true;
+    return [{ content: output }];
   });
-  return { results };
+  return unparsed ? { results, unparsed } : { results };
 }
 
 export type VmemSearch = {
@@ -216,7 +223,7 @@ export function createVmemSearch(getConfig: () => McpServerConfig | undefined, c
       const tool = pickSearchTool(connection.tools);
       if (!tool) throw new Error("no memory search tool");
       const settled = await Promise.allSettled(
-        searchSources(tool).map((source) => connection.call(tool.name, searchArguments(tool, query, source), VMEM_CALL_TIMEOUT_MS)),
+        searchSources(tool).map((source) => connection.call(tool.name, searchArguments(tool, query, source), VMEM_CALL_TIMEOUT_MS, MAX_RESULT_CHARS)),
       );
       const outputs = settled.flatMap((outcome) => (outcome.status === "fulfilled" ? [outcome.value] : []));
       if (outputs.length > 0) return mergeSearchOutputs(outputs);

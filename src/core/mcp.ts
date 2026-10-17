@@ -110,21 +110,23 @@ function makeTransport(config: McpServerConfig): Transport {
 
 export type McpConnection = {
   tools: Array<McpToolInfo & { inputSchema: Record<string, unknown> }>;
-  call: (name: string, args: unknown, timeoutMs?: number) => Promise<string>;
+  /** `maxChars` caps the text; Luna's tools keep the default, internal callers that parse the output raise it. */
+  call: (name: string, args: unknown, timeoutMs?: number, maxChars?: number) => Promise<string>;
   close: () => Promise<void>;
 };
 
-function resultText(result: { content?: unknown; structuredContent?: unknown; isError?: boolean }): string {
+/** Structured content wins: it is whole JSON, where text may be a shortened copy. Only a result over `maxChars` is cut. */
+export function resultText(result: { content?: unknown; structuredContent?: unknown; isError?: boolean }, maxChars = MAX_RESULT_CHARS): string {
   const parts: string[] = [];
-  if (Array.isArray(result.content)) {
+  if (result.structuredContent !== undefined) parts.push(JSON.stringify(result.structuredContent));
+  else if (Array.isArray(result.content)) {
     for (const part of result.content as Array<{ type?: string; text?: string; resource?: { text?: string } }>) {
       if (part.type === "text" && typeof part.text === "string") parts.push(part.text);
       else if (part.type === "resource" && typeof part.resource?.text === "string") parts.push(part.resource.text);
       else parts.push(`[${part.type ?? "unknown"} content omitted]`);
     }
   }
-  if (parts.length === 0 && result.structuredContent !== undefined) parts.push(JSON.stringify(result.structuredContent));
-  const text = parts.join("\n").slice(0, MAX_RESULT_CHARS) || "(no output)";
+  const text = parts.join("\n").slice(0, maxChars) || "(no output)";
   return result.isError ? `Error: ${text}` : text;
 }
 
@@ -151,13 +153,13 @@ export async function connectMcp(config: McpServerConfig, timeoutMs = MCP_CONNEC
     } while (cursor && tools.length < MCP_MAX_TOOLS);
     return {
       tools: tools.slice(0, MCP_MAX_TOOLS),
-      call: async (name, args, callTimeoutMs = MCP_CALL_TIMEOUT_MS) => {
+      call: async (name, args, callTimeoutMs = MCP_CALL_TIMEOUT_MS, maxChars) => {
         const result = await withTimeout(
           client.callTool({ name, arguments: (args ?? {}) as Record<string, unknown> }, undefined, { timeout: callTimeoutMs }),
           callTimeoutMs,
           `Tool ${name}`,
         );
-        return resultText(result as Parameters<typeof resultText>[0]);
+        return resultText(result as Parameters<typeof resultText>[0], maxChars);
       },
       close,
     };

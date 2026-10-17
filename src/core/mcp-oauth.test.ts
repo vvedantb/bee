@@ -1,6 +1,6 @@
 import { auth } from "@modelcontextprotocol/sdk/client/auth.js";
 import { describe, expect, it } from "vitest";
-import { authorizeMcpServer, createMcpOAuthProvider, hasMcpOAuthTokens, type McpOAuthState, type McpOAuthStorage } from "./mcp-oauth";
+import { authorizeMcpServer, createMcpOAuthProvider, hasMcpOAuthTokens, revokeMcpOAuth, type McpOAuthState, type McpOAuthStorage } from "./mcp-oauth";
 
 const MCP_URL = "https://mcp.example.test/mcp";
 const AS = "https://auth.example.test";
@@ -166,5 +166,39 @@ describe("credentials", () => {
     expect(storage.state()?.tokens).toBeUndefined();
     void provider.invalidateCredentials?.("all");
     expect(storage.state()).toBeUndefined();
+  });
+});
+
+describe("revokeMcpOAuth", () => {
+  const state: McpOAuthState = {
+    tokens: { access_token: "AT", refresh_token: "RT", token_type: "Bearer", issuer: AS },
+    clientInformation: { client_id: "client-1", issuer: AS },
+  };
+  const metadataRoute = (extra: Record<string, unknown>) => ({ [`GET ${AS}/.well-known/oauth-authorization-server`]: () => json({ ...asMetadata, ...extra }) });
+
+  it("posts the refresh and access tokens to the advertised revocation_endpoint", async () => {
+    const { fetchFn, calls } = fakeFetch({ ...metadataRoute({ revocation_endpoint: `${AS}/revoke` }), [`POST ${AS}/revoke`]: () => new Response(null, { status: 200 }) });
+    await expect(revokeMcpOAuth({ url: MCP_URL, state, fetch: fetchFn })).resolves.toBe(true);
+    const posts = calls.filter((call) => call.method === "POST").map((call) => new URLSearchParams(call.body));
+    expect(posts.map((body) => [body.get("token"), body.get("token_type_hint"), body.get("client_id")])).toEqual([
+      ["RT", "refresh_token", "client-1"],
+      ["AT", "access_token", "client-1"],
+    ]);
+  });
+
+  it("skips when the server advertises no revocation_endpoint, or nobody is signed in", async () => {
+    const { fetchFn, calls } = fakeFetch(metadataRoute({}));
+    await expect(revokeMcpOAuth({ url: MCP_URL, state, fetch: fetchFn })).resolves.toBe(false);
+    expect(calls.some((call) => call.method === "POST")).toBe(false);
+    const none = fakeFetch({});
+    await expect(revokeMcpOAuth({ url: MCP_URL, state: undefined, fetch: none.fetchFn })).resolves.toBe(false);
+    expect(none.calls).toEqual([]);
+  });
+
+  it("never throws when revocation fails with a 500 or a network error", async () => {
+    const failing = fakeFetch({ ...metadataRoute({ revocation_endpoint: `${AS}/revoke` }), [`POST ${AS}/revoke`]: () => new Response("down", { status: 500 }) });
+    await expect(revokeMcpOAuth({ url: MCP_URL, state, fetch: failing.fetchFn })).resolves.toBe(false);
+    const offline = async (): Promise<Response> => Promise.reject(new Error("offline"));
+    await expect(revokeMcpOAuth({ url: MCP_URL, state, fetch: offline })).resolves.toBe(false);
   });
 });

@@ -136,10 +136,10 @@ describe("pickSearchTool and searchArguments", () => {
   });
 
   it("sends query and limit, and source only when given and the schema has it", () => {
-    expect(searchArguments(tool("search", { query: {}, limit: {} }), "q")).toEqual({ query: "q", limit: 20 });
-    expect(searchArguments(tool("search", { query: {}, limit: {}, source: { type: "string" } }), "q", "bookmark")).toEqual({ query: "q", limit: 20, source: "bookmark" });
+    expect(searchArguments(tool("search", { query: {}, limit: {} }), "q")).toEqual({ query: "q", limit: 8 });
+    expect(searchArguments(tool("search", { query: {}, limit: {}, source: { type: "string" } }), "q", "bookmark")).toEqual({ query: "q", limit: 8, source: "bookmark" });
     expect(searchArguments(tool("search", { query: {} }), "q", "bookmark")).toEqual({ query: "q" });
-    expect(searchArguments(tool("search"), "q")).toEqual({ query: "q", limit: 20 });
+    expect(searchArguments(tool("search"), "q")).toEqual({ query: "q", limit: 8 });
   });
 
   it("searches history and bookmarks, one call each", () => {
@@ -158,6 +158,22 @@ describe("mergeSearchOutputs", () => {
   it("joins result lists, and keeps URLs from plain text", () => {
     const merged = mergeSearchOutputs([JSON.stringify({ memories: [{ url: "https://a.com/1" }] }), JSON.stringify([{ url: "https://a.com/2" }]), "see https://a.com/3", ""]);
     expect(parseHistoryHits(merged, "a.com").map((hit) => hit.url)).toEqual(["https://a.com/1", "https://a.com/2", "https://a.com/3"]);
+  });
+});
+
+describe("mergeSearchOutputs and unparsed text", () => {
+  it("flags non-JSON output, but not JSON or empty output", () => {
+    expect(mergeSearchOutputs(["Sorry, something went wrong"])).toMatchObject({ unparsed: true });
+    expect(mergeSearchOutputs(['{"memories": []}', ""])).toEqual({ results: [] });
+  });
+
+  it("reports through createVmemHistory when the merged output is not JSON", async () => {
+    const onFallback = vi.fn();
+    expect(await createVmemHistory(async () => mergeSearchOutputs(["Sorry, something went wrong"]), onFallback)("q", "vercel.com")).toEqual([]);
+    expect(onFallback).toHaveBeenCalledWith("vmem search output could not be parsed");
+    onFallback.mockClear();
+    await createVmemHistory(async () => mergeSearchOutputs(['{"memories": []}']), onFallback)("q", "vercel.com");
+    expect(onFallback).not.toHaveBeenCalled();
   });
 });
 
@@ -203,7 +219,7 @@ describe("createVmemSearch", () => {
   });
 
   it("keeps the connection after a timeout, and reconnects after another failure", async () => {
-    let failure = new Error("Tool memory_search timed out after 1 s");
+    let failure = new Error("Tool memory_search timed out after 1.5 s");
     const { connect, connections } = fakeConnect(async () => {
       throw failure;
     });

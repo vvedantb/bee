@@ -4,7 +4,7 @@ import { BrowserWindow, Menu, Tray, app, desktopCapturer, globalShortcut, ipcMai
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { RENDERER_HOST, RENDERER_SCHEME, RENDERER_URL } from "../shared/clerk";
-import { scaleSize } from "../core/interface-scale";
+import { fitToWorkArea, scaleSize } from "../core/interface-scale";
 import { IPC, settingsUpdateSchema, windowSizeSchema, type WindowSize } from "../shared/ipc";
 import { createVmemSearch } from "../core/vmem-history";
 import { registerFaviconIpc } from "./favicon-ipc";
@@ -41,12 +41,7 @@ let interfaceScale = 1;
 let tray: Tray | null = null;
 
 function topCentreBounds(size: { width: number; height: number }) {
-  const area = screen.getPrimaryDisplay().workArea;
-  return {
-    x: Math.round(area.x + (area.width - size.width) / 2),
-    y: area.y + TOP_MARGIN,
-    ...size,
-  };
+  return fitToWorkArea(size, screen.getPrimaryDisplay().workArea, TOP_MARGIN);
 }
 
 // Zoom every Bee window; the overlay also grows with its content so nothing clips.

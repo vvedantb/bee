@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { INTERFACE_SCALES, clampInterfaceScale, scaleSize } from "./interface-scale";
+import { INTERFACE_SCALES, clampInterfaceScale, fitToWorkArea, scaleSize } from "./interface-scale";
 
 describe("clampInterfaceScale", () => {
   it("keeps every allowed factor", () => {
@@ -26,5 +26,23 @@ describe("scaleSize", () => {
   it("rounds to whole pixels", () => {
     expect(scaleSize({ width: 440, height: 330 }, 0.9)).toEqual({ width: 396, height: 297 });
     expect(scaleSize({ width: 440, height: 64 }, 1.1)).toEqual({ width: 484, height: 70 });
+  });
+});
+
+describe("fitToWorkArea", () => {
+  const screen900 = { x: 0, y: 25, width: 1440, height: 875 };
+
+  it("does not clamp at 100% on a large display, and centres at the top", () => {
+    const area = { x: 0, y: 0, width: 2560, height: 1400 };
+    expect(fitToWorkArea({ width: 480, height: 640 }, area, 8)).toEqual({ x: 1040, y: 8, width: 480, height: 640 });
+  });
+
+  it("cuts 150% (960 px high) to the work area minus the top margin", () => {
+    expect(fitToWorkArea(scaleSize({ width: 480, height: 640 }, 1.5), screen900, 8)).toEqual({ x: 360, y: 33, width: 720, height: 867 });
+  });
+
+  it("cuts 175% (1120 px high) the same way, and a width wider than the area", () => {
+    const narrow = { x: 100, y: 0, width: 800, height: 900 };
+    expect(fitToWorkArea(scaleSize({ width: 480, height: 640 }, 1.75), narrow, 8)).toEqual({ x: 100, y: 8, width: 800, height: 892 });
   });
 });
