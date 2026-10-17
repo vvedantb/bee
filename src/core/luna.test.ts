@@ -1,5 +1,6 @@
+import { jsonSchema, tool } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { MOCK_TOKEN, startMockMcpServer } from "../../test/helpers/mock-mcp-server";
 import { LUNA_MCP_SYSTEM, LUNA_SYSTEM, buildLunaPrompt, guideWithLuna, parseLunaTips } from "./luna";
 import { loadMcpTools } from "./mcp";
@@ -84,6 +85,12 @@ describe("parseLunaTips", () => {
   });
 });
 
+describe("LUNA_MCP_SYSTEM", () => {
+  it("points Luna at the MCP data tools", () => {
+    for (const name of ["list_tables", "count_table", "query_table", "run_query", "postgres_query", "eva__count_table"]) expect(LUNA_MCP_SYSTEM).toContain(name);
+  });
+});
+
 describe("guideWithLuna with MCP tools", () => {
   const usage = {
     inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
@@ -124,5 +131,56 @@ describe("guideWithLuna with MCP tools", () => {
       await mcp.close();
       await server.close();
     }
+  });
+
+  it("retries without a tool the schema error names and still returns tips", async () => {
+    const calls: string[][] = [];
+    const model = new MockLanguageModelV4({
+      doGenerate: async (options) => {
+        const names = (options.tools ?? []).map((item) => item.name);
+        calls.push(names);
+        if (names.includes("eva__evaluate")) throw new Error("'JSON Schema propertyNames that does not use a string schema' functionality not supported (eva__evaluate)");
+        return { content: [{ type: "text", text: "- 42 users" }], finishReason: { unified: "stop", raw: undefined }, usage, warnings: [] };
+      },
+    });
+    const extraTools = {
+      eva__evaluate: tool({ inputSchema: jsonSchema({ type: "object", properties: {} }), execute: async () => "x" }),
+      eva__count_table: tool({ inputSchema: jsonSchema({ type: "object", properties: {} }), execute: async () => "42" }),
+    };
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const result = await guideWithLuna({ model, transcript: ["How many users do we have?"], notes: [], extraTools });
+      expect(result.error).toBeNull();
+      expect(result.tips).toEqual(["42 users"]);
+      expect(result.skipped).toContain("eva__evaluate");
+      expect(calls).toHaveLength(2);
+      expect(calls[1]).toContain("eva__count_table");
+      expect(warn).toHaveBeenCalledOnce();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("drops every MCP tool when the error names none, and keeps other errors", async () => {
+    const seen: number[] = [];
+    const model = new MockLanguageModelV4({
+      doGenerate: async (options) => {
+        const extras = (options.tools ?? []).filter((item) => item.name.startsWith("eva__")).length;
+        seen.push(extras);
+        if (extras > 0) throw new Error("Invalid tool input_schema: unsupported JSON Schema keyword");
+        return { content: [{ type: "text", text: "- ok" }], finishReason: { unified: "stop", raw: undefined }, usage, warnings: [] };
+      },
+    });
+    const extraTools = { eva__a: tool({ inputSchema: jsonSchema({ type: "object" }), execute: async () => "x" }) };
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const result = await guideWithLuna({ model, transcript: ["Hi"], notes: [], extraTools });
+      expect(result.tips).toEqual(["ok"]);
+      expect(seen).toEqual([1, 0]);
+    } finally {
+      warn.mockRestore();
+    }
+    const failing = new MockLanguageModelV4({ doGenerate: async () => Promise.reject(new Error("timeout")) });
+    expect((await guideWithLuna({ model: failing, transcript: ["Hi"], notes: [], extraTools })).error).toContain("timeout");
   });
 });

@@ -20,12 +20,12 @@ describe("scaleSize", () => {
 
   it("multiplies width and height by the factor", () => {
     expect(scaleSize(expanded, 1.5)).toEqual({ width: 720, height: 960 });
-    expect(scaleSize({ width: 440, height: 64 }, 1.25)).toEqual({ width: 550, height: 80 });
+    expect(scaleSize({ width: 480, height: 64 }, 1.25)).toEqual({ width: 600, height: 80 });
   });
 
   it("rounds to whole pixels", () => {
-    expect(scaleSize({ width: 440, height: 330 }, 0.9)).toEqual({ width: 396, height: 297 });
-    expect(scaleSize({ width: 440, height: 64 }, 1.1)).toEqual({ width: 484, height: 70 });
+    expect(scaleSize({ width: 480, height: 330 }, 0.9)).toEqual({ width: 432, height: 297 });
+    expect(scaleSize({ width: 480, height: 64 }, 1.1)).toEqual({ width: 528, height: 70 });
   });
 });
 
@@ -66,13 +66,13 @@ const left: DisplayInfo = {
   bounds: { x: -1920, y: 0, width: 1920, height: 1080 },
   workArea: { x: -1920, y: 0, width: 1920, height: 1080 },
 };
-const collapsed = { width: 440, height: 64 };
+const collapsed = { width: 480, height: 64 };
 const expanded = { width: 480, height: 640 };
 
 describe("displayMatching", () => {
   it("picks the display with the largest overlap", () => {
-    expect(displayMatching({ x: 1800, y: 100, width: 440, height: 64 }, [primary, right])?.id).toBe(2);
-    expect(displayMatching({ x: 1000, y: 100, width: 440, height: 64 }, [primary, right])?.id).toBe(1);
+    expect(displayMatching({ x: 1800, y: 100, width: 480, height: 64 }, [primary, right])?.id).toBe(2);
+    expect(displayMatching({ x: 1000, y: 100, width: 480, height: 64 }, [primary, right])?.id).toBe(1);
   });
 
   it("falls back to the nearest centre when nothing overlaps", () => {
@@ -86,6 +86,13 @@ describe("placeInWorkArea", () => {
     const current = { x: 2200, y: 40, ...collapsed };
     const next = placeInWorkArea({ size: expanded, current, area: right.workArea, margin: MARGIN });
     expect(next).toEqual({ x: 2200, y: 40, ...expanded });
+  });
+
+  it("keeps x and width when expanding from the collapsed size", () => {
+    const current = { x: 2200, y: 40, ...collapsed };
+    const next = placeInWorkArea({ size: expanded, current, area: right.workArea, margin: MARGIN });
+    expect(next.x).toBe(current.x);
+    expect(next.width).toBe(collapsed.width);
   });
 
   it("stays on a display at negative coordinates", () => {
@@ -134,7 +141,7 @@ describe("restoreOverlayBounds", () => {
 
   it("clamps a saved spot into the saved display after a resolution change", () => {
     const bounds = restoreOverlayBounds({ saved: { x: 9000, y: 30, displayId: 2 }, size: collapsed, displays, primaryId: 1, margin: MARGIN });
-    expect(bounds.x).toBe(3200 - 440);
+    expect(bounds.x).toBe(3200 - 480);
   });
 
   it("falls back to the primary top centre when the saved display is gone", () => {
@@ -144,6 +151,6 @@ describe("restoreOverlayBounds", () => {
 
   it("uses the primary top centre on first run", () => {
     const bounds = restoreOverlayBounds({ saved: undefined, size: collapsed, displays, primaryId: 1, margin: MARGIN });
-    expect(bounds).toEqual({ x: 740, y: 33, ...collapsed });
+    expect(bounds).toEqual({ x: 720, y: 33, ...collapsed });
   });
 });

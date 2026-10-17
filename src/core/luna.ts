@@ -6,6 +6,8 @@ import { lunaTools, sourcesFromGenerateResult, type BeeSource } from "./tools";
 const TRANSCRIPT_WINDOW = 8;
 const MAX_TIPS = 2;
 const LUNA_TIMEOUT_MS = 45_000;
+const MAX_STEPS = 8;
+const SCHEMA_ERROR = /json schema|propertyNames|input_?schema|tools?\b.*\bschema|functionality.*not supported|not supported.*schema/i;
 
 export const LUNA_SYSTEM = [
   "You are Bee, a quiet meeting copilot shown in a small overlay.",
@@ -30,6 +32,9 @@ export const LUNA_SYSTEM = [
 export const LUNA_MCP_SYSTEM = [
   "The user has connected MCP servers, for example vmem or Eva. Their tools are named server__tool, for example vmem__search.",
   "Call them when the transcript needs what those servers hold. Use them before guessing about the user's own data.",
+  "For questions about the user's product or data (counts, users, tables, docs, tasks), call the connected tools instead of guessing.",
+  "For \"how many X\" or table counts, use list_tables, count_table, query_table, run_query or postgres_query, for example eva__list_tables then eva__count_table. Other tools include eva__list_repos.",
+  "Answer in the tip with the number or fact the tool returned.",
   "If an MCP tool returns an error, say so briefly or skip it. Never invent a result.",
 ].join("\n");
 
@@ -79,6 +84,15 @@ export function parseLunaTips(text: string): string[] {
     .slice(0, MAX_TIPS);
 }
 
+export type LunaResult = { tips: string[]; sources: BeeSource[]; error: string | null; /** Short muted note when connected tools were skipped. */ skipped: string | null };
+
+/** Tools the error names, else every extra tool. */
+function toolsToDrop(message: string, extra: ToolSet): string[] {
+  const names = Object.keys(extra);
+  const named = names.filter((name) => message.includes(name));
+  return named.length > 0 ? named : names;
+}
+
 export async function guideWithLuna(args: {
   model: LanguageModel;
   transcript: string[];
@@ -91,21 +105,29 @@ export async function guideWithLuna(args: {
   extraTools?: ToolSet;
   /** Called with each tool Luna calls, so the overlay can show what it is doing. */
   onActivity?: (toolName: string) => void;
-}): Promise<{ tips: string[]; sources: BeeSource[]; error: string | null }> {
-  try {
-    const { system, prompt } = buildLunaPrompt({ ...args, hasMcpTools: Object.keys(args.extraTools ?? {}).length > 0 });
-    const reported = new Set<string>();
-    const report = (id: string, name: string) => {
-      if (reported.has(id)) return;
-      reported.add(id);
-      args.onActivity?.(name);
-    };
-    const result = await generateText({
+}): Promise<LunaResult> {
+  let extra: ToolSet = { ...args.extraTools };
+  const dropped: string[] = [];
+  const skipped = () => {
+    if (dropped.length === 0) return null;
+    if (dropped.length === 1) return `Skipped connected tool: ${dropped[0]}.`;
+    if (dropped.length <= 3) return `Skipped connected tools: ${dropped.join(", ")}.`;
+    return `Skipped ${dropped.length} connected tools.`;
+  };
+  const reported = new Set<string>();
+  const report = (id: string, name: string) => {
+    if (reported.has(id)) return;
+    reported.add(id);
+    args.onActivity?.(name);
+  };
+  const run = async () => {
+    const { system, prompt } = buildLunaPrompt({ ...args, hasMcpTools: Object.keys(extra).length > 0 });
+    return generateText({
       model: args.model,
       system,
       prompt,
-      tools: lunaTools({ notesDir: args.notesDir, extraRoots: args.extraRoots, extra: args.extraTools }),
-      stopWhen: isStepCount(5),
+      tools: lunaTools({ notesDir: args.notesDir, extraRoots: args.extraRoots, extra }),
+      stopWhen: isStepCount(MAX_STEPS),
       // Local tools report as they start. Provider tools (web_search) report when their step finishes. Each call reports once.
       onToolExecutionStart: ({ toolCall }) => report(toolCall.toolCallId, toolCall.toolName),
       onStepFinish: (step) => {
@@ -116,8 +138,21 @@ export async function guideWithLuna(args: {
       abortSignal: AbortSignal.timeout(args.timeoutMs ?? LUNA_TIMEOUT_MS),
       providerOptions: { ...FLEX_PROVIDER_OPTIONS, openai: { reasoningEffort: "low" } },
     });
-    return { tips: parseLunaTips(result.text), sources: sourcesFromGenerateResult(result), error: null };
-  } catch (error) {
-    return { tips: [], sources: [], error: `Luna guidance failed: ${error instanceof Error ? error.message : String(error)}` };
+  };
+  // First try with every tool. A tools-schema error drops the named tools (else all), then all extras, then stops.
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const result = await run();
+      return { tips: parseLunaTips(result.text), sources: sourcesFromGenerateResult(result), error: null, skipped: skipped() };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!SCHEMA_ERROR.test(message) || attempt >= 2 || Object.keys(extra).length === 0) {
+        return { tips: [], sources: [], error: `Luna guidance failed: ${message}`, skipped: skipped() };
+      }
+      const drop = attempt === 0 ? toolsToDrop(message, extra) : Object.keys(extra);
+      console.warn(`Bee: dropped MCP tools after a schema error: ${drop.join(", ")}`);
+      dropped.push(...drop);
+      extra = Object.fromEntries(Object.entries(extra).filter(([name]) => !drop.includes(name)));
+    }
   }
 }

@@ -83,6 +83,7 @@ export async function runPipeline(args: {
     tips: guide.tips,
     sources: guide.sources,
     guideError: guide.error,
+    guideNote: guide.skipped,
     timingsMs: { retrieve: t1 - t0, rank: t2 - t1, guide: t3 - t2 },
   };
 }

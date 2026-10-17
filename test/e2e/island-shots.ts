@@ -40,7 +40,7 @@ const states: Record<string, string> = {
 const html = states[shot];
 if (!html) throw new Error(`Unknown shot: ${shot}`);
 window.addEventListener("DOMContentLoaded", () => {
-  document.body.innerHTML = `<div id="root"><div class="shell" style="margin: 0 auto; width: 440px; height: auto">${html}</div></div>`;
+  document.body.innerHTML = `<div id="root"><div class="shell" style="margin: 0 auto; width: 480px; height: auto">${html}</div></div>`;
   // Offscreen Electron windows may not advance CSS animations; show the settled end state.
   document.head.insertAdjacentHTML("beforeend", "<style>*, *::before, *::after { animation: none !important; transition: none !important; }</style>");
   // Let the open animation settle before the harness captures.
