@@ -18,7 +18,7 @@ const SIZES: Record<WindowSize, { width: number; height: number }> = {
   // Notch plus the Teams sync popup.
   prompt: { width: 440, height: 330 },
   // Notch plus the island body (tips and sources).
-  response: { width: 440, height: 300 },
+  response: { width: 440, height: 360 },
   expanded: { width: 480, height: 640 },
 };
 const TOP_MARGIN = 8;

@@ -64,6 +64,7 @@ body,
   display: flex;
   flex-direction: column;
   flex: none;
+  align-self: stretch;
   min-height: 0;
   max-height: 100%;
   border-radius: 26px;
@@ -117,17 +118,6 @@ body,
   text-overflow: ellipsis;
 }
 
-button.notch-status {
-  padding: 0;
-  background: none;
-  text-align: left;
-}
-
-button.notch-status:not(:disabled):hover {
-  background: none;
-  text-decoration: underline;
-}
-
 button {
   font: inherit;
   color: var(--text);
@@ -148,6 +138,19 @@ button:not(:disabled):hover {
 
 button:not(:disabled):active {
   transform: scale(0.97);
+}
+
+/* After the generic button rules so the reopen-status button keeps looking like the span. */
+button.notch-status {
+  padding: 0;
+  background: none;
+  border-radius: 0;
+  text-align: left;
+}
+
+button.notch-status:not(:disabled):hover {
+  background: none;
+  text-decoration: underline;
 }
 
 button.primary {
@@ -223,6 +226,7 @@ a.link:hover {
   display: grid;
   grid-template-rows: 1fr;
   min-height: 0;
+  /* Content-sized; scrolls only when the answer is taller than the window. */
   overflow-y: auto;
   animation: island-open 420ms var(--spring);
 }
@@ -234,6 +238,7 @@ a.link:hover {
 .island-inner {
   position: relative;
   min-height: 0;
+  overflow: hidden;
   padding: 2px 18px 18px;
 }
 
@@ -248,7 +253,7 @@ a.link:hover {
 
 .island-tips {
   margin: 0;
-  padding: 0 28px 0 0;
+  padding: 0 36px 0 0;
   list-style: none;
   display: flex;
   flex-direction: column;

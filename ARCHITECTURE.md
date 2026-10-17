@@ -112,12 +112,12 @@ Teams leaves the call (15 s) → controller leaves the sync; next detection → 
 - **Fail-open**: relay errors never throw into the UI. Unreachable, 401 or 5xx shows "Bee is working solo" and the local pipeline carries on; 403/404 on a room ends the sync locally.
 - **Main holds the relay connection**, so the renderer CSP stays closed to the relay host. The renderer passes a fresh Clerk token with each call; main checks it with `assertSignedIn` and the relay verifies it properly.
 - **Window**: a third size, `prompt` (440 × 330), shows the notch and the sync card without the panel.
-- **Island size**: a fourth size, `response` (440 × 300), shows the pill and the island body. `applyWindowSize` picks `expanded`, then `prompt`, then `response`, then `collapsed`.
+- **Island size**: a fourth size, `response` (440 × 360), shows the pill and the island body. `applyWindowSize` picks `expanded`, then `prompt`, then `response`, then `collapsed`.
 - **Deep links**: `bee://team/XXXX-XXXX` in `argv` (first launch, `second-instance`) or `open-url` (macOS) fills the invite code in **Settings → Team**. The user still clicks **Join team**.
 
 ## Processes and security
 
-- The window is frameless, transparent, always on top and skipped from the taskbar. It sits at the top centre of the primary display's work area. It resizes between 440 × 64 px (collapsed), 440 × 330 px (notch and Teams sync card), 440 × 300 px (notch and island response) and 480 × 640 px (expanded).
+- The window is frameless, transparent, always on top and skipped from the taskbar. It sits at the top centre of the primary display's work area. It resizes between 440 × 64 px (collapsed), 440 × 330 px (notch and Teams sync card), 440 × 360 px (notch and island response) and 480 × 640 px (expanded).
 - The renderer runs with `sandbox: true`, `contextIsolation: true` and no Node integration.
 - The renderer is served from `bee://renderer/` by `protocol.handle` (`main/renderer-protocol.ts`), not `file://`, so Clerk sees a stable origin. In development the handler proxies to the Vite dev server. Paths outside `out/renderer` return 404.
 - The same handler sends the content security policy as a response header. Fonts are bundled (Instrument Sans woff2 in `renderer/src/fonts`), so `default-src 'self'` covers them and no font hosts are allowed. Remote scripts are allowed only from the Clerk Frontend API host (derived from the publishable key: `clerk.vedantb.com`) and `challenges.cloudflare.com` (bot protection). Images are allowed from `img.clerk.com`.
