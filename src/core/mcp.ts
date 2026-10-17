@@ -1,16 +1,19 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import type { OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
 import { StdioClientTransport, getDefaultEnvironment } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { jsonSchema, tool, type ToolSet } from "ai";
 import { MCP_MAX_TOOLS, type McpServer } from "../shared/ipc";
+import { mcpSlug } from "../shared/mcp-names";
+
+export { isVmemConnector, mcpSlug } from "../shared/mcp-names";
 
 export const MCP_CONNECT_TIMEOUT_MS = 10_000;
 export const MCP_CALL_TIMEOUT_MS = 15_000;
 const MAX_RESULT_CHARS = 8000;
 const MAX_ERROR_CHARS = 200;
 const MAX_TOOL_NAME = 64;
-const MAX_SLUG = 24;
 const CLOSE_TIMEOUT_MS = 3000;
 
 /** A saved server with its secrets decrypted. Built in main for each run; never sent to the renderer. */
@@ -25,21 +28,15 @@ export type McpServerConfig = {
   auth: McpServer["auth"];
   /** Bearer token, or the value of the custom header. */
   secret?: string;
+  /** True when OAuth tokens are stored (Connectors sign-in), so the server needs no bearer token. */
+  oauthSignedIn?: boolean;
+  /** OAuth for a remote server with auth "none". Not interactive here: a 401 refreshes stored tokens or fails, and never opens a browser. */
+  authProvider?: OAuthClientProvider;
   /** Listed tools the user switched off. Tools not listed yet stay on. */
   disabledTools?: string[];
 };
 
 export type McpToolInfo = { name: string; description: string };
-
-/** Server name as a tool-name prefix: [a-zA-Z0-9_-]+, no "__" (that separates server and tool). */
-export function mcpSlug(name: string): string {
-  const slug = name
-    .replace(/[^a-zA-Z0-9_-]+/g, "_")
-    .replace(/_{2,}/g, "_")
-    .replace(/^[_-]+|[_-]+$/g, "")
-    .slice(0, MAX_SLUG);
-  return slug || "mcp";
-}
 
 /** Splits the "Args" box: one per line, or space-separated (with "double" or 'single' quotes) on a single line. */
 export function parseMcpArgs(text: string): string[] {
@@ -106,7 +103,9 @@ function makeTransport(config: McpServerConfig): Transport {
   const headers: Record<string, string> = {};
   if (config.secret && config.auth.type === "bearer") headers.Authorization = `Bearer ${config.secret}`;
   if (config.secret && config.auth.type === "header" && config.auth.headerName) headers[config.auth.headerName] = config.secret;
-  return new StreamableHTTPClientTransport(new URL(config.url as string), { requestInit: { headers } });
+  // Bearer and header servers keep their static header. Only an auth-none server gets the OAuth provider.
+  const authProvider = config.auth.type === "none" ? config.authProvider : undefined;
+  return new StreamableHTTPClientTransport(new URL(config.url as string), { requestInit: { headers }, authProvider });
 }
 
 export type McpConnection = {

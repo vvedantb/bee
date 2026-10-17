@@ -11,11 +11,11 @@ export function SecretField(props: { name: string; label: string; placeholder: s
       {props.label}
       <span className="row">
         {masked ? (
-          <input type="text" value="•••••••• (saved)" disabled aria-label={`${props.label} (saved)`} />
+          <input key="saved" type="text" value="•••••••• (saved)" disabled aria-label={`${props.label} (saved)`} />
         ) : props.multiline ? (
           <textarea name={props.name} className="secret-area" rows={3} placeholder={placeholder} autoComplete="off" spellCheck={false} autoFocus={replacing} />
         ) : (
-          <input name={props.name} type="password" placeholder={placeholder} autoComplete="off" autoFocus={replacing} />
+          <input key="entry" name={props.name} type="password" placeholder={placeholder} autoComplete="off" autoFocus={replacing} />
         )}
         {props.saved ? (
           <button type="button" className="link" onClick={() => setReplacing(!replacing)}>

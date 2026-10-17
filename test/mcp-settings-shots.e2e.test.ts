@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { runHarness } from "./e2e/run";
 
-// Electron screenshots of the Settings → MCP servers section (test/e2e/mcp-settings-shots.ts, real styles.css).
+// Electron screenshots of the Connectors tab (test/e2e/mcp-settings-shots.ts, real styles.css).
 // No Gateway key needed. Set BEE_E2E_SHOTS_DIR to choose where the PNGs go (default: a temp folder).
 
 const dir = process.env.BEE_E2E_SHOTS_DIR || mkdtempSync(join(tmpdir(), "bee-mcp-settings-shots-"));

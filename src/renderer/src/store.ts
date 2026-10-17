@@ -18,11 +18,11 @@ import {
   type UpdateCheck,
   type WindowSize,
 } from "../../shared/ipc";
-import { ISLAND_IDLE_MS, islandPhase, shouldAutoCollapse } from "./island";
+import { ISLAND_IDLE_MS, islandPhase, islandShowsBody, shouldAutoCollapse } from "./island";
 import { openMic, openSystemAudio } from "./mic";
 import { startMicSession } from "./speech";
 
-export type Tab = "live" | "settings";
+export type Tab = "live" | "connectors" | "settings";
 
 // ready: the installer is downloaded. check: the last successful check, kept while downloading.
 export type UpdateState = {
@@ -136,6 +136,8 @@ export function useBee(): BeeState {
 let latestRun = 0;
 let sampleIndex = 0;
 let localSeq = 0;
+let turnSeq = 0;
+let turnText = "";
 let stopMic: (() => void) | null = null;
 let sentSize: WindowSize = "collapsed";
 let ticking = false;
@@ -153,7 +155,8 @@ function touchIsland(): void {
 }
 
 function autoCollapseIsland(): void {
-  const phase = islandOpen(state) ? "expanded" : "idle";
+  // Chips can hold the body open while Luna thinks; the pill's phase then stays "thinking" and nothing collapses.
+  const phase = state.busy ? "thinking" : islandOpen(state) ? "expanded" : "idle";
   if (shouldAutoCollapse({ phase, hovered: islandHovered, lastActivityAt: islandActivityAt, now: Date.now() })) void closeIsland();
 }
 
@@ -175,10 +178,10 @@ export function syncCard(current: BeeState): SyncCard {
   return null;
 }
 
-/** The island body (tips and sources under the pill) is open: a result to show, and no panel or sync card in the way. */
+/** The island body (tips, sources and link chips under the pill) is open: something to show, and no panel or sync card in the way. */
 export function islandOpen(current: BeeState): boolean {
   if (current.expanded || syncCard(current)) return false;
-  return islandPhase(islandArgs(current)) === "expanded";
+  return islandShowsBody(islandArgs(current));
 }
 
 /** What island.ts needs from the state: the result (or an empty one), the chips still shown, and the flags. */
@@ -217,9 +220,30 @@ function addLines(lines: SessionLine[]): void {
   if (merged !== before) startTurn(lines);
 }
 
+/**
+ * Asks main to personalise chips (exact page from history, or drop one). Chips stay as they are on any failure or when the turn
+ * has moved on. Chips not sent (added since) are kept. Main sends text to vmem and Jev only with the setting on.
+ */
+async function enrichChips(sent: LinkChip[], text: string, seq: number): Promise<void> {
+  if (sent.length === 0 || !state.settings?.personalisedLinks) return;
+  try {
+    const reply = await window.bee.enrichLinks({ turn: text.slice(0, 4000), chips: sent });
+    if (seq !== turnSeq) return;
+    const sentIds = new Set(sent.map((chip) => chip.id));
+    const byId = new Map(reply.chips.map((chip) => [chip.id, chip]));
+    set({ chips: state.chips.flatMap((chip) => (sentIds.has(chip.id) ? (byId.has(chip.id) ? [byId.get(chip.id) as LinkChip] : []) : [chip])) });
+    void applyWindowSize();
+  } catch {
+    // Plain chips stay.
+  }
+}
+
 /** A new spoken or simulated line. Chips from its links open the island body even before Luna answers. */
 function startTurn(lines: SessionLine[]): void {
   const chips = mergeChips([], lines.flatMap((line) => detectLinks(line.text)));
+  const seq = ++turnSeq;
+  turnText = lines.map((line) => line.text).join("\n");
+  void enrichChips(chips, turnText, seq);
   set(chips.length > 0 ? { chips, dismissedChipIds: [], dismissed: false, islandClosing: false } : { chips, dismissedChipIds: [] });
   if (chips.length > 0) {
     touchIsland();
@@ -242,9 +266,12 @@ async function runPipeline(): Promise<void> {
     const result = await window.bee.runPipeline({ transcript, sessionToken: await sessionToken() });
     if (run !== latestRun) return;
     // The tips' links join this turn's chips (deduped, capped).
+    const chips = mergeChips(state.chips, result.tips.flatMap((tip) => detectLinks(tip)));
+    const added = chips.filter((chip) => !state.chips.some((known) => known.id === chip.id));
+    void enrichChips(added, [turnText, ...result.tips].join("\n"), turnSeq);
     set({
       result,
-      chips: mergeChips(state.chips, result.tips.flatMap((tip) => detectLinks(tip))),
+      chips,
       busy: false,
       activity: null,
       dismissed: false,
@@ -340,9 +367,13 @@ async function mcpChange(change: () => Promise<McpServerView[]>, staleTestId?: s
     const tests = { ...state.mcp.tests };
     if (staleTestId) delete tests[staleTestId];
     set({ mcp: { servers, tests, error: null } });
+    // The personalised-links default follows the vmem connector, so the settings view changes with it.
+    void actions.refreshSettings().catch(() => undefined);
     return true;
   } catch (error) {
-    set({ mcp: { ...state.mcp, error: error instanceof Error ? error.message : "Could not save the server" } });
+    // Electron prefixes a handler's error with "Error invoking remote method …".
+    const message = error instanceof Error ? error.message.replace(/^Error invoking remote method '[^']*': (Error: )?/, "") : "";
+    set({ mcp: { ...state.mcp, error: message || "Could not save the server" } });
     return false;
   }
 }
@@ -382,6 +413,21 @@ export const actions = {
 
   async setMcpEnabled(update: McpSetEnabled): Promise<void> {
     await mcpChange(() => window.bee.mcp.setEnabled(update));
+  },
+
+  /** Signs in to an MCP server in the system browser, saving it first when it is new. The row shows Disconnect once tokens are stored. */
+  async connectMcpServer(save: McpSave, existingId?: string): Promise<void> {
+    await mcpChange(async () => {
+      let id = existingId;
+      if (!id) {
+        const servers = await window.bee.mcp.save(save);
+        // Keep the new row on screen if the sign-in fails.
+        set({ mcp: { ...state.mcp, servers } });
+        id = servers.find((server) => server.name === save.name)?.id;
+      }
+      if (!id) throw new Error("Could not save the server");
+      return window.bee.mcp.authorize(id);
+    }, existingId);
   },
 
   async testMcpServer(id: string): Promise<void> {

@@ -11,8 +11,10 @@ import {
   IconX,
 } from "@tabler/icons-react";
 import { useState, type FormEvent } from "react";
-import { McpSettings } from "./McpSettings";
+import { Favicon } from "./Favicon";
+import { Connectors } from "./Connectors";
 import { SecretField } from "./SecretField";
+import { INTERFACE_SCALES } from "../../core/interface-scale";
 import { visibleChips, type LinkChip } from "../../core/link-suggest";
 import type { PipelineResult, SettingsView } from "../../shared/ipc";
 import { activityLabel, islandPhase, shouldShowResponse } from "./island";
@@ -46,10 +48,10 @@ function LinkChips({ chips }: { chips: LinkChip[] }) {
       {chips.map((chip) => (
         <li key={chip.id} className="chip link-chip">
           <button type="button" className="link-chip-open" title={chip.url} onClick={() => void actions.openLink(chip.url)}>
-            <IconExternalLink size={14} stroke={1.75} />
-            {chip.domain}
+            <Favicon domain={chip.domain} />
+            {chip.label}
           </button>
-          <button type="button" className="link-chip-dismiss" title="Dismiss link" aria-label={`Dismiss ${chip.domain}`} onClick={() => actions.dismissChip(chip.id)}>
+          <button type="button" className="link-chip-dismiss" title="Dismiss link" aria-label={`Dismiss ${chip.label}`} onClick={() => actions.dismissChip(chip.id)}>
             <IconX size={12} stroke={2} />
           </button>
         </li>
@@ -104,7 +106,8 @@ function Island({ state }: { state: BeeState }) {
   const showBody = islandOpen(state);
   const phase = islandPhase(islandArgs(state));
   const canReopen = !state.busy && !state.expanded && phase === "idle" && shouldShowResponse({ ...islandArgs(state), dismissed: false });
-  const status = showBody && !state.mic.error ? "Tips" : notchStatus(state, isSignedIn);
+  // While Luna thinks, chips may open the body but the pill keeps its thinking text.
+  const status = showBody && !state.busy && !state.mic.error ? "Tips" : notchStatus(state, isSignedIn);
   const newVersion = state.update.check?.available ? state.update.check.latestVersion : null;
   const statusProps = { className: state.mic.error ? "notch-status error-text" : "notch-status", title: status };
   return (
@@ -164,7 +167,8 @@ function Island({ state }: { state: BeeState }) {
           <IconChevronDown {...ICON} />
         </button>
       </header>
-      {showBody ? <IslandBody result={result} chips={chips} closing={state.islandClosing} /> : null}
+      {/* While busy, pass no result: the body shows only the new chips, never the previous turn's tips, sources or error. */}
+      {showBody ? <IslandBody result={state.busy ? null : result} chips={chips} closing={state.islandClosing} /> : null}
     </div>
   );
 }
@@ -425,7 +429,14 @@ function SettingsTab({ state, settings }: { state: BeeState; settings: SettingsV
         </div>
       </form>
 
-      <McpSettings servers={state.mcp.servers} tests={state.mcp.tests} error={state.mcp.error} />
+      <label className="toggle">
+        <input
+          type="checkbox"
+          checked={settings.personalisedLinks}
+          onChange={(event) => void actions.saveSettings({ personalisedLinks: event.currentTarget.checked })}
+        />
+        Personalised link suggestions (sends the current line to Jev, and to vmem when connected under Connectors, to pick the exact page; needs the Gateway key)
+      </label>
 
       <label className="toggle">
         <input
@@ -435,6 +446,24 @@ function SettingsTab({ state, settings }: { state: BeeState; settings: SettingsV
         />
         Meeting mode (hide Bee from screen sharing, stay above full-screen apps)
       </label>
+
+      <div className="field">
+        Interface size
+        <div className="segmented" role="radiogroup" aria-label="Interface size">
+          {INTERFACE_SCALES.map((scale) => (
+            <button
+              key={scale}
+              type="button"
+              role="radio"
+              aria-checked={settings.interfaceScale === scale}
+              className={settings.interfaceScale === scale ? "active" : ""}
+              onClick={() => void actions.saveSettings({ interfaceScale: scale })}
+            >
+              {Math.round(scale * 100)}%
+            </button>
+          ))}
+        </div>
+      </div>
 
       <TeamSection state={state} />
 
@@ -452,6 +481,9 @@ function Panel({ state }: { state: BeeState }) {
         <button type="button" className={state.tab === "live" ? "active" : ""} onClick={() => actions.setTab("live")}>
           Live
         </button>
+        <button type="button" className={state.tab === "connectors" ? "active" : ""} onClick={() => actions.setTab("connectors")}>
+          Connectors
+        </button>
         <button type="button" className={state.tab === "settings" ? "active" : ""} onClick={() => actions.setTab("settings")}>
           Settings
         </button>
@@ -460,6 +492,11 @@ function Panel({ state }: { state: BeeState }) {
         </span>
       </nav>
       {state.tab === "live" ? <LiveTab state={state} /> : null}
+      {state.tab === "connectors" ? (
+        <div className="tab-body">
+          <Connectors servers={state.mcp.servers} tests={state.mcp.tests} error={state.mcp.error} />
+        </div>
+      ) : null}
       {state.tab === "settings" && state.settings ? <SettingsTab state={state} settings={state.settings} /> : null}
     </main>
   );

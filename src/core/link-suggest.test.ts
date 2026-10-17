@@ -5,7 +5,7 @@ const domains = (text: string) => detectLinks(text).map((chip) => chip.domain);
 
 describe("detectLinks: positives", () => {
   it("finds explicit URLs and keeps the path", () => {
-    expect(detectLinks("see https://example.com/path now")[0]).toEqual({ id: "example.com", domain: "example.com", url: "https://example.com/path" });
+    expect(detectLinks("see https://example.com/path now")[0]).toEqual({ id: "example.com", domain: "example.com", url: "https://example.com/path", label: "example.com › path" });
     expect(detectLinks("http://example.com")[0]?.url).toBe("http://example.com/");
   });
 

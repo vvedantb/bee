@@ -25,6 +25,30 @@ describe("safeExternalUrl", () => {
     expect(safeExternalUrl(raw)).toBeNull();
   });
 
+  it.each([
+    "https://127.0.0.1/",
+    "http://127.1.2.3:8080/x",
+    "https://0.0.0.0/",
+    "https://0x7f.1/",
+    "https://2130706433/",
+    "https://[::1]/",
+    "https://[0:0:0:0:0:0:0:1]/",
+    "https://[::]/",
+    "https://[::ffff:127.0.0.1]/",
+    "https://[::ffff:0.0.0.0]/",
+    "https://localhost./",
+    "https://app.localhost/",
+  ])("rejects loopback %s", (raw) => {
+    expect(safeExternalUrl(raw)).toBeNull();
+  });
+
+  it("still accepts public addresses", () => {
+    expect(safeExternalUrl("https://8.8.8.8/")).toBe("https://8.8.8.8/");
+    expect(safeExternalUrl("https://128.0.0.1/")).toBe("https://128.0.0.1/");
+    expect(safeExternalUrl("https://[2001:db8::1]/")).toBe("https://[2001:db8::1]/");
+    expect(safeExternalUrl("https://[::ffff:8.8.8.8]/")).toBe("https://[::ffff:808:808]/");
+  });
+
   it("strips tracking params and keeps the rest", () => {
     const raw = "https://example.com/p?utm_source=a&UTM_medium=b&fbclid=1&gclid=2&ref=3&ref_src=4&source=post_page-abc&keep=yes";
     expect(safeExternalUrl(raw)).toBe("https://example.com/p?keep=yes");

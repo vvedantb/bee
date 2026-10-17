@@ -4,7 +4,11 @@ import { BrowserWindow, Menu, Tray, app, desktopCapturer, globalShortcut, ipcMai
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { RENDERER_HOST, RENDERER_SCHEME, RENDERER_URL } from "../shared/clerk";
+import { scaleSize } from "../core/interface-scale";
 import { IPC, settingsUpdateSchema, windowSizeSchema, type WindowSize } from "../shared/ipc";
+import { createVmemSearch } from "../core/vmem-history";
+import { registerFaviconIpc } from "./favicon-ipc";
+import { registerLinkIpc } from "./link-ipc";
 import { registerMcpIpc } from "./mcp-ipc";
 import { registerOpenUrlIpc } from "./open-url";
 import { registerMeetingIpc } from "./meeting-ipc";
@@ -31,6 +35,9 @@ const TOGGLE_SHORTCUT = "CommandOrControl+Shift+Space";
 const outDir = fileURLToPath(new URL(".", import.meta.url));
 
 let win: BrowserWindow | null = null;
+// The current window mode, so a zoom change re-applies its bounds, not the collapsed ones.
+let windowSize: WindowSize = "collapsed";
+let interfaceScale = 1;
 let tray: Tray | null = null;
 
 function topCentreBounds(size: { width: number; height: number }) {
@@ -42,15 +49,24 @@ function topCentreBounds(size: { width: number; height: number }) {
   };
 }
 
+// Zoom every Bee window; the overlay also grows with its content so nothing clips.
+function applyInterfaceScale(scale: number): void {
+  interfaceScale = scale;
+  for (const window of BrowserWindow.getAllWindows()) window.webContents.setZoomFactor(scale);
+  win?.setBounds(topCentreBounds(scaleSize(SIZES[windowSize], scale)));
+}
+
 function applyMeetingMode(window: BrowserWindow, meetingMode: boolean): void {
   // Meeting mode hides the overlay from screen sharing and lifts it above full-screen apps.
   window.setContentProtection(meetingMode);
   window.setAlwaysOnTop(true, meetingMode ? "screen-saver" : "floating");
 }
 
-function createWindow(meetingMode: boolean): BrowserWindow {
+function createWindow(meetingMode: boolean, scale: number): BrowserWindow {
+  interfaceScale = scale;
+  windowSize = "collapsed";
   const window = new BrowserWindow({
-    ...topCentreBounds(SIZES.collapsed),
+    ...topCentreBounds(scaleSize(SIZES.collapsed, scale)),
     frame: false,
     transparent: true,
     backgroundColor: "#00000000",
@@ -73,12 +89,15 @@ function createWindow(meetingMode: boolean): BrowserWindow {
   });
   applyMeetingMode(window, meetingMode);
   window.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  // Zoom resets on navigation, so apply again once the page is up.
+  window.webContents.on("did-finish-load", () => window.webContents.setZoomFactor(interfaceScale));
   window.once("ready-to-show", () => window.show());
   // Links in Clerk's UI (terms, help) open in the browser; the overlay never opens windows.
   window.webContents.setWindowOpenHandler(({ url }) => {
     if (url.startsWith("https://")) void shell.openExternal(url);
     return { action: "deny" };
   });
+  window.webContents.setZoomFactor(scale);
   void window.loadURL(RENDERER_URL);
   return window;
 }
@@ -203,11 +222,18 @@ if (clerk.isPrimaryInstance) {
     ipcMain.handle(IPC.saveSettings, (_event, payload) => {
       const view = settings.save(settingsUpdateSchema.parse(payload));
       if (win) applyMeetingMode(win, view.meetingMode);
+      applyInterfaceScale(view.interfaceScale);
       return view;
     });
 
-    registerMcpIpc(settings);
+    // One open connection to the vmem connector for link chips. Opened now when signed in, and after each Connectors change.
+    const vmemSearch = createVmemSearch(() => settings.vmemConfig());
+    vmemSearch.refresh();
+    app.on("will-quit", () => void vmemSearch.close());
+    registerMcpIpc(settings, vmemSearch);
     registerOpenUrlIpc();
+    registerLinkIpc(settings, vmemSearch);
+    registerFaviconIpc();
     registerMeetingIpc({ notesDir, fsRoots: settings.fsRoots, mcpConfigs: settings.mcpConfigs, gatewayApiKey: settings.gatewayApiKey });
 
     const teams = registerTeamsIpc({ relayUrl: relayUrlFromEnv(process.env.BEE_RELAY_URL || import.meta.env.MAIN_VITE_BEE_RELAY_URL), detector: createTeamsDetector() });
@@ -216,7 +242,8 @@ if (clerk.isPrimaryInstance) {
     pendingInvite = null;
 
     ipcMain.handle(IPC.setWindowSize, (_event, payload) => {
-      win?.setBounds(topCentreBounds(SIZES[windowSizeSchema.parse(payload)]));
+      windowSize = windowSizeSchema.parse(payload);
+      win?.setBounds(topCentreBounds(scaleSize(SIZES[windowSize], interfaceScale)));
     });
 
     ipcMain.handle(IPC.systemAudioSource, () => findSystemAudioSource());
@@ -228,14 +255,14 @@ if (clerk.isPrimaryInstance) {
     ipcMain.handle(IPC.downloadUpdate, () => updater.download());
     ipcMain.handle(IPC.installUpdate, () => updater.install());
 
-    win = createWindow(settings.view().meetingMode);
+    win = createWindow(settings.view().meetingMode, settings.view().interfaceScale);
     createTray(notesDir);
     registerToggleShortcut();
 
     // macOS: re-create the overlay if it is gone, otherwise show it.
     app.on("activate", () => {
       if (win && !win.isDestroyed()) win.show();
-      else win = createWindow(settings.view().meetingMode);
+      else win = createWindow(settings.view().meetingMode, settings.view().interfaceScale);
     });
   });
 

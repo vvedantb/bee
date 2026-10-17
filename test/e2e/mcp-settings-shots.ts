@@ -1,53 +1,38 @@
-// Static Settings → MCP servers states for screenshots, styled by the real styles.css (no Clerk, no store, no window.bee).
+// Static Connectors tab states for screenshots, styled by the real styles.css (no Clerk, no store, no window.bee).
 // harness-main.ts loads this page once per ?shot=mcp-settings-empty|mcp-settings-connected and captures it.
-// The markup mirrors App.tsx (Panel, SettingsTab) and McpSettings.tsx.
+// The markup mirrors App.tsx (Panel tabs) and Connectors.tsx. Shot ids keep the mcp-settings name.
 import "../../src/renderer/src/styles.css";
 
-const SERVER_TOOLS = [
-  { name: "search", enabled: true, description: "Search stored memories" },
-  { name: "remember", enabled: true, description: "Save a memory" },
-  { name: "forget", enabled: false, description: "Delete a memory" },
-];
+// The globe Favicon.tsx shows until a site icon arrives (the harness has no window.bee to fetch one).
+const GLOBE = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3.6 9h16.8M3.6 15h16.8M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg>`;
 
-const intro = `<p class="muted">Notes folder: <code>~/Documents/Bee</code> <button type="button" class="link">Open</button></p>`;
-
-function server(): string {
-  const tools = SERVER_TOOLS.map(
-    (tool) => `<li><label class="toggle" title="${tool.description}"><input type="checkbox"${tool.enabled ? " checked" : ""}><code>${tool.name}</code></label></li>`,
-  ).join("");
-  return `<ul class="mcp-list"><li class="mcp-server">
-    <div class="row"><strong>vmem</strong><span class="muted">Streamable HTTP</span>
-      <label class="toggle spacer"><input type="checkbox" checked>Enabled</label></div>
-    <div class="row">
-      <button type="button">Test connection</button>
-      <button type="button" class="link">Edit</button>
-      <button type="button" class="link">Remove</button>
-    </div>
-    <p class="muted">Connected. 3 tools.</p>
-    <ul class="mcp-tools">${tools}</ul>
-  </li></ul>`;
+function row(name: string, action: "Connect" | "Disconnect"): string {
+  const cls = action === "Connect" ? "primary" : "connector-disconnect";
+  return `<li class="connector"><span class="connector-main"><span class="connector-icon">${GLOBE}</span><strong>${name}</strong></span><button type="button" class="${cls}">${action}</button></li>`;
 }
 
-const EMPTY_COPY = `<p class="muted">Luna can use tools from MCP servers, such as vmem, Eva or a local command. Add one to try it.</p>`;
-const ADD_BUTTON = `<div class="actions row"><button type="button">Add server</button></div>`;
+function connectors(action: "Connect" | "Disconnect"): string {
+  return `<section><h2>Connectors</h2>
+    <ul class="connector-list">${row("vmem", action)}</ul>
+    <div class="actions row"><button type="button" class="link">Add custom</button></div>
+  </section>`;
+}
 
-function settings(mcpBody: string): string {
+function page(body: string): string {
   return `<main class="panel">
     <nav class="tabs">
       <button type="button">Live</button>
-      <button type="button" class="active">Settings</button>
+      <button type="button" class="active">Connectors</button>
+      <button type="button">Settings</button>
     </nav>
-    <div class="tab-body">
-      ${intro}
-      <section><h2>MCP servers</h2>${mcpBody}</section>
-    </div>
+    <div class="tab-body">${body}</div>
   </main>`;
 }
 
 const shot = new URLSearchParams(location.search).get("shot") ?? "mcp-settings-empty";
 const states: Record<string, string> = {
-  "mcp-settings-empty": settings(EMPTY_COPY + ADD_BUTTON),
-  "mcp-settings-connected": settings(server() + ADD_BUTTON),
+  "mcp-settings-empty": page(connectors("Connect")),
+  "mcp-settings-connected": page(connectors("Disconnect")),
 };
 const html = states[shot];
 if (!html) throw new Error(`Unknown shot: ${shot}`);

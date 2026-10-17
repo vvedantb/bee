@@ -1,5 +1,8 @@
+import { IconPlug } from "@tabler/icons-react";
 import { useState, type FormEvent } from "react";
 import type { McpSave, McpServerView } from "../../shared/ipc";
+import { isVmemConnector } from "../../shared/mcp-names";
+import { Favicon } from "./Favicon";
 import { SecretField } from "./SecretField";
 import { actions, type McpTestState } from "./store";
 
@@ -66,7 +69,7 @@ function McpForm({ server, error, onDone }: { server: McpServerView | null; erro
         <>
           <label>
             URL
-            <input name="url" defaultValue={server?.url} placeholder="https://vmem.vedantb.com/mcp" required spellCheck={false} />
+            <input name="url" defaultValue={server?.url} placeholder="https://clear-bear-690.eu-west-1.convex.site/mcp" required spellCheck={false} />
             <span className="muted">https, or http on localhost.</span>
           </label>
           <label>
@@ -145,70 +148,133 @@ function McpToolList({ server }: { server: McpServerView }) {
   );
 }
 
-function McpServerRow({ server, test, onEdit }: { server: McpServerView; test: McpTestState | undefined; onEdit: () => void }) {
+// The details of one custom connector: test the connection, switch tools. Only reached by clicking the row.
+function McpDetails({ server, test }: { server: McpServerView; test: McpTestState | undefined }) {
   const status = test ? testLabel(test) : null;
   return (
-    <li className="mcp-server">
-      <div className="row">
-        <strong>{server.name}</strong>
-        <span className="muted">{server.transport === "http" ? "Streamable HTTP" : "stdio"}</span>
-        <label className="toggle spacer">
-          <input
-            type="checkbox"
-            checked={server.enabled}
-            onChange={(event) => void actions.setMcpEnabled({ id: server.id, enabled: event.currentTarget.checked })}
-          />
-          Enabled
-        </label>
-      </div>
+    <div className="mcp-details">
       <div className="row">
         <button type="button" disabled={test?.busy} onClick={() => void actions.testMcpServer(server.id)}>
           Test connection
         </button>
-        <button type="button" className="link" onClick={onEdit}>
-          Edit
-        </button>
-        <button type="button" className="link" onClick={() => void actions.removeMcpServer(server.id)}>
-          Remove
-        </button>
       </div>
       {status ? <p className={status.failed ? "error" : "muted"}>{status.text}</p> : null}
       <McpToolList server={server} />
+    </div>
+  );
+}
+
+// Connectors Bee offers by name. Connect saves the server enabled and signs in through the system browser (MCP OAuth).
+type Preset = { name: string; url: string; domain: string; matches: (server: McpServerView) => boolean };
+const PRESETS: Preset[] = [{ name: "vmem", url: "https://clear-bear-690.eu-west-1.convex.site/mcp", domain: "vmem.projectv.uk", matches: isVmemConnector }];
+
+function hostOf(url: string | undefined): string | null {
+  try {
+    return new URL(url ?? "").hostname || null;
+  } catch {
+    return null;
+  }
+}
+
+function ConnectorIcon({ domain }: { domain: string | null }) {
+  return <span className="connector-icon">{domain ? <Favicon domain={domain} /> : <IconPlug size={14} stroke={1.75} aria-hidden />}</span>;
+}
+
+type ConnectorRowProps = { name: string; domain: string | null; connected: boolean; busy: boolean; onToggle: () => void; onOpen?: () => void };
+
+// One line: icon, name, Connect or Disconnect. A custom row's name opens its edit panel.
+function ConnectorRow({ name, domain, connected, busy, onToggle, onOpen }: ConnectorRowProps) {
+  const label = (
+    <>
+      <ConnectorIcon domain={domain} />
+      <strong>{name}</strong>
+    </>
+  );
+  return (
+    <li className="connector">
+      {onOpen ? (
+        <button type="button" className="connector-main" onClick={onOpen}>
+          {label}
+        </button>
+      ) : (
+        <span className="connector-main">{label}</span>
+      )}
+      <button type="button" className={connected ? "connector-disconnect" : "primary"} disabled={busy} onClick={onToggle}>
+        {connected ? "Disconnect" : "Connect"}
+      </button>
     </li>
   );
 }
 
-/** Settings → MCP servers. Live data and actions go through window.bee (store.ts); secrets never come back. */
-export function McpSettings(props: { servers: McpServerView[]; tests: Record<string, McpTestState>; error: string | null }) {
+/** The Connectors tab: one clean row per connector, with advanced setup behind Add custom or a custom row. Secrets never come back. */
+export function Connectors(props: { servers: McpServerView[]; tests: Record<string, McpTestState>; error: string | null }) {
   // "new", a server id, or null (list only).
   const [editing, setEditing] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
   const editingServer = props.servers.find((server) => server.id === editing) ?? null;
-  const form = editing ? (
-    // Remount per target so each form starts from its own saved values.
-    <McpForm key={editing} server={editingServer} error={props.error} onDone={() => setEditing(null)} />
-  ) : null;
 
+  async function run(key: string, work: () => Promise<unknown>): Promise<void> {
+    setBusy(key);
+    try {
+      await work();
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  // Connect saves a preset enabled when it is new, then signs in. Disconnect removes the server and its tokens, so Connect is a fresh add.
+  const connectPreset = (preset: Preset, saved: McpServerView | undefined) =>
+    actions.connectMcpServer({ name: preset.name, enabled: true, transport: "http", url: preset.url, auth: { type: "none" } }, saved?.id);
+
+  if (editing) {
+    return (
+      <section>
+        <h2>{editingServer ? editingServer.name : "Add custom connector"}</h2>
+        {/* Remount per target so each form starts from its own saved values. */}
+        <McpForm key={editing} server={editingServer} error={props.error} onDone={() => setEditing(null)} />
+        {editingServer ? <McpDetails server={editingServer} test={props.tests[editingServer.id]} /> : null}
+      </section>
+    );
+  }
+
+  const custom = props.servers.filter((server) => !PRESETS.some((preset) => preset.matches(server)));
   return (
     <section>
-      <h2>MCP servers</h2>
-      {props.servers.length === 0 && !editing ? (
-        <p className="muted">Luna can use tools from MCP servers, such as vmem, Eva or a local command. Add one to try it.</p>
-      ) : null}
-      {props.servers.length > 0 ? (
-        <ul className="mcp-list">
-          {props.servers.map((server) => (
-            <McpServerRow key={server.id} server={server} test={props.tests[server.id]} onEdit={() => setEditing(server.id)} />
-          ))}
-        </ul>
-      ) : null}
-      {!editing && props.error ? <p className="error">{props.error}</p> : null}
-      {form ?? (
-        <div className="actions row">
-          <button type="button" onClick={() => setEditing("new")}>
-            Add server
-          </button>
-        </div>
-      )}
+      <h2>Connectors</h2>
+      <ul className="connector-list">
+        {PRESETS.map((preset) => {
+          const saved = props.servers.find(preset.matches);
+          // Signed in, not just saved: a server that is enabled but has no tokens still offers Connect.
+          const connected = Boolean(saved?.enabled && saved.hasAuth);
+          return (
+            <ConnectorRow
+              key={preset.name}
+              name={preset.name}
+              domain={preset.domain}
+              connected={connected}
+              busy={busy === preset.name}
+              onToggle={() => void run(preset.name, () => (connected && saved ? actions.removeMcpServer(saved.id) : connectPreset(preset, saved)))}
+            />
+          );
+        })}
+        {custom.map((server) => (
+          <ConnectorRow
+            key={server.id}
+            name={server.name}
+            domain={server.transport === "http" ? hostOf(server.url) : null}
+            connected={server.enabled}
+            busy={busy === server.id}
+            onToggle={() => void run(server.id, () => (server.enabled ? actions.removeMcpServer(server.id) : actions.setMcpEnabled({ id: server.id, enabled: true })))}
+            onOpen={() => setEditing(server.id)}
+          />
+        ))}
+      </ul>
+      {props.error ? <p className="error">{props.error}</p> : null}
+      <div className="actions row">
+        <button type="button" className="link" onClick={() => setEditing("new")}>
+          Add custom
+        </button>
+      </div>
     </section>
   );
 }
