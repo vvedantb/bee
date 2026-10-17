@@ -18,7 +18,7 @@ import { isNotePath, loadSnippets, writeMeetingSummaryFile } from "./notes";
  * Mic phrases → Grok STT, lines → retrieve → Jev → Luna, and the end-of-meeting summary into the notes folder.
  * The Gateway key never leaves main.
  */
-export function registerMeetingIpc(args: { notesDir: string; gatewayApiKey: () => string | undefined }): void {
+export function registerMeetingIpc(args: { notesDir: string; fsRoots: () => string[]; gatewayApiKey: () => string | undefined }): void {
   ipcMain.handle(IPC.transcribe, (_event, payload) => {
     const request = transcribeRequestSchema.parse(payload);
     assertSignedIn(request.sessionToken);
@@ -35,6 +35,8 @@ export function registerMeetingIpc(args: { notesDir: string; gatewayApiKey: () =
       transcript: request.transcript,
       snippets: loadSnippets(args.notesDir),
       gateway: apiKey ? createBeeGateway(apiKey) : null,
+      notesDir: args.notesDir,
+      extraRoots: args.fsRoots(),
     });
   });
 

@@ -373,7 +373,8 @@ ol {
 
 input[type="password"],
 input[type="text"],
-input:not([type]) {
+input:not([type]),
+textarea {
   flex: 1;
   min-width: 0;
   font: inherit;
@@ -382,6 +383,10 @@ input:not([type]) {
   border: none;
   border-radius: 8px;
   padding: 7px 10px;
+}
+
+textarea {
+  resize: vertical;
 }
 
 input:disabled {

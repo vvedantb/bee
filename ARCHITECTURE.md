@@ -144,7 +144,7 @@ All model calls use the Vercel AI SDK (`ai`, `@ai-sdk/gateway`) against Vercel A
 | --- | --- | --- | --- | --- |
 | Transcribe | `xai/grok-stt` | `experimental_transcribe` (Gateway transcription API) | 20 s | 1 |
 | Rank | `typesafe-ai/jev` | `experimental_evaluate` (Gateway evaluation API) | 15 s | 1 |
-| Guide | `openai/gpt-6-luna` | `generateText`, reasoning effort `low`, max 800 output tokens, tool `web_search` (OpenAI built-in, run by the provider) | 45 s | 1 |
+| Guide | `openai/gpt-6-luna` | `generateText`, reasoning effort `low`, max 800 output tokens, tools `web_search` (OpenAI built-in, run by the provider) and the file tools, up to 5 steps | 45 s | 1 |
 | Summarise | `openai/gpt-6-luna` | `generateText`, reasoning effort `low`, max 2,000 output tokens | 60 s | 1 |
 
 ### Why Jev does not use chat completions
@@ -183,13 +183,24 @@ Defined in `src/core/jev.ts`.
 Question keys are positional (`c0`…) rather than note ids. Note ids contain characters such as `#` and `.`, and positional keys keep the mapping simple.
 
 ### Tools and sources
-`src/core/tools.ts` holds the tool registry. `lunaTools()` returns the `ToolSet` passed to Luna; today it holds only `web_search` (`openai.tools.webSearch({ searchContextSize: "low" })` from `@ai-sdk/openai`, sent through the Gateway). The model decides when to search; Bee never forces it. Search runs in one provider-side step. Later tools go into the same registry.
+`src/core/tools.ts` holds the tool registry. `lunaTools()` returns the `ToolSet` passed to Luna. It always includes `web_search` (`openai.tools.webSearch({ searchContextSize: "low" })` from `@ai-sdk/openai`, sent through the Gateway). The model decides when to search; Bee never forces it. Search runs in one provider-side step. When `notesDir` is passed, the set also includes the four file tools below. New tools go into the same registry.
+
+The file tools come from `src/core/fs-tools.ts` (`lunaTools({ notesDir, extraRoots })`); without `notesDir` they are omitted. They run in the main process (the pipeline does), so they use Node `fs`. They add to retrieval and Jev; they do not replace them.
+
+| Tool | Does | Limits |
+| --- | --- | --- |
+| `list_dir` | Names, type and size in a folder; optional one level of subfolders | 200 entries; binaries marked `skip` |
+| `search_files` | Case-insensitive match on file name or content; relative path plus a short line | 20 hits, 200-character snippet, 2000 files, depth 4 |
+| `read_file` | Text of one file | 256 KiB file limit; 64 KiB returned, then truncated with a note |
+| `append_note` | Creates or appends to a `.md` file | Notes folder only, file name only, 8 KiB per call, never overwrites |
+
+Sandbox (`src/core/fs-sandbox.ts`): the roots are the notes folder (always first) plus `fsRoots` from `settings.json` (absolute paths, set in Settings, read on each pipeline run). Relative paths start at the notes folder. Backslashes count as separators on every platform. A path is refused if it holds a NUL byte, is empty, or resolves (`node:path`) outside every root. All symlinks are refused, and so is any path whose real location leaves its root. Listings and searches skip dotfiles and symlinks. A file is binary if its extension is on the binary list or its first 4 KiB hold a NUL byte. Tools return a short `Error: …` string instead of throwing.
 
 `sourcesFromGenerateResult` reads `result.sources` and, if that is empty, `output.sources` in `result.toolResults`. It keeps unique `https` URLs, falls back to the hostname for a missing title, and returns at most 5. `PipelineResult.sources` carries them to the Live tab, which lists them under the tips. The list is empty when there is no key or Luna fails. A failed search fails open: Luna still returns tips, or the usual `Luna guidance failed:` error.
 
 ### Luna prompt format
 
-Defined in `src/core/luna.ts`. The system prompt asks for at most two tips, one per line, under 20 words each. If the latest lines ask a direct question, the first tip answers it: from the notes when they cover it (cited as `[n1]`), otherwise from general knowledge, with a brief caveat when the answer may have changed since training. Otherwise tips suggest what to say next, citing notes. Tips must not invent facts about the user's own work. If there is nothing useful, the model replies `NONE`. If the notes do not cover a question and the fact is public or may have changed (office holders, news, scores, prices), Luna calls `web_search` and ends the tip with a short citation (domain or `[web]`). It does not search for stable facts or sums. The user prompt holds the last 8 transcript lines and the notes labelled `[n1]`… The panel shows the same labels next to each note.
+Defined in `src/core/luna.ts`. The system prompt asks for at most two tips, one per line, under 20 words each. If the latest lines ask a direct question, the first tip answers it: from the notes when they cover it (cited as `[n1]`), otherwise from general knowledge, with a brief caveat when the answer may have changed since training. Otherwise tips suggest what to say next, citing notes. Tips must not invent facts about the user's own work. If there is nothing useful, the model replies `NONE`. If the notes do not cover a question and the fact is public or may have changed (office holders, news, scores, prices), Luna calls `web_search` and ends the tip with a short citation (domain or `[web]`). It does not search for stable facts or sums. If the notes do not cover a question about the user's own notes or files, Luna uses `list_dir`, `search_files` and `read_file` (injected `[n1]` notes first, never `web_search` for private facts), and calls `append_note` only when the user clearly asks to add or save a note. The user prompt holds the last 8 transcript lines and the notes labelled `[n1]`… The panel shows the same labels next to each note.
 
 ### Summary prompt format
 

@@ -2,6 +2,7 @@ import { safeStorage } from "electron";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
+import { normalizeFsRoots } from "../core/fs-sandbox";
 import type { SettingsUpdate, SettingsView } from "../shared/ipc";
 
 // On disk: secrets are safeStorage ciphertext (base64). Plain secrets never touch disk.
@@ -9,6 +10,7 @@ const fileSchema = z.object({
   meetingMode: z.boolean().default(false),
   gatewayApiKey: z.string().optional(),
   claudeOAuthToken: z.string().optional(),
+  fsRoots: z.array(z.string()).default([]),
 });
 type SettingsFile = z.infer<typeof fileSchema>;
 type SecretName = "gatewayApiKey" | "claudeOAuthToken";
@@ -33,7 +35,7 @@ export function createSettingsStore(args: { userDataDir: string; notesDir: strin
     } catch {
       // Missing or corrupt file: start from defaults.
     }
-    return { meetingMode: false };
+    return { meetingMode: false, fsRoots: [] };
   }
 
   function write(file: SettingsFile): void {
@@ -76,6 +78,7 @@ export function createSettingsStore(args: { userDataDir: string; notesDir: strin
       meetingMode: file.meetingMode,
       secretStorage: storageMode(),
       notesDir: args.notesDir,
+      fsRoots: read().fsRoots,
     };
   }
 
@@ -85,9 +88,19 @@ export function createSettingsStore(args: { userDataDir: string; notesDir: strin
     // Reserved for a later version: stored securely, never used at runtime in v1.
     if (update.claudeOAuthToken !== undefined) file = setSecret(file, "claudeOAuthToken", update.claudeOAuthToken);
     if (update.meetingMode !== undefined) file = { ...file, meetingMode: update.meetingMode };
+    if (update.fsRoots !== undefined) {
+      const { roots, invalid } = normalizeFsRoots(update.fsRoots);
+      if (invalid.length > 0) throw new Error(`Folders must be absolute paths: ${invalid.join(", ")}`);
+      file = { ...file, fsRoots: roots };
+    }
     write(file);
     return view();
   }
 
-  return { view, save, gatewayApiKey };
+  // Read on each pipeline run, so Settings changes apply without a restart.
+  function fsRoots(): string[] {
+    return normalizeFsRoots(read().fsRoots).roots;
+  }
+
+  return { view, save, gatewayApiKey, fsRoots };
 }

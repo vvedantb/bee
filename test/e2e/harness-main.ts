@@ -32,7 +32,7 @@ function fakeSessionToken(): string {
 void app.whenReady().then(() => {
   const notesDir = notesDirEnv || join(mkdtempSync(join(tmpdir(), "bee-e2e-")), "notes");
   ensureNotesDir(notesDir);
-  registerMeetingIpc({ notesDir, gatewayApiKey: () => process.env.BEE_AI_GATEWAY_API_KEY?.trim() || undefined });
+  registerMeetingIpc({ notesDir, fsRoots: () => [], gatewayApiKey: () => process.env.BEE_AI_GATEWAY_API_KEY?.trim() || undefined });
   // Short timings so the popup and the debounced leave happen within the test.
   registerTeamsIpc({ relayUrl: relayUrlFromEnv(process.env.BEE_RELAY_URL), detector: createStubDetector(), timing: { enterMs: 300, leaveMs: 1000 } });
   session.defaultSession.setPermissionRequestHandler((_contents, permission, callback) => callback(permission === "media"));

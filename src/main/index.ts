@@ -155,7 +155,7 @@ if (clerk.isPrimaryInstance) {
       return view;
     });
 
-    registerMeetingIpc({ notesDir, gatewayApiKey: settings.gatewayApiKey });
+    registerMeetingIpc({ notesDir, fsRoots: settings.fsRoots, gatewayApiKey: settings.gatewayApiKey });
 
     const teams = registerTeamsIpc({ relayUrl: relayUrlFromEnv(process.env.BEE_RELAY_URL || import.meta.env.MAIN_VITE_BEE_RELAY_URL), detector: createTeamsDetector() });
     onInvite = (link) => teams.setPendingInvite(link);
