@@ -2,7 +2,7 @@
 // page once per ?shot=collapsed|thinking|expanded and captures it; the page reports once it has rendered.
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { IconChevronDown, IconMicrophone, IconX } from "@tabler/icons-react";
+import { IconChevronDown, IconExternalLink, IconMicrophone, IconX } from "@tabler/icons-react";
 import "../../src/renderer/src/styles.css";
 
 const ICON = { size: 16, stroke: 1.75 };
@@ -22,9 +22,11 @@ function pill(status: string, busy: boolean): string {
 
 function body(): string {
   const tips = TIPS.map((tip) => `<li>${tip}</li>`).join("");
+  const chips = `<ul class="link-chips" aria-label="Suggested links"><li class="chip link-chip"><button type="button" class="link-chip-open" title="https://convex.dev/">${icon(IconExternalLink)}convex.dev</button><button type="button" class="link-chip-dismiss" aria-label="Dismiss convex.dev">${icon(IconX)}</button></li></ul>`;
   return `<section class="island-body"><div class="island-inner">
     <button type="button" class="icon-button island-close" aria-label="Dismiss">${icon(IconX)}</button>
     <ul class="island-tips">${tips}</ul>
+    ${chips}
     <div class="island-sources"><h3>Sources</h3><ul><li><a href="${SOURCE.url}">${SOURCE.title}</a></li></ul></div>
   </div></section>`;
 }

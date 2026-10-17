@@ -1,5 +1,6 @@
 import { getToken } from "@clerk/electron/react";
 import { useSyncExternalStore } from "react";
+import { detectLinks, mergeChips, visibleChips, type LinkChip } from "../../core/link-suggest";
 import { mergeLines, pipelineText, summaryTranscript, type SessionLine } from "../../core/sync-lines";
 import {
   SESSION_TRANSCRIPT_MAX,
@@ -62,6 +63,9 @@ export type BeeState = {
   dismissed: boolean;
   // True while the body plays its exit animation, before the window shrinks.
   islandClosing: boolean;
+  // Link chips for the current turn (the latest line plus the tips that came back), and the ones the user closed.
+  chips: LinkChip[];
+  dismissedChipIds: string[];
   error: string | null;
   mic: { on: boolean; level: number; error: string | null };
   update: UpdateState;
@@ -103,6 +107,8 @@ let state: BeeState = {
   activity: null,
   dismissed: false,
   islandClosing: false,
+  chips: [],
+  dismissedChipIds: [],
   error: null,
   mic: { ...MIC_OFF, error: null },
   update: { status: "idle", check: null, error: null },
@@ -172,7 +178,17 @@ export function syncCard(current: BeeState): SyncCard {
 /** The island body (tips and sources under the pill) is open: a result to show, and no panel or sync card in the way. */
 export function islandOpen(current: BeeState): boolean {
   if (current.expanded || syncCard(current)) return false;
-  return islandPhase({ ...(current.result ?? EMPTY_RESULT), dismissed: current.dismissed, busy: current.busy }) === "expanded";
+  return islandPhase(islandArgs(current)) === "expanded";
+}
+
+/** What island.ts needs from the state: the result (or an empty one), the chips still shown, and the flags. */
+export function islandArgs(current: BeeState) {
+  return {
+    ...(current.result ?? EMPTY_RESULT),
+    chipCount: visibleChips(current.chips, current.dismissedChipIds).length,
+    dismissed: current.dismissed,
+    busy: current.busy,
+  };
 }
 
 /** Resize the window to fit: full panel, notch plus sync card, notch plus island body, or notch only. */
@@ -194,7 +210,21 @@ function selfName(): string {
 }
 
 function addLines(lines: SessionLine[]): void {
-  set({ session: { ...state.session, lines: mergeLines(state.session.lines, lines, SESSION_TRANSCRIPT_MAX) } });
+  const before = state.session.lines;
+  const merged = mergeLines(before, lines, SESSION_TRANSCRIPT_MAX);
+  set({ session: { ...state.session, lines: merged } });
+  // Lines already seen start no turn. New ones reset chips and dismissals, then fill from what was just said.
+  if (merged !== before) startTurn(lines);
+}
+
+/** A new spoken or simulated line. Chips from its links open the island body even before Luna answers. */
+function startTurn(lines: SessionLine[]): void {
+  const chips = mergeChips([], lines.flatMap((line) => detectLinks(line.text)));
+  set(chips.length > 0 ? { chips, dismissedChipIds: [], dismissed: false, islandClosing: false } : { chips, dismissedChipIds: [] });
+  if (chips.length > 0) {
+    touchIsland();
+    void applyWindowSize();
+  }
 }
 
 /** Retrieve → Jev → Luna on the last 8 lines, teammates' lines labelled "Alice: …". */
@@ -211,7 +241,15 @@ async function runPipeline(): Promise<void> {
   try {
     const result = await window.bee.runPipeline({ transcript, sessionToken: await sessionToken() });
     if (run !== latestRun) return;
-    set({ result, busy: false, activity: null, dismissed: false, islandClosing: false });
+    // The tips' links join this turn's chips (deduped, capped).
+    set({
+      result,
+      chips: mergeChips(state.chips, result.tips.flatMap((tip) => detectLinks(tip))),
+      busy: false,
+      activity: null,
+      dismissed: false,
+      islandClosing: false,
+    });
     addToSession(result);
     touchIsland();
   } catch (error) {
@@ -362,6 +400,23 @@ export const actions = {
     return closeIsland();
   },
 
+  /** Hide one chip for this turn. The island closes when nothing else is left to show. */
+  dismissChip(id: string): void {
+    if (state.dismissedChipIds.includes(id)) return;
+    set({ dismissedChipIds: [...state.dismissedChipIds, id] });
+    touchIsland();
+    void applyWindowSize();
+  },
+
+  /** Open a chip's link in the default browser. Only called from a click; main validates the URL. */
+  async openLink(url: string): Promise<void> {
+    try {
+      await window.bee.openExternalUrl(url);
+    } catch {
+      // The chip stays; the user can click again.
+    }
+  },
+
   /** Show the last result again under the pill. */
   reopenIsland(): void {
     if (state.expanded) return;
@@ -437,7 +492,7 @@ export const actions = {
     const ended = state.session;
     if (ended.lines.length === 0 || state.summary.saving) return;
     if (stopMic) actions.stopMic(null);
-    set({ session: EMPTY_SESSION, summary: { saving: true, result: null, error: null } });
+    set({ session: EMPTY_SESSION, chips: [], dismissedChipIds: [], summary: { saving: true, result: null, error: null } });
     try {
       const result = await window.bee.writeMeetingSummary({
         transcript: summaryTranscript(ended.lines, selfName()),

@@ -7,6 +7,7 @@ import {
   mcpListSchema,
   mcpTestResultSchema,
   meetingSummaryResultSchema,
+  openExternalUrlResultSchema,
   pipelineResultSchema,
   settingsViewSchema,
   teamsActionResultSchema,
@@ -39,6 +40,8 @@ const api = {
     meetingSummaryResultSchema.parse(await ipcRenderer.invoke(IPC.writeMeetingSummary, request)),
   // Resolves to shell.openPath's error message, "" on success.
   openMeetingSummary: async (path: string) => z.string().parse(await ipcRenderer.invoke(IPC.openMeetingSummary, path)),
+  // Opens one http(s) link in the default browser after a click. Main re-checks the URL.
+  openExternalUrl: async (url: string) => openExternalUrlResultSchema.parse(await ipcRenderer.invoke(IPC.openExternalUrl, url)),
   setWindowSize: async (size: WindowSize) => {
     z.void().parse(await ipcRenderer.invoke(IPC.setWindowSize, size));
   },
