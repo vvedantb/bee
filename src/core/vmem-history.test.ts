@@ -130,7 +130,7 @@ describe("pickSearchTool and searchArguments", () => {
 
   it("sends query and limit, and source only when the schema has it", () => {
     expect(searchArguments(tool("search", { query: {}, limit: {} }), "q")).toEqual({ query: "q", limit: 20 });
-    expect(searchArguments(tool("search", { query: {}, limit: {}, source: { type: "string" } }), "q")).toEqual({ query: "q", limit: 20, source: "browsing history" });
+    expect(searchArguments(tool("search", { query: {}, limit: {}, source: { type: "string" } }), "q")).toEqual({ query: "q", limit: 20, source: "browsing-history" });
     expect(searchArguments(tool("search"), "q")).toEqual({ query: "q", limit: 20 });
   });
 

@@ -11,7 +11,8 @@ const MAX_QUERY = 300;
 export const VMEM_CONNECT_TIMEOUT_MS = 800;
 export const VMEM_CALL_TIMEOUT_MS = 800;
 const HISTORY_SOURCE = /history|bookmark/i;
-const DEFAULT_SOURCE = "browsing history";
+// vmem stores history as source "browsing-history" and matches the filter exactly ("browsing history" returns nothing).
+const DEFAULT_SOURCE = "browsing-history";
 const URL_IN_TEXT = /https?:\/\/[^\s<>"')\]]+/gi;
 const TRAILING = /[.,;:!?]+$/;
 const LIST_KEYS = ["memories", "results", "data"];

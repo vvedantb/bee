@@ -99,7 +99,7 @@ When a spoken line or a tip names a website (a URL, `convex.dev`, "convex dot de
 
 **Personalised link suggestions** pick the exact page you mean. For "vercel logs for vibot", the chip can read `vercel.com › vibot › logs` and open that page, taken from your browsing history or bookmarks in [vmem](https://github.com/vedantb2/vmem), when vmem is connected.
 
-1. Open the **Connectors** tab (between **Live** and **Settings**) and click **Connect** on **vmem**. There is no API key: vmem is an MCP connector (`https://vmem.vedantb.com/mcp`). **Add custom** sets up any other MCP server. Any enabled server named `vmem`, or on the `vmem.vedantb.com` host, counts.
+1. Open the **Connectors** tab (between **Live** and **Settings**) and click **Connect** on **vmem**. There is no API key: vmem is an MCP connector (`https://clear-bear-690.eu-west-1.convex.site/mcp`). **Add custom** sets up any other MCP server. Any enabled server named `vmem`, or on the `vmem.vedantb.com` host, counts.
 2. Keep the **Gateway key** set in **Settings**: Jev, which makes the choice, runs through AI Gateway.
 3. Use the **Personalised link suggestions** switch in **Settings**. It is on by default when an enabled vmem connector exists, and off otherwise. Once you change it, Bee keeps your choice.
 

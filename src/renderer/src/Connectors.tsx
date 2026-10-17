@@ -69,7 +69,7 @@ function McpForm({ server, error, onDone }: { server: McpServerView | null; erro
         <>
           <label>
             URL
-            <input name="url" defaultValue={server?.url} placeholder="https://vmem.vedantb.com/mcp" required spellCheck={false} />
+            <input name="url" defaultValue={server?.url} placeholder="https://clear-bear-690.eu-west-1.convex.site/mcp" required spellCheck={false} />
             <span className="muted">https, or http on localhost.</span>
           </label>
           <label>
@@ -166,7 +166,7 @@ function McpDetails({ server, test }: { server: McpServerView; test: McpTestStat
 
 // Connectors Bee offers by name. Connect saves the server enabled; none of these needs a token.
 type Preset = { name: string; url: string; domain: string; matches: (server: McpServerView) => boolean };
-const PRESETS: Preset[] = [{ name: "vmem", url: "https://vmem.vedantb.com/mcp", domain: "vmem.vedantb.com", matches: isVmemConnector }];
+const PRESETS: Preset[] = [{ name: "vmem", url: "https://clear-bear-690.eu-west-1.convex.site/mcp", domain: "vmem.vedantb.com", matches: isVmemConnector }];
 
 function hostOf(url: string | undefined): string | null {
   try {
