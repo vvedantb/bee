@@ -30,6 +30,8 @@
   --fast: 150ms;
   --medium: 220ms;
   --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  /* Slight overshoot: the island and its content settle like a spring. */
+  --spring: cubic-bezier(0.22, 1.2, 0.36, 1);
   font-family: "Instrument Sans", "Segoe UI", system-ui, -apple-system, sans-serif;
   font-size: 13px;
   color: var(--text);
@@ -57,6 +59,23 @@ body,
   gap: 6px;
 }
 
+/* The pill and, when an answer is open, the body under it: one surface that grows downward. */
+.island {
+  display: flex;
+  flex-direction: column;
+  flex: none;
+  min-height: 0;
+  max-height: 100%;
+  border-radius: 26px;
+  background: var(--surface);
+  overflow: hidden;
+  transition: border-radius 360ms var(--spring);
+}
+
+.island.open {
+  border-radius: 26px 26px 30px 30px;
+}
+
 .notch {
   display: flex;
   align-items: center;
@@ -64,8 +83,6 @@ body,
   height: 52px;
   flex: none;
   padding: 0 10px 0 16px;
-  border-radius: 26px;
-  background: var(--surface);
   -webkit-app-region: drag;
 }
 
@@ -98,6 +115,17 @@ body,
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
+}
+
+button.notch-status {
+  padding: 0;
+  background: none;
+  text-align: left;
+}
+
+button.notch-status:not(:disabled):hover {
+  background: none;
+  text-decoration: underline;
 }
 
 button {
@@ -188,6 +216,101 @@ a.link:hover {
   background: currentColor;
   transform-origin: bottom;
   transition: transform 100ms linear;
+}
+
+/* Island body: height grows from the pill (0fr to 1fr), content rises in with a spring. */
+.island-body {
+  display: grid;
+  grid-template-rows: 1fr;
+  min-height: 0;
+  overflow-y: auto;
+  animation: island-open 420ms var(--spring);
+}
+
+.island-body.closing {
+  animation: island-close 200ms ease-in forwards;
+}
+
+.island-inner {
+  position: relative;
+  min-height: 0;
+  padding: 2px 18px 18px;
+}
+
+.island-close {
+  position: absolute;
+  top: 0;
+  right: 10px;
+  padding: 4px;
+  color: var(--muted);
+  background: none;
+}
+
+.island-tips {
+  margin: 0;
+  padding: 0 28px 0 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.island-tips li {
+  font-size: 17px;
+  line-height: 1.4;
+  font-weight: 500;
+  animation: island-rise 460ms var(--spring) backwards;
+}
+
+.island-tips li:nth-child(2) {
+  animation-delay: 70ms;
+}
+
+.island-error {
+  margin: 8px 0 0;
+  font-size: 14px;
+  color: var(--danger);
+}
+
+.island-sources {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--surface-raised);
+  animation: island-rise 460ms var(--spring) 140ms backwards;
+}
+
+.island-sources h3 {
+  margin: 0 0 6px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.island-sources ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.island-sources li {
+  font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.island-sources a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.island-sources a:hover {
+  text-decoration: underline;
 }
 
 .panel {
@@ -455,6 +578,27 @@ code {
   to {
     opacity: 0;
     transform: translateY(-6px) scale(0.98);
+  }
+}
+
+@keyframes island-open {
+  from {
+    grid-template-rows: 0fr;
+    opacity: 0;
+  }
+}
+
+@keyframes island-close {
+  to {
+    grid-template-rows: 0fr;
+    opacity: 0;
+  }
+}
+
+@keyframes island-rise {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.98);
   }
 }
 

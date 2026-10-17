@@ -3,8 +3,10 @@
 // folder (default: a new temp folder). Clerk is skipped: the page sends an unsigned token with Bee's issuer, which is
 // all main/auth.ts checks. BEE_E2E_TOKEN replaces that token (the Teams E2E signs real RS256 tokens for its mock
 // relay at BEE_RELAY_URL). Teams detection uses a stub the page drives with the simulateMeeting action.
+// With BEE_E2E_SHOTS_DIR, the page is loaded once per name in BEE_E2E_SHOTS (comma-separated, as ?shot=) in a transparent
+// frameless 520 × 360 window, and each capturePage() is written to <dir>/island-<name>.png.
 import { BrowserWindow, app, session } from "electron";
-import { mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CLERK_ISSUER } from "../../src/main/auth";
@@ -13,6 +15,7 @@ import { ensureNotesDir } from "../../src/main/notes";
 import { createStubDetector } from "../../src/main/teams-detector";
 import { registerTeamsIpc, relayUrlFromEnv } from "../../src/main/teams-sync";
 
+const { BEE_E2E_SHOTS_DIR: shotsDir, BEE_E2E_SHOTS: shotNames } = process.env;
 const { BEE_E2E_PRELOAD: preload, BEE_E2E_PAGE: page, BEE_E2E_AUDIO: audioFile, BEE_E2E_NOTES_DIR: notesDirEnv } = process.env;
 if (!preload || !page) throw new Error("BEE_E2E_PRELOAD and BEE_E2E_PAGE must be set");
 
@@ -29,7 +32,47 @@ function fakeSessionToken(): string {
   return `${part({ alg: "none" })}.${part({ iss: CLERK_ISSUER, sub: "user_e2e", exp })}.`;
 }
 
-void app.whenReady().then(() => {
+/** Loads the page once per shot name, waits for its E2E_RESULT, and writes the PNG. Resolves the written files. */
+async function captureShots(dir: string, names: string[]): Promise<string[]> {
+  mkdirSync(dir, { recursive: true });
+  const files: string[] = [];
+  // One window for every shot: closing the only window would quit the app.
+  const shotWin = new BrowserWindow({
+    show: false,
+    width: 520,
+    height: 360,
+    frame: false,
+    transparent: true,
+    backgroundColor: "#00000000",
+    webPreferences: { preload, sandbox: true, contextIsolation: true, nodeIntegration: false },
+  });
+  for (const name of names) {
+    const rendered = new Promise<void>((resolve, reject) => {
+      const onMessage = ({ message }: { message: string }) => {
+        if (!message.startsWith("E2E_RESULT ")) return;
+        shotWin.webContents.off("console-message", onMessage);
+        resolve();
+      };
+      shotWin.webContents.on("console-message", onMessage);
+      setTimeout(() => reject(new Error(`Shot "${name}" did not render in 15 s`)), 15_000);
+    });
+    await shotWin.loadFile(page as string, { query: { shot: name } });
+    await rendered;
+    const image = await shotWin.webContents.capturePage();
+    const file = join(dir, `island-${name}.png`);
+    writeFileSync(file, image.toPNG());
+    files.push(file);
+  }
+  return files;
+}
+
+void app.whenReady().then(async () => {
+  if (shotsDir) {
+    const files = await captureShots(shotsDir, (shotNames || "collapsed,thinking,expanded").split(","));
+    process.stdout.write(`E2E_RESULT ${JSON.stringify({ ok: true, files })}\n`);
+    app.exit(0);
+    return;
+  }
   const notesDir = notesDirEnv || join(mkdtempSync(join(tmpdir(), "bee-e2e-")), "notes");
   ensureNotesDir(notesDir);
   registerMeetingIpc({ notesDir, fsRoots: () => [], gatewayApiKey: () => process.env.BEE_AI_GATEWAY_API_KEY?.trim() || undefined });

@@ -13,6 +13,7 @@ import {
   type UpdateCheck,
   type WindowSize,
 } from "../../shared/ipc";
+import { ISLAND_IDLE_MS, islandPhase, shouldAutoCollapse } from "./island";
 import { openMic } from "./mic";
 import { startMicSession } from "./speech";
 
@@ -46,6 +47,12 @@ export type BeeState = {
   session: MeetingSession;
   summary: SummaryState;
   busy: boolean;
+  // The tool Luna last used in this run (a raw tool name; island.ts activityLabel turns it into text). Null otherwise.
+  activity: string | null;
+  // Island: the user closed the body for the result on screen. A new result clears it.
+  dismissed: boolean;
+  // True while the body plays its exit animation, before the window shrinks.
+  islandClosing: boolean;
   error: string | null;
   mic: { on: boolean; level: number; error: string | null };
   update: UpdateState;
@@ -60,6 +67,8 @@ export type BeeState = {
 const PIPELINE_WINDOW = 8;
 // Matches the panel exit animation in styles.css.
 const COLLAPSE_MS = 160;
+// Matches the island exit animation in styles.css.
+const ISLAND_CLOSE_MS = 200;
 const MIC_OFF = { on: false, level: 0 };
 const EMPTY_SESSION: MeetingSession = { lines: [], notesCited: [], tips: [] };
 const SESSION_LIST_MAX = 100;
@@ -81,6 +90,9 @@ let state: BeeState = {
   session: EMPTY_SESSION,
   summary: { saving: false, result: null, error: null },
   busy: false,
+  activity: null,
+  dismissed: false,
+  islandClosing: false,
   error: null,
   mic: { ...MIC_OFF, error: null },
   update: { status: "idle", check: null, error: null },
@@ -111,6 +123,32 @@ let localSeq = 0;
 let stopMic: (() => void) | null = null;
 let sentSize: WindowSize = "collapsed";
 let ticking = false;
+let islandHovered = false;
+let islandActivityAt = 0;
+let islandTimer: ReturnType<typeof setTimeout> | undefined;
+const EMPTY_RESULT = { tips: [], sources: [], guideError: null };
+
+/** Restart the inactivity clock. The body closes ISLAND_IDLE_MS after the last result or pointer leave. */
+function touchIsland(): void {
+  islandActivityAt = Date.now();
+  clearTimeout(islandTimer);
+  if (!islandOpen(state) || islandHovered) return;
+  islandTimer = setTimeout(autoCollapseIsland, ISLAND_IDLE_MS);
+}
+
+function autoCollapseIsland(): void {
+  const phase = islandOpen(state) ? "expanded" : "idle";
+  if (shouldAutoCollapse({ phase, hovered: islandHovered, lastActivityAt: islandActivityAt, now: Date.now() })) void closeIsland();
+}
+
+async function closeIsland(): Promise<void> {
+  if (!islandOpen(state) || state.islandClosing) return;
+  set({ islandClosing: true });
+  await new Promise((resolve) => setTimeout(resolve, ISLAND_CLOSE_MS));
+  if (!state.islandClosing) return;
+  set({ dismissed: true, islandClosing: false });
+  await applyWindowSize();
+}
 
 export function syncCard(current: BeeState): SyncCard {
   const teams = current.teams;
@@ -121,9 +159,16 @@ export function syncCard(current: BeeState): SyncCard {
   return null;
 }
 
-/** Resize the window to fit: full panel, notch plus sync card, or notch only. */
+/** The island body (tips and sources under the pill) is open: a result to show, and no panel or sync card in the way. */
+export function islandOpen(current: BeeState): boolean {
+  if (current.expanded || syncCard(current)) return false;
+  return islandPhase({ ...(current.result ?? EMPTY_RESULT), dismissed: current.dismissed, busy: current.busy }) === "expanded";
+}
+
+/** Resize the window to fit: full panel, notch plus sync card, notch plus island body, or notch only. */
 async function applyWindowSize(): Promise<void> {
-  const size: WindowSize = state.expanded && !state.collapsing ? "expanded" : syncCard(state) ? "prompt" : "collapsed";
+  const size: WindowSize =
+    state.expanded && !state.collapsing ? "expanded" : syncCard(state) ? "prompt" : islandOpen(state) ? "response" : "collapsed";
   if (size === sentSize) return;
   sentSize = size;
   await window.bee.setWindowSize(size);
@@ -147,14 +192,23 @@ async function runPipeline(): Promise<void> {
   const transcript = state.session.lines.slice(-PIPELINE_WINDOW).map(pipelineText);
   if (transcript.length === 0) return;
   const run = ++latestRun;
-  set({ busy: true, error: null });
+  set({ busy: true, activity: null, error: null });
+  void applyWindowSize();
+  // Tool events carry no run id; the latest run owns them, and finishing clears the label.
+  const stopActivity = window.bee.onLunaActivity((tool) => {
+    if (run === latestRun) set({ activity: tool });
+  });
   try {
     const result = await window.bee.runPipeline({ transcript, sessionToken: await sessionToken() });
     if (run !== latestRun) return;
-    set({ result, busy: false });
+    set({ result, busy: false, activity: null, dismissed: false, islandClosing: false });
     addToSession(result);
+    touchIsland();
   } catch (error) {
-    if (run === latestRun) set({ busy: false, error: error instanceof Error ? error.message : "Pipeline failed" });
+    if (run === latestRun) set({ busy: false, activity: null, error: error instanceof Error ? error.message : "Pipeline failed" });
+  } finally {
+    stopActivity();
+    void applyWindowSize();
   }
 }
 
@@ -243,8 +297,28 @@ export const actions = {
     }
   },
 
+  /** Close the island body without closing the window. */
+  dismissIsland(): Promise<void> {
+    return closeIsland();
+  },
+
+  /** Show the last result again under the pill. */
+  reopenIsland(): void {
+    if (state.expanded) return;
+    set({ dismissed: false, islandClosing: false });
+    touchIsland();
+    void applyWindowSize();
+  },
+
+  /** The pointer on the island holds the body open; leaving restarts the clock. */
+  setIslandHover(hovered: boolean): void {
+    islandHovered = hovered;
+    touchIsland();
+  },
+
   async setExpanded(expanded: boolean): Promise<void> {
     if (expanded) {
+      clearTimeout(islandTimer);
       set({ collapsing: false, expanded: true });
       await applyWindowSize();
       return;
@@ -254,6 +328,7 @@ export const actions = {
     await new Promise((resolve) => setTimeout(resolve, COLLAPSE_MS));
     if (!state.collapsing) return;
     set({ expanded: false, collapsing: false });
+    touchIsland();
     await applyWindowSize();
   },
 

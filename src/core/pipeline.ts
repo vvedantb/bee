@@ -15,6 +15,7 @@ export async function runPipeline(args: {
   gateway: BeeGateway | null;
   notesDir?: string;
   extraRoots?: readonly string[];
+  onActivity?: (toolName: string) => void;
 }): Promise<PipelineResult> {
   const t0 = performance.now();
   const retrieved = retrieve(transcriptQuery(args.transcript), args.snippets, RETRIEVE_LIMIT);
@@ -54,6 +55,7 @@ export async function runPipeline(args: {
     notes: guideNotes,
     notesDir: args.notesDir,
     extraRoots: args.extraRoots,
+    onActivity: args.onActivity,
   });
   const t3 = performance.now();
 
