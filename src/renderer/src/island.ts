@@ -28,12 +28,14 @@ type ResponseArgs = {
   guideError: string | null;
   // The user closed the body for the result on screen. A new result clears it (store.ts).
   dismissed: boolean;
+  // Link chips on screen for this turn. They can open the body on their own, before any result.
+  chipCount?: number;
 };
 
-/** The body shows when the result has something to say and the user has not closed it. */
+/** The body shows when the result (or a link chip) has something to say and the user has not closed it. */
 export function shouldShowResponse(args: ResponseArgs): boolean {
   if (args.dismissed) return false;
-  return args.tips.length > 0 || args.sources.length > 0 || args.guideError !== null;
+  return args.tips.length > 0 || args.sources.length > 0 || args.guideError !== null || (args.chipCount ?? 0) > 0;
 }
 
 /** Thinking wins over the body: a new run replaces the old answer. */

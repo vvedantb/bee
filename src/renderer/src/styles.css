@@ -783,3 +783,46 @@ input[readonly] {
   border-radius: 8px;
   padding: 7px 10px;
 }
+
+/* Link suggestion chips: domain pills under the tips. A click opens the browser through main; X hides the chip. */
+.link-chips {
+  margin: 10px 0 0;
+  padding: 0 36px 0 0;
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  animation: island-rise 460ms var(--spring) 100ms backwards;
+}
+
+.link-chip {
+  gap: 2px;
+  padding: 0 4px 0 0;
+  font-size: 13px;
+}
+
+.link-chip button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 0;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+}
+
+.link-chip-open {
+  padding: 4px 4px 4px 10px;
+  border-radius: 999px;
+  color: var(--accent);
+}
+
+.link-chip-dismiss {
+  padding: 3px;
+  border-radius: 999px;
+  color: var(--muted);
+}
+
+.link-chip button:hover {
+  filter: brightness(1.2);
+}

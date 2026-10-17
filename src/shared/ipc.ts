@@ -23,6 +23,7 @@ export const IPC = {
   mcpRemove: "bee:mcp:remove",
   mcpSetEnabled: "bee:mcp:set-enabled",
   mcpTest: "bee:mcp:test",
+  openExternalUrl: "bee:shell:open-url",
 };
 
 // Collapsed notch, notch plus the sync popup, notch plus the island response, or the full panel.
@@ -333,3 +334,8 @@ export const mcpTestResultSchema = z.object({
   error: z.string().max(400).optional(),
 });
 export type McpTestResult = z.infer<typeof mcpTestResultSchema>;
+
+// Link chips: the renderer asks main to open one http(s) URL in the default browser. Main validates it again.
+export const openExternalUrlSchema = z.string().max(2000);
+export const openExternalUrlResultSchema = z.object({ ok: z.boolean() });
+export type OpenExternalUrlResult = z.infer<typeof openExternalUrlResultSchema>;

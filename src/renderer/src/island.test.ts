@@ -56,6 +56,12 @@ describe("shouldShowResponse", () => {
   it("is false once dismissed", () => {
     expect(shouldShowResponse({ ...empty, tips: ["Say yes"], dismissed: true })).toBe(false);
   });
+
+  it("is true for link chips alone, unless dismissed or none", () => {
+    expect(shouldShowResponse({ ...empty, chipCount: 1 })).toBe(true);
+    expect(shouldShowResponse({ ...empty, chipCount: 0 })).toBe(false);
+    expect(shouldShowResponse({ ...empty, chipCount: 2, dismissed: true })).toBe(false);
+  });
 });
 
 describe("islandPhase", () => {
@@ -74,6 +80,11 @@ describe("islandPhase", () => {
 
   it("is expanded with sources only", () => {
     expect(islandPhase({ ...empty, sources: [source], busy: false })).toBe("expanded");
+  });
+
+  it("is expanded with link chips only", () => {
+    expect(islandPhase({ ...empty, chipCount: 1, busy: false })).toBe("expanded");
+    expect(islandPhase({ ...empty, chipCount: 1, busy: true })).toBe("thinking");
   });
 
   it("is idle once dismissed", () => {

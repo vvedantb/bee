@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { RENDERER_HOST, RENDERER_SCHEME, RENDERER_URL } from "../shared/clerk";
 import { IPC, settingsUpdateSchema, windowSizeSchema, type WindowSize } from "../shared/ipc";
 import { registerMcpIpc } from "./mcp-ipc";
+import { registerOpenUrlIpc } from "./open-url";
 import { registerMeetingIpc } from "./meeting-ipc";
 import { ensureNotesDir } from "./notes";
 import { handleRendererProtocol } from "./renderer-protocol";
@@ -206,6 +207,7 @@ if (clerk.isPrimaryInstance) {
     });
 
     registerMcpIpc(settings);
+    registerOpenUrlIpc();
     registerMeetingIpc({ notesDir, fsRoots: settings.fsRoots, mcpConfigs: settings.mcpConfigs, gatewayApiKey: settings.gatewayApiKey });
 
     const teams = registerTeamsIpc({ relayUrl: relayUrlFromEnv(process.env.BEE_RELAY_URL || import.meta.env.MAIN_VITE_BEE_RELAY_URL), detector: createTeamsDetector() });

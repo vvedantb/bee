@@ -1,10 +1,10 @@
 import { openai } from "@ai-sdk/openai";
 import type { ToolSet } from "ai";
 import { fsTools } from "./fs-tools";
+import { MAX_URL_LENGTH, stripTrackingParams } from "./url-safety";
 
 const MAX_SOURCES = 5;
 const MAX_TITLE_LENGTH = 300;
-const MAX_URL_LENGTH = 2000;
 
 export type BeeSource = { title: string; url: string };
 
@@ -31,8 +31,6 @@ function collectRaw(result: { sources?: readonly unknown[]; toolResults?: readon
   return fromTools;
 }
 
-const TRACKING_PARAMS = new Set(["fbclid", "gclid", "ref", "ref_src"]);
-
 function toSource(raw: RawSource): BeeSource | null {
   if (typeof raw.url !== "string") return null;
   let parsed: URL;
@@ -42,12 +40,7 @@ function toSource(raw: RawSource): BeeSource | null {
     return null;
   }
   if (parsed.protocol !== "https:") return null;
-  for (const [key, value] of [...parsed.searchParams.entries()]) {
-    const name = key.toLowerCase();
-    if (name.startsWith("utm_") || TRACKING_PARAMS.has(name) || (name === "source" && value.toLowerCase().startsWith("post_page"))) {
-      parsed.searchParams.delete(key);
-    }
-  }
+  stripTrackingParams(parsed);
   if (parsed.href.length > MAX_URL_LENGTH) return null;
   const title = typeof raw.title === "string" ? raw.title.trim() : "";
   return {

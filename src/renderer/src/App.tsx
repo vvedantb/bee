@@ -13,9 +13,10 @@ import {
 import { useState, type FormEvent } from "react";
 import { McpSettings } from "./McpSettings";
 import { SecretField } from "./SecretField";
+import { visibleChips, type LinkChip } from "../../core/link-suggest";
 import type { PipelineResult, SettingsView } from "../../shared/ipc";
 import { activityLabel, islandPhase, shouldShowResponse } from "./island";
-import { actions, islandOpen, useBee, type BeeState, type SummaryState, type UpdateState } from "./store";
+import { actions, islandArgs, islandOpen, useBee, type BeeState, type SummaryState, type UpdateState } from "./store";
 import { SyncCard, SyncSection, TeamSection, syncedWith } from "./Teams";
 
 const ICON = { size: 16, stroke: 1.75 };
@@ -37,26 +38,49 @@ function notchStatus(state: BeeState, signedIn: boolean | undefined): string {
   return state.settings?.meetingMode ? "Meeting mode on" : "Bee is ready";
 }
 
-function IslandBody({ result, closing }: { result: PipelineResult; closing: boolean }) {
+// Suggestions only: a click asks main to open the link in the default browser. Nothing opens by itself.
+function LinkChips({ chips }: { chips: LinkChip[] }) {
+  if (chips.length === 0) return null;
+  return (
+    <ul className="link-chips" aria-label="Suggested links">
+      {chips.map((chip) => (
+        <li key={chip.id} className="chip link-chip">
+          <button type="button" className="link-chip-open" title={chip.url} onClick={() => void actions.openLink(chip.url)}>
+            <IconExternalLink size={14} stroke={1.75} />
+            {chip.domain}
+          </button>
+          <button type="button" className="link-chip-dismiss" title="Dismiss link" aria-label={`Dismiss ${chip.domain}`} onClick={() => actions.dismissChip(chip.id)}>
+            <IconX size={12} stroke={2} />
+          </button>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function IslandBody({ result, chips, closing }: { result: PipelineResult | null; chips: LinkChip[]; closing: boolean }) {
+  const tips = result?.tips ?? [];
+  const sources = result?.sources ?? [];
   return (
     <section className={closing ? "island-body closing" : "island-body"} aria-live="polite">
       <div className="island-inner">
         <button type="button" className="icon-button island-close" title="Dismiss" aria-label="Dismiss" onClick={() => void actions.dismissIsland()}>
           <IconX {...ICON} />
         </button>
-        {result.tips.length > 0 ? (
+        {tips.length > 0 ? (
           <ul className="island-tips">
-            {result.tips.map((tip) => (
+            {tips.map((tip) => (
               <li key={tip}>{tip}</li>
             ))}
           </ul>
         ) : null}
-        {result.guideError ? <p className="island-error">{result.guideError}</p> : null}
-        {result.sources.length > 0 ? (
+        <LinkChips chips={chips} />
+        {result?.guideError ? <p className="island-error">{result.guideError}</p> : null}
+        {sources.length > 0 ? (
           <div className="island-sources">
             <h3>Sources</h3>
             <ul>
-              {result.sources.map((source) => (
+              {sources.map((source) => (
                 <li key={source.url}>
                   <a href={source.url} target="_blank" rel="noreferrer" title={source.title}>
                     {source.title}
@@ -76,9 +100,10 @@ function Island({ state }: { state: BeeState }) {
   const { isSignedIn } = useAuth();
   const open = state.expanded && !state.collapsing;
   const result = state.result;
-  const showBody = islandOpen(state) && result !== null;
-  const phase = islandPhase({ ...(result ?? { tips: [], sources: [], guideError: null }), dismissed: state.dismissed, busy: state.busy });
-  const canReopen = !state.busy && !state.expanded && phase === "idle" && result !== null && shouldShowResponse({ ...result, dismissed: false });
+  const chips = visibleChips(state.chips, state.dismissedChipIds);
+  const showBody = islandOpen(state);
+  const phase = islandPhase(islandArgs(state));
+  const canReopen = !state.busy && !state.expanded && phase === "idle" && shouldShowResponse({ ...islandArgs(state), dismissed: false });
   const status = showBody && !state.mic.error ? "Tips" : notchStatus(state, isSignedIn);
   const newVersion = state.update.check?.available ? state.update.check.latestVersion : null;
   const statusProps = { className: state.mic.error ? "notch-status error-text" : "notch-status", title: status };
@@ -139,7 +164,7 @@ function Island({ state }: { state: BeeState }) {
           <IconChevronDown {...ICON} />
         </button>
       </header>
-      {showBody ? <IslandBody result={result} closing={state.islandClosing} /> : null}
+      {showBody ? <IslandBody result={result} chips={chips} closing={state.islandClosing} /> : null}
     </div>
   );
 }
@@ -178,6 +203,7 @@ function MeetingSection({ summary, lineCount }: { summary: SummaryState; lineCou
 
 function LiveTab({ state }: { state: BeeState }) {
   const result = state.result;
+  const chips = visibleChips(state.chips, state.dismissedChipIds);
 
   function onSubmit(event: FormEvent<HTMLFormElement>): void {
     event.preventDefault();
@@ -200,6 +226,7 @@ function LiveTab({ state }: { state: BeeState }) {
         ) : (
           <p className="muted">{state.busy ? "Thinking…" : state.mic.on ? "Listening…" : "No tips yet. Turn on the mic to start."}</p>
         )}
+        <LinkChips chips={chips} />
         {result && result.sources.length > 0 ? (
           <div className="sources">
             <span className="muted">Sources</span>
