@@ -5,6 +5,8 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { RENDERER_HOST, RENDERER_SCHEME, RENDERER_URL } from "../shared/clerk";
 import { IPC, settingsUpdateSchema, windowSizeSchema, type WindowSize } from "../shared/ipc";
+import { registerFaviconIpc } from "./favicon-ipc";
+import { registerLinkIpc } from "./link-ipc";
 import { registerMcpIpc } from "./mcp-ipc";
 import { registerOpenUrlIpc } from "./open-url";
 import { registerMeetingIpc } from "./meeting-ipc";
@@ -167,6 +169,8 @@ if (clerk.isPrimaryInstance) {
       userDataDir,
       notesDir,
       envGatewayKey: process.env.BEE_AI_GATEWAY_API_KEY,
+      envVmemKey: process.env.BEE_VMEM_API_KEY || process.env.VMEM_API_KEY,
+      envVmemBaseUrl: process.env.BEE_VMEM_BASE_URL || process.env.VMEM_BASE_URL,
     });
 
     // Menu bar app: no Dock icon.
@@ -208,6 +212,8 @@ if (clerk.isPrimaryInstance) {
 
     registerMcpIpc(settings);
     registerOpenUrlIpc();
+    registerLinkIpc(settings);
+    registerFaviconIpc();
     registerMeetingIpc({ notesDir, fsRoots: settings.fsRoots, mcpConfigs: settings.mcpConfigs, gatewayApiKey: settings.gatewayApiKey });
 
     const teams = registerTeamsIpc({ relayUrl: relayUrlFromEnv(process.env.BEE_RELAY_URL || import.meta.env.MAIN_VITE_BEE_RELAY_URL), detector: createTeamsDetector() });

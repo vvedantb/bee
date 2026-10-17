@@ -3,6 +3,8 @@ import { contextBridge, ipcRenderer } from "electron";
 import { z } from "zod";
 import {
   IPC,
+  enrichLinksResultSchema,
+  faviconResultSchema,
   lunaActivitySchema,
   mcpListSchema,
   mcpTestResultSchema,
@@ -16,6 +18,7 @@ import {
   transcribeResultSchema,
   updateActionSchema,
   updateCheckSchema,
+  type EnrichLinksRequest,
   type McpSave,
   type McpSetEnabled,
   type MeetingSummaryRequest,
@@ -42,6 +45,10 @@ const api = {
   openMeetingSummary: async (path: string) => z.string().parse(await ipcRenderer.invoke(IPC.openMeetingSummary, path)),
   // Opens one http(s) link in the default browser after a click. Main re-checks the URL.
   openExternalUrl: async (url: string) => openExternalUrlResultSchema.parse(await ipcRenderer.invoke(IPC.openExternalUrl, url)),
+  // Personalised link chips: main asks vmem and Jev. Fails open with the chips unchanged.
+  enrichLinks: async (request: EnrichLinksRequest) => enrichLinksResultSchema.parse(await ipcRenderer.invoke(IPC.enrichLinks, request)),
+  // A site's icon as a data URL, fetched and cached in main. null when none could be fetched.
+  getFavicon: async (domain: string) => faviconResultSchema.parse(await ipcRenderer.invoke(IPC.getFavicon, domain)),
   setWindowSize: async (size: WindowSize) => {
     z.void().parse(await ipcRenderer.invoke(IPC.setWindowSize, size));
   },

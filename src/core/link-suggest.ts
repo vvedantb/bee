@@ -1,8 +1,10 @@
+import { chipLabel } from "./link-rank";
 import { safeExternalUrl } from "./url-safety";
 
 // Finds website references in a spoken line or a tip, for suggestion chips. Nothing here opens anything.
 
-export type LinkChip = { id: string; domain: string; url: string };
+// id and domain are the host without www (dismiss and dedupe use id). url may be a deep link; label is what the chip shows.
+export type LinkChip = { id: string; domain: string; url: string; label: string };
 
 export const MAX_CHIPS = 5;
 const MAX_TEXT = 4000;
@@ -43,7 +45,7 @@ function chipFor(url: string): LinkChip | null {
   const safe = safeExternalUrl(url);
   if (!safe) return null;
   const domain = new URL(safe).hostname.toLowerCase().replace(/^www\./, "");
-  return { id: domain, domain, url: safe };
+  return { id: domain, domain, url: safe, label: chipLabel(safe) };
 }
 
 function mask(text: string, start: number, length: number): string {
@@ -97,7 +99,7 @@ export function detectLinks(input: string): LinkChip[] {
 
   for (const service of SERVICES) {
     const match = service.pattern.exec(text);
-    if (match) hits.push({ index: match.index, chip: { id: service.domain, domain: service.domain, url: service.url } });
+    if (match) hits.push({ index: match.index, chip: { id: service.domain, domain: service.domain, url: service.url, label: service.domain } });
   }
 
   hits.sort((a, b) => a.index - b.index);

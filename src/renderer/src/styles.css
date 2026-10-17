@@ -827,3 +827,9 @@ input[readonly] {
 .link-chip button:hover {
   filter: brightness(1.2);
 }
+
+/* Chip icons: the site's favicon (a data URL from main) or a globe until it arrives. */
+.link-chip .favicon {
+  border-radius: 3px;
+  object-fit: contain;
+}

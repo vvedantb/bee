@@ -11,6 +11,7 @@ import {
   IconX,
 } from "@tabler/icons-react";
 import { useState, type FormEvent } from "react";
+import { Favicon } from "./Favicon";
 import { McpSettings } from "./McpSettings";
 import { SecretField } from "./SecretField";
 import { visibleChips, type LinkChip } from "../../core/link-suggest";
@@ -46,10 +47,10 @@ function LinkChips({ chips }: { chips: LinkChip[] }) {
       {chips.map((chip) => (
         <li key={chip.id} className="chip link-chip">
           <button type="button" className="link-chip-open" title={chip.url} onClick={() => void actions.openLink(chip.url)}>
-            <IconExternalLink size={14} stroke={1.75} />
-            {chip.domain}
+            <Favicon domain={chip.domain} />
+            {chip.label}
           </button>
-          <button type="button" className="link-chip-dismiss" title="Dismiss link" aria-label={`Dismiss ${chip.domain}`} onClick={() => actions.dismissChip(chip.id)}>
+          <button type="button" className="link-chip-dismiss" title="Dismiss link" aria-label={`Dismiss ${chip.label}`} onClick={() => actions.dismissChip(chip.id)}>
             <IconX size={12} stroke={2} />
           </button>
         </li>
@@ -104,7 +105,8 @@ function Island({ state }: { state: BeeState }) {
   const showBody = islandOpen(state);
   const phase = islandPhase(islandArgs(state));
   const canReopen = !state.busy && !state.expanded && phase === "idle" && shouldShowResponse({ ...islandArgs(state), dismissed: false });
-  const status = showBody && !state.mic.error ? "Tips" : notchStatus(state, isSignedIn);
+  // While Luna thinks, chips may open the body but the pill keeps its thinking text.
+  const status = showBody && !state.busy && !state.mic.error ? "Tips" : notchStatus(state, isSignedIn);
   const newVersion = state.update.check?.available ? state.update.check.latestVersion : null;
   const statusProps = { className: state.mic.error ? "notch-status error-text" : "notch-status", title: status };
   return (
@@ -164,7 +166,8 @@ function Island({ state }: { state: BeeState }) {
           <IconChevronDown {...ICON} />
         </button>
       </header>
-      {showBody ? <IslandBody result={result} chips={chips} closing={state.islandClosing} /> : null}
+      {/* While busy, pass no result: the body shows only the new chips, never the previous turn's tips, sources or error. */}
+      {showBody ? <IslandBody result={state.busy ? null : result} chips={chips} closing={state.islandClosing} /> : null}
     </div>
   );
 }
@@ -374,8 +377,11 @@ function SettingsTab({ state, settings }: { state: BeeState; settings: SettingsV
     const form = event.currentTarget;
     const gatewayApiKey = formString(form, "gatewayApiKey");
     const claudeOAuthToken = formString(form, "claudeOAuthToken");
+    const vmemApiKey = formString(form, "vmemApiKey");
     const saved = await actions.saveSettings({
       gatewayApiKey: gatewayApiKey || undefined,
+      vmemApiKey: vmemApiKey || undefined,
+      vmemBaseUrl: formString(form, "vmemBaseUrl"),
       claudeOAuthToken: claudeOAuthToken || undefined,
       fsRoots: formString(form, "fsRoots").split(/\r?\n/),
     });
@@ -399,6 +405,17 @@ function SettingsTab({ state, settings }: { state: BeeState; settings: SettingsV
           saved={settings.hasClaudeToken}
           status={settings.hasClaudeToken ? "A token is stored." : "No token stored."}
         />
+        <SecretField
+          name="vmemApiKey"
+          label="vmem API key (personalised links)"
+          placeholder="vmem_…"
+          saved={settings.vmemKeySource === "saved"}
+          status={settings.vmemKeySource === "env" ? "Using BEE_VMEM_API_KEY from the environment." : KEY_SOURCE_LABEL[settings.vmemKeySource]}
+        />
+        <label>
+          vmem base URL (Convex site URL)
+          <input name="vmemBaseUrl" type="text" placeholder="https://<deployment>.convex.site" defaultValue={settings.vmemBaseUrl} autoComplete="off" spellCheck={false} />
+        </label>
         <label>
           Extra folders Luna may read (one absolute path per line)
           <textarea name="fsRoots" rows={3} defaultValue={settings.fsRoots.join("\n")} spellCheck={false} />
@@ -417,6 +434,11 @@ function SettingsTab({ state, settings }: { state: BeeState; settings: SettingsV
               Remove saved key
             </button>
           ) : null}
+          {settings.vmemKeySource === "saved" ? (
+            <button type="button" className="link" onClick={() => void actions.saveSettings({ vmemApiKey: "" })}>
+              Remove vmem key
+            </button>
+          ) : null}
           {settings.hasClaudeToken ? (
             <button type="button" className="link" onClick={() => void actions.saveSettings({ claudeOAuthToken: "" })}>
               Remove token
@@ -426,6 +448,15 @@ function SettingsTab({ state, settings }: { state: BeeState; settings: SettingsV
       </form>
 
       <McpSettings servers={state.mcp.servers} tests={state.mcp.tests} error={state.mcp.error} />
+
+      <label className="toggle">
+        <input
+          type="checkbox"
+          checked={settings.personalisedLinks}
+          onChange={(event) => void actions.saveSettings({ personalisedLinks: event.currentTarget.checked })}
+        />
+        Personalised link suggestions (sends the current line to vmem and Jev to pick the exact page; needs the vmem key, base URL and Gateway key)
+      </label>
 
       <label className="toggle">
         <input

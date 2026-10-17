@@ -24,6 +24,8 @@ export const IPC = {
   mcpSetEnabled: "bee:mcp:set-enabled",
   mcpTest: "bee:mcp:test",
   openExternalUrl: "bee:shell:open-url",
+  enrichLinks: "bee:links:enrich",
+  getFavicon: "bee:favicon:get",
 };
 
 // Collapsed notch, notch plus the sync popup, notch plus the island response, or the full panel.
@@ -35,6 +37,12 @@ export const secretStorageSchema = z.enum(["os", "weak", "memory"]);
 export const settingsViewSchema = z.object({
   gatewayKeySource: z.enum(["saved", "env", "none"]),
   hasClaudeToken: z.boolean(),
+  // Personalised link suggestions: the effective toggle, and vmem's connection (the key itself never leaves main).
+  personalisedLinks: z.boolean(),
+  vmemConfigured: z.boolean(),
+  hasVmemKey: z.boolean(),
+  vmemKeySource: z.enum(["saved", "env", "none"]),
+  vmemBaseUrl: z.string(),
   meetingMode: z.boolean(),
   secretStorage: secretStorageSchema,
   notesDir: z.string(),
@@ -47,6 +55,10 @@ export const settingsUpdateSchema = z.object({
   gatewayApiKey: z.string().max(500).optional(),
   claudeOAuthToken: z.string().max(4000).optional(),
   meetingMode: z.boolean().optional(),
+  personalisedLinks: z.boolean().optional(),
+  vmemApiKey: z.string().max(500).optional(),
+  // The Convex site URL (https://<deployment>.convex.site). "" clears it.
+  vmemBaseUrl: z.string().max(500).optional(),
   // Extra absolute folders Luna may read; replaces the saved list.
   fsRoots: z.array(z.string().max(1000)).max(20).optional(),
 });
@@ -339,3 +351,24 @@ export type McpTestResult = z.infer<typeof mcpTestResultSchema>;
 export const openExternalUrlSchema = z.string().max(2000);
 export const openExternalUrlResultSchema = z.object({ ok: z.boolean() });
 export type OpenExternalUrlResult = z.infer<typeof openExternalUrlResultSchema>;
+
+// A link chip as it crosses IPC (core/link-suggest.ts LinkChip).
+export const linkChipSchema = z.object({
+  id: z.string().max(253),
+  domain: z.string().max(253),
+  url: z.string().max(2000),
+  label: z.string().max(300),
+});
+
+// Personalised links: this turn's text and the detector's chips go to main, which asks vmem and Jev (only with the toggle on).
+// The reply keeps the chips' order and leaves out the ones Jev rejected. Any failure returns the chips unchanged.
+export const enrichLinksRequestSchema = z.object({
+  turn: z.string().max(4000),
+  chips: z.array(linkChipSchema).max(5),
+});
+export type EnrichLinksRequest = z.infer<typeof enrichLinksRequestSchema>;
+export const enrichLinksResultSchema = z.object({ chips: z.array(linkChipSchema).max(5) });
+
+// Favicons: a domain in, a data URL (or null) out. Fetched and cached in main.
+export const faviconRequestSchema = z.string().max(253);
+export const faviconResultSchema = z.string().max(200_000).nullable();

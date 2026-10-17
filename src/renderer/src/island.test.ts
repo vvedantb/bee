@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ISLAND_IDLE_MS, activityLabel, islandPhase, shouldAutoCollapse, shouldShowResponse } from "./island";
+import { ISLAND_IDLE_MS, activityLabel, islandPhase, islandShowsBody, shouldAutoCollapse, shouldShowResponse } from "./island";
 
 const empty = { tips: [], sources: [], guideError: null, dismissed: false };
 const source = { title: "Example", url: "https://example.com/" };
@@ -89,6 +89,30 @@ describe("islandPhase", () => {
 
   it("is idle once dismissed", () => {
     expect(islandPhase({ ...empty, tips: ["Say yes"], dismissed: true, busy: false })).toBe("idle");
+  });
+});
+
+describe("islandShowsBody", () => {
+  it("shows link chips while busy, with the pill still thinking", () => {
+    const args = { ...empty, chipCount: 2, busy: true };
+    expect(islandShowsBody(args)).toBe(true);
+    expect(islandPhase(args)).toBe("thinking");
+  });
+
+  it("stays closed while busy without chips, even over an old answer", () => {
+    expect(islandShowsBody({ ...empty, busy: true })).toBe(false);
+    expect(islandShowsBody({ ...empty, tips: ["Old tip"], sources: [source], busy: true })).toBe(false);
+  });
+
+  it("stays closed while busy when the chips were dismissed", () => {
+    expect(islandShowsBody({ ...empty, chipCount: 1, dismissed: true, busy: true })).toBe(false);
+  });
+
+  it("follows shouldShowResponse when not busy", () => {
+    expect(islandShowsBody({ ...empty, busy: false })).toBe(false);
+    expect(islandShowsBody({ ...empty, tips: ["Say yes"], busy: false })).toBe(true);
+    expect(islandShowsBody({ ...empty, chipCount: 1, busy: false })).toBe(true);
+    expect(islandShowsBody({ ...empty, tips: ["Say yes"], dismissed: true, busy: false })).toBe(false);
   });
 });
 

@@ -38,7 +38,16 @@ export function shouldShowResponse(args: ResponseArgs): boolean {
   return args.tips.length > 0 || args.sources.length > 0 || args.guideError !== null || (args.chipCount ?? 0) > 0;
 }
 
-/** Thinking wins over the body: a new run replaces the old answer. */
+/**
+ * Whether the island body is on screen. Link chips belong to the new turn, so they show while Luna thinks (the pill keeps
+ * its text). Without chips the body stays closed while busy: the old answer must not pass for the new one.
+ */
+export function islandShowsBody(args: ResponseArgs & { busy: boolean }): boolean {
+  if (!args.busy) return shouldShowResponse(args);
+  return !args.dismissed && (args.chipCount ?? 0) > 0;
+}
+
+/** Thinking wins over the pill's phase: a new run replaces the old answer. */
 export function islandPhase(args: ResponseArgs & { busy: boolean }): IslandPhase {
   if (args.busy) return "thinking";
   return shouldShowResponse(args) ? "expanded" : "idle";
