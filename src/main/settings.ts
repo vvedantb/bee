@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
+import { clampInterfaceScale } from "../core/interface-scale";
 import { normalizeFsRoots } from "../core/fs-sandbox";
 import { createMcpOAuthProvider, hasMcpOAuthTokens, mcpOAuthStateSchema, type McpOAuthStorage } from "../core/mcp-oauth";
 import { isVmemConnector, mcpSlug, mcpUrlError, parseMcpArgs, parseMcpEnv, type McpServerConfig } from "../core/mcp";
@@ -22,6 +23,8 @@ import {
 // On disk: secrets are safeStorage ciphertext (base64). Plain secrets never touch disk.
 const fileSchema = z.object({
   meetingMode: z.boolean().default(false),
+  // Interface size factor. Anything unlisted reads as 1 (100%).
+  interfaceScale: z.unknown().optional().transform(clampInterfaceScale),
   gatewayApiKey: z.string().optional(),
   claudeOAuthToken: z.string().optional(),
   // Personalised link suggestions. The toggle is stored only once the user sets it; until then it follows whether an enabled vmem connector exists.
@@ -67,7 +70,7 @@ export function createSettingsStore(args: {
     } catch {
       // Missing or corrupt file: start from defaults.
     }
-    return { meetingMode: false, fsRoots: [], mcpServers: [] };
+    return { meetingMode: false, interfaceScale: 1, fsRoots: [], mcpServers: [] };
   }
 
   function write(file: SettingsFile): void {
@@ -302,6 +305,7 @@ export function createSettingsStore(args: {
       gatewayKeySource: saved ? "saved" : args.envGatewayKey?.trim() ? "env" : "none",
       hasClaudeToken: Boolean(getSecret(file, "claudeOAuthToken")),
       meetingMode: file.meetingMode,
+      interfaceScale: file.interfaceScale,
       secretStorage: storageMode(),
       notesDir: args.notesDir,
       fsRoots: read().fsRoots,
@@ -314,6 +318,7 @@ export function createSettingsStore(args: {
     // Reserved for a later version: stored securely, never used at runtime in v1.
     if (update.claudeOAuthToken !== undefined) file = setSecret(file, "claudeOAuthToken", update.claudeOAuthToken);
     if (update.meetingMode !== undefined) file = { ...file, meetingMode: update.meetingMode };
+    if (update.interfaceScale !== undefined) file = { ...file, interfaceScale: clampInterfaceScale(update.interfaceScale) };
     if (update.personalisedLinks !== undefined) file = { ...file, personalisedLinks: update.personalisedLinks };
     if (update.fsRoots !== undefined) {
       const { roots, invalid } = normalizeFsRoots(update.fsRoots);

@@ -14,6 +14,7 @@ import { useState, type FormEvent } from "react";
 import { Favicon } from "./Favicon";
 import { Connectors } from "./Connectors";
 import { SecretField } from "./SecretField";
+import { INTERFACE_SCALES } from "../../core/interface-scale";
 import { visibleChips, type LinkChip } from "../../core/link-suggest";
 import type { PipelineResult, SettingsView } from "../../shared/ipc";
 import { activityLabel, islandPhase, shouldShowResponse } from "./island";
@@ -445,6 +446,24 @@ function SettingsTab({ state, settings }: { state: BeeState; settings: SettingsV
         />
         Meeting mode (hide Bee from screen sharing, stay above full-screen apps)
       </label>
+
+      <div className="field">
+        Interface size
+        <div className="segmented" role="radiogroup" aria-label="Interface size">
+          {INTERFACE_SCALES.map((scale) => (
+            <button
+              key={scale}
+              type="button"
+              role="radio"
+              aria-checked={settings.interfaceScale === scale}
+              className={settings.interfaceScale === scale ? "active" : ""}
+              onClick={() => void actions.saveSettings({ interfaceScale: scale })}
+            >
+              {Math.round(scale * 100)}%
+            </button>
+          ))}
+        </div>
+      </div>
 
       <TeamSection state={state} />
 

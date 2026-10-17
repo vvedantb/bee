@@ -548,6 +548,45 @@ input:disabled {
   gap: 4px;
 }
 
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.segmented {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  background: var(--surface-sunken);
+  border-radius: 8px;
+}
+
+.segmented button {
+  flex: 1;
+  padding: 4px 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.segmented button:not(:disabled):hover {
+  background: transparent;
+}
+
+.segmented button.active {
+  background: var(--accent);
+  color: var(--surface-sunken);
+  font-weight: 600;
+}
+
+.segmented button.active:not(:disabled):hover {
+  background: var(--accent);
+}
+
 .toggle {
   display: flex;
   gap: 8px;

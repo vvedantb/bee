@@ -233,3 +233,43 @@ describe("settings personalised links", () => {
     expect(onDisk()).not.toMatch(/vmemApiKey|vmemBaseUrl|PLAINTEXT/);
   });
 });
+
+describe("settings interfaceScale", () => {
+  const onDisk = (value: unknown) => writeFileSync(join(dir, "settings.json"), JSON.stringify({ interfaceScale: value }));
+
+  it("defaults to 100%", () => {
+    expect(create().view().interfaceScale).toBe(1);
+  });
+
+  it("round-trips every allowed size", () => {
+    for (const scale of [0.9, 1, 1.1, 1.25, 1.5, 1.75]) {
+      expect(create().save({ interfaceScale: scale }).interfaceScale).toBe(scale);
+      expect(JSON.parse(readFileSync(join(dir, "settings.json"), "utf8")).interfaceScale).toBe(scale);
+      expect(create().view().interfaceScale).toBe(scale);
+    }
+  });
+
+  it("keeps the saved size when a save omits it", () => {
+    const store = create();
+    store.save({ interfaceScale: 1.5 });
+    expect(store.save({ meetingMode: true }).interfaceScale).toBe(1.5);
+    expect(create().view().interfaceScale).toBe(1.5);
+  });
+
+  it("reads garbage, unlisted numbers and a missing field as 100%", () => {
+    for (const bad of ["1.5", null, 1.3, 0, -1, 99, {}, [1.5]]) {
+      onDisk(bad);
+      expect(create().view().interfaceScale).toBe(1);
+    }
+    writeFileSync(join(dir, "settings.json"), JSON.stringify({ meetingMode: true }));
+    expect(create().view().interfaceScale).toBe(1);
+    expect(create().view().meetingMode).toBe(true);
+  });
+
+  it("rejects unlisted sizes in a save update", async () => {
+    const { settingsUpdateSchema } = await import("../shared/ipc");
+    expect(settingsUpdateSchema.safeParse({ interfaceScale: 1.3 }).success).toBe(false);
+    expect(settingsUpdateSchema.safeParse({ interfaceScale: Number.NaN }).success).toBe(false);
+    expect(settingsUpdateSchema.safeParse({ interfaceScale: 1.25 }).success).toBe(true);
+  });
+});

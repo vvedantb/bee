@@ -225,6 +225,7 @@ Personalised links use the same client. `isVmemConnector` (`shared/mcp-names.ts`
 
 Storage (`main/settings.ts`, `settings.json`):
 
+- `interfaceScale`: the Interface size in Settings, one of 0.9, 1 (default), 1.1, 1.25, 1.5, 1.75. Anything else on disk reads as 1, and a save accepts only those values. Main applies it with `webContents.setZoomFactor` on every window and scales the overlay bounds by the same factor (`core/interface-scale.ts`), keeping the current window mode. It takes effect on save, like meeting mode.
 - `mcpServers`: `{ id, name, enabled, transport, url?, command?, args?, envKeys?, auth: { type, headerName? }, tools?: { name, description, enabled }[] }`. At most 20 servers and 100 tools each, validated with zod. Names must be unique after slugging. An invalid list is dropped without losing the other settings.
 - `mcpSecrets`: one `safeStorage` ciphertext (base64) of JSON keyed by server id, holding the bearer token or header value, the stdio env values and, for OAuth servers, an `oauth` blob (tokens and client information, each stamped with its authorization server by the SDK). Secrets are never written into `mcpServers`. If encryption is unavailable they stay in memory for the session, like the gateway key.
 - `view` objects carry `hasAuth` and env key names only. On save, a secret that is omitted stays as it was and `""` clears it. Changing the auth style drops the old secret.

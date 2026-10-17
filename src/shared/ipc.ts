@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { INTERFACE_SCALES } from "../core/interface-scale";
 
 // One place for every channel name and payload shape crossing the IPC boundary.
 export const IPC = {
@@ -33,6 +34,9 @@ export const IPC = {
 export const windowSizeSchema = z.enum(["collapsed", "prompt", "response", "expanded"]);
 export type WindowSize = z.infer<typeof windowSizeSchema>;
 
+// The allowed Interface size factors (core/interface-scale.ts); a save with any other number is rejected.
+const interfaceScaleSchema = z.number().refine((value) => (INTERFACE_SCALES as readonly number[]).includes(value), { message: "Unsupported interface size" });
+
 export const secretStorageSchema = z.enum(["os", "weak", "memory"]);
 
 export const settingsViewSchema = z.object({
@@ -42,6 +46,8 @@ export const settingsViewSchema = z.object({
   personalisedLinks: z.boolean(),
   vmemConnected: z.boolean(),
   meetingMode: z.boolean(),
+  // Zoom factor for the whole overlay, always an allowed value.
+  interfaceScale: interfaceScaleSchema,
   secretStorage: secretStorageSchema,
   notesDir: z.string(),
   fsRoots: z.array(z.string()),
@@ -53,6 +59,7 @@ export const settingsUpdateSchema = z.object({
   gatewayApiKey: z.string().max(500).optional(),
   claudeOAuthToken: z.string().max(4000).optional(),
   meetingMode: z.boolean().optional(),
+  interfaceScale: interfaceScaleSchema.optional(),
   personalisedLinks: z.boolean().optional(),
   // Extra absolute folders Luna may read; replaces the saved list.
   fsRoots: z.array(z.string().max(1000)).max(20).optional(),
