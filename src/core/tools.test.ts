@@ -95,6 +95,28 @@ describe("sourcesFromGenerateResult", () => {
     expect(sources).toEqual([{ title: "A", url: "https://a.com/x" }]);
   });
 
+  it("strips tracking params but keeps unrelated ones", () => {
+    const sources = sourcesFromGenerateResult({
+      sources: [
+        { sourceType: "url", id: "1", url: "https://a.com/x?source=post_page-abc&id=3", title: "A" },
+        { sourceType: "url", id: "2", url: "https://b.com/?FBCLID=1&gclid=2&ref=x&ref_src=y&q=ok", title: "B" },
+        { sourceType: "url", id: "3", url: "https://c.com/?source=newsletter", title: "C" },
+      ],
+    });
+    expect(sources.map((s) => s.url)).toEqual(["https://a.com/x?id=3", "https://b.com/?q=ok", "https://c.com/?source=newsletter"]);
+  });
+
+  it("trims trailing . , ) from urls but not from the middle", () => {
+    const sources = sourcesFromGenerateResult({
+      sources: [
+        { sourceType: "url", id: "1", url: "https://a.com/page).", title: "A" },
+        { sourceType: "url", id: "2", url: "https://b.com/p,", title: "B" },
+        { sourceType: "url", id: "3", url: "https://c.com/a.b/(x)/y", title: "C" },
+      ],
+    });
+    expect(sources.map((s) => s.url)).toEqual(["https://a.com/page", "https://b.com/p", "https://c.com/a.b/(x)/y"]);
+  });
+
   it("strips utm_ params and dedupes after stripping", () => {
     const sources = sourcesFromGenerateResult({
       sources: [

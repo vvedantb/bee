@@ -31,16 +31,23 @@ function collectRaw(result: { sources?: readonly unknown[]; toolResults?: readon
   return fromTools;
 }
 
+const TRACKING_PARAMS = new Set(["fbclid", "gclid", "ref", "ref_src"]);
+
 function toSource(raw: RawSource): BeeSource | null {
   if (typeof raw.url !== "string") return null;
   let parsed: URL;
   try {
-    parsed = new URL(raw.url.trim());
+    parsed = new URL(raw.url.trim().replace(/[.,)]+$/, ""));
   } catch {
     return null;
   }
   if (parsed.protocol !== "https:") return null;
-  for (const key of [...parsed.searchParams.keys()]) if (key.toLowerCase().startsWith("utm_")) parsed.searchParams.delete(key);
+  for (const [key, value] of [...parsed.searchParams.entries()]) {
+    const name = key.toLowerCase();
+    if (name.startsWith("utm_") || TRACKING_PARAMS.has(name) || (name === "source" && value.toLowerCase().startsWith("post_page"))) {
+      parsed.searchParams.delete(key);
+    }
+  }
   if (parsed.href.length > MAX_URL_LENGTH) return null;
   const title = typeof raw.title === "string" ? raw.title.trim() : "";
   return {

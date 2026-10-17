@@ -43,4 +43,4 @@ jobs:
             release/*.dmg
             release/*.zip
             release/*.blockmap
-            release/*.yml
+            release/latest*.yml
