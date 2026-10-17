@@ -77,11 +77,18 @@ export type BeeState = {
   inviteOpen: boolean;
 };
 
+/** True when the root carries data-motion="reduce" (App sets it from the Animations setting). */
+export function motionReduced(): boolean {
+  return typeof document !== "undefined" && document.documentElement.dataset.motion === "reduce";
+}
+
 const PIPELINE_WINDOW = 8;
 // Matches the panel exit animation in styles.css.
 const COLLAPSE_MS = 160;
 // Matches the island exit animation in styles.css.
 const ISLAND_CLOSE_MS = 200;
+// With motion reduced, CSS animations last 1ms, so exits do not wait for them.
+const REDUCED_EXIT_MS = 1;
 const MIC_OFF = { on: false, level: 0 };
 const EMPTY_SESSION: MeetingSession = { lines: [], notesCited: [], tips: [] };
 const SESSION_LIST_MAX = 100;
@@ -163,7 +170,7 @@ function autoCollapseIsland(): void {
 async function closeIsland(): Promise<void> {
   if (!islandOpen(state) || state.islandClosing) return;
   set({ islandClosing: true });
-  await new Promise((resolve) => setTimeout(resolve, ISLAND_CLOSE_MS));
+  await new Promise((resolve) => setTimeout(resolve, motionReduced() ? REDUCED_EXIT_MS : ISLAND_CLOSE_MS));
   if (!state.islandClosing) return;
   set({ dismissed: true, islandClosing: false });
   await applyWindowSize();
@@ -478,7 +485,7 @@ export const actions = {
     }
     // Let the panel fade out before the window shrinks under it.
     set({ collapsing: true });
-    await new Promise((resolve) => setTimeout(resolve, COLLAPSE_MS));
+    await new Promise((resolve) => setTimeout(resolve, motionReduced() ? REDUCED_EXIT_MS : COLLAPSE_MS));
     if (!state.collapsing) return;
     set({ expanded: false, collapsing: false });
     touchIsland();

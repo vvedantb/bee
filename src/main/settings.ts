@@ -4,6 +4,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
 import { clampInterfaceScale, type SavedPosition } from "../core/interface-scale";
+import { clampMotionPreference } from "../core/motion-preference";
 import { normalizeFsRoots } from "../core/fs-sandbox";
 import { createMcpOAuthProvider, hasMcpOAuthTokens, mcpOAuthStateSchema, type McpOAuthStorage } from "../core/mcp-oauth";
 import { isVmemConnector, mcpSlug, mcpUrlError, parseMcpArgs, parseMcpEnv, type McpServerConfig } from "../core/mcp";
@@ -25,6 +26,8 @@ const fileSchema = z.object({
   meetingMode: z.boolean().default(false),
   // Interface size factor. Anything unlisted reads as 1 (100%).
   interfaceScale: z.unknown().optional().transform(clampInterfaceScale),
+  // Animations: system, on or off. Anything else reads as on.
+  motionPreference: z.unknown().optional().transform(clampMotionPreference),
   gatewayApiKey: z.string().optional(),
   // Where the overlay was last left. Main only; a bad value reads as unset.
   overlayPosition: z.object({ x: z.number().finite(), y: z.number().finite(), displayId: z.number() }).optional().catch(undefined),
@@ -71,7 +74,7 @@ export function createSettingsStore(args: {
     } catch {
       // Missing or corrupt file: start from defaults.
     }
-    return { meetingMode: false, interfaceScale: 1, fsRoots: [], mcpServers: [] };
+    return { meetingMode: false, interfaceScale: 1, motionPreference: "on", fsRoots: [], mcpServers: [] };
   }
 
   function write(file: SettingsFile): void {
@@ -313,6 +316,7 @@ export function createSettingsStore(args: {
       gatewayKeySource: saved ? "saved" : args.envGatewayKey?.trim() ? "env" : "none",
       meetingMode: file.meetingMode,
       interfaceScale: file.interfaceScale,
+      motionPreference: file.motionPreference,
       secretStorage: storageMode(),
       notesDir: args.notesDir,
       fsRoots: read().fsRoots,
@@ -324,6 +328,7 @@ export function createSettingsStore(args: {
     if (update.gatewayApiKey !== undefined) file = setSecret(file, "gatewayApiKey", update.gatewayApiKey);
     if (update.meetingMode !== undefined) file = { ...file, meetingMode: update.meetingMode };
     if (update.interfaceScale !== undefined) file = { ...file, interfaceScale: clampInterfaceScale(update.interfaceScale) };
+    if (update.motionPreference !== undefined) file = { ...file, motionPreference: clampMotionPreference(update.motionPreference) };
     if (update.personalisedLinks !== undefined) file = { ...file, personalisedLinks: update.personalisedLinks };
     if (update.fsRoots !== undefined) {
       const { roots, invalid } = normalizeFsRoots(update.fsRoots);
