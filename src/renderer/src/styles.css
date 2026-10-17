@@ -790,6 +790,7 @@ input[readonly] {
   padding: 0 36px 0 0;
   list-style: none;
   display: flex;
+  flex-direction: row;
   flex-wrap: wrap;
   gap: 6px;
   animation: island-rise 460ms var(--spring) 100ms backwards;
