@@ -23,6 +23,7 @@ export const IPC = {
   mcpRemove: "bee:mcp:remove",
   mcpSetEnabled: "bee:mcp:set-enabled",
   mcpTest: "bee:mcp:test",
+  mcpAuthorize: "bee:mcp:authorize",
   openExternalUrl: "bee:shell:open-url",
   enrichLinks: "bee:links:enrich",
   getFavicon: "bee:favicon:get",
@@ -304,7 +305,7 @@ export const mcpServerSchema = z.object({
 });
 export type McpServer = z.infer<typeof mcpServerSchema>;
 
-// What the renderer sees: hasAuth says a secret is stored, never what it is.
+// What the renderer sees: hasAuth says a secret (bearer, header or OAuth sign-in) is stored, never what it is.
 export const mcpServerViewSchema = mcpServerSchema.extend({ envKeys: z.array(z.string()), hasAuth: z.boolean() });
 export type McpServerView = z.infer<typeof mcpServerViewSchema>;
 export const mcpListSchema = z.array(mcpServerViewSchema);

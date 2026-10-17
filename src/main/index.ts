@@ -5,6 +5,7 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { RENDERER_HOST, RENDERER_SCHEME, RENDERER_URL } from "../shared/clerk";
 import { IPC, settingsUpdateSchema, windowSizeSchema, type WindowSize } from "../shared/ipc";
+import { createVmemSearch } from "../core/vmem-history";
 import { registerFaviconIpc } from "./favicon-ipc";
 import { registerLinkIpc } from "./link-ipc";
 import { registerMcpIpc } from "./mcp-ipc";
@@ -208,9 +209,13 @@ if (clerk.isPrimaryInstance) {
       return view;
     });
 
-    registerMcpIpc(settings);
+    // One open connection to the vmem connector for link chips. Opened now when signed in, and after each Connectors change.
+    const vmemSearch = createVmemSearch(() => settings.vmemConfig());
+    vmemSearch.refresh();
+    app.on("will-quit", () => void vmemSearch.close());
+    registerMcpIpc(settings, vmemSearch);
     registerOpenUrlIpc();
-    registerLinkIpc(settings);
+    registerLinkIpc(settings, vmemSearch);
     registerFaviconIpc();
     registerMeetingIpc({ notesDir, fsRoots: settings.fsRoots, mcpConfigs: settings.mcpConfigs, gatewayApiKey: settings.gatewayApiKey });
 

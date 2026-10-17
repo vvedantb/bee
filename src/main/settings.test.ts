@@ -137,6 +137,30 @@ describe("settings MCP servers", () => {
     expect(JSON.parse(onDisk()).mcpSecrets).toBeUndefined();
   });
 
+  it("keeps OAuth tokens encrypted, shows hasAuth, survives a re-save and clears on remove", () => {
+    crypto.on = true;
+    const store = create();
+    const id = store.mcpSave({ ...httpServer, auth: { type: "none" }, secret: undefined })[0]?.id as string;
+    expect(store.mcpList()[0]?.hasAuth).toBe(false);
+    store.mcpOAuthStorage(id).save({
+      tokens: { access_token: "oauth-PLAINTEXT-789", token_type: "Bearer", refresh_token: "r", issuer: "https://auth.example.test" },
+      clientInformation: { client_id: "client-1", issuer: "https://auth.example.test" },
+    });
+    expect(store.mcpList()[0]?.hasAuth).toBe(true);
+    expect(store.mcpConfig(id)).toMatchObject({ oauthSignedIn: true });
+    expect(onDisk()).not.toContain("oauth-PLAINTEXT-789");
+    // Saving the server again (same URL) keeps the sign-in; a new URL drops it.
+    expect(store.mcpSave({ ...httpServer, id, auth: { type: "none" }, secret: undefined })[0]?.hasAuth).toBe(true);
+    expect(create().mcpOAuthStorage(id).load()?.tokens?.issuer).toBe("https://auth.example.test");
+    expect(store.mcpSave({ ...httpServer, id, url: "https://other.example.com/mcp", auth: { type: "none" }, secret: undefined })[0]?.hasAuth).toBe(false);
+    store.mcpOAuthStorage(id).save({ tokens: { access_token: "a", token_type: "Bearer" } });
+    store.mcpRemove(id);
+    expect(JSON.parse(onDisk()).mcpSecrets).toBeUndefined();
+    // A late save after Disconnect does not bring the record back.
+    store.mcpOAuthStorage(id).save({ tokens: { access_token: "a", token_type: "Bearer" } });
+    expect(JSON.parse(onDisk()).mcpSecrets).toBeUndefined();
+  });
+
   it("rejects bad input and duplicate names, and caps the list", () => {
     const store = create();
     expect(() => store.mcpSave({ ...httpServer, url: "http://example.com/mcp" })).toThrow(/https/);

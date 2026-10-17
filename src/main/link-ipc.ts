@@ -4,7 +4,7 @@ import { decideWithJev } from "../core/link-jev";
 import { canPersonalise, createLinkEnricher, sameSite, type EnrichDeps } from "../core/link-rank";
 import type { LinkChip } from "../core/link-suggest";
 import { safeExternalUrl } from "../core/url-safety";
-import { createMcpSearch, createVmemHistory } from "../core/vmem-history";
+import { createVmemHistory, type VmemSearch } from "../core/vmem-history";
 import { IPC, enrichLinksRequestSchema } from "../shared/ipc";
 import type { SettingsStore } from "./settings";
 
@@ -23,7 +23,7 @@ function logFallback(reason: string): void {
  * Personalised link chips. The turn's text goes to Jev (and to the vmem connector, when there is one) only with the toggle on and a Gateway key;
  * otherwise (and on any failure or timeout) the chips come back as they were. Keys never leave main.
  */
-export function registerLinkIpc(settings: SettingsStore): void {
+export function registerLinkIpc(settings: SettingsStore, vmem: VmemSearch): void {
   // Read on each call, so Settings and Connectors changes apply without a restart.
   const enrich = createLinkEnricher({
     onFallback: logFallback,
@@ -35,12 +35,12 @@ export function registerLinkIpc(settings: SettingsStore): void {
         logFallback("no AI Gateway key");
         return null;
       }
-      const vmem = settings.vmemConfig();
-      const mcpSearch = vmem ? createMcpSearch(vmem) : null;
+      const { hasVmem } = settings.linkSettings();
       const searchHistory = createVmemHistory(async (query) => {
-        if (!mcpSearch) return [];
+        if (!hasVmem) return [];
         try {
-          return await mcpSearch(query);
+          // The connection is already open (app start or sign-in), so this pays for the search only.
+          return await vmem.search(query);
         } catch (error) {
           console.warn("Bee: vmem connector error:", error instanceof Error ? error.message : String(error));
           throw error;

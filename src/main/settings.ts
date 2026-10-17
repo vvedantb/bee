@@ -4,6 +4,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
 import { normalizeFsRoots } from "../core/fs-sandbox";
+import { createMcpOAuthProvider, hasMcpOAuthTokens, mcpOAuthStateSchema, type McpOAuthStorage } from "../core/mcp-oauth";
 import { isVmemConnector, mcpSlug, mcpUrlError, parseMcpArgs, parseMcpEnv, type McpServerConfig } from "../core/mcp";
 import {
   MCP_MAX_SERVERS,
@@ -31,7 +32,11 @@ const fileSchema = z.object({
   // One safeStorage ciphertext (base64) for every server's secrets, as JSON keyed by server id.
   mcpSecrets: z.string().optional(),
 });
-const mcpSecretsSchema = z.record(z.string(), z.object({ auth: z.string().optional(), env: z.record(z.string(), z.string()).optional() }));
+// auth: bearer token or header value. env: stdio env values. oauth: tokens and client information from Connectors sign-in.
+const mcpSecretsSchema = z.record(
+  z.string(),
+  z.object({ auth: z.string().optional(), env: z.record(z.string(), z.string()).optional(), oauth: mcpOAuthStateSchema.optional() }),
+);
 type McpSecrets = z.infer<typeof mcpSecretsSchema>;
 type SettingsFile = z.infer<typeof fileSchema>;
 type SecretName = "gatewayApiKey" | "claudeOAuthToken";
@@ -104,7 +109,7 @@ export function createSettingsStore(args: {
   }
 
   function writeMcpSecrets(file: SettingsFile, secrets: McpSecrets): SettingsFile {
-    const kept = Object.fromEntries(Object.entries(secrets).filter(([id, secret]) => file.mcpServers.some((server) => server.id === id) && (secret.auth || Object.keys(secret.env ?? {}).length > 0)));
+    const kept = Object.fromEntries(Object.entries(secrets).filter(([id, secret]) => file.mcpServers.some((server) => server.id === id) && (secret.auth || secret.oauth || Object.keys(secret.env ?? {}).length > 0)));
     if (storageMode() === "memory") {
       memoryMcp = kept;
       return { ...file, mcpSecrets: undefined };
@@ -114,7 +119,7 @@ export function createSettingsStore(args: {
   }
 
   function mcpView(server: McpServer, secrets: McpSecrets): McpServerView {
-    return { ...server, envKeys: server.envKeys ?? [], hasAuth: Boolean(secrets[server.id]?.auth) };
+    return { ...server, envKeys: server.envKeys ?? [], hasAuth: Boolean(secrets[server.id]?.auth) || hasMcpOAuthTokens(secrets[server.id]?.oauth) };
   }
 
   function mcpList(): McpServerView[] {
@@ -147,6 +152,7 @@ export function createSettingsStore(args: {
     };
     let auth = previous.auth;
     let env = previous.env;
+    let oauth = previous.oauth;
 
     if (input.transport === "http") {
       const urlError = mcpUrlError(input.url);
@@ -161,6 +167,8 @@ export function createSettingsStore(args: {
       if (next.auth.type === "none") auth = undefined;
       if (next.auth.type !== "none" && !auth) throw new Error("Enter a token or header value");
       env = undefined;
+      // Sign-in belongs to one endpoint, and only to a server without a static token.
+      if (next.auth.type !== "none" || (existing && existing.url !== next.url)) oauth = undefined;
     } else {
       if (!input.command) throw new Error("Enter a command");
       next.command = input.command;
@@ -168,11 +176,12 @@ export function createSettingsStore(args: {
       if (input.env !== undefined) env = parseMcpEnv(input.env);
       next.envKeys = Object.keys(env ?? {});
       auth = undefined;
+      oauth = undefined;
     }
     // A different endpoint or command lists different tools: forget the old list.
     if (existing && (existing.url !== next.url || existing.command !== next.command || existing.transport !== next.transport)) next.tools = undefined;
 
-    secrets[id] = { auth, env };
+    secrets[id] = { auth, env, oauth };
     const servers = existing ? file.mcpServers.map((server) => (server.id === id ? next : server)) : [...file.mcpServers, next];
     file = writeMcpSecrets({ ...file, mcpServers: servers }, secrets);
     write(file);
@@ -213,6 +222,20 @@ export function createSettingsStore(args: {
     return tools;
   }
 
+  /** Where one server's OAuth tokens and client information live: inside the encrypted MCP secrets. Refreshed tokens are saved through it. */
+  function mcpOAuthStorage(id: string): McpOAuthStorage {
+    return {
+      load: () => readMcpSecrets(read())[id]?.oauth,
+      save: (oauth) => {
+        const file = read();
+        // A server removed while signing in (Disconnect) must not come back through a late save.
+        if (!file.mcpServers.some((server) => server.id === id)) return;
+        const secrets = readMcpSecrets(file);
+        write(writeMcpSecrets(file, { ...secrets, [id]: { ...secrets[id], oauth } }));
+      },
+    };
+  }
+
   function toConfig(server: McpServer, secrets: McpSecrets): McpServerConfig {
     const secret = secrets[server.id];
     return {
@@ -225,6 +248,8 @@ export function createSettingsStore(args: {
       env: secret?.env,
       auth: server.auth,
       secret: secret?.auth,
+      oauthSignedIn: hasMcpOAuthTokens(secret?.oauth),
+      authProvider: server.transport === "http" ? createMcpOAuthProvider({ storage: mcpOAuthStorage(server.id) }) : undefined,
       disabledTools: server.tools?.filter((item) => !item.enabled).map((item) => item.name),
     };
   }
@@ -304,5 +329,5 @@ export function createSettingsStore(args: {
     return normalizeFsRoots(read().fsRoots).roots;
   }
 
-  return { view, save, gatewayApiKey, linkSettings, vmemConfig, fsRoots, mcpList, mcpSave, mcpRemove, mcpSetEnabled, mcpRecordTools, mcpConfigs, mcpConfig };
+  return { view, save, gatewayApiKey, linkSettings, vmemConfig, fsRoots, mcpList, mcpSave, mcpRemove, mcpSetEnabled, mcpRecordTools, mcpConfigs, mcpConfig, mcpOAuthStorage };
 }

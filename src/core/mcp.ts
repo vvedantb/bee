@@ -1,4 +1,5 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import type { OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
 import { StdioClientTransport, getDefaultEnvironment } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
@@ -27,6 +28,10 @@ export type McpServerConfig = {
   auth: McpServer["auth"];
   /** Bearer token, or the value of the custom header. */
   secret?: string;
+  /** True when OAuth tokens are stored (Connectors sign-in), so the server needs no bearer token. */
+  oauthSignedIn?: boolean;
+  /** OAuth for a remote server with auth "none". Not interactive here: a 401 refreshes stored tokens or fails, and never opens a browser. */
+  authProvider?: OAuthClientProvider;
   /** Listed tools the user switched off. Tools not listed yet stay on. */
   disabledTools?: string[];
 };
@@ -98,7 +103,9 @@ function makeTransport(config: McpServerConfig): Transport {
   const headers: Record<string, string> = {};
   if (config.secret && config.auth.type === "bearer") headers.Authorization = `Bearer ${config.secret}`;
   if (config.secret && config.auth.type === "header" && config.auth.headerName) headers[config.auth.headerName] = config.secret;
-  return new StreamableHTTPClientTransport(new URL(config.url as string), { requestInit: { headers } });
+  // Bearer and header servers keep their static header. Only an auth-none server gets the OAuth provider.
+  const authProvider = config.auth.type === "none" ? config.authProvider : undefined;
+  return new StreamableHTTPClientTransport(new URL(config.url as string), { requestInit: { headers }, authProvider });
 }
 
 export type McpConnection = {

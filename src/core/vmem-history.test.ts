@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { createVmemHistory, parseHistoryHits, pickSearchTool, searchArguments } from "./vmem-history";
+import type { McpConnection, McpServerConfig } from "./mcp";
+import { createVmemHistory, createVmemSearch, mergeSearchOutputs, parseHistoryHits, pickSearchTool, searchArguments, searchSources } from "./vmem-history";
 
 const memory = (extra: Record<string, unknown>) => ({ id: "m", title: "", content: "", source: "browsing history", ...extra });
 
@@ -128,15 +129,94 @@ describe("pickSearchTool and searchArguments", () => {
     expect(pickSearchTool([])).toBeUndefined();
   });
 
-  it("sends query and limit, and source only when the schema has it", () => {
+  it("sends query and limit, and source only when given and the schema has it", () => {
     expect(searchArguments(tool("search", { query: {}, limit: {} }), "q")).toEqual({ query: "q", limit: 20 });
-    expect(searchArguments(tool("search", { query: {}, limit: {}, source: { type: "string" } }), "q")).toEqual({ query: "q", limit: 20, source: "browsing-history" });
+    expect(searchArguments(tool("search", { query: {}, limit: {}, source: { type: "string" } }), "q", "bookmark")).toEqual({ query: "q", limit: 20, source: "bookmark" });
+    expect(searchArguments(tool("search", { query: {} }), "q", "bookmark")).toEqual({ query: "q" });
     expect(searchArguments(tool("search"), "q")).toEqual({ query: "q", limit: 20 });
   });
 
-  it("never sends a source that an enum does not list", () => {
-    const listed = tool("search", { query: {}, source: { enum: ["note", "Browsing History"] } });
-    expect(searchArguments(listed, "q")).toEqual({ query: "q", source: "Browsing History" });
-    expect(searchArguments(tool("search", { query: {}, source: { enum: ["note", "chat"] } }), "q")).toEqual({ query: "q" });
+  it("searches history and bookmarks, one call each", () => {
+    expect(searchSources(tool("search", { source: { type: "string" } }))).toEqual(["browsing-history", "bookmark"]);
+    expect(searchSources(tool("search"))).toEqual([undefined]);
+  });
+
+  it("never picks a source that an enum does not list", () => {
+    expect(searchSources(tool("search", { source: { enum: ["note", "Browsing History", "bookmarks"] } }))).toEqual(["Browsing History", "bookmarks"]);
+    expect(searchSources(tool("search", { source: { enum: ["note", "browsing-history"] } }))).toEqual(["browsing-history"]);
+    expect(searchSources(tool("search", { source: { enum: ["note", "chat"] } }))).toEqual([undefined]);
+  });
+});
+
+describe("mergeSearchOutputs", () => {
+  it("joins result lists, and keeps URLs from plain text", () => {
+    const merged = mergeSearchOutputs([JSON.stringify({ memories: [{ url: "https://a.com/1" }] }), JSON.stringify([{ url: "https://a.com/2" }]), "see https://a.com/3", ""]);
+    expect(parseHistoryHits(merged, "a.com").map((hit) => hit.url)).toEqual(["https://a.com/1", "https://a.com/2", "https://a.com/3"]);
+  });
+});
+
+describe("createVmemSearch", () => {
+  const config = (extra: Partial<McpServerConfig> = {}): McpServerConfig => ({ id: "v", name: "vmem", transport: "http", url: "https://mcp.test/mcp", auth: { type: "none" }, oauthSignedIn: true, ...extra });
+  const searchTool = { name: "memory_search", description: "", inputSchema: { type: "object", properties: { query: {}, source: { type: "string" } } } };
+
+  function fakeConnect(call: McpConnection["call"] = async () => JSON.stringify({ memories: [] })) {
+    const connections: Array<{ close: ReturnType<typeof vi.fn>; call: ReturnType<typeof vi.fn> }> = [];
+    const connect = vi.fn(async () => {
+      const made = { close: vi.fn(async () => undefined), call: vi.fn(call) };
+      connections.push(made);
+      return { tools: [searchTool], call: made.call, close: made.close } as McpConnection;
+    });
+    return { connect, connections };
+  }
+
+  it("connects once and reuses the connection for every search", async () => {
+    const { connect, connections } = fakeConnect(async (_name, args) => JSON.stringify({ memories: [{ url: `https://a.com/${(args as { source: string }).source}` }] }));
+    const vmem = createVmemSearch(() => config(), connect);
+    vmem.refresh();
+    const first = await vmem.search("a");
+    await vmem.search("b");
+    expect(connect).toHaveBeenCalledTimes(1);
+    expect(connections[0]?.call).toHaveBeenCalledTimes(4);
+    expect(parseHistoryHits(first, "a.com").map((hit) => hit.url)).toEqual(["https://a.com/browsing-history", "https://a.com/bookmark"]);
+  });
+
+  it("does not connect while signed out, and closes when the connector goes", async () => {
+    const { connect, connections } = fakeConnect();
+    let current: McpServerConfig | undefined = config({ oauthSignedIn: false });
+    const vmem = createVmemSearch(() => current, connect);
+    vmem.refresh();
+    await expect(vmem.search("a")).rejects.toThrow(/not signed in/);
+    expect(connect).not.toHaveBeenCalled();
+    current = config();
+    vmem.refresh();
+    await vmem.search("a");
+    current = undefined;
+    vmem.refresh();
+    await vi.waitFor(() => expect(connections[0]?.close).toHaveBeenCalled());
+    await expect(vmem.search("a")).rejects.toThrow(/not connected/);
+  });
+
+  it("keeps the connection after a timeout, and reconnects after another failure", async () => {
+    let failure = new Error("Tool memory_search timed out after 1 s");
+    const { connect, connections } = fakeConnect(async () => {
+      throw failure;
+    });
+    const vmem = createVmemSearch(() => config(), connect);
+    await expect(vmem.search("a")).rejects.toThrow(/timed out/);
+    await expect(vmem.search("a")).rejects.toThrow(/timed out/);
+    expect(connect).toHaveBeenCalledTimes(1);
+    failure = new Error("socket closed");
+    await expect(vmem.search("a")).rejects.toThrow(/socket closed/);
+    await expect(vmem.search("a")).rejects.toThrow(/socket closed/);
+    expect(connect).toHaveBeenCalledTimes(2);
+    expect(connections[0]?.close).toHaveBeenCalled();
+  });
+
+  it("tries again after a failed connect", async () => {
+    const connect = vi.fn().mockRejectedValueOnce(new Error("Connecting timed out")).mockResolvedValue({ tools: [searchTool], call: async () => "{}", close: async () => undefined });
+    const vmem = createVmemSearch(() => config(), connect);
+    await expect(vmem.search("a")).rejects.toThrow(/timed out/);
+    await expect(vmem.search("a")).resolves.toEqual({ results: [] });
+    expect(connect).toHaveBeenCalledTimes(2);
   });
 });

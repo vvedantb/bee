@@ -7,12 +7,15 @@ import { MAX_HISTORY_CANDIDATES, sameSite, type HistoryHit } from "./link-rank";
 
 const SEARCH_LIMIT = 20;
 const MAX_QUERY = 300;
-// This path lives inside the 1.5 s enrich budget (ENRICH_TIMEOUT_MS), so it cannot use the 10 s and 15 s Luna defaults.
-export const VMEM_CONNECT_TIMEOUT_MS = 800;
-export const VMEM_CALL_TIMEOUT_MS = 800;
+// Searches run on a connection that is already open, inside the 2 s enrich budget (ENRICH_TIMEOUT_MS), so a call gets about 1 s.
+// Connecting happens in the background (app start, sign-in), outside that budget: a slow connect only costs the chip that waited for it.
+export const VMEM_CONNECT_TIMEOUT_MS = 5000;
+export const VMEM_CALL_TIMEOUT_MS = 1000;
 const HISTORY_SOURCE = /history|bookmark/i;
 // vmem stores history as source "browsing-history" and matches the filter exactly ("browsing history" returns nothing).
-const DEFAULT_SOURCE = "browsing-history";
+const HISTORY_SOURCE_VALUE = "browsing-history";
+// Assumed value for bookmarks when the tool's source is free text: an unknown value only returns nothing.
+const BOOKMARK_SOURCE_VALUE = "bookmark";
 const URL_IN_TEXT = /https?:\/\/[^\s<>"')\]]+/gi;
 const TRAILING = /[.,;:!?]+$/;
 const LIST_KEYS = ["memories", "results", "data"];
@@ -126,36 +129,100 @@ export function pickSearchTool(tools: readonly McpTool[]): McpTool | undefined {
   return named((name) => name === "memory_search") ?? named((name) => name === "search") ?? named((name) => name.includes("memory") && name.includes("search"));
 }
 
-/** query and limit, plus `source` only when the tool has that property. An enum gets a listed history value, or no source at all. */
-export function searchArguments(tool: McpTool, query: string): Record<string, unknown> {
+/** The source filters to search, one call each: history and bookmarks. undefined means no filter (the tool has no source, or no listed match). */
+export function searchSources(tool: McpTool): Array<string | undefined> {
+  const source = isRecord(tool.inputSchema?.properties) ? tool.inputSchema.properties.source : undefined;
+  if (!isRecord(source)) return [undefined];
+  if (!Array.isArray(source.enum)) return [HISTORY_SOURCE_VALUE, BOOKMARK_SOURCE_VALUE];
+  // An enum only gets values it lists.
+  const listed = source.enum.filter((value): value is string => typeof value === "string");
+  const matches = [/history/i, /bookmark/i].flatMap((pattern) => listed.find((value) => pattern.test(value)) ?? []);
+  return matches.length > 0 ? matches : [undefined];
+}
+
+/** query and limit, plus `source` when given and the tool has that property. */
+export function searchArguments(tool: McpTool, query: string, source?: string): Record<string, unknown> {
   const properties = isRecord(tool.inputSchema?.properties) ? tool.inputSchema.properties : undefined;
   const args: Record<string, unknown> = { query };
   if (!properties || "limit" in properties) args.limit = SEARCH_LIMIT;
-  const source = properties?.source;
-  if (!isRecord(source)) return args;
-  if (Array.isArray(source.enum)) {
-    const listed = source.enum.filter((value): value is string => typeof value === "string");
-    const match = listed.find((value) => /history/i.test(value)) ?? listed.find((value) => /bookmark/i.test(value));
-    if (match) args.source = match;
-  } else {
-    args.source = DEFAULT_SOURCE;
-  }
+  if (source !== undefined && properties && "source" in properties) args.source = source;
   return args;
 }
 
+/** One result list from several tool outputs. Text that is not JSON becomes a single item, so its URLs are still read. */
+export function mergeSearchOutputs(outputs: readonly string[]): { results: unknown[] } {
+  const results = outputs.flatMap((output) => {
+    const parsed = parseJsonLoose(output);
+    if (parsed !== undefined) return itemsOf(parsed);
+    return output.trim() ? [{ content: output }] : [];
+  });
+  return { results };
+}
+
+export type VmemSearch = {
+  /** History and bookmark results for a query, merged. Throws when the connector is missing, signed out or fails. */
+  search: (query: string) => Promise<unknown>;
+  /** Opens the connection now when the connector is enabled and signed in, closes it otherwise. Call at start and after Connectors changes. */
+  refresh: () => void;
+  /** Closes the connection. A later search or refresh opens a new one. */
+  close: () => Promise<void>;
+};
+
 /**
- * Searches the connector with short timeouts. Throws on connect, list or call failure (createVmemHistory turns that into []).
- * The connection closes in the background so the enrich budget is not spent waiting for it.
+ * Keeps one MCP connection to the vmem connector open, so a chip pays for the search call and not for connecting.
+ * `getConfig` is read on each call, so Connectors changes apply. Fail open: callers treat a throw as no history.
  */
-export function createMcpSearch(config: McpServerConfig): (query: string) => Promise<string> {
-  return async (query) => {
-    const connection = await connectMcp(config, VMEM_CONNECT_TIMEOUT_MS);
-    try {
+export function createVmemSearch(getConfig: () => McpServerConfig | undefined, connect: typeof connectMcp = connectMcp): VmemSearch {
+  type Entry = { key: string; ready: Promise<McpConnection> };
+  let current: Entry | undefined;
+
+  const signedIn = (config: McpServerConfig): boolean => config.auth.type !== "none" || Boolean(config.oauthSignedIn);
+
+  async function close(): Promise<void> {
+    const entry = current;
+    current = undefined;
+    await entry?.ready.then((connection) => connection.close(), () => undefined);
+  }
+
+  function open(config: McpServerConfig): Promise<McpConnection> {
+    const key = [config.id, config.url, config.auth.type, config.oauthSignedIn].join("|");
+    if (current?.key === key) return current.ready;
+    void close();
+    const entry: Entry = { key, ready: connect(config, VMEM_CONNECT_TIMEOUT_MS) };
+    current = entry;
+    // A failed connect is not kept, so the next call tries again.
+    entry.ready.catch(() => {
+      if (current === entry) current = undefined;
+    });
+    return entry.ready;
+  }
+
+  return {
+    refresh: () => {
+      const config = getConfig();
+      if (!config || !signedIn(config)) {
+        void close();
+        return;
+      }
+      open(config).catch((error: unknown) => console.warn("Bee: vmem connector error:", error instanceof Error ? error.message : String(error)));
+    },
+    close,
+    search: async (query) => {
+      const config = getConfig();
+      if (!config) throw new Error("vmem is not connected");
+      if (!signedIn(config)) throw new Error("vmem is not signed in");
+      const connection = await open(config);
       const tool = pickSearchTool(connection.tools);
       if (!tool) throw new Error("no memory search tool");
-      return await connection.call(tool.name, searchArguments(tool, query), VMEM_CALL_TIMEOUT_MS);
-    } finally {
-      void connection.close();
-    }
+      const settled = await Promise.allSettled(
+        searchSources(tool).map((source) => connection.call(tool.name, searchArguments(tool, query, source), VMEM_CALL_TIMEOUT_MS)),
+      );
+      const outputs = settled.flatMap((outcome) => (outcome.status === "fulfilled" ? [outcome.value] : []));
+      if (outputs.length > 0) return mergeSearchOutputs(outputs);
+      const reason = (settled[0] as PromiseRejectedResult).reason as unknown;
+      // A slow call leaves the connection fine; any other failure may mean it dropped, so the next search reconnects.
+      if (!(reason instanceof Error && /timed out/.test(reason.message))) void close();
+      throw reason;
+    },
   };
 }

@@ -78,6 +78,8 @@ const api = {
     remove: async (id: string) => mcpListSchema.parse(await ipcRenderer.invoke(IPC.mcpRemove, { id })),
     setEnabled: async (update: McpSetEnabled) => mcpListSchema.parse(await ipcRenderer.invoke(IPC.mcpSetEnabled, update)),
     test: async (id: string) => mcpTestResultSchema.parse(await ipcRenderer.invoke(IPC.mcpTest, { id })),
+    // Opens the system browser for MCP sign-in and resolves once tokens are stored in main.
+    authorize: async (id: string) => mcpListSchema.parse(await ipcRenderer.invoke(IPC.mcpAuthorize, { id })),
   },
   teams: {
     tick: async (sessionToken: string) => teamsTickResultSchema.parse(await ipcRenderer.invoke(IPC.teamsTick, { sessionToken })),

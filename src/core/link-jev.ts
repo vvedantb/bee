@@ -1,7 +1,7 @@
 import { experimental_evaluate, type Experimental_EvaluationModel, type Experimental_EvaluationQuestion } from "ai";
 import type { LinkCandidate, LinkDecision } from "./link-rank";
 
-// Standard tier, not flex: this runs inside a 1.5 s budget. Asks Jev (Gateway evaluation API, as in jev.ts) whether a link helps and which URL fits. Throws on failure; link-rank fails open.
+// Standard tier, not flex: this runs inside a 2 s budget. Asks Jev (Gateway evaluation API, as in jev.ts) whether a link helps and which URL fits. Throws on failure; link-rank fails open.
 //
 // state: { transcript } — the current turn's text.
 // questions: "suggest" (is a link to the site useful now?) and "u0", "u1", … (does this exact page fit?), each scored 0–3.

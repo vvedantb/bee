@@ -11,7 +11,7 @@ export function mcpSlug(name: string): string {
   return slug || "mcp";
 }
 
-const VMEM_HOSTS = ["vmem.vedantb.com"];
+const VMEM_HOSTS = ["vmem.vedantb.com", "vmem.projectv.uk"];
 
 /** True for the user's vmem connector: a server named vmem, or one whose URL host is a vmem host. Callers check `enabled`. */
 export function isVmemConnector(server: { name: string; url?: string }): boolean {

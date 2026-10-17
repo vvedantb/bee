@@ -164,9 +164,9 @@ function McpDetails({ server, test }: { server: McpServerView; test: McpTestStat
   );
 }
 
-// Connectors Bee offers by name. Connect saves the server enabled; none of these needs a token.
+// Connectors Bee offers by name. Connect saves the server enabled and signs in through the system browser (MCP OAuth).
 type Preset = { name: string; url: string; domain: string; matches: (server: McpServerView) => boolean };
-const PRESETS: Preset[] = [{ name: "vmem", url: "https://clear-bear-690.eu-west-1.convex.site/mcp", domain: "vmem.vedantb.com", matches: isVmemConnector }];
+const PRESETS: Preset[] = [{ name: "vmem", url: "https://clear-bear-690.eu-west-1.convex.site/mcp", domain: "vmem.projectv.uk", matches: isVmemConnector }];
 
 function hostOf(url: string | undefined): string | null {
   try {
@@ -222,11 +222,9 @@ export function Connectors(props: { servers: McpServerView[]; tests: Record<stri
     }
   }
 
-  // Connect saves a preset enabled, or switches a saved one back on. Disconnect removes the server, so Connect is always a fresh add.
+  // Connect saves a preset enabled when it is new, then signs in. Disconnect removes the server and its tokens, so Connect is a fresh add.
   const connectPreset = (preset: Preset, saved: McpServerView | undefined) =>
-    saved
-      ? actions.setMcpEnabled({ id: saved.id, enabled: true })
-      : actions.saveMcpServer({ name: preset.name, enabled: true, transport: "http", url: preset.url, auth: { type: "none" } });
+    actions.connectMcpServer({ name: preset.name, enabled: true, transport: "http", url: preset.url, auth: { type: "none" } }, saved?.id);
 
   if (editing) {
     return (
@@ -246,7 +244,8 @@ export function Connectors(props: { servers: McpServerView[]; tests: Record<stri
       <ul className="connector-list">
         {PRESETS.map((preset) => {
           const saved = props.servers.find(preset.matches);
-          const connected = Boolean(saved?.enabled);
+          // Signed in, not just saved: a server that is enabled but has no tokens still offers Connect.
+          const connected = Boolean(saved?.enabled && saved.hasAuth);
           return (
             <ConnectorRow
               key={preset.name}

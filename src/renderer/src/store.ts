@@ -371,7 +371,9 @@ async function mcpChange(change: () => Promise<McpServerView[]>, staleTestId?: s
     void actions.refreshSettings().catch(() => undefined);
     return true;
   } catch (error) {
-    set({ mcp: { ...state.mcp, error: error instanceof Error ? error.message : "Could not save the server" } });
+    // Electron prefixes a handler's error with "Error invoking remote method …".
+    const message = error instanceof Error ? error.message.replace(/^Error invoking remote method '[^']*': (Error: )?/, "") : "";
+    set({ mcp: { ...state.mcp, error: message || "Could not save the server" } });
     return false;
   }
 }
@@ -411,6 +413,21 @@ export const actions = {
 
   async setMcpEnabled(update: McpSetEnabled): Promise<void> {
     await mcpChange(() => window.bee.mcp.setEnabled(update));
+  },
+
+  /** Signs in to an MCP server in the system browser, saving it first when it is new. The row shows Disconnect once tokens are stored. */
+  async connectMcpServer(save: McpSave, existingId?: string): Promise<void> {
+    await mcpChange(async () => {
+      let id = existingId;
+      if (!id) {
+        const servers = await window.bee.mcp.save(save);
+        // Keep the new row on screen if the sign-in fails.
+        set({ mcp: { ...state.mcp, servers } });
+        id = servers.find((server) => server.name === save.name)?.id;
+      }
+      if (!id) throw new Error("Could not save the server");
+      return window.bee.mcp.authorize(id);
+    }, existingId);
   },
 
   async testMcpServer(id: string): Promise<void> {
