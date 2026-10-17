@@ -10,6 +10,8 @@ import {
   IconUsersGroup,
   IconX,
 } from "@tabler/icons-react";
+import { Button, Input, LabeledSwitchRow, Textarea } from "@vvedantb/ui";
+import { PillTabs } from "@vvedantb/shell";
 import { useState, type FormEvent } from "react";
 import { Favicon } from "./Favicon";
 import { Connectors } from "./Connectors";
@@ -47,13 +49,13 @@ function LinkChips({ chips }: { chips: LinkChip[] }) {
     <ul className="link-chips" aria-label="Suggested links">
       {chips.map((chip) => (
         <li key={chip.id} className="chip link-chip">
-          <button type="button" className="link-chip-open" title={chip.url} onClick={() => void actions.openLink(chip.url)}>
+          <Button type="button" variant="link" className="h-6 gap-1.5 rounded-full py-0 pr-1 pl-2.5 text-[13px] no-underline" title={chip.url} onClick={() => void actions.openLink(chip.url)}>
             <Favicon domain={chip.domain} />
             {chip.label}
-          </button>
-          <button type="button" className="link-chip-dismiss" title="Dismiss link" aria-label={`Dismiss ${chip.label}`} onClick={() => actions.dismissChip(chip.id)}>
+          </Button>
+          <Button type="button" variant="ghost" size="icon-xs" className="size-6 rounded-full" title="Dismiss link" aria-label={`Dismiss ${chip.label}`} onClick={() => actions.dismissChip(chip.id)}>
             <IconX size={12} stroke={2} />
-          </button>
+          </Button>
         </li>
       ))}
     </ul>
@@ -66,9 +68,9 @@ function IslandBody({ result, chips, closing }: { result: PipelineResult | null;
   return (
     <section className={closing ? "island-body closing" : "island-body"} aria-live="polite">
       <div className="island-inner">
-        <button type="button" className="icon-button island-close" title="Dismiss" aria-label="Dismiss" onClick={() => void actions.dismissIsland()}>
+        <Button type="button" variant="ghost" size="icon-sm" className="island-close" title="Dismiss" aria-label="Dismiss" onClick={() => void actions.dismissIsland()}>
           <IconX {...ICON} />
-        </button>
+        </Button>
         {tips.length > 0 ? (
           <ul className="island-tips">
             {tips.map((tip) => (
@@ -109,7 +111,7 @@ function Island({ state }: { state: BeeState }) {
   // While Luna thinks, chips may open the body but the pill keeps its thinking text.
   const status = showBody && !state.busy && !state.mic.error ? "Tips" : notchStatus(state, isSignedIn);
   const newVersion = state.update.check?.available ? state.update.check.latestVersion : null;
-  const statusProps = { className: state.mic.error ? "notch-status error-text" : "notch-status", title: status };
+  const statusClass = state.mic.error ? "notch-status error-text" : "notch-status";
   return (
     <div
       className={["island", state.busy && "thinking", showBody && "open"].filter(Boolean).join(" ")}
@@ -120,23 +122,32 @@ function Island({ state }: { state: BeeState }) {
         <span className={state.busy ? "notch-dot busy" : "notch-dot"} aria-hidden />
         {canReopen ? (
           // Keyed so each new status fades in.
-          <button key={status} type="button" {...statusProps} onClick={() => actions.reopenIsland()}>
+          <Button
+            key={status}
+            type="button"
+            variant="ghost"
+            title={status}
+            className={`${statusClass} h-auto justify-start rounded-none p-0 text-[13px] font-normal text-foreground hover:bg-transparent hover:text-foreground hover:underline`}
+            onClick={() => actions.reopenIsland()}
+          >
             {status}
-          </button>
+          </Button>
         ) : (
-          <span key={status} {...statusProps}>
+          <span key={status} className={statusClass} title={status}>
             {status}
           </span>
         )}
         {newVersion ? (
-          <button type="button" className="icon-button accent" title={`Bee ${newVersion} is available`} onClick={() => void actions.openSettings()}>
+          <Button type="button" variant="ghost" size="icon-sm" className="notch-update" title={`Bee ${newVersion} is available`} onClick={() => void actions.openSettings()}>
             <IconDownload {...ICON} />
-          </button>
+          </Button>
         ) : null}
         {state.teams?.room ? (
-          <button
+          <Button
             type="button"
-            className="icon-button sync-chip"
+            variant="ghost"
+            size="sm"
+            className="sync-chip rounded-full"
             title={`${syncedWith(state.teams)}${state.teams.shareMuted ? " · sharing paused" : ""}`}
             onClick={() => {
               actions.setTab("live");
@@ -145,27 +156,31 @@ function Island({ state }: { state: BeeState }) {
           >
             <IconUsersGroup {...ICON} />
             {state.teams.room.members.length}
-          </button>
+          </Button>
         ) : null}
         <Show when="signed-in">
-          <button
+          <Button
             type="button"
-            className={state.mic.on ? "icon-button on" : "icon-button"}
+            variant={state.mic.on ? "default" : "ghost"}
+            size="sm"
+            className="rounded-full"
             title={state.mic.error ?? (state.mic.on ? "Stop microphone" : "Start microphone")}
             onClick={() => void actions.toggleMic()}
           >
             <IconMicrophone {...ICON} />
             <span className="mic-level" style={{ transform: `scaleY(${0.2 + state.mic.level * 0.8})` }} />
-          </button>
+          </Button>
         </Show>
-        <button
+        <Button
           type="button"
-          className={open ? "icon-button chevron open" : "icon-button chevron"}
+          variant="ghost"
+          size="sm"
+          className={open ? "chevron open rounded-full" : "chevron rounded-full"}
           title={open ? "Collapse" : "Expand"}
           onClick={() => void actions.setExpanded(!open)}
         >
           <IconChevronDown {...ICON} />
-        </button>
+        </Button>
       </header>
       {/* While busy, pass no result: the body shows only the new chips, never the previous turn's tips, sources or error. */}
       {showBody ? <IslandBody result={state.busy ? null : result} chips={chips} closing={state.islandClosing} /> : null}
@@ -190,13 +205,13 @@ function MeetingSection({ summary, lineCount }: { summary: SummaryState; lineCou
     <section>
       <h2>Meeting</h2>
       <div className="row actions">
-        <button type="button" className="primary" disabled={lineCount === 0 || summary.saving} onClick={() => void actions.endMeeting()}>
+        <Button type="button" size="sm" disabled={lineCount === 0 || summary.saving} onClick={() => void actions.endMeeting()}>
           <IconNotebook {...ICON} /> End meeting &amp; save summary
-        </button>
+        </Button>
         {summary.result ? (
-          <button type="button" className="link" onClick={() => void actions.openSummary()}>
+          <Button type="button" variant="link" size="sm" onClick={() => void actions.openSummary()}>
             <IconExternalLink {...ICON} /> Open summary
-          </button>
+          </Button>
         ) : null}
       </div>
       <p className="muted">{summaryLabel(summary, lineCount)}</p>
@@ -292,20 +307,18 @@ function LiveTab({ state }: { state: BeeState }) {
       <section>
         <h2>Manual test</h2>
         <form className="simulate" onSubmit={onSubmit}>
-          <input name="line" placeholder="Type a line, or leave blank for a sample" autoComplete="off" />
-          <button type="submit" disabled={state.busy}>
+          <Input className="h-9" name="line" placeholder="Type a line, or leave blank for a sample" autoComplete="off" />
+          <Button type="submit" variant="secondary" size="sm" disabled={state.busy}>
             Simulate meeting line
-          </button>
+          </Button>
         </form>
         {state.teams?.team ? (
-          <label className="toggle">
-            <input
-              type="checkbox"
-              checked={state.teams.detection.source === "simulated"}
-              onChange={(event) => void actions.teams({ type: "simulateMeeting", on: event.currentTarget.checked })}
-            />
-            Simulate Teams meeting (the sync popup shows after about 10 s)
-          </label>
+          <LabeledSwitchRow
+            id="simulate-teams"
+            label="Simulate Teams meeting (the sync popup shows after about 10 s)"
+            checked={state.teams.detection.source === "simulated"}
+            onCheckedChange={(on) => void actions.teams({ type: "simulateMeeting", on })}
+          />
         ) : null}
       </section>
     </div>
@@ -347,19 +360,19 @@ function UpdateSection({ update }: { update: UpdateState }) {
       {update.error ? <p className="error">{update.error}</p> : null}
       <div className="row actions">
         {update.status === "ready" ? (
-          <button type="button" className="primary" onClick={() => void actions.installUpdate()}>
+          <Button type="button" size="sm" onClick={() => void actions.installUpdate()}>
             <IconPlayerPlay {...ICON} /> Quit &amp; install
-          </button>
+          </Button>
         ) : check?.available ? (
-          <button type="button" className="primary" disabled={busy} onClick={() => void actions.downloadUpdate()}>
+          <Button type="button" size="sm" disabled={busy} onClick={() => void actions.downloadUpdate()}>
             <IconDownload {...ICON} /> Download update
-          </button>
+          </Button>
         ) : null}
-        <button type="button" disabled={busy} onClick={() => void actions.checkForUpdate()}>
+        <Button type="button" variant="secondary" size="sm" disabled={busy} onClick={() => void actions.checkForUpdate()}>
           <IconRefresh {...ICON} className={update.status === "checking" ? "spin" : undefined} /> Check for updates
-        </button>
+        </Button>
         {check?.releaseUrl ? (
-          <a className="link" href={check.releaseUrl} target="_blank" rel="noreferrer">
+          <a className="text-accent hover:underline" href={check.releaseUrl} target="_blank" rel="noreferrer">
             Release notes
           </a>
         ) : null}
@@ -405,64 +418,58 @@ function SettingsTab({ state, settings }: { state: BeeState; settings: SettingsV
         />
         <label>
           Extra folders Luna may read (one absolute path per line)
-          <textarea name="fsRoots" rows={3} defaultValue={settings.fsRoots.join("\n")} spellCheck={false} />
+          <Textarea name="fsRoots" rows={3} defaultValue={settings.fsRoots.join("\n")} spellCheck={false} />
         </label>
         <p className="muted">
           Notes folder: <code>{settings.notesDir}</code>{" "}
-          <button type="button" className="link" onClick={() => void window.bee.openNotesFolder()}>
+          <Button type="button" variant="link" size="sm" className="h-auto p-0" onClick={() => void window.bee.openNotesFolder()}>
             Open
-          </button>
+          </Button>
         </p>
         {error ? <p className="error">{error}</p> : null}
         <div className="row">
-          <button type="submit">Save</button>
+          <Button type="submit" size="sm">
+            Save
+          </Button>
           {settings.gatewayKeySource === "saved" ? (
-            <button type="button" className="link" onClick={() => void actions.saveSettings({ gatewayApiKey: "" })}>
+            <Button type="button" variant="link" size="sm" onClick={() => void actions.saveSettings({ gatewayApiKey: "" })}>
               Remove saved key
-            </button>
+            </Button>
           ) : null}
           {settings.hasClaudeToken ? (
-            <button type="button" className="link" onClick={() => void actions.saveSettings({ claudeOAuthToken: "" })}>
+            <Button type="button" variant="link" size="sm" onClick={() => void actions.saveSettings({ claudeOAuthToken: "" })}>
               Remove token
-            </button>
+            </Button>
           ) : null}
         </div>
       </form>
 
-      <label className="toggle">
-        <input
-          type="checkbox"
-          checked={settings.personalisedLinks}
-          onChange={(event) => void actions.saveSettings({ personalisedLinks: event.currentTarget.checked })}
-        />
-        Personalised link suggestions (sends the current line to Jev, and to vmem when connected under Connectors, to pick the exact page; needs the Gateway key)
-      </label>
+      <LabeledSwitchRow
+        id="personalised-links"
+        label="Personalised link suggestions"
+        description="Sends the current line to Jev, and to vmem when connected under Connectors, to pick the exact page. Needs the Gateway key."
+        checked={settings.personalisedLinks}
+        onCheckedChange={(personalisedLinks) => void actions.saveSettings({ personalisedLinks })}
+      />
 
-      <label className="toggle">
-        <input
-          type="checkbox"
-          checked={settings.meetingMode}
-          onChange={(event) => void actions.saveSettings({ meetingMode: event.currentTarget.checked })}
-        />
-        Meeting mode (hide Bee from screen sharing, stay above full-screen apps)
-      </label>
+      <LabeledSwitchRow
+        id="meeting-mode"
+        label="Meeting mode"
+        description="Hide Bee from screen sharing, stay above full-screen apps."
+        checked={settings.meetingMode}
+        onCheckedChange={(meetingMode) => void actions.saveSettings({ meetingMode })}
+      />
 
       <div className="field">
         Interface size
-        <div className="segmented" role="radiogroup" aria-label="Interface size">
-          {INTERFACE_SCALES.map((scale) => (
-            <button
-              key={scale}
-              type="button"
-              role="radio"
-              aria-checked={settings.interfaceScale === scale}
-              className={settings.interfaceScale === scale ? "active" : ""}
-              onClick={() => void actions.saveSettings({ interfaceScale: scale })}
-            >
-              {Math.round(scale * 100)}%
-            </button>
-          ))}
-        </div>
+        <PillTabs
+          tabs={INTERFACE_SCALES.map((scale) => ({ value: String(scale), label: `${Math.round(scale * 100)}%` }))}
+          value={String(settings.interfaceScale)}
+          onValueChange={(value) => {
+            const interfaceScale = INTERFACE_SCALES.find((scale) => String(scale) === value);
+            if (interfaceScale) void actions.saveSettings({ interfaceScale });
+          }}
+        />
       </div>
 
       <TeamSection state={state} />
@@ -478,15 +485,15 @@ function Panel({ state }: { state: BeeState }) {
   return (
     <main className="panel">
       <nav className="tabs">
-        <button type="button" className={state.tab === "live" ? "active" : ""} onClick={() => actions.setTab("live")}>
-          Live
-        </button>
-        <button type="button" className={state.tab === "connectors" ? "active" : ""} onClick={() => actions.setTab("connectors")}>
-          Connectors
-        </button>
-        <button type="button" className={state.tab === "settings" ? "active" : ""} onClick={() => actions.setTab("settings")}>
-          Settings
-        </button>
+        <PillTabs
+          tabs={[
+            { value: "live", label: "Live" },
+            { value: "connectors", label: "Connectors" },
+            { value: "settings", label: "Settings" },
+          ]}
+          value={state.tab}
+          onValueChange={(tab) => actions.setTab(tab as BeeState["tab"])}
+        />
         <span className="tabs-account">
           <UserButton />
         </span>

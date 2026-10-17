@@ -1,3 +1,4 @@
+import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "electron-vite";
 
@@ -17,6 +18,6 @@ export default defineConfig({
   },
   renderer: {
     build: { outDir: "out/renderer" },
-    plugins: [react({ babel: { plugins: ["babel-plugin-react-compiler"] } })],
+    plugins: [tailwindcss(), react({ babel: { plugins: ["babel-plugin-react-compiler"] } })],
   },
 });

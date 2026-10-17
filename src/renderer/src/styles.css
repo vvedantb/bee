@@ -1,4 +1,19 @@
+@import "tailwindcss";
+@import "@vvedantb/tokens";
+@import "@vvedantb/tokens/css/base.css";
+@import "@vvedantb/tokens/css/dialog.css";
+@import "@vvedantb/tokens/css/modal.css";
+@import "@vvedantb/tokens/css/tabs.css";
+@import "@vvedantb/tokens/css/tabs-pills.css";
+@import "@vvedantb/tokens/css/scrollbar-thin.css";
+@import "@vvedantb/tokens/css/animations.css";
+@import "shadow-plugin";
+@plugin "tailwindcss-animate";
+@source "../../../node_modules/@vvedantb/ui/src/**/*.{ts,tsx}";
+@source "../../../node_modules/@vvedantb/shell/dist/**/*.js";
+
 /* Instrument Sans (variable, 400–700), self-hosted so the CSP needs no font hosts. SIL OFL 1.1: fonts/OFL.txt. */
+
 @font-face {
   font-family: "Instrument Sans";
   font-style: normal;
@@ -20,28 +35,50 @@
 }
 
 :root {
+  /* Bee's dark palette on the shared tokens. Unlayered, so it wins over the token layers. */
   --surface: #17140f;
   --surface-raised: #221e17;
   --surface-sunken: #110f0b;
   --text: #f4efe6;
   --muted: #a39a8a;
   --accent: #fabe28;
+  --accent-foreground: #17140f;
   --danger: #ff8a7a;
+  --foreground: var(--text);
+  --default: var(--surface-raised);
+  --default-foreground: var(--text);
+  --field-background: var(--surface-sunken);
+  --border: #2d271e;
   --fast: 150ms;
   --medium: 220ms;
   --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
   /* Slight overshoot: the island and its content settle like a spring. */
   --spring: cubic-bezier(0.22, 1.2, 0.36, 1);
-  font-family: "Instrument Sans", "Segoe UI", system-ui, -apple-system, sans-serif;
-  font-size: 13px;
+  /* Shared modal and tab motion variables (see @vvedantb/tokens css). */
+  --modal-open-dur: 200ms;
+  --modal-close-dur: 150ms;
+  --modal-scale: 0.97;
+  --modal-scale-close: 0.98;
+  --modal-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --tabs-dur: 200ms;
+  --tabs-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --tabs-text-muted: var(--muted);
+  --tabs-text-active: var(--text);
+  --tabs-pill-bg: var(--surface-raised);
   color: var(--text);
   color-scheme: dark;
+}
+
+/* Rem-based shared components keep their 16px scale; Bee text stays 13px. */
+html {
+  font-size: 16px;
 }
 
 * {
   box-sizing: border-box;
 }
 
+/* The window is transparent: tokens paint body opaque, so keep the page canvas clear. The island and panel draw their own surfaces. */
 html,
 body,
 #root {
@@ -49,6 +86,11 @@ body,
   height: 100%;
   background: transparent;
   overflow: hidden;
+}
+
+body {
+  background-color: transparent;
+  font-size: 13px;
 }
 
 .shell {
@@ -60,6 +102,7 @@ body,
 }
 
 /* The pill and, when an answer is open, the body under it: one surface that grows downward. */
+
 .island {
   display: flex;
   flex-direction: column;
@@ -118,87 +161,9 @@ body,
   text-overflow: ellipsis;
 }
 
-button {
-  font: inherit;
-  color: var(--text);
-  background: var(--surface-raised);
-  border: none;
-  border-radius: 8px;
-  padding: 6px 10px;
-  cursor: pointer;
-  transition:
-    background-color var(--fast) ease,
-    color var(--fast) ease,
-    opacity var(--fast) ease;
-}
-
-button:not(:disabled):hover {
-  background: #2d271e;
-}
-
-button:not(:disabled):active {
-  transform: scale(0.97);
-}
-
 /* After the generic button rules so the reopen-status button keeps looking like the span. */
-button.notch-status {
-  padding: 0;
-  background: none;
-  border-radius: 0;
-  text-align: left;
-}
 
-button.notch-status:not(:disabled):hover {
-  background: none;
-  text-decoration: underline;
-}
-
-button.primary {
-  background: var(--accent);
-  color: var(--surface);
-}
-
-button.primary:not(:disabled):hover {
-  background: #ffcb4d;
-}
-
-button svg {
-  flex: none;
-}
-
-button:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
-
-button.link,
-a.link {
-  background: none;
-  color: var(--accent);
-  padding: 0 4px;
-  text-decoration: none;
-}
-
-button.link:not(:disabled):hover,
-a.link:hover {
-  background: none;
-  text-decoration: underline;
-}
-
-.icon-button {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  border-radius: 16px;
-}
-
-.icon-button.on,
-.icon-button.on:not(:disabled):hover {
-  background: var(--accent);
-  color: var(--surface);
-}
-
-.icon-button.accent {
+.notch-update {
   color: var(--accent);
   animation: fade-in var(--medium) var(--ease-out);
 }
@@ -222,6 +187,7 @@ a.link:hover {
 }
 
 /* Island body: height grows from the pill (0fr to 1fr), content rises in with a spring. */
+
 .island-body {
   display: grid;
   grid-template-rows: 1fr;
@@ -246,9 +212,6 @@ a.link:hover {
   position: absolute;
   top: 0;
   right: 10px;
-  padding: 4px;
-  color: var(--muted);
-  background: none;
 }
 
 .island-tips {
@@ -337,22 +300,6 @@ a.link:hover {
   display: flex;
   gap: 4px;
   padding: 10px 12px 0;
-}
-
-.tabs button {
-  background: none;
-  color: var(--muted);
-}
-
-.tabs button:not(:disabled):hover {
-  background: none;
-  color: var(--text);
-}
-
-.tabs button.active,
-.tabs button.active:not(:disabled):hover {
-  background: var(--surface-raised);
-  color: var(--text);
 }
 
 .tabs-account {
@@ -499,37 +446,9 @@ ol {
   align-items: center;
 }
 
-input[type="password"],
-input[type="text"],
-input:not([type]),
-textarea {
-  flex: 1;
-  min-width: 0;
-  font: inherit;
-  color: var(--text);
-  background: var(--surface-sunken);
-  border: none;
-  border-radius: 8px;
-  padding: 7px 10px;
-}
-
-textarea {
-  resize: vertical;
-}
-
-input:disabled {
-  color: var(--muted);
-}
-
 .actions {
   flex-wrap: wrap;
   margin-top: 8px;
-}
-
-.actions button {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
 }
 
 .spin {
@@ -552,45 +471,6 @@ input:disabled {
   display: flex;
   flex-direction: column;
   gap: 4px;
-}
-
-.segmented {
-  display: flex;
-  gap: 2px;
-  padding: 2px;
-  background: var(--surface-sunken);
-  border-radius: 8px;
-}
-
-.segmented button {
-  flex: 1;
-  padding: 4px 0;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--muted);
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.segmented button:not(:disabled):hover {
-  background: transparent;
-}
-
-.segmented button.active {
-  background: var(--accent);
-  color: var(--surface-sunken);
-  font-weight: 600;
-}
-
-.segmented button.active:not(:disabled):hover {
-  background: var(--accent);
-}
-
-.toggle {
-  display: flex;
-  gap: 8px;
-  align-items: center;
 }
 
 code {
@@ -663,6 +543,7 @@ code {
 }
 
 /* Teams mode: the sync popup under the notch, the status chip and the team roster. */
+
 .sync-card {
   display: flex;
   flex-direction: column;
@@ -681,13 +562,6 @@ code {
   max-height: 220px;
 }
 
-.sync-card > button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-}
-
 .sync-head {
   display: flex;
   align-items: center;
@@ -702,7 +576,7 @@ code {
   text-overflow: ellipsis;
 }
 
-.sync-card > button.sync-main {
+.sync-card .sync-main {
   flex-direction: column;
   align-items: flex-start;
   gap: 2px;
@@ -716,7 +590,8 @@ code {
 }
 
 /* "Which meeting?" and equal room choices: one full-width button per option, no default. */
-.sync-picks button.sync-main {
+
+.sync-picks .sync-main {
   display: flex;
   flex: 1;
   min-width: 0;
@@ -772,29 +647,6 @@ code {
   background: var(--surface-sunken);
 }
 
-input[readonly] {
-  color: var(--muted);
-}
-
-.mcp-list,
-.mcp-tools {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.mcp-server {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 8px 10px;
-  background: var(--surface-sunken);
-  border-radius: 8px;
-}
-
 .mcp-tools {
   gap: 4px;
   max-height: 160px;
@@ -802,6 +654,7 @@ input[readonly] {
 }
 
 /* Connectors tab: one line per connector, icon and name on the left, Connect or Disconnect on the right. */
+
 .connector-list {
   list-style: none;
   margin: 0;
@@ -826,27 +679,9 @@ input[readonly] {
   gap: 10px;
   flex: 1;
   min-width: 0;
-  padding: 0;
-  border: 0;
-  background: none;
-  color: inherit;
-  font: inherit;
-  text-align: left;
 }
 
-button.connector-main {
-  cursor: pointer;
-}
-
-button.connector-main:not(:disabled):hover {
-  background: none;
-}
-
-button.connector-main:not(:disabled):active {
-  transform: none;
-}
-
-button.connector-main:hover strong {
+.connector-main:hover strong {
   color: var(--accent);
 }
 
@@ -857,19 +692,6 @@ button.connector-main:hover strong {
   width: 20px;
   flex: none;
   color: var(--muted);
-}
-
-.connector button {
-  flex: none;
-  padding: 4px 10px;
-}
-
-.connector-disconnect {
-  color: var(--muted);
-}
-
-.connector-disconnect:not(:disabled):hover {
-  color: var(--danger);
 }
 
 .mcp-details {
@@ -888,20 +710,9 @@ button.connector-main:hover strong {
 }
 
 /* KEY=value secrets: drawn as dots while typing, like a password field. */
-.secret-area {
-  -webkit-text-security: disc;
-}
-
-.settings select {
-  font: inherit;
-  color: var(--text);
-  background: var(--surface-sunken);
-  border: none;
-  border-radius: 8px;
-  padding: 7px 10px;
-}
 
 /* Link suggestion chips: domain pills under the tips. A click opens the browser through main; X hides the chip. */
+
 .link-chips {
   margin: 10px 0 0;
   padding: 0 36px 0 0;
@@ -915,37 +726,12 @@ button.connector-main:hover strong {
 
 .link-chip {
   gap: 2px;
-  padding: 0 4px 0 0;
+  padding: 0;
   font-size: 13px;
 }
 
-.link-chip button {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  border: 0;
-  background: none;
-  color: inherit;
-  cursor: pointer;
-}
-
-.link-chip-open {
-  padding: 4px 4px 4px 10px;
-  border-radius: 999px;
-  color: var(--accent);
-}
-
-.link-chip-dismiss {
-  padding: 3px;
-  border-radius: 999px;
-  color: var(--muted);
-}
-
-.link-chip button:hover {
-  filter: brightness(1.2);
-}
-
 /* Site icons: the favicon (a data URL from main) or a globe until it arrives. A light square keeps dark glyphs visible on the dark surface. */
+
 .link-chip .favicon,
 .connector .favicon {
   box-sizing: border-box;
@@ -955,4 +741,15 @@ button.connector-main:hover strong {
   border-radius: 4px;
   background: var(--text);
   object-fit: contain;
+}
+
+/* KEY=value secrets: drawn as dots while typing, like a password field. */
+.secret-area {
+  -webkit-text-security: disc;
+}
+
+.toggle {
+  display: flex;
+  gap: 8px;
+  align-items: center;
 }
