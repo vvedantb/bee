@@ -262,7 +262,7 @@ export function SyncSection({ state }: { state: BeeState }) {
       {room ? (
         <>
           <div className="row">
-            <Badge variant="secondary">
+            <Badge variant="secondary" className="h-7 gap-1.5 border-0 px-2.5 text-[13px] font-normal">
               <IconUsersGroup {...ICON} /> {syncedWith(teams)}
             </Badge>
             <code>{room.code}</code>
