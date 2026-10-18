@@ -19,4 +19,9 @@ describe("findSpecifiers", () => {
     const source = `import { a } from "zod";\nimport "ai";\nconst e = require("electron");\nawait import("@clerk/electron/storage");`;
     expect([...findSpecifiers(source)].sort()).toEqual(["@clerk/electron/storage", "ai", "electron", "zod"]);
   });
+
+  it("ignores the word from inside a string list", () => {
+    const source = `const STOP = new Set(["the", "from", "will"]);\nimport { z } from "zod";`;
+    expect([...findSpecifiers(source)]).toEqual(["zod"]);
+  });
 });
