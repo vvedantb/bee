@@ -385,13 +385,6 @@ p {
   margin-top: 6px;
 }
 
-.badge {
-  margin-left: auto;
-  text-transform: none;
-  letter-spacing: 0;
-  font-weight: 400;
-}
-
 ul,
 ol {
   margin: 0;
@@ -495,12 +488,6 @@ ol {
 }
 
 .settings label {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.field {
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -649,15 +636,6 @@ html[data-motion="reduce"] *::after {
   animation: rise-in var(--medium) var(--ease-out) backwards;
 }
 
-.chip,
-.roster label {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 10px;
-  border-radius: 999px;
-  background: var(--surface-raised);
-}
 
 .roster {
   flex-direction: row;
@@ -665,6 +643,12 @@ html[data-motion="reduce"] *::after {
 }
 
 .roster label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--surface-raised);
   cursor: pointer;
 }
 
@@ -757,6 +741,10 @@ html[data-motion="reduce"] *::after {
 }
 
 .link-chip {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  background: var(--surface-raised);
   gap: 2px;
   padding: 0;
   font-size: 13px;
@@ -780,12 +768,6 @@ html[data-motion="reduce"] *::after {
   -webkit-text-security: disc;
 }
 
-.toggle {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-}
-
 /* Narrow-window overrides for @vvedantb/ui. Bee never reaches Tailwind's sm breakpoint (640px), so
    the desktop-first classes are corrected here. Unlayered, so they win over the utility layer. */
 
@@ -795,7 +777,8 @@ textarea {
   font-size: 13px;
 }
 
-/* Switch rows: label and switch on one row, switch right-aligned, description under the label. */
+/* Switch rows: LabeledSwitchRow takes no className, so this wrapper corrects its max-sm:flex-wrap.
+   Label and switch stay on one row, switch right-aligned, description under the label. */
 .switch-row > div {
   flex-wrap: nowrap;
   align-items: flex-start;
@@ -804,20 +787,6 @@ textarea {
 /* Switch wrapper: match the 20px label line instead of the 40px min-h-10, so the switch lines up with the label. */
 .switch-row > div > div:last-child {
   min-height: 20px;
-}
-
-/* Raised pill behind the mic, chevron and update icons. The notch status button stays transparent. */
-.pill-button {
-  background: var(--surface-raised);
-}
-
-.pill-button.on {
-  background: var(--accent);
-  color: var(--surface);
-}
-
-.pill-button:not(:disabled):not(.on):hover {
-  background: #2d271e;
 }
 
 /* Link chips: neutral text, accent on hover and focus. */

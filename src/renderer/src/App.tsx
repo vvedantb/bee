@@ -11,7 +11,7 @@ import {
   IconUsersGroup,
   IconX,
 } from "@tabler/icons-react";
-import { Button, Input, LabeledSwitchRow, Textarea } from "@vvedantb/ui";
+import { Badge, Button, Input, LabeledSwitchRow, Textarea } from "@vvedantb/ui";
 import { PillTabs } from "@vvedantb/ui/shell";
 import { useEffect, useState, type FormEvent } from "react";
 import { Favicon } from "./Favicon";
@@ -156,7 +156,7 @@ function Island({ state }: { state: BeeState }) {
           </span>
         )}
         {newVersion ? (
-          <Button type="button" variant="ghost" size="icon-sm" className="pill-button notch-update" title={`Bee ${newVersion} is available`} onClick={() => void actions.openSettings()}>
+          <Button type="button" variant="ghost" size="icon-sm" className="notch-update bg-[var(--surface-raised)] hover:bg-[#2d271e]" title={`Bee ${newVersion} is available`} onClick={() => void actions.openSettings()}>
             <IconDownload {...ICON} />
           </Button>
         ) : null}
@@ -181,7 +181,7 @@ function Island({ state }: { state: BeeState }) {
             type="button"
             variant={state.mic.on ? "default" : "ghost"}
             size="sm"
-            className={state.mic.on ? "pill-button on rounded-full" : "pill-button rounded-full"}
+            className={state.mic.on ? "rounded-full bg-[var(--accent)] text-[var(--surface)] hover:bg-[var(--accent)]" : "rounded-full bg-[var(--surface-raised)] hover:bg-[#2d271e]"}
             title={state.mic.error ?? (state.mic.on ? "Stop microphone" : "Start microphone")}
             onClick={() => void actions.toggleMic()}
           >
@@ -193,7 +193,7 @@ function Island({ state }: { state: BeeState }) {
           type="button"
           variant="ghost"
           size="sm"
-          className={open ? "pill-button chevron open rounded-full" : "pill-button chevron rounded-full"}
+          className={open ? "chevron open rounded-full bg-[var(--surface-raised)] hover:bg-[#2d271e]" : "chevron rounded-full bg-[var(--surface-raised)] hover:bg-[#2d271e]"}
           title={open ? "Collapse" : "Expand"}
           onClick={() => void actions.setExpanded(!open)}
         >
@@ -293,9 +293,9 @@ function LiveTab({ state }: { state: BeeState }) {
         <h2>
           Notes
           {done ? (
-            <span className="badge" title={timingsTitle(done.timingsMs)}>
+            <Badge variant="outline" className="ml-auto" title={timingsTitle(done.timingsMs)}>
               {done.rankSource === "jev" ? "ranked by Jev" : "retrieval order"} · {timingsLabel(done.timingsMs)}
-            </span>
+            </Badge>
           ) : null}
         </h2>
         {done?.rankError ? <p className="error">{done.rankError}</p> : null}
@@ -475,7 +475,7 @@ function SettingsTab({ state, settings }: { state: BeeState; settings: SettingsV
 
       </div>
 
-      <div className="field">
+      <div className="flex flex-col gap-1">
         Interface size
         <PillTabs
           tabs={INTERFACE_SCALES.map((scale) => ({ value: String(scale), label: `${Math.round(scale * 100)}%` }))}
@@ -487,7 +487,7 @@ function SettingsTab({ state, settings }: { state: BeeState; settings: SettingsV
         />
       </div>
 
-      <div className="field">
+      <div className="flex flex-col gap-1">
         Animations
         <PillTabs
           tabs={MOTION_PREFERENCES.map((preference) => ({ value: preference, label: MOTION_LABEL[preference] }))}
@@ -497,7 +497,7 @@ function SettingsTab({ state, settings }: { state: BeeState; settings: SettingsV
             if (motionPreference) void actions.saveSettings({ motionPreference });
           }}
         />
-        <p className="muted">On keeps Bee's motion even when Windows or macOS reduces animations. System follows the OS. Off skips motion.</p>
+      <p className="muted">On keeps Bee's motion even when Windows or macOS reduces animations. System follows the OS. Off skips motion.</p>
       </div>
 
       <MeetingContextSection

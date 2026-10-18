@@ -147,7 +147,7 @@ function McpToolList({ server }: { server: McpServerView }) {
     <ul className="mcp-tools">
       {server.tools.map((item) => (
         <li key={item.name}>
-          <label className="toggle" title={item.description}>
+          <label className="flex items-center gap-2" title={item.description}>
             <Checkbox
               checked={item.enabled}
               onCheckedChange={(checked) => void actions.setMcpEnabled({ id: server.id, tool: item.name, enabled: checked === true })}

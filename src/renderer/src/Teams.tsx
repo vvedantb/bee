@@ -8,7 +8,7 @@ import {
   IconUsersGroup,
   IconX,
 } from "@tabler/icons-react";
-import { Button, Checkbox, Input } from "@vvedantb/ui";
+import { Badge, Button, Checkbox, Input } from "@vvedantb/ui";
 import { useState, type FormEvent } from "react";
 import { namesLabel } from "../../core/room-picker";
 import type { TeamsView } from "../../shared/ipc";
@@ -188,7 +188,7 @@ function InviteStep({ teams, busy }: { teams: TeamsView; busy: boolean }) {
           <ul className="roster">
             {teams.roster.map((member) => (
               <li key={member.userId}>
-                <label className="toggle">
+                <label>
                   <Checkbox name="invite" value={member.userId} /> {member.displayName}
                 </label>
               </li>
@@ -262,9 +262,9 @@ export function SyncSection({ state }: { state: BeeState }) {
       {room ? (
         <>
           <div className="row">
-            <span className="chip">
+            <Badge variant="secondary">
               <IconUsersGroup {...ICON} /> {syncedWith(teams)}
-            </span>
+            </Badge>
             <code>{room.code}</code>
           </div>
           <div className="row actions">
