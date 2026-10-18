@@ -806,6 +806,8 @@ export const actions = {
   /** Deletes every saved meeting from local memory. Resolves how many there were. */
   async clearMeetingMemory(): Promise<number> {
     const { cleared } = await window.bee.meeting.clearMemory(await sessionToken());
+    // The card recalls a saved meeting: it goes with them.
+    if (state.meetingCard) set({ meetingCard: null });
     return cleared;
   },
 

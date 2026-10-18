@@ -231,6 +231,53 @@ describe("remembering a meeting", () => {
     expect(t.context.clearMemory()).toBe(2);
     expect(t.memory.list()).toEqual([]);
   });
+
+  it("drops what the meeting in progress recalled when memory is cleared", async () => {
+    const t = setup();
+    t.memory.add(record(1));
+    const before = await t.run(15);
+    expect(before.card.length).toBeGreaterThan(0);
+    expect(t.context.brief()).toContain("Ship SSO in Q4");
+    t.context.clearMemory();
+    expect(t.context.brief()).not.toContain("Ship SSO in Q4");
+    // Tool notes are kept: nothing is searched again.
+    expect(t.context.brief()).toContain("Acme asked for 20% off in June");
+    expect(t.searchNotes).toHaveBeenCalledTimes(1);
+    expect((await t.context.tick()).card).toEqual([]);
+  });
+
+  it("does not recall saved meetings while meeting memory is off", async () => {
+    const t = setup();
+    t.memory.add(record(1));
+    t.settings.memory = false;
+    const view = await t.run(15);
+    expect(view.card).toEqual([]);
+    expect(t.context.brief()).not.toContain("Ship SSO in Q4");
+    t.settings.memory = true;
+    expect((await t.context.tick()).card.length).toBeGreaterThan(0);
+    expect(t.context.brief()).toContain("Ship SSO in Q4");
+    t.settings.memory = false;
+    await t.context.tick();
+    expect(t.context.brief()).not.toContain("Ship SSO in Q4");
+  });
+});
+
+describe("calendar switch", () => {
+  it("forgets calendar events when the calendar is switched off mid-session", async () => {
+    const t = setup();
+    expect((await t.run(15)).source).toBe("calendar");
+    t.settings.calendar = false;
+    // A new call: matching must not use the events read earlier.
+    t.inCall.value = false;
+    t.titles.rows = [];
+    await t.run(30);
+    t.inCall.value = true;
+    t.titles.rows = [{ image: "ms-teams.exe", title: "Weekly Sync | Microsoft Teams" }];
+    const calls = t.readToday.mock.calls.length;
+    const view = await t.run(45);
+    expect(view).toMatchObject({ active: true, source: "title" });
+    expect(t.readToday.mock.calls.length).toBe(calls);
+  });
 });
 
 describe("logging", () => {

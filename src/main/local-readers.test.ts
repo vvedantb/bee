@@ -70,6 +70,27 @@ describe("createCalendarReader", () => {
     expect(result).toEqual({ ok: false, disabled: true, reason: "Operation aborted" });
   });
 
+  it("keeps a slow read's events but does not ask Outlook again (a security prompt may have been answered)", async () => {
+    const exec = ok('{"status":"ok","events":[]}');
+    let now = 0;
+    const exec2: Exec = vi.fn(async (...args: Parameters<Exec>) => {
+      now += 5000;
+      return exec(...args);
+    });
+    const reader = createCalendarReader("win32", exec2, () => now);
+    expect(await reader.readToday()).toEqual({ ok: true, events: [] });
+    expect(await reader.readToday()).toEqual({ ok: false, disabled: true, reason: "slow calendar read" });
+    expect(exec2).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps reading after fast reads", async () => {
+    const exec = ok('{"status":"ok","events":[]}');
+    const reader = createCalendarReader("win32", exec, () => 0);
+    await reader.readToday();
+    await reader.readToday();
+    expect(exec).toHaveBeenCalledTimes(2);
+  });
+
   it("is disabled off Windows, without running anything", async () => {
     const exec = ok("x");
     expect(await createCalendarReader("linux", exec).readToday()).toEqual({ ok: false, disabled: true, reason: "not windows" });

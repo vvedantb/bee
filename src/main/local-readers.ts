@@ -20,6 +20,8 @@ export const nodeExec: Exec = (file, args, { timeoutMs, maxBuffer }) =>
 const POWERSHELL = "powershell.exe";
 const TITLE_TIMEOUT_MS = 4000;
 const CALENDAR_TIMEOUT_MS = 8000;
+/** A calendar read at least this slow stops further reads for the session (see createCalendarReader). */
+export const CALENDAR_SLOW_MS = 4000;
 // Titles are a few KB. Calendar output is capped by the script (50 events, bodies cut), so 1 MB is far above any real reply.
 const TITLE_BUFFER = 256 * 1024;
 const CALENDAR_BUFFER = 1024 * 1024;
@@ -84,12 +86,18 @@ export function createWindowTitleReader(platform: NodeJS.Platform = process.plat
  * user) or elsewhere, it answers "disabled" and the caller falls back to the window title. The guard in core/calendar.ts
  * stops all further reads after the first failure.
  */
-export function createCalendarReader(platform: NodeJS.Platform = process.platform, exec: Exec = nodeExec): CalendarReader {
+export function createCalendarReader(platform: NodeJS.Platform = process.platform, exec: Exec = nodeExec, clock: () => number = Date.now): CalendarReader {
   if (platform !== "win32") return unsupportedCalendarReader;
+  // A read this slow most likely waited on Outlook's "a program is trying to access" prompt. Its events are kept, but Outlook
+  // is not asked again this session, so a user who clicked Allow is not prompted again every few minutes.
+  let slow = false;
   return {
     readToday: async (now = new Date()) => {
+      if (slow) return { ok: false, disabled: true, reason: "slow calendar read" };
+      const started = clock();
       const result = await exec(POWERSHELL, ["-NoProfile", "-NonInteractive", "-Command", outlookScriptFor(now)], { timeoutMs: CALENDAR_TIMEOUT_MS, maxBuffer: CALENDAR_BUFFER });
       if (!result.ok) return { ok: false, disabled: true, reason: result.error };
+      if (clock() - started >= CALENDAR_SLOW_MS) slow = true;
       return parseOutlookOutput(result.stdout);
     },
   };

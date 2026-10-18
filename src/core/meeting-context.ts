@@ -43,6 +43,8 @@ type ActiveMeeting = {
   id: number;
   identity: MeetingIdentity | null;
   brief: MeetingBrief | null;
+  /** Notes from connected tools, kept so the brief can be rebuilt (memory cleared or switched off) without searching again. */
+  notes: string[];
   ended: boolean;
 };
 
@@ -88,8 +90,22 @@ export function createMeetingContext(deps: MeetingContextDeps): MeetingContext {
   // A different meeting must be seen twice in a row before it replaces the current one (a title can flap, for example to a chat).
   let pending: { key: string; seen: number } | null = null;
   // Briefs by meeting key for this session: the same meeting again reuses its brief instead of searching again.
-  const briefs = new Map<string, MeetingBrief>();
+  const briefs = new Map<string, { brief: MeetingBrief; notes: string[] }>();
   let busy = false;
+  // The memory switch the briefs were built with. Switching it off rebuilds them without earlier meetings.
+  let briefMemory = deps.settings().memory;
+
+  /** Earlier meetings for a brief: none while meeting memory is off. */
+  const pastFor = (identity: MeetingIdentity) => (deps.settings().memory ? pastMeetings({ records: deps.memory.list(), identity }) : []);
+
+  /** Rebuilds the briefs of the current and recent meetings from memory as it is now, keeping their tool notes. */
+  function rebuildBriefs(): void {
+    briefs.clear();
+    for (const meeting of [current, ...recent]) {
+      if (!meeting?.identity) continue;
+      meeting.brief = buildBrief({ identity: meeting.identity, past: pastFor(meeting.identity), notes: meeting.notes });
+    }
+  }
 
   const view = (settings: MeetingContextSettings): MeetingContextView => {
     const meeting = current;
@@ -114,7 +130,7 @@ export function createMeetingContext(deps: MeetingContextDeps): MeetingContext {
       recent.push(current);
       if (recent.length > HISTORY) recent.shift();
     }
-    const meeting: ActiveMeeting = { id: ++counter, identity: null, brief: null, ended: false };
+    const meeting: ActiveMeeting = { id: ++counter, identity: null, brief: null, notes: [], ended: false };
     current = meeting;
     pending = null;
     if (identity) adopt(meeting, identity);
@@ -126,20 +142,26 @@ export function createMeetingContext(deps: MeetingContextDeps): MeetingContext {
     meeting.identity = identity;
     const cached = briefs.get(identity.key);
     if (cached) {
-      meeting.brief = cached;
+      meeting.brief = cached.brief;
+      meeting.notes = cached.notes;
       return;
     }
     const started = performance.now();
-    const past = pastMeetings({ records: deps.memory.list(), identity });
+    const past = pastFor(identity);
+    meeting.notes = [];
     meeting.brief = buildBrief({ identity, past, notes: [] });
     void deps
       .searchNotes(searchQuery(identity))
       .catch(() => [] as string[])
       .then((notes) => {
         // The meeting may have moved on while tools answered. Its brief still goes in the cache for a later return.
-        const brief = buildBrief({ identity, past, notes });
-        briefs.set(identity.key, brief);
-        if (meeting.identity === identity) meeting.brief = brief;
+        // Memory may have been cleared or switched off while tools answered: read it again.
+        const brief = buildBrief({ identity, past: pastFor(identity), notes });
+        briefs.set(identity.key, { brief, notes });
+        if (meeting.identity === identity) {
+          meeting.brief = brief;
+          meeting.notes = notes;
+        }
         console.debug(`perf meeting-brief past=${brief.counts.past} notes=${brief.counts.notes} ms=${Math.round(performance.now() - started)}`);
       });
   }
@@ -151,7 +173,12 @@ export function createMeetingContext(deps: MeetingContextDeps): MeetingContext {
   }
 
   async function readCalendar(now: number, enabled: boolean, name: string): Promise<void> {
-    if (!enabled) return;
+    if (!enabled) {
+      // Switched off: forget what was read, so matching falls back to the window title. Read afresh if switched on again.
+      events = [];
+      eventsAt = -Infinity;
+      return;
+    }
     const age = now - eventsAt;
     const changed = name !== titleName;
     if (age < (changed ? timing.calendarChangeMs : timing.calendarMs)) return;
@@ -174,6 +201,10 @@ export function createMeetingContext(deps: MeetingContextDeps): MeetingContext {
       if (current) endCurrent();
       tracker = IDLE_TRACKER;
       return view(settings);
+    }
+    if (settings.memory !== briefMemory) {
+      briefMemory = settings.memory;
+      rebuildBriefs();
     }
     const now = clock();
     const detected = await deps.inCall().catch(() => false);
@@ -261,8 +292,10 @@ export function createMeetingContext(deps: MeetingContextDeps): MeetingContext {
       return true;
     },
     clearMemory() {
-      briefs.clear();
-      return deps.memory.clear();
+      const count = deps.memory.clear();
+      // The meeting in progress drops what it recalled too (its brief and its island card).
+      rebuildBriefs();
+      return count;
     },
   };
 }
