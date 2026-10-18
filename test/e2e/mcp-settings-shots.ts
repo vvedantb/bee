@@ -8,16 +8,16 @@ const GLOBE = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" strok
 
 // Class strings match what @vvedantb/ui Button (size sm; default and ghost variants; link variant) renders in the real app.
 const BUTTON = "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-lg text-xs font-medium h-8 px-3";
-const BUTTON_DEFAULT = `${BUTTON} bg-accent text-accent-foreground`;
-const BUTTON_GHOST = `${BUTTON} text-muted`;
-const BUTTON_LINK = `${BUTTON} text-accent`;
+const BUTTON_DEFAULT = `${BUTTON} bg-primary text-primary-foreground`;
+const BUTTON_GHOST = `${BUTTON} text-muted-foreground`;
+const BUTTON_LINK = `${BUTTON} text-primary`;
 
 function row(name: string, action: "Connect" | "Disconnect"): string {
   const cls = action === "Connect" ? BUTTON_DEFAULT : BUTTON_GHOST;
   return `<li class="connector"><span class="connector-main"><span class="connector-icon">${GLOBE}</span><strong>${name}</strong></span><button type="button" class="${cls}">${action}</button></li>`;
 }
 
-// Class strings match @vvedantb/shell PillTabs.
+// Class strings match @vvedantb/ui PillTabs.
 const PILL = "inline-flex h-8 items-center justify-center gap-1.5 whitespace-nowrap rounded-full border border-border px-3.5 py-1 text-sm font-medium";
 const PILL_IDLE = "text-muted";
 const PILL_ACTIVE = "bg-default text-foreground";

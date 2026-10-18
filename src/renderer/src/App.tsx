@@ -11,8 +11,7 @@ import {
   IconUsersGroup,
   IconX,
 } from "@tabler/icons-react";
-import { Button, Input, LabeledSwitchRow, Textarea } from "@vvedantb/ui";
-import { PillTabs } from "@vvedantb/shell";
+import { Badge, Button, Input, LabeledSwitchRow, PillTabs, Textarea } from "@vvedantb/ui";
 import { useEffect, useState, type FormEvent } from "react";
 import { Favicon } from "./Favicon";
 import { Connectors } from "./Connectors";
@@ -41,7 +40,7 @@ function LinkChips({ chips }: { chips: LinkChip[] }) {
   return (
     <ul className="link-chips" aria-label="Suggested links">
       {chips.map((chip) => (
-        <li key={chip.id} className="chip link-chip">
+        <li key={chip.id} className="link-chip">
           <Button type="button" variant="link" className="h-6 gap-1.5 rounded-full py-0 pr-1 pl-2.5 text-[13px] no-underline" title={chip.url} onClick={() => void actions.openLink(chip.url)}>
             <Favicon domain={chip.domain} />
             {chip.label}
@@ -156,7 +155,7 @@ function Island({ state }: { state: BeeState }) {
           </span>
         )}
         {newVersion ? (
-          <Button type="button" variant="ghost" size="icon-sm" className="pill-button notch-update" title={`Bee ${newVersion} is available`} onClick={() => void actions.openSettings()}>
+          <Button type="button" variant="ghost" size="icon-sm" className="notch-update bg-[var(--surface-raised)] hover:bg-[#2d271e]" title={`Bee ${newVersion} is available`} onClick={() => void actions.openSettings()}>
             <IconDownload {...ICON} />
           </Button>
         ) : null}
@@ -181,7 +180,7 @@ function Island({ state }: { state: BeeState }) {
             type="button"
             variant={state.mic.on ? "default" : "ghost"}
             size="sm"
-            className={state.mic.on ? "pill-button on rounded-full" : "pill-button rounded-full"}
+            className={state.mic.on ? "rounded-full bg-[var(--accent)] text-[var(--surface)] hover:bg-[var(--accent)]" : "rounded-full bg-[var(--surface-raised)] hover:bg-[#2d271e]"}
             title={state.mic.error ?? (state.mic.on ? "Stop microphone" : "Start microphone")}
             onClick={() => void actions.toggleMic()}
           >
@@ -193,7 +192,7 @@ function Island({ state }: { state: BeeState }) {
           type="button"
           variant="ghost"
           size="sm"
-          className={open ? "pill-button chevron open rounded-full" : "pill-button chevron rounded-full"}
+          className={open ? "chevron open rounded-full bg-[var(--surface-raised)] hover:bg-[#2d271e]" : "chevron rounded-full bg-[var(--surface-raised)] hover:bg-[#2d271e]"}
           title={open ? "Collapse" : "Expand"}
           onClick={() => void actions.setExpanded(!open)}
         >
@@ -293,9 +292,9 @@ function LiveTab({ state }: { state: BeeState }) {
         <h2>
           Notes
           {done ? (
-            <span className="badge" title={timingsTitle(done.timingsMs)}>
+            <Badge className="ml-auto border-0 p-0 text-[11px] font-normal normal-case text-muted" title={timingsTitle(done.timingsMs)}>
               {done.rankSource === "jev" ? "ranked by Jev" : "retrieval order"} · {timingsLabel(done.timingsMs)}
-            </span>
+            </Badge>
           ) : null}
         </h2>
         {done?.rankError ? <p className="error">{done.rankError}</p> : null}
@@ -332,14 +331,13 @@ function LiveTab({ state }: { state: BeeState }) {
           </Button>
         </form>
         {state.teams?.team ? (
-          <div className="switch-row">
-            <LabeledSwitchRow
-              id="simulate-teams"
-              label="Simulate Teams meeting (the sync popup shows after about 10 s)"
-              checked={state.teams.detection.source === "simulated"}
-              onCheckedChange={(on) => void actions.teams({ type: "simulateMeeting", on })}
-            />
-          </div>
+          <LabeledSwitchRow
+            className="flex-nowrap items-start max-sm:flex-nowrap [&>div:last-child]:min-h-5"
+            id="simulate-teams"
+            label="Simulate Teams meeting (the sync popup shows after about 10 s)"
+            checked={state.teams.detection.source === "simulated"}
+            onCheckedChange={(on) => void actions.teams({ type: "simulateMeeting", on })}
+          />
         ) : null}
       </section>
     </div>
@@ -450,32 +448,24 @@ function SettingsTab({ state, settings }: { state: BeeState; settings: SettingsV
           ) : null}
         </div>
       </form>
+      <LabeledSwitchRow
+        className="flex-nowrap items-start max-sm:flex-nowrap [&>div:last-child]:min-h-5"
+        id="personalised-links"
+        label="Personalised link suggestions"
+        description="Sends the current line to Jev, and to vmem when connected under Connectors, to pick the exact page. Needs the Gateway key."
+        checked={settings.personalisedLinks}
+        onCheckedChange={(personalisedLinks) => void actions.saveSettings({ personalisedLinks })}
+      />
+      <LabeledSwitchRow
+        className="flex-nowrap items-start max-sm:flex-nowrap [&>div:last-child]:min-h-5"
+        id="meeting-mode"
+        label="Meeting mode"
+        description="Hide Bee from screen sharing, stay above full-screen apps."
+        checked={settings.meetingMode}
+        onCheckedChange={(meetingMode) => void actions.saveSettings({ meetingMode })}
+      />
 
-      <div className="switch-row">
-
-        <LabeledSwitchRow
-          id="personalised-links"
-          label="Personalised link suggestions"
-          description="Sends the current line to Jev, and to vmem when connected under Connectors, to pick the exact page. Needs the Gateway key."
-          checked={settings.personalisedLinks}
-          onCheckedChange={(personalisedLinks) => void actions.saveSettings({ personalisedLinks })}
-        />
-
-      </div>
-
-      <div className="switch-row">
-
-        <LabeledSwitchRow
-          id="meeting-mode"
-          label="Meeting mode"
-          description="Hide Bee from screen sharing, stay above full-screen apps."
-          checked={settings.meetingMode}
-          onCheckedChange={(meetingMode) => void actions.saveSettings({ meetingMode })}
-        />
-
-      </div>
-
-      <div className="field">
+      <div className="flex flex-col gap-1">
         Interface size
         <PillTabs
           tabs={INTERFACE_SCALES.map((scale) => ({ value: String(scale), label: `${Math.round(scale * 100)}%` }))}
@@ -487,7 +477,7 @@ function SettingsTab({ state, settings }: { state: BeeState; settings: SettingsV
         />
       </div>
 
-      <div className="field">
+      <div className="flex flex-col gap-1">
         Animations
         <PillTabs
           tabs={MOTION_PREFERENCES.map((preference) => ({ value: preference, label: MOTION_LABEL[preference] }))}
@@ -497,7 +487,7 @@ function SettingsTab({ state, settings }: { state: BeeState; settings: SettingsV
             if (motionPreference) void actions.saveSettings({ motionPreference });
           }}
         />
-        <p className="muted">On keeps Bee's motion even when Windows or macOS reduces animations. System follows the OS. Off skips motion.</p>
+      <p className="muted">On keeps Bee's motion even when Windows or macOS reduces animations. System follows the OS. Off skips motion.</p>
       </div>
 
       <MeetingContextSection

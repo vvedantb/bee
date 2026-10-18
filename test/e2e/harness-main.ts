@@ -42,7 +42,7 @@ function fakeSessionToken(): string {
 async function captureShots(dir: string, names: string[]): Promise<string[]> {
   mkdirSync(dir, { recursive: true });
   const files: string[] = [];
-  const tabShot = (name: string) => name.startsWith("mcp-") || name.startsWith("settings-");
+  const tabShot = (name: string) => name.startsWith("mcp-") || name.startsWith("settings-") || name.startsWith("live-");
   const tall = names.some(tabShot) || /(mcp|meeting)-settings-shots/.test(page as string);
   // One window for every shot: closing the only window would quit the app.
   const shotWin = new BrowserWindow({
