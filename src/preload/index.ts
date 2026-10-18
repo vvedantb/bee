@@ -7,6 +7,8 @@ import {
   faviconResultSchema,
   lunaActivitySchema,
   lunaPartialSchema,
+  clearMeetingMemoryResultSchema,
+  meetingContextViewSchema,
   mcpListSchema,
   mcpTestResultSchema,
   meetingSummaryResultSchema,
@@ -97,6 +99,11 @@ const api = {
     test: async (id: string) => mcpTestResultSchema.parse(await ipcRenderer.invoke(IPC.mcpTest, { id })),
     // Opens the system browser for MCP sign-in and resolves once tokens are stored in main.
     authorize: async (id: string) => mcpListSchema.parse(await ipcRenderer.invoke(IPC.mcpAuthorize, { id })),
+  },
+  // The detected meeting and its island card, and the saved-meetings clear. Main keeps the brief.
+  meeting: {
+    context: async (sessionToken: string) => meetingContextViewSchema.parse(await ipcRenderer.invoke(IPC.meetingContext, { sessionToken })),
+    clearMemory: async (sessionToken: string) => clearMeetingMemoryResultSchema.parse(await ipcRenderer.invoke(IPC.clearMeetingMemory, { sessionToken })),
   },
   teams: {
     tick: async (sessionToken: string) => teamsTickResultSchema.parse(await ipcRenderer.invoke(IPC.teamsTick, { sessionToken })),

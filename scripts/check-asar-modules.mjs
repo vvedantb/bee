@@ -25,7 +25,8 @@ export function packageName(specifier) {
 /** Finds bare import and require specifiers in built JavaScript. */
 export function findSpecifiers(source) {
   const found = new Set();
-  const patterns = [/\bfrom\s*["']([^"']+)["']/g, /\bimport\s*["']([^"']+)["']/g, /\b(?:require|import)\(\s*["']([^"']+)["']\s*\)/g];
+  // A specifier never holds spaces or commas, so text such as ["the", "from", "will"] in a bundled word list is not an import.
+  const patterns = [/\bfrom\s*["']([^"'\s,]+)["']/g, /\bimport\s*["']([^"'\s,]+)["']/g, /\b(?:require|import)\(\s*["']([^"'\s,]+)["']\s*\)/g];
   for (const pattern of patterns) for (const match of source.matchAll(pattern)) found.add(match[1]);
   return found;
 }

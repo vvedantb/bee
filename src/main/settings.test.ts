@@ -343,3 +343,45 @@ describe("settings overlayPosition", () => {
     expect(create().overlayPosition()).toBeUndefined();
   });
 });
+
+describe("settings meeting context", () => {
+  it("defaults all three switches to on", () => {
+    const store = create();
+    expect(store.view()).toMatchObject({ meetingContextEnabled: true, meetingCalendarEnabled: true, meetingMemoryEnabled: true });
+    expect(store.meetingContext()).toEqual({ enabled: true, calendar: true, memory: true });
+  });
+
+  it("round-trips each switch through settings.json, leaving the others alone", () => {
+    const store = create();
+    expect(store.save({ meetingCalendarEnabled: false }).meetingCalendarEnabled).toBe(false);
+    expect(store.view()).toMatchObject({ meetingContextEnabled: true, meetingMemoryEnabled: true });
+    store.save({ meetingMemoryEnabled: false });
+    store.save({ meetingContextEnabled: false });
+    expect(JSON.parse(readFileSync(join(dir, "settings.json"), "utf8"))).toMatchObject({
+      meetingContextEnabled: false,
+      meetingCalendarEnabled: false,
+      meetingMemoryEnabled: false,
+    });
+    expect(create().meetingContext()).toEqual({ enabled: false, calendar: false, memory: false });
+    store.save({ meetingContextEnabled: true, meetingCalendarEnabled: true, meetingMemoryEnabled: true });
+    expect(create().meetingContext()).toEqual({ enabled: true, calendar: true, memory: true });
+  });
+
+  it("keeps the switches when an unrelated setting is saved", () => {
+    const store = create();
+    store.save({ meetingMemoryEnabled: false });
+    store.save({ meetingMode: true });
+    expect(store.meetingContext().memory).toBe(false);
+  });
+
+  it("reads a bad stored value as on", () => {
+    writeFileSync(join(dir, "settings.json"), JSON.stringify({ meetingContextEnabled: "no", meetingCalendarEnabled: 0 }));
+    expect(create().meetingContext()).toEqual({ enabled: true, calendar: true, memory: true });
+  });
+
+  it("rejects a non-boolean update at the IPC schema", async () => {
+    const { settingsUpdateSchema } = await import("../shared/ipc");
+    expect(() => settingsUpdateSchema.parse({ meetingContextEnabled: "yes" })).toThrow();
+    expect(settingsUpdateSchema.parse({ meetingContextEnabled: false })).toEqual({ meetingContextEnabled: false });
+  });
+});

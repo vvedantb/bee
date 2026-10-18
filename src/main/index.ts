@@ -7,9 +7,13 @@ import { RENDERER_HOST, RENDERER_SCHEME, RENDERER_URL } from "../shared/clerk";
 import { displayMatching, placeInWorkArea, restoreOverlayBounds, scaleSize, type DisplayInfo } from "../core/interface-scale";
 import { IPC, settingsUpdateSchema, windowSizeSchema, type WindowSize } from "../shared/ipc";
 import { createMcpPool } from "../core/mcp";
+import { createMeetingContext } from "../core/meeting-context";
+import { createMeetingMemoryStore } from "../core/meeting-memory";
+import { searchMcpNotes } from "../core/meeting-search";
 import { createVmemSearch } from "../core/vmem-history";
 import { registerFaviconIpc } from "./favicon-ipc";
 import { registerLinkIpc } from "./link-ipc";
+import { createCalendarReader, createWindowTitleReader } from "./local-readers";
 import { registerMcpIpc } from "./mcp-ipc";
 import { registerOpenUrlIpc } from "./open-url";
 import { registerMeetingIpc } from "./meeting-ipc";
@@ -260,9 +264,23 @@ if (clerk.isPrimaryInstance) {
     registerOpenUrlIpc();
     registerLinkIpc(settings, vmemSearch);
     registerFaviconIpc();
-    registerMeetingIpc({ notesDir, fsRoots: settings.fsRoots, mcpConfigs: settings.mcpConfigs, mcpPool, gatewayApiKey: settings.gatewayApiKey });
+    // One detector for the Teams sync popup and for meeting context, so the in-call reading is shared and cached.
+    const detector = createTeamsDetector();
+    // Which meeting the user is in: window titles and the classic Outlook calendar (Windows), saved meetings, connected tools.
+    // The brief is built here in main and sent to Luna; saved meetings stay in meeting-memory.json in the user data folder.
+    const meeting = createMeetingContext({
+      inCall: async () => (await detector.read()).inMeeting,
+      titles: createWindowTitleReader(),
+      calendar: createCalendarReader(),
+      memory: createMeetingMemoryStore({ path: join(userDataDir, "meeting-memory.json") }),
+      searchNotes: (query) => searchMcpNotes({ configs: settings.mcpConfigs(), pool: mcpPool, query }),
+      settings: settings.meetingContext,
+      // macOS has no in-call detector, so it reads Teams window names on its own schedule.
+      pollTitlesWhenIdle: isMac,
+    });
+    registerMeetingIpc({ notesDir, fsRoots: settings.fsRoots, mcpConfigs: settings.mcpConfigs, mcpPool, meeting, gatewayApiKey: settings.gatewayApiKey });
 
-    const teams = registerTeamsIpc({ relayUrl: relayUrlFromEnv(process.env.BEE_RELAY_URL || import.meta.env.MAIN_VITE_BEE_RELAY_URL), detector: createTeamsDetector() });
+    const teams = registerTeamsIpc({ relayUrl: relayUrlFromEnv(process.env.BEE_RELAY_URL || import.meta.env.MAIN_VITE_BEE_RELAY_URL), detector });
     onInvite = (link) => teams.setPendingInvite(link);
     if (pendingInvite) teams.setPendingInvite(pendingInvite);
     pendingInvite = null;

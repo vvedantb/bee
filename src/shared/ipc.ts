@@ -31,6 +31,8 @@ export const IPC = {
   openExternalUrl: "bee:shell:open-url",
   enrichLinks: "bee:links:enrich",
   getFavicon: "bee:favicon:get",
+  meetingContext: "bee:meeting:context",
+  clearMeetingMemory: "bee:meeting:clear-memory",
 };
 
 // Collapsed notch, notch plus the sync popup, notch plus the island response, or the full panel.
@@ -57,6 +59,10 @@ export const settingsViewSchema = z.object({
   secretStorage: secretStorageSchema,
   notesDir: z.string(),
   fsRoots: z.array(z.string()),
+  // Meeting context (core/meeting-context.ts). All on by default. Calendar and memory only matter while the master switch is on.
+  meetingContextEnabled: z.boolean(),
+  meetingCalendarEnabled: z.boolean(),
+  meetingMemoryEnabled: z.boolean(),
 });
 export type SettingsView = z.infer<typeof settingsViewSchema>;
 
@@ -69,6 +75,9 @@ export const settingsUpdateSchema = z.object({
   personalisedLinks: z.boolean().optional(),
   // Extra absolute folders Luna may read; replaces the saved list.
   fsRoots: z.array(z.string().max(1000)).max(20).optional(),
+  meetingContextEnabled: z.boolean().optional(),
+  meetingCalendarEnabled: z.boolean().optional(),
+  meetingMemoryEnabled: z.boolean().optional(),
 });
 export type SettingsUpdate = z.infer<typeof settingsUpdateSchema>;
 
@@ -99,6 +108,9 @@ export const meetingSummaryRequestSchema = z.object({
   // Titles of notes cited in tips during the meeting.
   notesCited: z.array(z.string().max(500)).max(100),
   tips: z.array(z.string().max(500)).max(100),
+  // The detected meeting (MeetingContextView.id) the lines belong to, so a summary written after the next meeting began still
+  // saves to the right meeting memory.
+  meetingId: z.number().int().nonnegative().optional(),
   sessionToken: z.string().max(8000),
 });
 export type MeetingSummaryRequest = z.infer<typeof meetingSummaryRequestSchema>;
@@ -110,6 +122,24 @@ export const meetingSummaryResultSchema = z.object({
   error: z.string().nullable(),
 });
 export type MeetingSummaryResult = z.infer<typeof meetingSummaryResultSchema>;
+
+// The meeting Bee detected from window titles and the local Outlook calendar (core/meeting-context.ts). Main keeps the brief
+// that goes to Luna; the renderer only sees the name and up to two island lines.
+export const meetingContextRequestSchema = z.object({ sessionToken: z.string().max(8000) });
+export const meetingContextViewSchema = z.object({
+  enabled: z.boolean(),
+  // True while the debounced detection says the user is in a call.
+  active: z.boolean(),
+  // Increments with each new meeting. Kept after the call ends, so the renderer can finish saving it. 0: none yet.
+  id: z.number().int().nonnegative(),
+  subject: z.string().max(200).nullable(),
+  source: z.enum(["calendar", "title", "none"]),
+  // "Last time with these people…" for the island at meeting start. Empty without an earlier meeting.
+  card: z.array(z.string().max(200)).max(2),
+});
+export type MeetingContextView = z.infer<typeof meetingContextViewSchema>;
+
+export const clearMeetingMemoryResultSchema = z.object({ cleared: z.number().int().nonnegative() });
 
 // 15 s of 16 kHz 16-bit mono WAV is about 480 KB; the cap leaves room without letting a runaway buffer through.
 export const TRANSCRIBE_MAX_BYTES = 2_000_000;

@@ -31,12 +31,14 @@ type ResponseArgs = {
   dismissed: boolean;
   // Link chips on screen for this turn. They can open the body on their own, before any result.
   chipCount?: number;
+  // Lines of the meeting card ("Last time with…") on screen. Like a chip, it can open the body before any result.
+  cardLines?: number;
 };
 
 /** The body shows when the result (or a link chip) has something to say and the user has not closed it. */
 export function shouldShowResponse(args: ResponseArgs): boolean {
   if (args.dismissed) return false;
-  return args.tips.length > 0 || args.sources.length > 0 || args.guideError !== null || (args.chipCount ?? 0) > 0;
+  return args.tips.length > 0 || args.sources.length > 0 || args.guideError !== null || (args.chipCount ?? 0) > 0 || (args.cardLines ?? 0) > 0;
 }
 
 /**
@@ -45,7 +47,7 @@ export function shouldShowResponse(args: ResponseArgs): boolean {
  */
 export function islandShowsBody(args: ResponseArgs & { busy: boolean }): boolean {
   if (!args.busy) return shouldShowResponse(args);
-  return !args.dismissed && (args.tips.length > 0 || (args.chipCount ?? 0) > 0);
+  return !args.dismissed && (args.tips.length > 0 || (args.chipCount ?? 0) > 0 || (args.cardLines ?? 0) > 0);
 }
 
 /** Thinking wins over the pill's phase: a new run replaces the old answer. */

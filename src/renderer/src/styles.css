@@ -255,6 +255,24 @@ body {
   color: var(--muted);
 }
 
+/* "Last time with these people…" at meeting start. Muted text on the island itself: no panel of its own. */
+.island-card {
+  padding: 0 36px 0 0;
+  margin-bottom: 10px;
+  animation: island-rise 460ms var(--spring) backwards;
+}
+
+.island-card p {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--muted);
+}
+
+.island-card p:first-child {
+  font-weight: 600;
+}
+
 .island-sources {
   margin-top: 14px;
   padding-top: 12px;

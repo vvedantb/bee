@@ -36,6 +36,8 @@ export async function runPipeline(args: {
   transcript: string[];
   /** Tips already on screen, passed to Luna as a keep list (live steering). */
   shown?: string[];
+  /** The brief for the meeting in progress (title, people, agenda, earlier decisions). Sent to Luna with every turn. */
+  meetingBrief?: string;
   snippets: Snippet[];
   gateway: BeeGateway | null;
   notesDir?: string;
@@ -80,6 +82,7 @@ export async function runPipeline(args: {
       model: args.gateway!(LUNA_MODEL),
       transcript: args.transcript,
       shown: args.shown,
+      meetingBrief: args.meetingBrief,
       notes: guideNotes,
       notesDir: args.notesDir,
       extraRoots: args.extraRoots,

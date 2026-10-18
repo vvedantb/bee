@@ -34,6 +34,10 @@ const fileSchema = z.object({
   // Personalised link suggestions. The toggle is stored only once the user sets it; until then it follows whether an enabled vmem connector exists.
   personalisedLinks: z.boolean().optional(),
   fsRoots: z.array(z.string()).default([]),
+  // Meeting context: all on until the user switches them off.
+  meetingContextEnabled: z.boolean().default(true).catch(true),
+  meetingCalendarEnabled: z.boolean().default(true).catch(true),
+  meetingMemoryEnabled: z.boolean().default(true).catch(true),
   // Non-secret MCP settings. A bad entry drops the list, not the whole file.
   mcpServers: z.array(mcpServerSchema).catch([]).default([]),
   // One safeStorage ciphertext (base64) for every server's secrets, as JSON keyed by server id.
@@ -74,7 +78,16 @@ export function createSettingsStore(args: {
     } catch {
       // Missing or corrupt file: start from defaults.
     }
-    return { meetingMode: false, interfaceScale: 1, motionPreference: "on", fsRoots: [], mcpServers: [] };
+    return {
+      meetingMode: false,
+      interfaceScale: 1,
+      motionPreference: "on",
+      fsRoots: [],
+      meetingContextEnabled: true,
+      meetingCalendarEnabled: true,
+      meetingMemoryEnabled: true,
+      mcpServers: [],
+    };
   }
 
   function write(file: SettingsFile): void {
@@ -320,7 +333,16 @@ export function createSettingsStore(args: {
       secretStorage: storageMode(),
       notesDir: args.notesDir,
       fsRoots: read().fsRoots,
+      meetingContextEnabled: file.meetingContextEnabled,
+      meetingCalendarEnabled: file.meetingCalendarEnabled,
+      meetingMemoryEnabled: file.meetingMemoryEnabled,
     };
+  }
+
+  /** The three meeting-context switches, read on each tick so Settings changes apply without a restart. Main only. */
+  function meetingContext(): { enabled: boolean; calendar: boolean; memory: boolean } {
+    const file = read();
+    return { enabled: file.meetingContextEnabled, calendar: file.meetingCalendarEnabled, memory: file.meetingMemoryEnabled };
   }
 
   function save(update: SettingsUpdate): SettingsView {
@@ -330,6 +352,9 @@ export function createSettingsStore(args: {
     if (update.interfaceScale !== undefined) file = { ...file, interfaceScale: clampInterfaceScale(update.interfaceScale) };
     if (update.motionPreference !== undefined) file = { ...file, motionPreference: clampMotionPreference(update.motionPreference) };
     if (update.personalisedLinks !== undefined) file = { ...file, personalisedLinks: update.personalisedLinks };
+    if (update.meetingContextEnabled !== undefined) file = { ...file, meetingContextEnabled: update.meetingContextEnabled };
+    if (update.meetingCalendarEnabled !== undefined) file = { ...file, meetingCalendarEnabled: update.meetingCalendarEnabled };
+    if (update.meetingMemoryEnabled !== undefined) file = { ...file, meetingMemoryEnabled: update.meetingMemoryEnabled };
     if (update.fsRoots !== undefined) {
       const { roots, invalid } = normalizeFsRoots(update.fsRoots);
       if (invalid.length > 0) throw new Error(`Folders must be absolute paths: ${invalid.join(", ")}`);
@@ -352,5 +377,5 @@ export function createSettingsStore(args: {
     write({ ...read(), overlayPosition: position });
   }
 
-  return { view, save, overlayPosition, saveOverlayPosition, gatewayApiKey, linkSettings, vmemConfig, fsRoots, mcpList, mcpSave, mcpRemove, mcpSetEnabled, mcpRecordTools, mcpConfigs, mcpConfig, mcpOAuthStorage };
+  return { view, save, meetingContext, overlayPosition, saveOverlayPosition, gatewayApiKey, linkSettings, vmemConfig, fsRoots, mcpList, mcpSave, mcpRemove, mcpSetEnabled, mcpRecordTools, mcpConfigs, mcpConfig, mcpOAuthStorage };
 }

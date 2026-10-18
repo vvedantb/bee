@@ -1,12 +1,14 @@
 import { ipcMain, shell } from "electron";
 import { z } from "zod";
 import { loadMcpTools, type McpPool, type McpServerConfig } from "../core/mcp";
+import type { MeetingContext } from "../core/meeting-context";
 import { LUNA_MODEL, NO_GATEWAY_KEY, STT_MODEL, createBeeGateway } from "../core/gateway";
 import { runPipeline } from "../core/pipeline";
 import { buildLocalSummary, generateMeetingSummary } from "../core/summary";
 import { transcribeSpeech } from "../core/transcribe";
 import {
   IPC,
+  meetingContextRequestSchema,
   meetingSummaryRequestSchema,
   pipelineCancelSchema,
   pipelineRequestSchema,
@@ -24,6 +26,8 @@ export function registerMeetingIpc(args: { notesDir: string; fsRoots: () => stri
   mcpConfigs: () => McpServerConfig[];
   /** Tool lists and warm connections, shared across runs. */
   mcpPool: McpPool;
+  /** Which meeting the user is in, its brief for Luna, and the saved meetings. */
+  meeting: MeetingContext;
   gatewayApiKey: () => string | undefined }): void {
   // One controller per run in flight. The renderer cancels a run when a newer line supersedes it.
   const runs = new Map<string, AbortController>();
@@ -34,6 +38,19 @@ export function registerMeetingIpc(args: { notesDir: string; fsRoots: () => stri
     const apiKey = args.gatewayApiKey();
     if (!apiKey) return { text: null, error: NO_GATEWAY_KEY };
     return transcribeSpeech({ model: createBeeGateway(apiKey).transcription(STT_MODEL), audio: request.audio });
+  });
+
+  // The renderer polls this every few seconds. Main steps detection (title and calendar reads are throttled inside).
+  ipcMain.handle(IPC.meetingContext, (_event, payload) => {
+    const request = meetingContextRequestSchema.parse(payload);
+    assertSignedIn(request.sessionToken);
+    return args.meeting.tick();
+  });
+
+  ipcMain.handle(IPC.clearMeetingMemory, (_event, payload) => {
+    const request = meetingContextRequestSchema.parse(payload);
+    assertSignedIn(request.sessionToken);
+    return { cleared: args.meeting.clearMemory() };
   });
 
   ipcMain.handle(IPC.runPipeline, async (event, payload) => {
@@ -54,6 +71,7 @@ export function registerMeetingIpc(args: { notesDir: string; fsRoots: () => stri
       const result = await runPipeline({
         transcript: request.transcript,
         shown: request.shown,
+        meetingBrief: args.meeting.brief(),
         snippets,
         gateway: apiKey ? createBeeGateway(apiKey) : null,
         notesDir: args.notesDir,
@@ -90,6 +108,13 @@ export function registerMeetingIpc(args: { notesDir: string; fsRoots: () => stri
       ? await generateMeetingSummary({ ...input, model: createBeeGateway(apiKey)(LUNA_MODEL), when })
       : { markdown: buildLocalSummary({ ...input, when }), usedLlm: false, error: NO_GATEWAY_KEY };
     const path = writeMeetingSummaryFile(args.notesDir, summary.markdown, when);
+    // Structured fields go to meeting memory too (when it is on and the meeting has a name). Failing to save never loses the note.
+    try {
+      const remembered = args.meeting.remember({ meetingId: input.meetingId, summaryMarkdown: summary.markdown, usedLlm: summary.usedLlm, tips: input.tips });
+      console.debug(`perf meeting-memory saved=${remembered ? 1 : 0}`);
+    } catch {
+      console.debug("perf meeting-memory saved=0");
+    }
     return { path, usedLlm: summary.usedLlm, error: summary.error };
   });
 

@@ -105,6 +105,30 @@ export function parseSummaryMarkdown(text: string): string | null {
   return SUMMARY_SECTIONS.every((section) => headings.has(section.toLowerCase())) ? body : null;
 }
 
+const EMPTY_ITEM = /^(none recorded\.?|none\.?|not extracted: saved without ai\.?)$/i;
+
+function sectionBullets(markdown: string, heading: string): string[] {
+  const lines = markdown.replace(/\r\n/g, "\n").split("\n");
+  const start = lines.findIndex((line) => line.trim().toLowerCase() === `## ${heading}`.toLowerCase());
+  if (start === -1) return [];
+  const items: string[] = [];
+  for (const line of lines.slice(start + 1)) {
+    if (line.startsWith("## ")) break;
+    const match = /^\s*[-*]\s+(.*\S)\s*$/.exec(line);
+    if (match && !EMPTY_ITEM.test(match[1] ?? "")) items.push(match[1] as string);
+  }
+  return items;
+}
+
+/** Decisions, action items and topics from a summary's markdown (Luna's or the local one), for meeting memory. Placeholders are dropped. */
+export function extractSummaryFields(markdown: string): { decisions: string[]; actionItems: string[]; topics: string[] } {
+  return {
+    decisions: sectionBullets(markdown, "Decisions"),
+    actionItems: sectionBullets(markdown, "Action items"),
+    topics: sectionBullets(markdown, "Topics"),
+  };
+}
+
 /**
  * Summary without a model (no key, or the call failed): same headings, so retrieval chunks it the same way,
  * with the transcript lines kept under Topics instead of an extracted summary.
