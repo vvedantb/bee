@@ -11,7 +11,8 @@ export type MeetingContextSettings = Pick<SettingsView, "meetingContextEnabled" 
 const COPY =
   "Bee reads the Teams window title and, on Windows with classic Outlook, today's calendar, to know which meeting you are in. " +
   "Everything is read on this device and saved here: no Microsoft Graph and no sign-in. The meeting name, people, agenda excerpt and " +
-  "earlier decisions go to Luna with each request, like your notes do.";
+  "earlier decisions go to Luna with each request, like your notes do. Once per meeting, Bee also searches your connected tools " +
+  "for the meeting name and people.";
 
 function clearMessage(count: number): string {
   return count === 0 ? "No saved meeting notes to clear." : `Cleared ${count} saved meeting ${count === 1 ? "note" : "notes"}.`;
