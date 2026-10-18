@@ -81,6 +81,7 @@ export function createMeetingContext(deps: MeetingContextDeps): MeetingContext {
   let trackerEpoch = 0;
   let rows: WindowTitleRow[] = [];
   let rowsAt = -Infinity;
+  // The window title at the last calendar read.
   let titleName = "";
   let events: CalendarEvent[] = [];
   let eventsAt = -Infinity;
@@ -183,6 +184,8 @@ export function createMeetingContext(deps: MeetingContextDeps): MeetingContext {
     const changed = name !== titleName;
     if (age < (changed ? timing.calendarChangeMs : timing.calendarMs)) return;
     eventsAt = now;
+    // The title this read was for: a title that changed since, even inside the 60 s window, re-reads once the window has passed.
+    titleName = name;
     const started = performance.now();
     const result = await calendar.readToday(new Date(now));
     if (result.ok) {
@@ -222,7 +225,6 @@ export function createMeetingContext(deps: MeetingContextDeps): MeetingContext {
     }
     const title = currentTeamsTitle(rows, true);
     await readCalendar(now, settings.calendar, title?.name ?? "");
-    titleName = title?.name ?? "";
     const identity = matchMeeting({ title, events, now: new Date(now) });
 
     // A new stable detection is a new meeting, even with the same name.

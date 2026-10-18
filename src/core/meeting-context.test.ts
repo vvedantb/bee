@@ -262,6 +262,25 @@ describe("remembering a meeting", () => {
   });
 });
 
+describe("calendar re-read on a title change", () => {
+  it("re-reads once the 60 s window has passed, even when the title changed inside it", async () => {
+    const t = setup();
+    await t.run(15);
+    const reads = t.readToday.mock.calls.length;
+    // 30 s after the read the title changes: too soon to read again.
+    await t.run(30);
+    t.titles.rows = [{ image: "ms-teams.exe", title: "Pricing Review | Microsoft Teams" }];
+    await t.run(15);
+    expect(t.readToday.mock.calls.length).toBe(reads);
+    // Past 60 s since the read: the new title is read for, without waiting the full 5 minutes.
+    await t.run(45);
+    expect(t.readToday.mock.calls.length).toBe(reads + 1);
+    // And then not again while the title stays the same.
+    await t.run(60);
+    expect(t.readToday.mock.calls.length).toBe(reads + 1);
+  });
+});
+
 describe("calendar switch", () => {
   it("forgets calendar events when the calendar is switched off mid-session", async () => {
     const t = setup();
