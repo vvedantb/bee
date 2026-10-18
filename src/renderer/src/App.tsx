@@ -12,7 +12,7 @@ import {
   IconX,
 } from "@tabler/icons-react";
 import { Button, Input, LabeledSwitchRow, Textarea } from "@vvedantb/ui";
-import { PillTabs } from "@vvedantb/shell";
+import { PillTabs } from "@vvedantb/ui/shell";
 import { useEffect, useState, type FormEvent } from "react";
 import { Favicon } from "./Favicon";
 import { Connectors } from "./Connectors";

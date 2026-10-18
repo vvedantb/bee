@@ -1,16 +1,16 @@
 @import "tailwindcss";
-@import "@vvedantb/tokens";
-@import "@vvedantb/tokens/css/base.css";
-@import "@vvedantb/tokens/css/dialog.css";
-@import "@vvedantb/tokens/css/modal.css";
-@import "@vvedantb/tokens/css/tabs.css";
-@import "@vvedantb/tokens/css/tabs-pills.css";
-@import "@vvedantb/tokens/css/scrollbar-thin.css";
-@import "@vvedantb/tokens/css/animations.css";
+@import "@vvedantb/ui/tokens";
+@import "@vvedantb/ui/tokens/css/base.css";
+@import "@vvedantb/ui/tokens/css/dialog.css";
+@import "@vvedantb/ui/tokens/css/modal.css";
+@import "@vvedantb/ui/tokens/css/tabs.css";
+@import "@vvedantb/ui/tokens/css/tabs-pills.css";
+@import "@vvedantb/ui/tokens/css/scrollbar-thin.css";
+@import "@vvedantb/ui/tokens/css/animations.css";
 @import "shadow-plugin";
 @plugin "tailwindcss-animate";
 @source "../../../node_modules/@vvedantb/ui/src/**/*.{ts,tsx}";
-@source "../../../node_modules/@vvedantb/shell/dist/**/*.js";
+@source "../../../node_modules/@vvedantb/ui/shell/src/**/*.{ts,tsx}";
 
 /* Instrument Sans (variable, 400–700), self-hosted so the CSP needs no font hosts. SIL OFL 1.1: fonts/OFL.txt. */
 
@@ -54,7 +54,7 @@
   --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
   /* Slight overshoot: the island and its content settle like a spring. */
   --spring: cubic-bezier(0.22, 1.2, 0.36, 1);
-  /* Shared modal and tab motion variables (see @vvedantb/tokens css). */
+  /* Shared modal and tab motion variables (see @vvedantb/ui/tokens css). */
   --modal-open-dur: 200ms;
   --modal-close-dur: 150ms;
   --modal-scale: 0.97;
