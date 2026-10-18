@@ -11,8 +11,7 @@ import {
   IconUsersGroup,
   IconX,
 } from "@tabler/icons-react";
-import { Badge, Button, Input, LabeledSwitchRow, Textarea } from "@vvedantb/ui";
-import { PillTabs } from "@vvedantb/ui/shell";
+import { Badge, Button, Input, LabeledSwitchRow, PillTabs, Textarea } from "@vvedantb/ui";
 import { useEffect, useState, type FormEvent } from "react";
 import { Favicon } from "./Favicon";
 import { Connectors } from "./Connectors";
@@ -293,7 +292,7 @@ function LiveTab({ state }: { state: BeeState }) {
         <h2>
           Notes
           {done ? (
-            <Badge variant="outline" className="ml-auto" title={timingsTitle(done.timingsMs)}>
+            <Badge className="ml-auto border-0 p-0 text-[11px] font-normal normal-case text-muted" title={timingsTitle(done.timingsMs)}>
               {done.rankSource === "jev" ? "ranked by Jev" : "retrieval order"} · {timingsLabel(done.timingsMs)}
             </Badge>
           ) : null}
@@ -332,14 +331,13 @@ function LiveTab({ state }: { state: BeeState }) {
           </Button>
         </form>
         {state.teams?.team ? (
-          <div className="switch-row">
-            <LabeledSwitchRow
-              id="simulate-teams"
-              label="Simulate Teams meeting (the sync popup shows after about 10 s)"
-              checked={state.teams.detection.source === "simulated"}
-              onCheckedChange={(on) => void actions.teams({ type: "simulateMeeting", on })}
-            />
-          </div>
+          <LabeledSwitchRow
+            className="flex-nowrap items-start max-sm:flex-nowrap [&>div:last-child]:min-h-5"
+            id="simulate-teams"
+            label="Simulate Teams meeting (the sync popup shows after about 10 s)"
+            checked={state.teams.detection.source === "simulated"}
+            onCheckedChange={(on) => void actions.teams({ type: "simulateMeeting", on })}
+          />
         ) : null}
       </section>
     </div>
@@ -450,30 +448,22 @@ function SettingsTab({ state, settings }: { state: BeeState; settings: SettingsV
           ) : null}
         </div>
       </form>
-
-      <div className="switch-row">
-
-        <LabeledSwitchRow
-          id="personalised-links"
-          label="Personalised link suggestions"
-          description="Sends the current line to Jev, and to vmem when connected under Connectors, to pick the exact page. Needs the Gateway key."
-          checked={settings.personalisedLinks}
-          onCheckedChange={(personalisedLinks) => void actions.saveSettings({ personalisedLinks })}
-        />
-
-      </div>
-
-      <div className="switch-row">
-
-        <LabeledSwitchRow
-          id="meeting-mode"
-          label="Meeting mode"
-          description="Hide Bee from screen sharing, stay above full-screen apps."
-          checked={settings.meetingMode}
-          onCheckedChange={(meetingMode) => void actions.saveSettings({ meetingMode })}
-        />
-
-      </div>
+      <LabeledSwitchRow
+        className="flex-nowrap items-start max-sm:flex-nowrap [&>div:last-child]:min-h-5"
+        id="personalised-links"
+        label="Personalised link suggestions"
+        description="Sends the current line to Jev, and to vmem when connected under Connectors, to pick the exact page. Needs the Gateway key."
+        checked={settings.personalisedLinks}
+        onCheckedChange={(personalisedLinks) => void actions.saveSettings({ personalisedLinks })}
+      />
+      <LabeledSwitchRow
+        className="flex-nowrap items-start max-sm:flex-nowrap [&>div:last-child]:min-h-5"
+        id="meeting-mode"
+        label="Meeting mode"
+        description="Hide Bee from screen sharing, stay above full-screen apps."
+        checked={settings.meetingMode}
+        onCheckedChange={(meetingMode) => void actions.saveSettings({ meetingMode })}
+      />
 
       <div className="flex flex-col gap-1">
         Interface size

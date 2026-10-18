@@ -17,7 +17,7 @@ function row(name: string, action: "Connect" | "Disconnect"): string {
   return `<li class="connector"><span class="connector-main"><span class="connector-icon">${GLOBE}</span><strong>${name}</strong></span><button type="button" class="${cls}">${action}</button></li>`;
 }
 
-// Class strings match @vvedantb/ui/shell PillTabs.
+// Class strings match @vvedantb/ui PillTabs.
 const PILL = "inline-flex h-8 items-center justify-center gap-1.5 whitespace-nowrap rounded-full border border-border px-3.5 py-1 text-sm font-medium";
 const PILL_IDLE = "text-muted";
 const PILL_ACTIVE = "bg-default text-foreground";
