@@ -9,6 +9,7 @@ import {
   type McpServerView,
   type McpSetEnabled,
   type McpTestResult,
+  type MeetingContextView,
   type MeetingSummaryResult,
   type PipelineResult,
   type SettingsUpdate,
@@ -45,6 +46,9 @@ export type SummaryState = { saving: boolean; result: MeetingSummaryResult | nul
 // Test connection, per server id. Cleared when the server is edited or removed.
 export type McpTestState = { busy: boolean; result: McpTestResult | null };
 
+// The "Last time with these people…" card at meeting start: shown once per detected meeting (id), until the island closes.
+export type MeetingCard = { id: number; lines: string[] };
+
 // App-wide state shared by the notch and the panel. Local form input stays in the DOM (uncontrolled forms).
 export type BeeState = {
   settings: SettingsView | null;
@@ -75,6 +79,9 @@ export type BeeState = {
   // Link chips for the current turn (the latest line plus the tips that came back), and the ones the user closed.
   chips: LinkChip[];
   dismissedChipIds: string[];
+  // The meeting main detected (window titles, Outlook calendar), and its card. Names only; the brief for Luna stays in main.
+  meeting: MeetingContextView | null;
+  meetingCard: MeetingCard | null;
   error: string | null;
   mic: { on: boolean; level: number; error: string | null };
   update: UpdateState;
@@ -102,6 +109,10 @@ const MIC_OFF = { on: false, level: 0 };
 const EMPTY_SESSION: MeetingSession = { lines: [], notesCited: [], tips: [] };
 const SESSION_LIST_MAX = 100;
 const SYNC_TICK_MS = 2000;
+// Main throttles its own title and calendar reads, so this poll only asks for the cached view.
+const MEETING_TICK_MS = 5000;
+// Lines kept, island dismissed and no new line for this long: the meeting is saved without a click.
+const DISMISS_FINALIZE_MS = 10 * 60_000;
 
 export const SAMPLE_LINES = [
   "Let's pick up the Acme renewal. They are asking for a bigger discount.",
@@ -129,6 +140,8 @@ let state: BeeState = {
   islandClosing: false,
   chips: [],
   dismissedChipIds: [],
+  meeting: null,
+  meetingCard: null,
   error: null,
   mic: { ...MIC_OFF, error: null },
   update: { status: "idle", check: null, error: null },
@@ -182,6 +195,11 @@ let stopMic: (() => void) | null = null;
 let sentSize: WindowSize = "collapsed";
 let ticking = false;
 let islandHovered = false;
+// Meeting context. The detected meeting the session's lines belong to (null: none was detected, so only a click saves it),
+// and the last meeting whose card was shown.
+let sessionMeetingId: number | null = null;
+let cardShownFor = 0;
+let meetingTicking = false;
 let islandActivityAt = 0;
 let islandTimer: ReturnType<typeof setTimeout> | undefined;
 const EMPTY_RESULT = { tips: [], sources: [], guideError: null };
@@ -221,7 +239,7 @@ async function closeIsland(): Promise<void> {
   if (!state.islandClosing) return;
   // Dismissed tips are a finished turn: the next line starts afresh. A run in flight carries on.
   turnOpen = false;
-  set({ dismissed: true, islandClosing: false });
+  set({ dismissed: true, islandClosing: false, meetingCard: null });
   await applyWindowSize();
 }
 
@@ -245,6 +263,7 @@ export function islandArgs(current: BeeState) {
   return {
     ...(displayResult(current) ?? EMPTY_RESULT),
     chipCount: visibleChips(current.chips, current.dismissedChipIds).length,
+    cardLines: current.meetingCard?.lines.length ?? 0,
     dismissed: current.dismissed,
     busy: current.busy,
     revising: current.revising,
@@ -275,6 +294,7 @@ function selfName(): string {
  */
 function addLines(lines: SessionLine[]): boolean {
   const before = state.session.lines;
+  if (before.length === 0) sessionMeetingId = state.meeting?.active ? state.meeting.id : null;
   const merged = mergeLines(before, lines, SESSION_TRANSCRIPT_MAX);
   set({ session: { ...state.session, lines: merged } });
   // Lines already seen start no turn.
@@ -500,6 +520,42 @@ async function teamsTick(): Promise<void> {
   }
 }
 
+/**
+ * Asks main which meeting this is. A new meeting with something from before shows its card once. When the call ends (or a
+ * different meeting begins), or Bee has been dismissed and quiet for a while, the session saves itself, if meeting memory is on.
+ */
+async function meetingTick(): Promise<void> {
+  if (meetingTicking) return;
+  meetingTicking = true;
+  try {
+    const token = await getToken().catch(() => null);
+    if (!token) return;
+    const view = await window.bee.meeting.context(token);
+    set({ meeting: view });
+    if (!view.enabled) return;
+    if (state.session.lines.length > 0 && sessionMeetingId === null && view.active) sessionMeetingId = view.id;
+    if (view.active && view.id !== cardShownFor && view.card.length > 0) {
+      cardShownFor = view.id;
+      set({ meetingCard: { id: view.id, lines: view.card }, dismissed: false, islandClosing: false });
+      touchIsland();
+      void applyWindowSize();
+    }
+    const lines = state.session.lines.length;
+    if (sessionMeetingId === null || state.summary.saving) return;
+    const over = !view.active || view.id !== sessionMeetingId;
+    const quiet = state.dismissed && !state.busy && lines > 0 && Date.now() - lastLineAt >= DISMISS_FINALIZE_MS;
+    if (lines === 0) {
+      if (over) sessionMeetingId = null;
+    } else if ((over || quiet) && state.settings?.meetingContextEnabled && state.settings.meetingMemoryEnabled) {
+      void actions.endMeeting({ auto: true });
+    }
+  } catch {
+    // Main failed this tick; the next one tries again.
+  } finally {
+    meetingTicking = false;
+  }
+}
+
 async function sessionToken(): Promise<string> {
   const token = await getToken();
   if (!token) throw new Error("Sign in to Bee to get guidance.");
@@ -712,10 +768,13 @@ export const actions = {
    * Stop the mic and write the session's summary to the notes folder. The session starts empty for the next
    * meeting straight away; on failure it is put back, ahead of any lines that arrived meanwhile.
    */
-  async endMeeting(): Promise<void> {
+  async endMeeting(options: { auto?: boolean } = {}): Promise<void> {
     const ended = state.session;
     if (ended.lines.length === 0 || state.summary.saving) return;
-    if (stopMic) actions.stopMic(null);
+    // An automatic save leaves the mic alone: the next meeting may be starting. It is not retried if it fails.
+    if (stopMic && !options.auto) actions.stopMic(null);
+    const meetingId = sessionMeetingId;
+    sessionMeetingId = null;
     clearTimeout(runTimer);
     runTimer = undefined;
     deferred = false;
@@ -726,10 +785,12 @@ export const actions = {
         transcript: summaryTranscript(ended.lines, selfName()),
         notesCited: ended.notesCited,
         tips: ended.tips,
+        ...(meetingId !== null ? { meetingId } : {}),
         sessionToken: await sessionToken(),
       });
       setSummary({ saving: false, result });
     } catch (error) {
+      if (!options.auto) sessionMeetingId ??= meetingId;
       const now = state.session;
       set({
         session: {
@@ -740,6 +801,12 @@ export const actions = {
       });
       setSummary({ saving: false, error: error instanceof Error ? error.message : "Could not save the summary" });
     }
+  },
+
+  /** Deletes every saved meeting from local memory. Resolves how many there were. */
+  async clearMeetingMemory(): Promise<number> {
+    const { cleared } = await window.bee.meeting.clearMemory(await sessionToken());
+    return cleared;
   },
 
   async openSummary(): Promise<void> {
@@ -848,3 +915,4 @@ void actions.refreshMcp();
 // Quiet check at start-up; the notch shows an update button only when one is available.
 void actions.checkForUpdate();
 setInterval(() => void teamsTick(), SYNC_TICK_MS);
+setInterval(() => void meetingTick(), MEETING_TICK_MS);

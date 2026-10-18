@@ -48,6 +48,8 @@ async function bundle(page: string): Promise<{ main: string; html: string }> {
     bundle: true,
     platform: "browser",
     format: "iife",
+    // Components from @vvedantb/ui ship as TSX without a tsconfig of their own, so esbuild would default to classic JSX.
+    jsx: "automatic",
     define,
     plugins: [stubStyles],
     logLevel: "error",

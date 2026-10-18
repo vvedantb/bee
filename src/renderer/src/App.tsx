@@ -16,6 +16,7 @@ import { PillTabs } from "@vvedantb/shell";
 import { useEffect, useState, type FormEvent } from "react";
 import { Favicon } from "./Favicon";
 import { Connectors } from "./Connectors";
+import { MeetingContextSection } from "./MeetingContextSection";
 import { SecretField } from "./SecretField";
 import { INTERFACE_SCALES } from "../../core/interface-scale";
 import { DEFAULT_MOTION_PREFERENCE, MOTION_PREFERENCES, resolveReducedMotion, type MotionPreference } from "../../core/motion-preference";
@@ -54,7 +55,19 @@ function LinkChips({ chips }: { chips: LinkChip[] }) {
   );
 }
 
-function IslandBody({ result, chips, closing, keptTips }: { result: PipelineResult | null; chips: LinkChip[]; closing: boolean; keptTips: string[] }) {
+function IslandBody({
+  result,
+  chips,
+  closing,
+  keptTips,
+  card,
+}: {
+  result: PipelineResult | null;
+  chips: LinkChip[];
+  closing: boolean;
+  keptTips: string[];
+  card: string[];
+}) {
   const tips = result?.tips ?? [];
   const kept = new Set(keptTips.map(tipKey));
   const sources = result?.sources ?? [];
@@ -64,6 +77,13 @@ function IslandBody({ result, chips, closing, keptTips }: { result: PipelineResu
         <Button type="button" variant="ghost" size="icon-sm" className="island-close" title="Dismiss" aria-label="Dismiss" onClick={() => void actions.dismissIsland()}>
           <IconX {...ICON} />
         </Button>
+        {card.length > 0 ? (
+          <div className="island-card">
+            {card.map((line, index) => (
+              <p key={index}>{line}</p>
+            ))}
+          </div>
+        ) : null}
         {tips.length > 0 ? (
           <ul className="island-tips">
             {/* Keyed by position: a streaming line grows in place instead of replaying the entrance. Kept tips are dimmed while Bee updates them. */}
@@ -106,7 +126,8 @@ function Island({ state }: { state: BeeState }) {
   // Collapsed, the status text opens the panel like the chevron, whatever it says.
   const canExpand = !state.expanded;
   // While Luna thinks, chips may open the body but the pill keeps its thinking text.
-  const status = showBody && !state.busy && !state.heard && !state.mic.error ? "Tips" : notchStatus(state, isSignedIn);
+  const cardOnly = (state.meetingCard?.lines.length ?? 0) > 0 && (result?.tips.length ?? 0) === 0;
+  const status = showBody && !state.busy && !state.heard && !state.mic.error ? (cardOnly ? "Last time" : "Tips") : notchStatus(state, isSignedIn);
   const newVersion = state.update.check?.available ? state.update.check.latestVersion : null;
   const statusClass = state.mic.error ? "notch-status error-text" : "notch-status";
   return (
@@ -180,7 +201,7 @@ function Island({ state }: { state: BeeState }) {
         </Button>
       </header>
       {/* While busy the previous tips stay (and streamed tips replace them); displayResult drops the old error. */}
-      {showBody ? <IslandBody result={result} chips={chips} closing={state.islandClosing} keptTips={state.revising ? state.keptTips : []} /> : null}
+      {showBody ? <IslandBody result={result} chips={chips} closing={state.islandClosing} keptTips={state.revising ? state.keptTips : []} card={state.meetingCard?.lines ?? []} /> : null}
     </div>
   );
 }
@@ -478,6 +499,12 @@ function SettingsTab({ state, settings }: { state: BeeState; settings: SettingsV
         />
         <p className="muted">On keeps Bee's motion even when Windows or macOS reduces animations. System follows the OS. Off skips motion.</p>
       </div>
+
+      <MeetingContextSection
+        settings={settings}
+        onChange={(update) => void actions.saveSettings(update)}
+        onClear={() => actions.clearMeetingMemory()}
+      />
 
       <TeamSection state={state} />
 

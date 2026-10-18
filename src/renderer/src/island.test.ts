@@ -199,3 +199,17 @@ describe("timingsLabel", () => {
     expect(title).toContain("Jev 900 ms");
   });
 });
+
+describe("meeting card", () => {
+  it("opens the body on its own, until the user closes it", () => {
+    expect(shouldShowResponse({ ...empty, cardLines: 2 })).toBe(true);
+    expect(shouldShowResponse({ ...empty, cardLines: 0 })).toBe(false);
+    expect(shouldShowResponse({ ...empty, cardLines: 2, dismissed: true })).toBe(false);
+    expect(islandPhase({ ...empty, cardLines: 1, busy: false })).toBe("expanded");
+  });
+
+  it("stays on screen while Luna thinks, unless dismissed", () => {
+    expect(islandShowsBody({ ...empty, cardLines: 2, busy: true })).toBe(true);
+    expect(islandShowsBody({ ...empty, cardLines: 2, busy: true, dismissed: true })).toBe(false);
+  });
+});

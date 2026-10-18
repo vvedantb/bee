@@ -78,6 +78,15 @@ describe("runPipeline", () => {
     expect(guide.mock.calls[0]?.[0].shown).toEqual(["Tip already on screen"]);
   });
 
+  it("passes the meeting brief to Luna, and nothing when there is none", async () => {
+    jevAfter(1);
+    guide.mockResolvedValue(lunaOk());
+    await runPipeline({ transcript, meetingBrief: "Meeting: Weekly Sync", snippets, gateway });
+    expect(guide.mock.calls[0]?.[0].meetingBrief).toBe("Meeting: Weekly Sync");
+    await runPipeline({ transcript, snippets, gateway });
+    expect(guide.mock.calls[1]?.[0].meetingBrief).toBeUndefined();
+  });
+
   it("starts MCP and Luna's prompt while Jev is still running", async () => {
     let jevEnd = 0;
     let mcpStart = 0;

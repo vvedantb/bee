@@ -6,6 +6,7 @@ import {
   SUMMARY_SYSTEM,
   buildLocalSummary,
   buildSummaryPrompt,
+  extractSummaryFields,
   generateMeetingSummary,
   parseSummaryMarkdown,
   summaryFileName,
@@ -158,5 +159,26 @@ describe("speaker-labelled summaries (Teams sync)", () => {
 
   it("accepts a mix of plain and labelled lines", () => {
     expect(buildSummaryPrompt({ transcript: ["Solo line", { speaker: "Bob", text: "Hi" }] }).prompt).toContain("- Solo line\n- Bob: Hi");
+  });
+});
+
+describe("extractSummaryFields", () => {
+  it("reads decisions, action items and topics from the markdown", () => {
+    const markdown = "## Decisions\n- Ship SSO in Q4\n- Keep 15%\n\n## Action items\n- Sam: send the quote\n\n## Topics\n* Pricing: 15% for two years\n\n## Notes cited\n- Roadmap";
+    expect(extractSummaryFields(markdown)).toEqual({
+      decisions: ["Ship SSO in Q4", "Keep 15%"],
+      actionItems: ["Sam: send the quote"],
+      topics: ["Pricing: 15% for two years"],
+    });
+  });
+
+  it("drops the none and not-extracted placeholders", () => {
+    const local = buildLocalSummary({ transcript: ["Hello there"], when: new Date(2026, 9, 17, 14, 0) });
+    expect(extractSummaryFields(local)).toEqual({ decisions: [], actionItems: [], topics: ["Hello there"] });
+    expect(extractSummaryFields("## Decisions\n- None recorded.\n## Action items\n- None recorded.\n## Topics\n- None recorded.")).toEqual({ decisions: [], actionItems: [], topics: [] });
+  });
+
+  it("returns empty lists for text without sections", () => {
+    expect(extractSummaryFields("nothing here")).toEqual({ decisions: [], actionItems: [], topics: [] });
   });
 });
