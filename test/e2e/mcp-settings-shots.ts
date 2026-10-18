@@ -8,9 +8,9 @@ const GLOBE = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" strok
 
 // Class strings match what @vvedantb/ui Button (size sm; default and ghost variants; link variant) renders in the real app.
 const BUTTON = "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-lg text-xs font-medium h-8 px-3";
-const BUTTON_DEFAULT = `${BUTTON} bg-accent text-accent-foreground`;
-const BUTTON_GHOST = `${BUTTON} text-muted`;
-const BUTTON_LINK = `${BUTTON} text-accent`;
+const BUTTON_DEFAULT = `${BUTTON} bg-primary text-primary-foreground`;
+const BUTTON_GHOST = `${BUTTON} text-muted-foreground`;
+const BUTTON_LINK = `${BUTTON} text-primary`;
 
 function row(name: string, action: "Connect" | "Disconnect"): string {
   const cls = action === "Connect" ? BUTTON_DEFAULT : BUTTON_GHOST;
