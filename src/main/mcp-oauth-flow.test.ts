@@ -155,11 +155,11 @@ describe("MCP OAuth end to end", () => {
     expect(stored?.tokens).toStrictEqual({ access_token: "access-2", token_type: "Bearer", refresh_token: "refresh-2", expires_in: 3600, issuer: server.origin });
     expect(server.log.filter((route) => route === "POST /register")).toHaveLength(1);
 
-    // Revoke: refresh token first, then the access token; the server then refuses the old access token.
+    // Revoke: both tokens are revoked concurrently, so arrival order is not pinned; the server then refuses the old access token.
     await expect(revokeMcpOAuth({ url: server.url, state: stored })).resolves.toBe(true);
-    expect(server.revoked).toEqual([
-      ["refresh-2", "refresh_token", "client-e2e"],
+    expect([...server.revoked].sort()).toEqual([
       ["access-2", "access_token", "client-e2e"],
+      ["refresh-2", "refresh_token", "client-e2e"],
     ]);
     await expect(connectMcp({ id: "e2e", name: "e2e", transport: "http", url: server.url, auth: { type: "none" }, authProvider: createMcpOAuthProvider({ storage }) })).rejects.toThrow(new Error("Sign in from the Connectors tab"));
     // The refresh token was revoked too, so the SDK dropped the tokens and kept the client.
