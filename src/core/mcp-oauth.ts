@@ -1,11 +1,11 @@
 import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
-import { authorizeMcpServer as authorize, createMcpOAuthProvider as createProvider, type McpOAuthProvider, type McpOAuthStorage } from "@vvedantb/mcp-client";
+import { authorizeMcpServer as authorize, createMcpOAuthProvider as createProvider, type McpOAuthProvider, type McpOAuthStorage } from "@vvedantb/server";
 import { z } from "zod";
 
-// MCP authorization (OAuth 2.1 with PKCE and dynamic client registration) for remote servers such as vmem, from @vvedantb/mcp-client
+// MCP authorization (OAuth 2.1 with PKCE and dynamic client registration) for remote servers such as vmem, from @vvedantb/server
 // with Bee's options. No Electron imports: main supplies the storage, the redirect and the browser. The caller saves the state, encrypted.
 
-export { hasMcpOAuthTokens, revokeMcpOAuth, type McpOAuthProvider, type McpOAuthStorage } from "@vvedantb/mcp-client";
+export { hasMcpOAuthTokens, revokeMcpOAuth, type McpOAuthProvider, type McpOAuthStorage } from "@vvedantb/server";
 
 // Kept local: the package schema also keeps an `identity` and checks `obtained_at`, which would change how stored settings parse.
 const tokensSchema = z.looseObject({
