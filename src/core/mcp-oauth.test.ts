@@ -158,7 +158,8 @@ describe("non-interactive provider", () => {
     const storage = memoryStorage();
     const provider = createMcpOAuthProvider({ storage });
     expect(provider.saveClientInformation).toBeDefined();
-    expect(() => provider.redirectToAuthorization(new URL(`${AS}/authorize`))).toThrow(/Connectors/);
+    // @vvedantb/server 0.4.0: rejects instead of throwing synchronously (the SDK awaits it either way).
+    await expect(provider.redirectToAuthorization(new URL(`${AS}/authorize`))).rejects.toThrow(/Connectors/);
     const { fetchFn, calls } = fakeFetch({
       "GET https://mcp.example.test/.well-known/oauth-protected-resource/mcp": () => json({ resource: MCP_URL, authorization_servers: [AS] }),
       [`GET ${AS}/.well-known/oauth-authorization-server`]: () => json(asMetadata),
@@ -375,8 +376,8 @@ describe("pinned behaviour", () => {
     const provider = createMcpOAuthProvider({ storage: memoryStorage(), redirectUrl: REDIRECT, redirectToAuthorization: async (url) => void opened.push(url.href) });
     await provider.redirectToAuthorization(new URL(`${AS}/authorize?x=1`));
     expect(opened).toEqual([`${AS}/authorize?x=1`]);
-    // redirectUrl alone is not interactive.
-    expect(() => createMcpOAuthProvider({ storage: memoryStorage(), redirectUrl: REDIRECT }).redirectToAuthorization(new URL(AS))).toThrow(new UnauthorizedError("Sign in from the Connectors tab"));
+    // redirectUrl alone is not interactive. Since @vvedantb/server 0.4.0 this rejects instead of throwing synchronously.
+    await expect(createMcpOAuthProvider({ storage: memoryStorage(), redirectUrl: REDIRECT }).redirectToAuthorization(new URL(AS))).rejects.toThrow(new UnauthorizedError("Sign in from the Connectors tab"));
   });
 
   it("passes a cancelled sign-in through, and never leaves an early rejection unhandled", async () => {
