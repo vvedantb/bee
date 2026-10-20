@@ -20,6 +20,14 @@ export function gatewayTier(tier: GatewayTier): { gateway?: { serviceTier: strin
 
 export const FLEX_PROVIDER_OPTIONS = gatewayTier("flex");
 
+// Gateway providers for Luna calls that send the web_search tool. Bedrock rejects the web_search tool.
+export const LUNA_PROVIDERS: readonly string[] = ["openai", "azure"];
+
+/** The tier's options plus the Luna provider allowlist. Use it only on Luna calls that send web_search or other provider tools. */
+export function lunaProviderOptions(tier: GatewayTier): { gateway: { serviceTier?: string; only: string[] } } {
+  return { gateway: { ...gatewayTier(tier).gateway, only: [...LUNA_PROVIDERS] } };
+}
+
 export const NO_GATEWAY_KEY = "No AI Gateway key. Add one in Settings.";
 
 export type BeeGateway = GatewayProvider;

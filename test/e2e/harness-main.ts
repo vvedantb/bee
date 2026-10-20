@@ -7,11 +7,16 @@
 // frameless 520 × 360 window, and each capturePage() is written to <BEE_E2E_SHOTS_DIR>/island-<name>.png.
 // Names starting with mcp- or settings- (the Settings and Connectors tab shots) use a taller 480 × 640 window and are written as <name>.png.
 // BEE_E2E_SHOTS_DIR alone does not change the run.
+// With BEE_E2E_MCP_FILE (the live MCP test), Luna gets the MCP servers in that JSON file, re-read on every run so tokens can
+// rotate while the test runs, and every MCP tool call is reported on stdout as "E2E_MCP_CALL {...}". Tokens are never printed.
+// BEE_E2E_QUESTIONS is passed to the page as ?questions=. Page lines starting "E2E_MARK " are copied to stdout.
 import { BrowserWindow, app, session } from "electron";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createMcpPool } from "../../src/core/mcp";
+import { z } from "zod";
+import { createMcpPool, type McpPool, type McpServerConfig } from "../../src/core/mcp";
+import { createMcpOAuthProvider, mcpOAuthStateSchema, type McpOAuthState } from "../../src/core/mcp-oauth";
 import { createMeetingContext } from "../../src/core/meeting-context";
 import { createMeetingMemoryStore, inMemoryFs } from "../../src/core/meeting-memory";
 import { unsupportedCalendarReader } from "../../src/core/calendar";
@@ -78,6 +83,58 @@ async function captureShots(dir: string, names: string[]): Promise<string[]> {
   return files;
 }
 
+const mcpFileSchema = z.object({
+  servers: z.array(z.object({ id: z.string(), name: z.string(), url: z.string(), bearer: z.string().optional(), oauth: mcpOAuthStateSchema.optional() })),
+});
+type McpFile = z.infer<typeof mcpFileSchema>;
+
+const readMcpFile = (file: string): McpFile => mcpFileSchema.parse(JSON.parse(readFileSync(file, "utf8")));
+
+/** Servers from the BEE_E2E_MCP_FILE JSON. An OAuth entry's refreshed tokens are written back into the file (mode 0600). */
+function mcpConfigsFromFile(file: string): McpServerConfig[] {
+  return readMcpFile(file).servers.map((server): McpServerConfig => {
+    const base = { id: server.id, name: server.name, transport: "http" as const, url: server.url };
+    if (server.bearer !== undefined) return { ...base, auth: { type: "bearer" }, secret: server.bearer };
+    const storage = {
+      load: () => readMcpFile(file).servers.find((item) => item.id === server.id)?.oauth,
+      save: (oauth: McpOAuthState | undefined) => {
+        const current = readMcpFile(file);
+        const servers = current.servers.map((item) => (item.id === server.id ? { ...item, oauth } : item));
+        writeFileSync(file, JSON.stringify({ ...current, servers }, null, 2), { mode: 0o600 });
+      },
+    };
+    return { ...base, auth: { type: "none" }, oauthSignedIn: true, authProvider: createMcpOAuthProvider({ storage }) };
+  });
+}
+
+/** Reports every tool call made through the pool as one "E2E_MCP_CALL {...}" stdout line: no arguments, no secrets. */
+function reportingPool(pool: McpPool): McpPool {
+  const report = (config: McpServerConfig, tool: string, ok: boolean, output: string) => {
+    const masked = config.secret ? output.split(config.secret).join("•••") : output;
+    const line = { tool, server: config.name, ok, chars: output.length, preview: masked.replace(/\s+/g, " ").slice(0, 160) };
+    process.stdout.write(`E2E_MCP_CALL ${JSON.stringify(line)}\n`);
+  };
+  return {
+    ...pool,
+    ensure: async (config, timeoutMs) => {
+      const connection = await pool.ensure(config, timeoutMs);
+      return {
+        ...connection,
+        call: async (name, input, callTimeoutMs, maxChars) => {
+          try {
+            const output = await connection.call(name, input, callTimeoutMs, maxChars);
+            report(config, name, !output.startsWith("Error:"), output);
+            return output;
+          } catch (error) {
+            report(config, name, false, error instanceof Error ? error.message : String(error));
+            throw error;
+          }
+        },
+      };
+    },
+  };
+}
+
 void app.whenReady().then(async () => {
   if (shotNames) {
     const dir = shotsDir || mkdtempSync(join(tmpdir(), "bee-island-shots-"));
@@ -97,7 +154,16 @@ void app.whenReady().then(async () => {
     searchNotes: async () => [],
     settings: () => ({ enabled: false, calendar: false, memory: false }),
   });
-  registerMeetingIpc({ notesDir, fsRoots: () => [], mcpConfigs: () => [], mcpPool: createMcpPool(), meeting, gatewayApiKey: () => process.env.BEE_AI_GATEWAY_API_KEY?.trim() || undefined });
+  const mcpFile = process.env.BEE_E2E_MCP_FILE;
+  registerMeetingIpc({
+    notesDir,
+    fsRoots: () => [],
+    mcpConfigs: mcpFile ? () => mcpConfigsFromFile(mcpFile) : () => [],
+    mcpSignedOut: () => [],
+    mcpPool: mcpFile ? reportingPool(createMcpPool()) : createMcpPool(),
+    meeting,
+    gatewayApiKey: () => process.env.BEE_AI_GATEWAY_API_KEY?.trim() || undefined,
+  });
   // Short timings so the popup and the debounced leave happen within the test.
   registerTeamsIpc({ relayUrl: relayUrlFromEnv(process.env.BEE_RELAY_URL), detector: createStubDetector(), timing: { enterMs: 300, leaveMs: 1000 } });
   session.defaultSession.setPermissionRequestHandler((_contents, permission, callback) => callback(permission === "media"));
@@ -107,9 +173,11 @@ void app.whenReady().then(async () => {
     webPreferences: { preload, sandbox: true, contextIsolation: true, nodeIntegration: false },
   });
   win.webContents.on("console-message", ({ message }) => {
+    // The live MCP page marks each run, so the test can tell which E2E_MCP_CALL lines belong to it.
+    if (message.startsWith("E2E_MARK ")) process.stdout.write(`${message}\n`);
     if (!message.startsWith("E2E_RESULT ")) return;
     process.stdout.write(`${message}\n`);
     app.exit(0);
   });
-  void win.loadFile(page, { query: { token: process.env.BEE_E2E_TOKEN || fakeSessionToken(), invite: process.env.BEE_E2E_INVITE ?? "" } });
+  void win.loadFile(page, { query: { token: process.env.BEE_E2E_TOKEN || fakeSessionToken(), invite: process.env.BEE_E2E_INVITE ?? "", questions: process.env.BEE_E2E_QUESTIONS ?? "" } });
 });

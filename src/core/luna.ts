@@ -1,6 +1,7 @@
 import { isStepCount, streamText, type LanguageModel, type ToolSet } from "ai";
+import { z } from "zod";
 import { withTimeout } from "./abort";
-import { gatewayTier } from "./gateway";
+import { lunaProviderOptions } from "./gateway";
 import type { Snippet } from "./notes";
 import { MAX_TIPS, tipCap } from "./steering";
 import { lunaTools, sourcesFromGenerateResult, type BeeSource } from "./tools";
@@ -9,6 +10,45 @@ const TRANSCRIPT_WINDOW = 8;
 const LUNA_TIMEOUT_MS = 45_000;
 const MAX_STEPS = 8;
 const SCHEMA_ERROR = /json schema|propertyNames|input_?schema|tools?\b.*\bschema|functionality.*not supported|not supported.*schema/i;
+// Too many tools for the provider, e.g. "Invalid 'tools': array too long. Expected an array with maximum length 128".
+const TOOL_COUNT_ERROR = /tools'?\W.*\b(array too long|too many|maximum length)|too many tools/i;
+// A gateway provider (bedrock) that cannot run the web_search tool. Luna retries once without it.
+const WEB_SEARCH_ERROR = /web search is not supported/i;
+const MAX_ERROR_CHARS = 300;
+// Stream error parts can carry plain objects, not Errors. These are the shapes seen from providers and the gateway.
+const errorShape = z.union([
+  z.object({ message: z.string().min(1) }).transform((value) => value.message),
+  z.object({ error: z.object({ message: z.string().min(1) }) }).transform((value) => value.error.message),
+  z.object({ data: z.object({ error: z.object({ message: z.string().min(1) }) }) }).transform((value) => value.data.error.message),
+  z.object({ responseBody: z.string().min(1) }).transform((value) => value.responseBody),
+  z.string(),
+]);
+// AI_TypeValidationError keeps the provider's error chunk in `value`; its own message is a Zod dump.
+const validationValue = z.object({ value: z.object({ error: z.object({ message: z.string().min(1) }) }) }).transform((value) => value.value.error.message);
+
+/** Any thrown value as one readable line, capped at max chars. Never "[object Object]". */
+export function errorText(error: unknown, max = MAX_ERROR_CHARS): string {
+  const wrapped = validationValue.safeParse(error);
+  const parsed = wrapped.success ? wrapped.data : error instanceof Error ? error.message : errorShape.safeParse(error);
+  const text = typeof parsed === "string" ? parsed : parsed.success ? parsed.data : safeJson(error);
+  return text.replace(/\s+/g, " ").trim().slice(0, max) || "Unknown error";
+}
+
+function safeJson(value: unknown): string {
+  const seen = new WeakSet<object>();
+  try {
+    const json = JSON.stringify(value, (_key, item) => {
+      if (typeof item === "bigint") return item.toString();
+      if (typeof item !== "object" || item === null) return item;
+      if (seen.has(item)) return "[Circular]";
+      seen.add(item);
+      return item;
+    });
+    return json ?? String(value);
+  } catch {
+    return String(value);
+  }
+}
 
 export const LUNA_SYSTEM = [
   "You are Bee, a quiet meeting copilot shown in a small overlay.",
@@ -42,15 +82,44 @@ function lunaSystem(maxTips: number): string {
   return maxTips === MAX_TIPS ? LUNA_SYSTEM : LUNA_SYSTEM.replace("at most 2 short tips", `at most ${maxTips} short tips`);
 }
 
-/** Added to the system prompt only when the user has connected MCP tools. */
-export const LUNA_MCP_SYSTEM = [
-  "The user has connected MCP servers, for example vmem or Eva. Their tools are named server__tool, for example vmem__search.",
-  "Call them when the transcript needs what those servers hold. Use them before guessing about the user's own data.",
-  "For questions about the user's product or data (counts, users, tables, docs, tasks), call the connected tools instead of guessing.",
-  "For \"how many X\" or table counts, use list_tables, count_table, query_table, run_query or postgres_query, for example eva__list_tables then eva__count_table. Other tools include eva__list_repos.",
-  "Answer in the tip with the number or fact the tool returned.",
-  "If an MCP tool returns an error, say so briefly or skip it. Never invent a result.",
-].join("\n");
+/** A connected MCP server as Luna sees it: its tools are named `${prefix}__<tool>` (core/mcp.ts loadMcpTools). */
+export type LunaMcpServer = { name: string; prefix: string; toolCount: number };
+/** A server that is not usable this turn, with a short reason. */
+export type LunaMcpUnavailable = { name: string; error: string };
+
+const MAX_REASON_CHARS = 120;
+const oneLine = (text: string, max: number) => {
+  const line = text.replace(/\s+/g, " ").trim();
+  return line.length > max ? `${line.slice(0, max - 1).trimEnd()}…` : line;
+};
+
+/**
+ * The MCP block of the system prompt: which Bee connectors are connected now, and which are not.
+ * Tool-name examples come from the real prefixes. Null when there is nothing to say.
+ */
+export function lunaMcpSystem(connected: readonly LunaMcpServer[], unavailable: readonly LunaMcpUnavailable[] = []): string | null {
+  if (connected.length === 0 && unavailable.length === 0) return null;
+  const tools = (count: number) => `${count} ${count === 1 ? "tool" : "tools"}`;
+  const lines = [
+    connected.length > 0
+      ? `Bee connectors connected now: ${connected.map((server) => `${oneLine(server.name, 40)} (${tools(server.toolCount)}, named ${server.prefix}__<tool>)`).join(", ")}.`
+      : "No Bee connectors are connected this turn.",
+    ...(unavailable.length > 0 ? [`Not available this turn: ${unavailable.map((server) => `${oneLine(server.name, 40)} (${oneLine(server.error, MAX_REASON_CHARS)})`).join(", ")}.`] : []),
+    "When the user asks what is connected, or which connectors or tools Bee has, answer from this list: name every connected connector, and any that are not available.",
+    "A connector's own tools, such as connectors_list, describe that service's internal data sources, not Bee's connectors. Never report them as Bee's connectors.",
+  ];
+  const first = connected.find((server) => server.toolCount > 0);
+  if (first) {
+    lines.push(
+      "Call the connectors' tools when the transcript needs what they hold. Use them before guessing about the user's own data.",
+      "For questions about the user's product or data (counts, users, tables, docs, tasks), call the connected tools instead of guessing.",
+      `For "how many X" or table counts, use a connector's list_tables, count_table, query_table, run_query or postgres_query tool, for example ${first.prefix}__list_tables then ${first.prefix}__count_table. Only call tools that are in your tool list.`,
+      "Answer in the tip with the number or fact the tool returned.",
+    );
+  }
+  lines.push("If a connector tool returns an error or a connector is not available, say so briefly or skip it. Never invent a result.");
+  return lines.join("\n");
+}
 
 /** The meeting block's limit in the prompt, in characters. The brief is built within it; this cut is a backstop. */
 export const MEETING_BLOCK_MAX = 2200;
@@ -77,7 +146,10 @@ export type LunaPrompt = { system: string; prompt: string };
 export function buildLunaPrompt(args: {
   transcript: string[];
   notes: Snippet[];
-  hasMcpTools?: boolean;
+  /** Bee's MCP connectors with tools this turn. */
+  connectedServers?: readonly LunaMcpServer[];
+  /** Enabled connectors that failed to load or are signed out. */
+  unavailableServers?: readonly LunaMcpUnavailable[];
   shown?: string[];
   /** The brief for the meeting in progress (core/meeting-brief.ts). Omitted outside a detected meeting. */
   meetingBrief?: string;
@@ -99,9 +171,10 @@ export function buildLunaPrompt(args: {
     "",
     "Tips:",
   ].join("\n");
+  const mcp = lunaMcpSystem(args.connectedServers ?? [], args.unavailableServers ?? []);
   const system = [
     shown.length > 0 ? lunaSystem(tipCap(shown.length)) : LUNA_SYSTEM,
-    ...(args.hasMcpTools ? [LUNA_MCP_SYSTEM] : []),
+    ...(mcp ? [mcp] : []),
     ...(meeting ? [LUNA_MEETING_SYSTEM] : []),
     ...(shown.length > 0 ? [LUNA_STEERING_SYSTEM] : []),
   ];
@@ -173,6 +246,21 @@ function toolsToDrop(message: string, extra: ToolSet): string[] {
   return usesKeyword.length > 0 ? usesKeyword : names;
 }
 
+/**
+ * The prompt's server lists after some tools were dropped: each count is what is left in `extra`.
+ * A server left with no tools moves to unavailable.
+ */
+function mcpServers(connected: readonly LunaMcpServer[], unavailable: readonly LunaMcpUnavailable[], extra: ToolSet, afterDrop: boolean) {
+  if (!afterDrop) return { connectedServers: connected, unavailableServers: unavailable };
+  const names = Object.keys(extra);
+  const counted = connected.map((server) => ({ ...server, toolCount: names.filter((name) => name.startsWith(`${server.prefix}__`)).length }));
+  const emptied = counted.filter((server, index) => server.toolCount === 0 && (connected[index]?.toolCount ?? 0) > 0);
+  return {
+    connectedServers: counted.filter((server) => !emptied.includes(server)),
+    unavailableServers: [...unavailable, ...emptied.map((server) => ({ name: server.name, error: "tools skipped after a schema error" }))],
+  };
+}
+
 export async function guideWithLuna(args: {
   model: LanguageModel;
   transcript: string[];
@@ -187,6 +275,10 @@ export async function guideWithLuna(args: {
   extraRoots?: readonly string[];
   /** MCP tools from loadMcpTools. The caller closes the connections after the run. */
   extraTools?: ToolSet;
+  /** The servers behind extraTools (loadMcpTools servers), named in the system prompt. */
+  connectedServers?: readonly LunaMcpServer[];
+  /** Enabled servers that cannot be used this turn, with a short reason. */
+  unavailableServers?: readonly LunaMcpUnavailable[];
   /** Called with each tool Luna calls, so the overlay can show what it is doing. */
   onActivity?: (toolName: string) => void;
   /** Called with the tips so far as lines stream in. Only when they change. */
@@ -198,6 +290,7 @@ export async function guideWithLuna(args: {
   const maxTips = tipCap(args.shown?.length ?? 0);
   let firstTokenMs: number | null = null;
   let extra: ToolSet = { ...args.extraTools };
+  let web = true;
   const dropped: string[] = [];
   const skipped = () => {
     if (dropped.length === 0) return null;
@@ -217,13 +310,13 @@ export async function guideWithLuna(args: {
     args.onActivity?.(name);
   };
   const run = async () => {
-    const { system, prompt } = buildLunaPrompt({ ...args, hasMcpTools: Object.keys(extra).length > 0 });
+    const { system, prompt } = buildLunaPrompt({ ...args, ...mcpServers(args.connectedServers ?? [], args.unavailableServers ?? [], extra, dropped.length > 0) });
     const abortSignal = withTimeout(args.signal, args.timeoutMs ?? LUNA_TIMEOUT_MS);
     const result = streamText({
       model: args.model,
       system,
       prompt,
-      tools: lunaTools({ notesDir: args.notesDir, extraRoots: args.extraRoots, extra }),
+      tools: lunaTools({ notesDir: args.notesDir, extraRoots: args.extraRoots, extra, web }),
       stopWhen: isStepCount(MAX_STEPS),
       // Local tools report as they start. Provider tools (web_search) report when their step finishes. Each call reports once.
       onToolExecutionStart: ({ toolCall }) => report(toolCall.toolCallId, toolCall.toolName),
@@ -235,8 +328,8 @@ export async function guideWithLuna(args: {
       maxOutputTokens: 800,
       maxRetries: 1,
       abortSignal,
-      // User-facing: not flex (see gateway.ts).
-      providerOptions: { ...gatewayTier("default"), openai: { reasoningEffort: "low" } },
+      // User-facing: not flex (see gateway.ts). Only providers that accept web_search.
+      providerOptions: { ...lunaProviderOptions("default"), openai: { reasoningEffort: "low" } },
     });
     // Only the last step's text is the answer, so each step starts a fresh buffer.
     let text = "";
@@ -264,20 +357,30 @@ export async function guideWithLuna(args: {
     if (abortSignal.aborted) throw abortSignal.reason instanceof Error ? abortSignal.reason : new Error("aborted");
     return { text, sources: await result.sources, toolResults: await result.toolResults };
   };
-  // First try with every tool. A tools-schema error drops the named tools (else all), then all extras, then stops.
-  for (let attempt = 0; ; attempt++) {
+  // First try with every tool. A web-search rejection retries once without web_search.
+  // A tools-schema error drops the named tools (else all), then all extras, then stops.
+  for (let attempt = 0; ; ) {
     try {
       const result = await run();
       return { tips: parseLunaTips(result.text, maxTips), sources: sourcesFromGenerateResult(result), error: null, skipped: skipped(), ...timings() };
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      if (args.signal?.aborted || !SCHEMA_ERROR.test(message) || attempt >= 2 || Object.keys(extra).length === 0) {
-        return { tips: [], sources: [], error: `Luna guidance failed: ${message}`, skipped: skipped(), ...timings() };
+      // Match on the whole text so a tool named late in a long error is still found. Show the short one.
+      const message = errorText(error, Number.POSITIVE_INFINITY);
+      if (!args.signal?.aborted && web && WEB_SEARCH_ERROR.test(message)) {
+        console.warn("Bee: retrying Luna without web_search after the provider rejected it");
+        web = false;
+        continue;
       }
-      const drop = attempt === 0 ? toolsToDrop(message, extra) : Object.keys(extra);
-      console.warn(`Bee: dropped MCP tools after a schema error: ${drop.join(", ")}`);
+      const tooMany = TOOL_COUNT_ERROR.test(message);
+      if (args.signal?.aborted || !(tooMany || SCHEMA_ERROR.test(message)) || attempt >= 2 || Object.keys(extra).length === 0) {
+        return { tips: [], sources: [], error: `Luna guidance failed: ${errorText(error)}`, skipped: skipped(), ...timings() };
+      }
+      // Too many tools: no single tool is at fault, so every MCP tool goes at once.
+      const drop = attempt === 0 && !tooMany ? toolsToDrop(message, extra) : Object.keys(extra);
+      console.warn(tooMany ? `Bee: dropped all ${drop.length} MCP tools after a tool-count error` : `Bee: dropped MCP tools after a schema error: ${drop.join(", ")}`);
       dropped.push(...drop);
       extra = Object.fromEntries(Object.entries(extra).filter(([name]) => !drop.includes(name)));
+      attempt++;
     }
   }
 }

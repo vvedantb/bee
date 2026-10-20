@@ -24,6 +24,8 @@ import { isNotePath, loadSnippets, writeMeetingSummaryFile } from "./notes";
  */
 export function registerMeetingIpc(args: { notesDir: string; fsRoots: () => string[];
   mcpConfigs: () => McpServerConfig[];
+  /** Enabled sign-in servers with no tokens. mcpConfigs leaves them out; Luna is told they are not signed in. */
+  mcpSignedOut: () => string[];
   /** Tool lists and warm connections, shared across runs. */
   mcpPool: McpPool;
   /** Which meeting the user is in, its brief for Luna, and the saved meetings. */
@@ -77,7 +79,11 @@ export function registerMeetingIpc(args: { notesDir: string; fsRoots: () => stri
         notesDir: args.notesDir,
         extraRoots: args.fsRoots(),
         // Settings are read now, so changes apply without a restart. Tool lists come from the pool's cache; servers connect on first call.
-        loadMcpTools: () => loadMcpTools(args.mcpConfigs(), { pool: args.mcpPool }),
+        loadMcpTools: async () => {
+          const signedOut = args.mcpSignedOut().map((server) => ({ server, error: "not signed in" }));
+          const mcp = await loadMcpTools(args.mcpConfigs(), { pool: args.mcpPool });
+          return { ...mcp, errors: [...signedOut, ...mcp.errors] };
+        },
         signal: controller.signal,
         onActivity: (tool) => {
           if (!event.sender.isDestroyed()) event.sender.send(IPC.lunaActivity, { tool });

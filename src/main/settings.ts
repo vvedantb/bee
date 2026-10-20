@@ -281,11 +281,23 @@ export function createSettingsStore(args: {
     };
   }
 
-  /** Enabled servers with decrypted secrets. Read on each pipeline run, like fsRoots. Main only. */
+  /** An enabled sign-in server (HTTP, auth none) with no stored tokens: it can only fail with "Sign in from the Connectors tab". */
+  function signedOut(server: McpServer, secrets: McpSecrets): boolean {
+    return server.transport === "http" && server.auth.type === "none" && !hasMcpOAuthTokens(secrets[server.id]?.oauth);
+  }
+
+  /** Enabled servers with decrypted secrets, without signed-out ones. Read on each pipeline run, like fsRoots. Main only. */
   function mcpConfigs(): McpServerConfig[] {
     const file = read();
     const secrets = readMcpSecrets(file);
-    return file.mcpServers.filter((server) => server.enabled).map((server) => toConfig(server, secrets));
+    return file.mcpServers.filter((server) => server.enabled && !signedOut(server, secrets)).map((server) => toConfig(server, secrets));
+  }
+
+  /** Names of the enabled servers mcpConfigs skips because they are not signed in. Main only. */
+  function mcpSignedOut(): string[] {
+    const file = read();
+    const secrets = readMcpSecrets(file);
+    return file.mcpServers.filter((server) => server.enabled && signedOut(server, secrets)).map((server) => server.name);
   }
 
   /** One server by id, enabled or not, for Test connection. Main only. */
@@ -377,5 +389,5 @@ export function createSettingsStore(args: {
     write({ ...read(), overlayPosition: position });
   }
 
-  return { view, save, meetingContext, overlayPosition, saveOverlayPosition, gatewayApiKey, linkSettings, vmemConfig, fsRoots, mcpList, mcpSave, mcpRemove, mcpSetEnabled, mcpRecordTools, mcpConfigs, mcpConfig, mcpOAuthStorage };
+  return { view, save, meetingContext, overlayPosition, saveOverlayPosition, gatewayApiKey, linkSettings, vmemConfig, fsRoots, mcpList, mcpSave, mcpRemove, mcpSetEnabled, mcpRecordTools, mcpConfigs, mcpSignedOut, mcpConfig, mcpOAuthStorage };
 }

@@ -29,8 +29,8 @@ function jevAfter(ms: number, started?: (at: number) => void, finished?: (at: nu
   }) as never);
 }
 
-function mcpTools(close: () => Promise<void> = async () => undefined): McpTools {
-  return { tools: {}, errors: [], close };
+function mcpTools(close: () => Promise<void> = async () => undefined, extra: Partial<McpTools> = {}): McpTools {
+  return { tools: {}, errors: [], servers: [], close, ...extra };
 }
 
 beforeEach(() => {
@@ -223,6 +223,27 @@ describe("runPipeline", () => {
     expect(result.guideError).toContain("aborted");
     expect(rank.mock.calls[0]?.[0].signal).toBe(controller.signal);
     expect(guide.mock.calls[0]?.[0].signal).toBe(controller.signal);
+  });
+
+  it("passes the servers to Luna and carries MCP errors through to the result", async () => {
+    jevAfter(5);
+    guide.mockResolvedValue(lunaOk());
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const servers = [{ name: "vmem", prefix: "vmem", toolCount: 77 }];
+    const errors = [
+      { server: "Eva", error: "Sign in from the Connectors tab" },
+      { server: "Long", error: "x".repeat(500) },
+    ];
+    const result = await runPipeline({ transcript, snippets, gateway, loadMcpTools: async () => mcpTools(undefined, { servers, errors }) });
+    expect(guide.mock.calls[0]?.[0]).toMatchObject({
+      connectedServers: servers,
+      unavailableServers: [{ name: "Eva", error: "Sign in from the Connectors tab" }, { name: "Long", error: "x".repeat(500) }],
+    });
+    const parsed = pipelineResultSchema.parse(result);
+    expect(parsed.mcpErrors?.[0]).toEqual({ server: "Eva", error: "Sign in from the Connectors tab" });
+    expect(parsed.mcpErrors?.[1]?.error).toHaveLength(300);
+    // No loader, or no errors: an empty list.
+    expect((await runPipeline({ transcript, snippets, gateway })).mcpErrors).toEqual([]);
   });
 
   it("logs numbers only, never transcript or note text", async () => {

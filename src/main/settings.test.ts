@@ -172,6 +172,22 @@ describe("settings MCP servers", () => {
     expect(JSON.parse(onDisk()).mcpSecrets).toBeUndefined();
   });
 
+  it("leaves signed-out sign-in servers out of mcpConfigs and names them in mcpSignedOut", () => {
+    crypto.on = true;
+    const store = create();
+    store.mcpSave(httpServer);
+    store.mcpSave(stdioServer);
+    const eva = store.mcpSave({ name: "Eva", enabled: true, transport: "http", url: "https://eva.example.com/mcp", auth: { type: "none" } }).at(-1)?.id as string;
+    store.mcpSave({ name: "off", enabled: false, transport: "http", url: "https://off.example.com/mcp", auth: { type: "none" } });
+    expect(store.mcpConfigs().map((config) => config.name)).toEqual(["vmem", "local"]);
+    expect(store.mcpSignedOut()).toEqual(["Eva"]);
+    // Still reachable by id, for Connect and Test.
+    expect(store.mcpConfig(eva)?.name).toBe("Eva");
+    store.mcpOAuthStorage(eva).save({ tokens: { access_token: "a", token_type: "Bearer" } });
+    expect(store.mcpConfigs().map((config) => config.name)).toEqual(["vmem", "local", "Eva"]);
+    expect(store.mcpSignedOut()).toEqual([]);
+  });
+
   it("rejects bad input and duplicate names, and caps the list", () => {
     const store = create();
     expect(() => store.mcpSave({ ...httpServer, url: "http://example.com/mcp" })).toThrow(/https/);

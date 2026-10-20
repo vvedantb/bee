@@ -1,9 +1,12 @@
-import { jsonSchema, simulateReadableStream, tool } from "ai";
+import { TypeValidationError, jsonSchema, simulateReadableStream, tool } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import { describe, expect, it, vi } from "vitest";
 import { MOCK_TOKEN, startMockMcpServer } from "../../test/helpers/mock-mcp-server";
-import { LUNA_MCP_SYSTEM, LUNA_MEETING_SYSTEM, LUNA_STEERING_SYSTEM, LUNA_SYSTEM, MEETING_BLOCK_MAX, buildLunaPrompt, guideWithLuna, parseLunaTips, streamingTips } from "./luna";
+import { LUNA_MEETING_SYSTEM, LUNA_STEERING_SYSTEM, LUNA_SYSTEM, MEETING_BLOCK_MAX, buildLunaPrompt, errorText, guideWithLuna, lunaMcpSystem, parseLunaTips, streamingTips } from "./luna";
 import { loadMcpTools } from "./mcp";
+
+const VMEM = { name: "vmem", prefix: "vmem", toolCount: 77 };
+const EVA = { name: "Eva", prefix: "eva", toolCount: 84 };
 
 describe("buildLunaPrompt", () => {
   it("includes the recent transcript and numbered notes", () => {
@@ -21,11 +24,36 @@ describe("buildLunaPrompt", () => {
     expect(prompt.endsWith("Tips:")).toBe(true);
   });
 
-  it("adds the MCP guidance only when MCP tools are present", () => {
-    expect(buildLunaPrompt({ transcript: ["a"], notes: [], hasMcpTools: false }).system).toBe(LUNA_SYSTEM);
-    const { system } = buildLunaPrompt({ transcript: ["a"], notes: [], hasMcpTools: true });
-    expect(system).toBe(`${LUNA_SYSTEM}\n${LUNA_MCP_SYSTEM}`);
+  it("adds the MCP block only when servers are connected or unavailable", () => {
+    expect(buildLunaPrompt({ transcript: ["a"], notes: [] }).system).toBe(LUNA_SYSTEM);
+    expect(buildLunaPrompt({ transcript: ["a"], notes: [], connectedServers: [], unavailableServers: [] }).system).toBe(LUNA_SYSTEM);
+    expect(lunaMcpSystem([], [])).toBeNull();
+    const { system } = buildLunaPrompt({ transcript: ["a"], notes: [], connectedServers: [VMEM, EVA] });
+    expect(system).toBe(`${LUNA_SYSTEM}\n${lunaMcpSystem([VMEM, EVA])}`);
     expect(system).toMatch(/Never invent a result/);
+  });
+
+  it("names every connected server with its prefix and tool count, and the unavailable ones", () => {
+    const { system } = buildLunaPrompt({ transcript: ["a"], notes: [], connectedServers: [VMEM, EVA], unavailableServers: [{ name: "Linear", error: "not signed in" }] });
+    expect(system).toContain("Bee connectors connected now: vmem (77 tools, named vmem__<tool>), Eva (84 tools, named eva__<tool>).");
+    expect(system).toContain("Not available this turn: Linear (not signed in).");
+    expect(system).toContain("answer from this list");
+    expect(system).toMatch(/connectors_list, describe that service's internal data sources, not Bee's connectors/);
+    // Examples use a real prefix.
+    expect(system).toContain("vmem__list_tables then vmem__count_table");
+    for (const name of ["list_tables", "count_table", "query_table", "run_query", "postgres_query"]) expect(system).toContain(name);
+  });
+
+  it("has no hard-coded server names, and uses the given prefixes", () => {
+    const only = lunaMcpSystem([{ name: "Acme DB", prefix: "acme_db", toolCount: 1 }]) ?? "";
+    expect(only).toContain("Acme DB (1 tool, named acme_db__<tool>)");
+    expect(only).toContain("acme_db__count_table");
+    expect(only).not.toMatch(/eva__|vmem__|\bEva\b|\bvmem\b/);
+    const unavailable = lunaMcpSystem([], [{ name: "Eva", error: "Sign in from\nthe Connectors tab" }]) ?? "";
+    expect(unavailable).toContain("No Bee connectors are connected this turn.");
+    expect(unavailable).toContain("Not available this turn: Eva (Sign in from the Connectors tab).");
+    expect(unavailable).not.toMatch(/eva__|vmem__/);
+    expect(unavailable).toMatch(/Never invent a result/);
   });
 
   it("adds the shown-tips block and the steering rule only when tips are shown", () => {
@@ -130,16 +158,10 @@ describe("buildLunaPrompt meeting context", () => {
   });
 
   it("works with MCP tools and kept tips together", () => {
-    const { system } = buildLunaPrompt({ transcript: ["a"], notes: [], hasMcpTools: true, shown: ["x"], meetingBrief: brief });
-    expect(system).toContain(LUNA_MCP_SYSTEM);
+    const { system } = buildLunaPrompt({ transcript: ["a"], notes: [], connectedServers: [VMEM], shown: ["x"], meetingBrief: brief });
+    expect(system).toContain(lunaMcpSystem([VMEM]) ?? "missing");
     expect(system).toContain(LUNA_MEETING_SYSTEM);
     expect(system).toContain(LUNA_STEERING_SYSTEM);
-  });
-});
-
-describe("LUNA_MCP_SYSTEM", () => {
-  it("points Luna at the MCP data tools", () => {
-    for (const name of ["list_tables", "count_table", "query_table", "run_query", "postgres_query", "eva__count_table"]) expect(LUNA_MCP_SYSTEM).toContain(name);
   });
 });
 
@@ -187,12 +209,22 @@ const toolCallChunks = (toolName: string): Chunk[] => [
 ];
 
 /** A Luna model whose every call streams the chunks the handler returns. Throwing in the handler fails the call. */
-function streamModel(handler: (options: { tools: string[]; prompt: string; signal?: AbortSignal }, call: number) => Chunk[] | Promise<Chunk[]>) {
+function streamModel(
+  handler: (options: { tools: string[]; prompt: string; signal?: AbortSignal; providerOptions: string }, call: number) => Chunk[] | Promise<Chunk[]>,
+) {
   let calls = 0;
   return new MockLanguageModelV4({
     doStream: async (options) => {
       calls++;
-      const chunks = await handler({ tools: (options.tools ?? []).map((item) => item.name), prompt: JSON.stringify(options.prompt), signal: options.abortSignal }, calls);
+      const chunks = await handler(
+        {
+          tools: (options.tools ?? []).map((item) => item.name),
+          prompt: JSON.stringify(options.prompt),
+          signal: options.abortSignal,
+          providerOptions: JSON.stringify(options.providerOptions),
+        },
+        calls,
+      );
       return { stream: simulateReadableStream({ chunks }) as never };
     },
   });
@@ -297,11 +329,11 @@ describe("guideWithLuna with MCP tools", () => {
         return textChunks(`- Code is ${MOCK_TOKEN}`);
       });
       const activity: string[] = [];
-      const result = await guideWithLuna({ model, transcript: ["What is the WOBBLE code?"], notes: [], extraTools: mcp.tools, onActivity: (tool) => activity.push(tool) });
+      const result = await guideWithLuna({ model, transcript: ["What is the WOBBLE code?"], notes: [], extraTools: mcp.tools, connectedServers: mcp.servers, onActivity: (tool) => activity.push(tool) });
       expect(result.error).toBeNull();
       expect(result.tips).toEqual([`Code is ${MOCK_TOKEN}`]);
       expect(toolResult).toContain(MOCK_TOKEN);
-      expect(system).toContain("MCP servers");
+      expect(system).toContain("Bee connectors connected now: vmem (3 tools, named vmem__<tool>)");
       expect(activity.filter((name) => name === "vmem__wobble")).toHaveLength(1);
     } finally {
       await mcp.close();
@@ -377,6 +409,118 @@ describe("guideWithLuna with MCP tools", () => {
     }
   });
 
+  it("retries when a mid-stream schema error is a plain object", async () => {
+    const seen: number[] = [];
+    const model = streamModel((options) => {
+      const extras = options.tools.filter((name) => name.startsWith("eva__")).length;
+      seen.push(extras);
+      if (extras > 0) return [{ type: "error", error: { error: { message: "Invalid tool input_schema: unsupported JSON Schema keyword" } } } as Chunk];
+      return textChunks("- Plain answer without tools");
+    });
+    const extraTools = { eva__a: tool({ inputSchema: jsonSchema({ type: "object" }), execute: async () => "x" }) };
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const result = await guideWithLuna({ model, transcript: ["Hi"], notes: [], extraTools });
+      expect(result.error).toBeNull();
+      expect(result.tips).toEqual(["Plain answer without tools"]);
+      expect(seen).toEqual([1, 0]);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("names Bee's connected servers even when a server's own tool lists its upstream sources as disconnected", async () => {
+    const upstream = JSON.stringify({ sources: ["Google Drive", "Notion", "Gmail", "Figma", "GitHub"].map((name) => ({ name, connected: false })) });
+    const noInput = jsonSchema({ type: "object", properties: {} });
+    const extraTools = {
+      vmem__connectors_list: tool({ inputSchema: noInput, execute: async () => upstream }),
+      vmem__search: tool({ inputSchema: noInput, execute: async () => "x" }),
+      eva__list_tables: tool({ inputSchema: noInput, execute: async () => "x" }),
+    };
+    const systems: string[] = [];
+    let toolResult = "";
+    const model = streamModel((options, call) => {
+      systems.push(options.prompt);
+      if (call === 1) return toolCallChunks("vmem__connectors_list");
+      toolResult = options.prompt;
+      return textChunks("- Bee has vmem and Eva connected");
+    });
+    const connectedServers = [
+      { name: "vmem", prefix: "vmem", toolCount: 2 },
+      { name: "Eva", prefix: "eva", toolCount: 1 },
+    ];
+    const result = await guideWithLuna({ model, transcript: ["What connectors do you have?"], notes: [], extraTools, connectedServers });
+    expect(result.tips).toEqual(["Bee has vmem and Eva connected"]);
+    expect(toolResult).toContain("Google Drive");
+    for (const system of systems) {
+      expect(system).toContain("Bee connectors connected now: vmem (2 tools, named vmem__<tool>), Eva (1 tool, named eva__<tool>).");
+      expect(system).toContain("not Bee's connectors");
+    }
+  });
+
+  it("drops every MCP tool at once on a tool-count error, retries, and lists the servers as unavailable", async () => {
+    const seen: number[] = [];
+    const systems: string[] = [];
+    const model = streamModel((options) => {
+      const extras = options.tools.filter((name) => name.includes("__")).length;
+      seen.push(extras);
+      systems.push(options.prompt);
+      // Names a tool on purpose: name matching must not be used for this error.
+      if (extras > 0) throw new Error("Invalid 'tools': array too long. Expected an array with maximum length 128, but got an array with length 161 instead. (vmem__a)");
+      return textChunks("- Answer without connectors");
+    });
+    const noInput = jsonSchema({ type: "object", properties: {} });
+    const extraTools = {
+      vmem__a: tool({ inputSchema: noInput, execute: async () => "x" }),
+      vmem__b: tool({ inputSchema: noInput, execute: async () => "x" }),
+      eva__c: tool({ inputSchema: noInput, execute: async () => "x" }),
+    };
+    const connectedServers = [
+      { name: "vmem", prefix: "vmem", toolCount: 2 },
+      { name: "Eva", prefix: "eva", toolCount: 1 },
+    ];
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const result = await guideWithLuna({ model, transcript: ["Hi"], notes: [], extraTools, connectedServers });
+      expect(result.error).toBeNull();
+      expect(result.tips).toEqual(["Answer without connectors"]);
+      expect(seen).toEqual([3, 0]);
+      expect(result.skipped).toBe("Skipped connected tools: vmem__a, vmem__b, eva__c.");
+      expect(systems[1]).toContain("No Bee connectors are connected this turn.");
+      expect(systems[1]).toContain("Not available this turn: vmem (tools skipped after a schema error), Eva (tools skipped after a schema error).");
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("recounts each server's tools after a schema error drops some", async () => {
+    const systems: string[] = [];
+    const model = streamModel((options) => {
+      systems.push(options.prompt);
+      if (options.tools.includes("eva__evaluate")) throw new Error("Invalid schema for function 'eva__evaluate': propertyNames is not supported");
+      return textChunks("- ok then");
+    });
+    const noInput = jsonSchema({ type: "object", properties: {} });
+    const extraTools = {
+      vmem__search: tool({ inputSchema: noInput, execute: async () => "x" }),
+      eva__evaluate: tool({ inputSchema: noInput, execute: async () => "x" }),
+    };
+    const connectedServers = [
+      { name: "vmem", prefix: "vmem", toolCount: 1 },
+      { name: "Eva", prefix: "eva", toolCount: 1 },
+    ];
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      await guideWithLuna({ model, transcript: ["Hi"], notes: [], extraTools, connectedServers, unavailableServers: [{ name: "Linear", error: "not signed in" }] });
+      expect(systems).toHaveLength(2);
+      expect(systems[0]).toContain("Bee connectors connected now: vmem (1 tool, named vmem__<tool>), Eva (1 tool, named eva__<tool>).");
+      expect(systems[1]).toContain("Bee connectors connected now: vmem (1 tool, named vmem__<tool>).");
+      expect(systems[1]).toContain("Not available this turn: Linear (not signed in), Eva (tools skipped after a schema error).");
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it("drops every MCP tool when the error names none, and keeps other errors", async () => {
     const seen: number[] = [];
     const model = streamModel((options) => {
@@ -398,5 +542,99 @@ describe("guideWithLuna with MCP tools", () => {
       throw new Error("timeout");
     });
     expect((await guideWithLuna({ model: failing, transcript: ["Hi"], notes: [], extraTools })).error).toContain("timeout");
+  });
+});
+
+describe("guideWithLuna stream errors", () => {
+  const failWith = (error: object) => streamModel(() => [{ type: "error", error } as Chunk]);
+
+  it.each([
+    ["a plain object", { message: "boom" }, "boom"],
+    ["a nested error object", { error: { message: "nested boom", code: 500 } }, "nested boom"],
+    ["a gateway data object", { data: { error: { message: "data boom" } } }, "data boom"],
+    ["a response body", { responseBody: "{\"error\":\"body boom\"}" }, "{\"error\":\"body boom\"}"],
+  ])("reads the message from %s", async (_label, error, message) => {
+    const result = await guideWithLuna({ model: failWith(error), transcript: ["Hi"], notes: [] });
+    expect(result.tips).toEqual([]);
+    expect(result.error).toBe(`Luna guidance failed: ${message}`);
+  });
+});
+
+describe("guideWithLuna providers and web search", () => {
+  // The Gateway's bedrock error chunk, as the SDK surfaces it.
+  const webSearchRejected = () =>
+    new TypeValidationError({
+      value: {
+        error: {
+          message: "Mantle streaming error for requestId abc: web search is not supported for this request",
+          type: "invalid_request_error",
+          code: "validation_error",
+        },
+      },
+      cause: new Error("Invalid input"),
+    });
+  const extraTools = { vmem__wobble: tool({ inputSchema: jsonSchema({ type: "object", properties: {} }), execute: async () => "X" }) };
+
+  it("routes Luna only to providers that accept web_search, with low reasoning effort", async () => {
+    let providerOptions = "";
+    const model = streamModel((options) => {
+      providerOptions = options.providerOptions;
+      return textChunks("- ok");
+    });
+    await guideWithLuna({ model, transcript: ["Hi"], notes: [] });
+    expect(JSON.parse(providerOptions)).toEqual({ gateway: { only: ["openai", "azure"] }, openai: { reasoningEffort: "low" } });
+  });
+
+  it("retries once without web_search when the provider rejects it, keeping MCP tools", async () => {
+    const seen: string[][] = [];
+    const model = streamModel((options, call) => {
+      seen.push(options.tools);
+      return call === 1 ? [{ type: "stream-start", warnings: [] }, { type: "error", error: webSearchRejected() }] : textChunks("- Use the notes for this one");
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const result = await guideWithLuna({ model, transcript: ["Hi"], notes: [], extraTools });
+      expect(result.error).toBeNull();
+      expect(result.tips).toEqual(["Use the notes for this one"]);
+      expect(seen).toHaveLength(2);
+      expect(seen[0]).toEqual(expect.arrayContaining(["web_search", "vmem__wobble"]));
+      expect(seen[1]).toContain("vmem__wobble");
+      expect(seen[1]).not.toContain("web_search");
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("shows the provider's message, not a validation dump, when the retry fails too", async () => {
+    let calls = 0;
+    const model = streamModel(() => {
+      calls++;
+      return [{ type: "stream-start", warnings: [] }, { type: "error", error: webSearchRejected() }];
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const result = await guideWithLuna({ model, transcript: ["Hi"], notes: [], extraTools });
+      expect(calls).toBe(2);
+      expect(result.tips).toEqual([]);
+      expect(result.error).toBe("Luna guidance failed: Mantle streaming error for requestId abc: web search is not supported for this request");
+    } finally {
+      warn.mockRestore();
+    }
+  });
+});
+
+describe("errorText", () => {
+  it("uses an Error's message and a thrown string as is, on one line", () => {
+    expect(errorText(new Error("line one\n  line two"))).toBe("line one line two");
+    expect(errorText("plain")).toBe("plain");
+  });
+
+  it("falls back to capped JSON, and survives cycles", () => {
+    const cyclic: { code: number; self?: object } = { code: 7 };
+    cyclic.self = cyclic;
+    expect(errorText(cyclic)).toBe('{"code":7,"self":"[Circular]"}');
+    expect(errorText({ detail: "x".repeat(1000) })).toHaveLength(300);
+    expect(errorText(undefined)).toBe("undefined");
+    expect(errorText({ message: 42 })).toBe('{"message":42}');
   });
 });

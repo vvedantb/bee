@@ -118,8 +118,21 @@ describe("loadMcpTools", () => {
     expect(Date.now() - started).toBeLessThan(5000);
   });
 
+  it("reports each listed server with a lowercase prefix and the tools it added", async () => {
+    const server = await mock();
+    const mcp = await loadMcpTools([http("Eva", server.url), http("vmem", server.url, { disabledTools: ["boom"] }), http("dead", "http://127.0.0.1:1/mcp")], { connectTimeoutMs: 2000 });
+    cleanup.push(mcp.close);
+    expect(Object.keys(mcp.tools).sort()).toEqual(["eva__boom", "eva__echo", "eva__wobble", "vmem__echo", "vmem__wobble"]);
+    expect(mcp.servers).toEqual([
+      { name: "Eva", prefix: "eva", toolCount: 3 },
+      { name: "vmem", prefix: "vmem", toolCount: 2 },
+    ]);
+    expect(mcp.errors.map((item) => item.server)).toEqual(["dead"]);
+    expect(await run(mcp.tools, "eva__echo", { text: "hi" })).toBe("echo: hi");
+  });
+
   it("returns nothing, without throwing, for no servers or a bad config", async () => {
-    expect((await loadMcpTools([])).tools).toEqual({});
+    expect(await loadMcpTools([])).toMatchObject({ tools: {}, errors: [], servers: [] });
     const bad = await loadMcpTools([{ id: "x", name: "x", transport: "stdio", auth: { type: "none" } }]);
     expect(bad.tools).toEqual({});
     expect(bad.errors).toHaveLength(1);

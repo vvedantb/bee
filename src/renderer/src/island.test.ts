@@ -1,9 +1,26 @@
 import { describe, expect, it } from "vitest";
 import { TURN_GAP_MS } from "../../core/steering";
-import { ISLAND_IDLE_MS, activityLabel, islandPhase, islandShowsBody, shouldAutoCollapse, shouldShowResponse, timingsLabel, timingsTitle } from "./island";
+import { ISLAND_IDLE_MS, activityLabel, islandPhase, mcpErrorNote, islandShowsBody, shouldAutoCollapse, shouldShowResponse, timingsLabel, timingsTitle } from "./island";
 
 const empty = { tips: [], sources: [], guideError: null, dismissed: false };
 const source = { title: "Example", url: "https://example.com/" };
+
+describe("mcpErrorNote", () => {
+  it("is null without errors", () => {
+    expect(mcpErrorNote(undefined)).toBeNull();
+    expect(mcpErrorNote([])).toBeNull();
+  });
+
+  it("asks for a new sign-in when the error is about signing in, else shows a short reason, on one line", () => {
+    expect(mcpErrorNote([{ server: "Eva", error: "Sign in from the Connectors tab" }])).toBe("Eva unavailable: sign in again from Connectors");
+    expect(mcpErrorNote([{ server: "Eva", error: "not signed in" }])).toBe("Eva unavailable: sign in again from Connectors");
+    const note = mcpErrorNote([
+      { server: "vmem", error: "Connecting timed out\nafter 10 s" },
+      { server: "Big", error: "y".repeat(200) },
+    ]);
+    expect(note).toBe(`vmem unavailable: Connecting timed out after 10 s; Big unavailable: ${"y".repeat(59)}…`);
+  });
+});
 
 describe("activityLabel", () => {
   it("names web search", () => {

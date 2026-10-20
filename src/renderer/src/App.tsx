@@ -22,7 +22,7 @@ import { DEFAULT_MOTION_PREFERENCE, MOTION_PREFERENCES, resolveReducedMotion, ty
 import { visibleChips, type LinkChip } from "../../core/link-suggest";
 import { tipKey } from "../../core/steering";
 import type { PipelineResult, SettingsView } from "../../shared/ipc";
-import { timingsLabel, timingsTitle } from "./island";
+import { mcpErrorNote, timingsLabel, timingsTitle } from "./island";
 import { notchStatus } from "./notch";
 import { actions, displayResult, islandOpen, useBee, type BeeState, type SummaryState, type UpdateState } from "./store";
 import { SyncCard, SyncSection, TeamSection, syncedWith } from "./Teams";
@@ -242,6 +242,7 @@ function LiveTab({ state }: { state: BeeState }) {
   // The notes list and its timings belong to the last finished run, not to streamed tips.
   const done = state.result;
   const chips = visibleChips(state.chips, state.dismissedChipIds);
+  const mcpNote = mcpErrorNote(result?.mcpErrors);
 
   function onSubmit(event: FormEvent<HTMLFormElement>): void {
     event.preventDefault();
@@ -281,6 +282,7 @@ function LiveTab({ state }: { state: BeeState }) {
         ) : null}
         {state.mic.error ? <p className="error">{state.mic.error}</p> : null}
         {result?.guideError ? <p className="error">{result.guideError}</p> : null}
+        {mcpNote ? <p className="muted">{mcpNote}</p> : null}
         {state.error ? <p className="error">{state.error}</p> : null}
       </section>
 

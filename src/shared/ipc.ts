@@ -177,6 +177,8 @@ export const pipelineResultSchema = z.object({
   guideError: z.string().nullable(),
   /** Muted note when connected tools were skipped. */
   guideNote: z.string().max(300).nullable().optional(),
+  /** Enabled MCP servers Luna could not use this turn, with a short reason (never a secret). */
+  mcpErrors: z.array(z.object({ server: z.string().max(200), error: z.string().max(300) })).max(20).optional(),
   // Numbers only, in ms. rank: Jev (runs beside Luna). mcp: MCP connect and list (runs beside Jev). guide: Luna alone, without the MCP wait.
   // lunaFirstToken is null when no text streamed. loadNotes is added in main.
   timingsMs: z.object({

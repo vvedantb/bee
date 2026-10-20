@@ -23,6 +23,19 @@ export function activityLabel(toolName: string | null | undefined): string {
   return split > 0 && split + 2 < toolName.length ? `Using ${toolName.slice(0, split)}…` : "Thinking…";
 }
 
+const MCP_REASON_CHARS = 60;
+
+/** One muted line for connectors Luna could not use, e.g. "Eva unavailable: sign in again from Connectors". Null when none. */
+export function mcpErrorNote(errors: ReadonlyArray<{ server: string; error: string }> | undefined): string | null {
+  if (!errors || errors.length === 0) return null;
+  const reason = (error: string) => {
+    if (/sign(?:ed)?[\s-]?in/i.test(error)) return "sign in again from Connectors";
+    const line = error.replace(/\s+/g, " ").trim();
+    return line.length > MCP_REASON_CHARS ? `${line.slice(0, MCP_REASON_CHARS - 1).trimEnd()}…` : line || "failed to connect";
+  };
+  return errors.map(({ server, error }) => `${server} unavailable: ${reason(error)}`).join("; ");
+}
+
 type ResponseArgs = {
   tips: readonly string[];
   sources: readonly unknown[];
