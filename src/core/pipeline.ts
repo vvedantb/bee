@@ -8,6 +8,9 @@ import { retrieve, transcriptQuery } from "./retrieve";
 
 const RETRIEVE_LIMIT = 5;
 const GUIDE_NOTE_LIMIT = 3;
+// Bounds for the result's mcpErrors (shared/ipc.ts pipelineResultSchema).
+const MCP_ERRORS_MAX = 20;
+const MCP_ERROR_CHARS = 300;
 
 // Fail open: if the loader itself throws, Luna runs without MCP tools.
 async function loadMcp(load: (() => Promise<McpTools>) | undefined): Promise<McpTools | null> {
@@ -87,6 +90,8 @@ export async function runPipeline(args: {
       notesDir: args.notesDir,
       extraRoots: args.extraRoots,
       extraTools: mcp?.tools,
+      connectedServers: mcp?.servers,
+      unavailableServers: mcp?.errors.map(({ server, error }) => ({ name: server, error })),
       onActivity: args.onActivity,
       onPartial: args.onPartial,
       signal: args.signal,
@@ -95,10 +100,10 @@ export async function runPipeline(args: {
     // Not awaited: the result must not wait for servers to wind down. close() is bounded and fail-open.
     const closeStarted = performance.now();
     void mcp?.close().catch(() => undefined).finally(() => console.debug(`perf mcp-close ${Math.round(performance.now() - closeStarted)}ms`));
-    return { guide, guideMs, mcpMs };
+    return { guide, guideMs, mcpMs, mcp };
   })();
 
-  const [{ value: rank, ms: rankMs }, { guide, guideMs, mcpMs }] = await Promise.all([jevRun, lunaRun]);
+  const [{ value: rank, ms: rankMs }, { guide, guideMs, mcpMs, mcp }] = await Promise.all([jevRun, lunaRun]);
   console.debug(`perf jev ${Math.round(rankMs)}ms mcp ${Math.round(mcpMs)}ms guide ${Math.round(guideMs)}ms`);
 
   const guideIds = new Set(guideNotes.map((note) => note.id));
@@ -115,6 +120,7 @@ export async function runPipeline(args: {
     sources: guide.sources,
     guideError: guide.error,
     guideNote: guide.skipped,
+    mcpErrors: (mcp?.errors ?? []).slice(0, MCP_ERRORS_MAX).map(({ server, error }) => ({ server: server.slice(0, 200), error: error.slice(0, MCP_ERROR_CHARS) })),
     timingsMs: {
       retrieve: retrieveMs,
       rank: rankMs,

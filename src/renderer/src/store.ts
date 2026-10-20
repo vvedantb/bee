@@ -206,14 +206,14 @@ const EMPTY_RESULT = { tips: [], sources: [], guideError: null };
 
 /**
  * What the island and panel show: the last result, with the streamed tips over it while a run is in flight.
- * Old tips stay visible while busy. An old error and note do not, and streamed tips drop the old sources.
+ * Old tips stay visible while busy. An old error and notes do not, and streamed tips drop the old sources.
  */
 export function displayResult(current: Pick<BeeState, "result" | "partialTips" | "busy">): PipelineResult | null {
   const { result, partialTips, busy } = current;
   if (partialTips) {
-    return { ...(result ?? { notes: [], rankSource: "fallback", rankError: null, timingsMs: ZERO_TIMINGS }), tips: partialTips, sources: [], guideError: null, guideNote: null };
+    return { ...(result ?? { notes: [], rankSource: "fallback", rankError: null, timingsMs: ZERO_TIMINGS }), tips: partialTips, sources: [], guideError: null, guideNote: null, mcpErrors: [] };
   }
-  return result && busy ? { ...result, guideError: null, guideNote: null } : result;
+  return result && busy ? { ...result, guideError: null, guideNote: null, mcpErrors: [] } : result;
 }
 
 const ZERO_TIMINGS = { retrieve: 0, rank: 0, guide: 0, mcp: 0, lunaFirstToken: null, lunaTotal: 0 };

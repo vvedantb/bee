@@ -278,7 +278,7 @@ if (clerk.isPrimaryInstance) {
       // macOS has no in-call detector, so it reads Teams window names on its own schedule.
       pollTitlesWhenIdle: isMac,
     });
-    registerMeetingIpc({ notesDir, fsRoots: settings.fsRoots, mcpConfigs: settings.mcpConfigs, mcpPool, meeting, gatewayApiKey: settings.gatewayApiKey });
+    registerMeetingIpc({ notesDir, fsRoots: settings.fsRoots, mcpConfigs: settings.mcpConfigs, mcpSignedOut: settings.mcpSignedOut, mcpPool, meeting, gatewayApiKey: settings.gatewayApiKey });
 
     const teams = registerTeamsIpc({ relayUrl: relayUrlFromEnv(process.env.BEE_RELAY_URL || import.meta.env.MAIN_VITE_BEE_RELAY_URL), detector });
     onInvite = (link) => teams.setPendingInvite(link);

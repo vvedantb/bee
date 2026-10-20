@@ -29,6 +29,10 @@ describe("lunaTools extra (MCP)", () => {
     expect(Object.keys(lunaTools({ notesDir: "/notes", extra: { vmem__ping: ping } }))).toHaveLength(6);
   });
 
+  it("leaves out web_search when asked, keeping the other tools", () => {
+    expect(Object.keys(lunaTools({ extra: { vmem__ping: ping }, web: false }))).toEqual(["vmem__ping"]);
+  });
+
   it("never lets an extra tool replace a built-in", () => {
     expect(lunaTools({ extra: { web_search: ping } }).web_search).not.toBe(ping);
   });

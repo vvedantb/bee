@@ -162,6 +162,12 @@ export async function connectMcp(config: McpServerConfig, timeoutMs = MCP_CONNEC
       cursor = page.nextCursor;
     } while (cursor && tools.length < MCP_MAX_TOOLS);
     const t2 = performance.now();
+    // A list cut at the cap is logged by count only. A cursor left over means pages were never fetched.
+    const cut = tools.length - MCP_MAX_TOOLS;
+    if (cut > 0 || cursor) {
+      const dropped = cut > 0 ? `${cut}${cursor ? " or more" : ""}` : "the rest";
+      console.warn(`Bee: MCP server "${config.name}" has more than ${MCP_MAX_TOOLS} tools; dropped ${dropped}`);
+    }
     return {
       tools: tools.slice(0, MCP_MAX_TOOLS),
       timingsMs: { connect: t1 - t0, list: t2 - t1 },
@@ -356,7 +362,11 @@ export type McpTools = {
   close: () => Promise<void>;
   /** Servers that failed to connect or list, with a short reason. They are skipped. */
   errors: Array<{ server: string; error: string }>;
+  /** Servers that listed: tools are named `${prefix}__<tool>`; toolCount is the tools added (switched-off ones left out). */
+  servers: McpServerTools[];
 };
+
+export type McpServerTools = { name: string; prefix: string; toolCount: number };
 
 /**
  * Wraps every enabled server's enabled tools as AI SDK tools. Tool lists come from the pool's cache when it is primed, so
@@ -370,6 +380,7 @@ export async function loadMcpTools(
 ): Promise<McpTools> {
   const tools: ToolSet = {};
   const errors: McpTools["errors"] = [];
+  const servers: McpServerTools[] = [];
   const taken = new Set<string>();
   const pool = options.pool ?? createMcpPool();
 
@@ -389,9 +400,12 @@ export async function loadMcpTools(
       continue;
     }
     const { config, entry } = outcome;
-    const slug = mcpSlug(config.name);
+    // Lowercase, so the "Eva" preset's tools are eva__… whatever case the name was saved in.
+    const slug = mcpSlug(config.name).toLowerCase();
+    let toolCount = 0;
     for (const item of entry.tools) {
       if (config.disabledTools?.includes(item.name)) continue;
+      toolCount++;
       tools[toolKey(slug, item.name, taken)] = tool({
         description: `${item.description || item.name} (via ${config.name})`,
         inputSchema: jsonSchema(item.inputSchema),
@@ -409,7 +423,8 @@ export async function loadMcpTools(
         },
       });
     }
+    servers.push({ name: config.name, prefix: slug, toolCount });
   }
 
-  return { tools, errors, close: options.pool ? async () => undefined : () => pool.closeAll() };
+  return { tools, errors, servers, close: options.pool ? async () => undefined : () => pool.closeAll() };
 }

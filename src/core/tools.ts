@@ -9,8 +9,9 @@ const MAX_TITLE_LENGTH = 300;
 export type BeeSource = { title: string; url: string };
 
 /** Tools Luna may call. Add new tools here; guideWithLuna passes the whole set. */
-export function lunaTools(options: { notesDir?: string; extraRoots?: readonly string[]; extra?: ToolSet } = {}) {
-  const web = { web_search: openai.tools.webSearch({ searchContextSize: "low" }) };
+/** `web: false` leaves out web_search (a provider that rejects it, see guideWithLuna). */
+export function lunaTools(options: { notesDir?: string; extraRoots?: readonly string[]; extra?: ToolSet; web?: boolean } = {}): ToolSet {
+  const web: ToolSet = options.web === false ? {} : { web_search: openai.tools.webSearch({ searchContextSize: "low" }) };
   const local = options.notesDir ? { ...web, ...fsTools({ notesDir: options.notesDir, extraRoots: options.extraRoots }) } : web;
   // MCP tools (core/mcp.ts) are namespaced; spreading them first also means they can never replace a built-in.
   return { ...options.extra, ...local };

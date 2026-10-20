@@ -62,6 +62,11 @@ async function bundle(page: string): Promise<{ main: string; html: string }> {
 }
 
 export async function runHarness<T extends z.ZodType>(args: { page: string; env: Record<string, string>; report: T }): Promise<z.infer<T>> {
+  return (await runHarnessWithOutput(args)).report;
+}
+
+/** runHarness, plus every stdout line (e.g. the live MCP test's E2E_MCP_CALL lines). timeoutMs defaults to 90 s. */
+export async function runHarnessWithOutput<T extends z.ZodType>(args: { page: string; env: Record<string, string>; report: T; timeoutMs?: number }): Promise<{ report: z.infer<T>; lines: string[] }> {
   if (!existsSync(preload)) throw new Error("Build first: npm run test:e2e runs electron-vite build.");
   const { main, html } = await bundle(args.page);
   const electron = z.string().parse(createRequire(import.meta.url)("electron"));
@@ -76,7 +81,7 @@ export async function runHarness<T extends z.ZodType>(args: { page: string; env:
     let stderr = "";
     child.stdout.on("data", (chunk: Buffer) => (stdout += chunk.toString("utf8")));
     child.stderr.on("data", (chunk: Buffer) => (stderr += chunk.toString("utf8")));
-    const timer = setTimeout(() => child.kill("SIGKILL"), 90_000);
+    const timer = setTimeout(() => child.kill("SIGKILL"), args.timeoutMs ?? 90_000);
     child.on("close", (status) => {
       clearTimeout(timer);
       resolve({ status, stdout, stderr });
@@ -84,5 +89,5 @@ export async function runHarness<T extends z.ZodType>(args: { page: string; env:
   });
   const line = run.stdout.split("\n").find((text) => text.startsWith("E2E_RESULT "));
   if (!line) throw new Error(`No E2E result (exit ${run.status}).\n${run.stdout}\n${run.stderr}`);
-  return args.report.parse(JSON.parse(line.slice("E2E_RESULT ".length)));
+  return { report: args.report.parse(JSON.parse(line.slice("E2E_RESULT ".length))), lines: run.stdout.split("\n") };
 }
