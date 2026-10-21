@@ -25,7 +25,7 @@ user typed when they joined the team.
 
 ## Deploy
 
-Convex project: team `vvv` (Vedant personal), project `bee`, production deployment.
+Convex project: team `<team>`, project `bee`, production deployment.
 
 ```sh
 cd /path/to/bee
@@ -35,7 +35,7 @@ npx convex env set CLERK_ISSUER https://clerk.vedantb.com
 
 Then start Bee with `BEE_RELAY_URL=https://<deployment>.eu-west-1.convex.site`.
 
-Production (as of 0.2.4): `https://academic-ostrich-889.eu-west-1.convex.site`
+Production (as of 0.2.4): `https://<deployment>.eu-west-1.convex.site`
 
 ## Local
 
