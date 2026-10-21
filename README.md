@@ -99,7 +99,7 @@ When a spoken line or a tip names a website (a URL, `convex.dev`, "convex dot de
 
 **Personalised link suggestions** pick the exact page you mean. For "vercel logs for vibot", the chip can read `vercel.com › vibot › logs` and open that page, taken from your browsing history or bookmarks in [vmem](https://github.com/vedantb2/vmem), when vmem is connected.
 
-1. Open the **Connectors** tab (between **Live** and **Settings**) and click **Connect** on **vmem**. There is no API key: vmem is an MCP connector (`https://clear-bear-690.eu-west-1.convex.site/mcp`) that uses MCP OAuth. Connect opens your system browser to sign in; the browser returns to a one-time server on `127.0.0.1` (random port) and Bee stores the tokens encrypted in the main process. Disconnect removes them. **Eva** is a second preset (`https://dazzling-dogfish-581.eu-west-1.convex.site/mcp`) with the same OAuth sign-in and no API key. **Add custom** sets up any other MCP server; a remote one with authentication "None" signs in the same way. Any enabled server named `vmem`, or on the `vmem.vedantb.com` or `vmem.projectv.uk` host, counts.
+1. Open the **Connectors** tab (between **Live** and **Settings**) and click **Connect** on **vmem**. There is no API key: vmem is an MCP connector (`https://<deployment>.eu-west-1.convex.site/mcp`) that uses MCP OAuth. Connect opens your system browser to sign in; the browser returns to a one-time server on `127.0.0.1` (random port) and Bee stores the tokens encrypted in the main process. Disconnect removes them. **Eva** is a second preset (`https://<deployment>.eu-west-1.convex.site/mcp`) with the same OAuth sign-in and no API key. **Add custom** sets up any other MCP server; a remote one with authentication "None" signs in the same way. Any enabled server named `vmem`, or on the `vmem.vedantb.com` or `vmem.projectv.uk` host, counts.
 2. Keep the **Gateway key** set in **Settings**: Jev, which makes the choice, runs through AI Gateway.
 3. Use the **Personalised link suggestions** switch in **Settings**. It is on by default when an enabled vmem connector exists, and off otherwise. Once you change it, Bee keeps your choice.
 
@@ -140,7 +140,7 @@ Teams mode lets teammates who are in the same Microsoft Teams meeting pool what 
 ### Set up
 
 1. Deploy the relay (Convex HTTP backend; shared handler in `relay/src`). See [relay/README.md](relay/README.md).
-2. Start Bee with `BEE_RELAY_URL` set to the Convex site URL, for example `https://academic-ostrich-889.eu-west-1.convex.site`. Without it, Teams mode is off and Bee works solo as before.
+2. Start Bee with `BEE_RELAY_URL` set to the Convex site URL, for example `https://<deployment>.eu-west-1.convex.site`. Without it, Teams mode is off and Bee works solo as before.
 3. One person opens **Settings → Team**, types a team name and clicks **Create team**. Settings shows the invite link (`bee://team/XXXX-XXXX`) and the code. **Copy** puts the link on the clipboard.
 4. Teammates click the link (Bee opens with the code filled in) or paste the code in **Settings → Team**, then click **Join team**. Team membership is an allowlist of Clerk user ids. **Leave team** removes you.
 
