@@ -4,22 +4,29 @@ import { blinkTiming, logoDetail } from "./logo";
 const INK = "#2a1e0c";
 // Amber, not ink, so the antennae read on the dark surface and on white.
 const ANTENNA = "#d0901a";
+// Glassy white wings vanish on a light background, so `tone="light"` draws them grey with a darker outline.
+const WINGS = {
+  dark: { from: "#ffffff", fromOpacity: 0.55, to: "#fff4d0", toOpacity: 0.12, stroke: "#ffffff", strokeOpacity: 0.7 },
+  light: { from: "#d4d4d8", fromOpacity: 0.9, to: "#cfcfd4", toOpacity: 0.6, stroke: "#8a8a92", strokeOpacity: 1 },
+};
 
 /**
  * Bee's mark: a glossy honey orb with two stripes, glassy wings, antennae and pill eyes.
  * Motion is CSS only (styles.css, `.bee-logo`): blink, an occasional wing flutter, hover scale, and a buzz while busy.
- * Decorative unless `title` is given.
+ * Decorative unless `title` is given. `tone` is the background the mark sits on.
  */
 export function BeeLogo({
   size = 28,
   animated = true,
   busy = false,
+  tone = "dark",
   className,
   title,
 }: {
   size?: number;
   animated?: boolean;
   busy?: boolean;
+  tone?: "dark" | "light";
   className?: string;
   title?: string;
 }) {
@@ -29,6 +36,7 @@ export function BeeLogo({
   const detail = logoDetail(size);
   const blink = blinkTiming(uid);
   const timing = { animationDelay: `${blink.delayS}s` };
+  const wings = WINGS[tone];
   return (
     <svg
       xmlns="http://www.w3.org/2000/svg"
@@ -68,8 +76,8 @@ export function BeeLogo({
           <stop offset="1" stopColor="#fff2b0" stopOpacity="0.35" />
         </linearGradient>
         <linearGradient id={ref("wing")} x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0" stopColor="#ffffff" stopOpacity="0.55" />
-          <stop offset="1" stopColor="#fff4d0" stopOpacity="0.12" />
+          <stop offset="0" stopColor={wings.from} stopOpacity={wings.fromOpacity} />
+          <stop offset="1" stopColor={wings.to} stopOpacity={wings.toOpacity} />
         </linearGradient>
         <clipPath id={ref("orb")}>
           <circle cx="32" cy="35" r="20" />
@@ -84,10 +92,10 @@ export function BeeLogo({
       {detail.glow ? <circle cx="32" cy="35" r="29" fill={`url(#${ref("glow")})`} /> : null}
       <g className="bee-logo-art">
         <g className="bee-logo-wing left" style={timing}>
-          <ellipse cx="17.5" cy="15.5" rx="10" ry="5" transform="rotate(30 17.5 15.5)" fill={`url(#${ref("wing")})`} stroke="#ffffff" strokeOpacity="0.7" strokeWidth="1" />
+          <ellipse cx="17.5" cy="15.5" rx="10" ry="5" transform="rotate(30 17.5 15.5)" fill={`url(#${ref("wing")})`} stroke={wings.stroke} strokeOpacity={wings.strokeOpacity} strokeWidth="1" />
         </g>
         <g className="bee-logo-wing right" style={timing}>
-          <ellipse cx="46.5" cy="15.5" rx="10" ry="5" transform="rotate(-30 46.5 15.5)" fill={`url(#${ref("wing")})`} stroke="#ffffff" strokeOpacity="0.7" strokeWidth="1" />
+          <ellipse cx="46.5" cy="15.5" rx="10" ry="5" transform="rotate(-30 46.5 15.5)" fill={`url(#${ref("wing")})`} stroke={wings.stroke} strokeOpacity={wings.strokeOpacity} strokeWidth="1" />
         </g>
         {detail.antennae ? (
           <g fill={ANTENNA} stroke={ANTENNA} strokeWidth="2.2" strokeLinecap="round">

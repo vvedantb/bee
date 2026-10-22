@@ -14,6 +14,7 @@
     "check:asar": "vvedantb-check-asar list --default-asar release/mac-arm64/Bee.app/Contents/Resources/app.asar --default-asar release/mac/Bee.app/Contents/Resources/app.asar --scan out/main --scan out/preload --require electron-store",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
+    "icons": "node scripts/make-icons.mjs",
     "test:gateway": "vitest run --config vitest.gateway.config.ts",
     "test:e2e": "electron-vite build && vitest run --config vitest.e2e.config.ts",
     "relay:mock": "esbuild relay/src/dev.ts --bundle --platform=node --format=esm --outfile=out/relay-dev.mjs --log-level=warning && node out/relay-dev.mjs",
@@ -38,6 +39,7 @@
     "@radix-ui/react-select": "^2.4.1",
     "@radix-ui/react-slot": "^1.5.0",
     "@radix-ui/react-switch": "^1.4.1",
+    "@resvg/resvg-js": "^2.6.2",
     "@tabler/icons-react": "^3.48.0",
     "@tailwindcss/vite": "^4.3.3",
     "@tanstack/react-hotkeys": "^0.15.0",
@@ -77,6 +79,7 @@
     "files": [
       "out/**",
       "resources/**",
+      "!resources/icon{,-mac}.{png,icns,ico}",
       "package.json",
       "!node_modules/esbuild{,/**}",
       "!node_modules/@esbuild{,/**}",
@@ -117,7 +120,7 @@
           ]
         }
       ],
-      "icon": "resources/icon.png"
+      "icon": "resources/icon.ico"
     },
     "nsis": {
       "artifactName": "Bee-Setup-${version}.${ext}",
@@ -143,7 +146,7 @@
         }
       ],
       "category": "public.app-category.productivity",
-      "icon": "resources/icon-mac.png",
+      "icon": "resources/icon.icns",
       "hardenedRuntime": true,
       "notarize": false,
       "gatekeeperAssess": false,

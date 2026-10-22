@@ -512,7 +512,6 @@ function Panel({ state }: { state: BeeState }) {
   return (
     <main className="panel">
       <nav className="tabs">
-        <BeeLogo size={22} className="tabs-logo" />
         <PillTabs
           tabs={[
             { value: "live", label: "Live" },

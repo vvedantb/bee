@@ -412,11 +412,6 @@ body {
   padding: 10px 12px 0;
 }
 
-.tabs-logo {
-  align-self: center;
-  margin: 0 6px 0 4px;
-}
-
 .tabs-account {
   display: flex;
   align-items: center;

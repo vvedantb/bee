@@ -50,9 +50,21 @@ describe("BeeLogo", () => {
     expect(new Set(ids).size).toBe(ids.length);
   });
 
-  // The standalone mark for regenerating app icons. Update it with `npx vitest run -u`.
-  it("matches resources/bee-logo.svg", async () => {
-    const markup = renderToStaticMarkup(createElement(BeeLogo, { size: 512, animated: false }));
-    await expect(`${markup}\n`).toMatchFileSnapshot("../../../resources/bee-logo.svg");
+  it("draws grey, outlined wings on a light background and keeps the dark look by default", () => {
+    const dark = renderToStaticMarkup(createElement(BeeLogo));
+    const light = renderToStaticMarkup(createElement(BeeLogo, { tone: "light" }));
+    expect(dark).toBe(renderToStaticMarkup(createElement(BeeLogo, { tone: "dark" })));
+    expect(dark).toContain('stroke="#ffffff"');
+    expect(light).toContain('stroke="#8a8a92"');
+    expect(light).not.toContain('stroke="#ffffff"');
+  });
+
+  // The standalone marks, one per background. Update them with `npx vitest run -u`.
+  it.each([
+    ["dark", "bee-logo.svg"],
+    ["light", "bee-logo-light.svg"],
+  ] as const)("matches the %s mark in resources/%s", async (tone, file) => {
+    const markup = renderToStaticMarkup(createElement(BeeLogo, { size: 512, animated: false, tone }));
+    await expect(`${markup}\n`).toMatchFileSnapshot(`../../../resources/${file}`);
   });
 });
