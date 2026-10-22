@@ -145,8 +145,8 @@ function registerToggleShortcut(): void {
 
 function createTray(notesDir: string): void {
   try {
-    const icon = nativeImage.createFromPath(join(app.getAppPath(), "resources/tray.png"));
-    // The menu bar tints a template image to match light and dark.
+    // macOS: a black-and-alpha template the menu bar tints to match light and dark; the @2x sibling loads with it.
+    const icon = nativeImage.createFromPath(join(app.getAppPath(), isMac ? "resources/trayTemplate.png" : "resources/tray.png"));
     if (isMac) icon.setTemplateImage(true);
     tray = new Tray(icon);
     tray.setToolTip("Bee");

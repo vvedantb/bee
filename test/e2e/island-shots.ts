@@ -3,6 +3,7 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { IconChevronDown, IconExternalLink, IconMicrophone, IconX } from "@tabler/icons-react";
+import { BeeLogo } from "../../src/renderer/src/BeeLogo";
 import "../../src/renderer/src/styles.css";
 
 const ICON = { size: 16, stroke: 1.75 };
@@ -13,7 +14,7 @@ const SOURCE = { title: "Acme enterprise pricing – example.com", url: "https:/
 
 function pill(status: string, busy: boolean): string {
   return `<header class="notch">
-    <span class="${busy ? "notch-dot busy" : "notch-dot"}"></span>
+    ${renderToStaticMarkup(createElement(BeeLogo, { size: 20, busy }))}
     <span class="notch-status">${status}</span>
     <button type="button" class="icon-button">${icon(IconMicrophone)}</button>
     <button type="button" class="icon-button chevron">${icon(IconChevronDown)}</button>
