@@ -117,25 +117,26 @@ function ico(sizes, draw) {
 }
 
 /**
- * macOS menu bar template, black and alpha only: an orb with the eyes and two stripes cut out, and two wings kept apart from it by a gap.
- * No antennae, as in the small app mark. @2x is drawn as shapes; @1x is hand-placed pixels (# solid, + half), as shapes blur at 16 px.
+ * macOS menu bar template, black and alpha only: the classic side-on bee, facing right. A wide teardrop body ending in a stinger, with two
+ * stripes cut inside its outline; a round head on a short neck (two short antennae at @2x); two wings fanned up and back, a gap above the body.
+ * @2x is drawn as shapes; @1x is hand-placed pixels (# solid, + half), as shapes blur at 16 px.
  */
 const TRAY_1X = [
   "................",
-  ".##+........+##.",
-  ".####+....+####.",
-  "..####....####..",
-  "..+##......##+..",
-  ".....+####+.....",
-  "....########....",
-  "...+##.##.##+...",
-  "...###.##.###...",
-  "...##########...",
-  "...##########...",
   "................",
-  "...+########+...",
+  "..##.....##.....",
+  ".#####..###.....",
+  ".######.###.....",
+  "...#####.##.....",
+  "......##.#......",
   "................",
-  ".....+####+.....",
+  ".....####...##..",
+  "..####.###.####.",
+  ".##.##.########.",
+  "###.##.###.####.",
+  ".##.##.###..##..",
+  "..####.###......",
+  "....#####.......",
   "................",
 ];
 
@@ -148,18 +149,15 @@ function pixels(rows) {
 
 function trayTemplate2x() {
   return `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 16 16">
-<defs>
-<mask id="body"><rect width="16" height="16" fill="#fff"/>
-<rect x="6" y="7" width="1" height="2.5" rx="0.5" fill="#000"/><rect x="9" y="7" width="1" height="2.5" rx="0.5" fill="#000"/>
-<rect x="2" y="11" width="12" height="1" fill="#000"/><rect x="2" y="13" width="12" height="1" fill="#000"/>
+<mask id="stripes"><rect width="16" height="16" fill="#fff"/>
+<path d="M3.6 10.1Q3.3 11.4 3.6 12.7M6.6 9.3Q6.1 11.4 6.6 13.5" fill="none" stroke="#000" stroke-width="1.2" stroke-linecap="round"/>
 </mask>
-<mask id="wings"><rect width="16" height="16" fill="#fff"/><circle cx="8" cy="10" r="6" fill="#000"/></mask>
-</defs>
-<g mask="url(#wings)">
-<ellipse cx="4" cy="4.2" rx="3.4" ry="2" transform="rotate(30 4 4.2)"/>
-<ellipse cx="12" cy="4.2" rx="3.4" ry="2" transform="rotate(-30 12 4.2)"/>
-</g>
-<circle cx="8" cy="10" r="5" mask="url(#body)"/>
+<ellipse cx="4.3" cy="4.4" rx="3.6" ry="1.6" transform="rotate(30 4.3 4.4)"/>
+<ellipse cx="9.4" cy="4.1" rx="2.3" ry="1.2" transform="rotate(78 9.4 4.1)"/>
+<g mask="url(#stripes)"><path d="M0 11.5L2.2 10V13Z"/><ellipse cx="5.2" cy="11.4" rx="4.4" ry="3.3"/></g>
+<rect x="9" y="9.8" width="2" height="1.4"/>
+<circle cx="12.4" cy="10.2" r="2.1"/>
+<path d="M13.5 8.5Q14.2 7.6 15.3 7.5M12 8.2Q12 7.1 12.8 6.4" fill="none" stroke="#000" stroke-width="0.8" stroke-linecap="round"/>
 </svg>`;
 }
 
