@@ -13,6 +13,7 @@ import {
 } from "@tabler/icons-react";
 import { Badge, Button, Input, LabeledSwitchRow, PillTabs, Textarea } from "@vvedantb/ui";
 import { useEffect, useState, type FormEvent } from "react";
+import { BeeLogo } from "./BeeLogo";
 import { Favicon } from "./Favicon";
 import { Connectors } from "./Connectors";
 import { MeetingContextSection } from "./MeetingContextSection";
@@ -136,7 +137,7 @@ function Island({ state }: { state: BeeState }) {
       onPointerLeave={() => actions.setIslandHover(false)}
     >
       <header className="notch">
-        <span className={state.busy ? "notch-dot busy" : "notch-dot"} aria-hidden />
+        <BeeLogo size={20} busy={state.busy} />
         {canExpand ? (
           // Keyed so each new status fades in.
           <Button
@@ -511,6 +512,7 @@ function Panel({ state }: { state: BeeState }) {
   return (
     <main className="panel">
       <nav className="tabs">
+        <BeeLogo size={22} className="tabs-logo" />
         <PillTabs
           tabs={[
             { value: "live", label: "Live" },
@@ -572,6 +574,7 @@ export function App() {
           </Show>
           <Show when="signed-out">
             <main className="panel sign-in">
+              <BeeLogo size={56} className="sign-in-logo" title="Bee" />
               <SignIn routing="hash" withSignUp />
             </main>
           </Show>
