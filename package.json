@@ -22,6 +22,7 @@
     "dist:mac": "npm run build && electron-builder --mac"
   },
   "dependencies": {
+    "@ai-sdk/anthropic": "4.0.65",
     "@ai-sdk/gateway": "^4.0.94",
     "@ai-sdk/openai": "^4.0.78",
     "@clerk/electron": "^0.0.47",

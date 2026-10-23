@@ -575,14 +575,35 @@ describe("guideWithLuna providers and web search", () => {
     });
   const extraTools = { vmem__wobble: tool({ inputSchema: jsonSchema({ type: "object", properties: {} }), execute: async () => "X" }) };
 
-  it("routes Luna only to providers that accept web_search, with low reasoning effort", async () => {
+  it("pins the Anthropic provider while web_search is sent and sends no reasoning options", async () => {
     let providerOptions = "";
     const model = streamModel((options) => {
       providerOptions = options.providerOptions;
       return textChunks("- ok");
     });
     await guideWithLuna({ model, transcript: ["Hi"], notes: [] });
-    expect(JSON.parse(providerOptions)).toEqual({ gateway: { only: ["openai", "azure"] }, openai: { reasoningEffort: "low" } });
+    expect(JSON.parse(providerOptions)).toEqual({ gateway: { only: ["anthropic"] } });
+  });
+
+  it("retries without web_search when the error names Anthropic's web search tool type", async () => {
+    const seen: { tools: string[]; providerOptions: string }[] = [];
+    const model = streamModel((options, call) => {
+      seen.push(options);
+      if (call === 1) throw new Error("tools.0: Input tag 'web_search_20260318' found using 'type' does not match any of the expected tags");
+      return textChunks("- Answer from the notes");
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const result = await guideWithLuna({ model, transcript: ["Hi"], notes: [], extraTools });
+      expect(result.error).toBeNull();
+      expect(seen).toHaveLength(2);
+      expect(seen[1]?.tools).not.toContain("web_search");
+      // The retry sends no Anthropic-run tool, so the Gateway may fail over again.
+      expect(JSON.parse(seen[0]?.providerOptions ?? "")).toEqual({ gateway: { only: ["anthropic"] } });
+      expect(JSON.parse(seen[1]?.providerOptions ?? "")).toEqual({ gateway: { order: ["anthropic"] } });
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("retries once without web_search when the provider rejects it, keeping MCP tools", async () => {

@@ -9,6 +9,10 @@ describe("lunaTools", () => {
     expect(Object.keys(lunaTools({ extraRoots: ["/x"] }))).toEqual(["web_search"]);
   });
 
+  it("uses Anthropic's native web search with a small search budget", () => {
+    expect(lunaTools().web_search).toMatchObject({ type: "provider", id: "anthropic.web_search_20260318", args: { maxUses: 3 } });
+  });
+
   it("adds the file tools when a notes folder is passed", () => {
     expect(Object.keys(lunaTools({ notesDir: "/notes" }))).toEqual([
       "web_search",
@@ -75,6 +79,45 @@ describe("sourcesFromGenerateResult", () => {
       toolResults: [{ output: { sources: [{ type: "url", url: "https://bbc.co.uk/news" }] } }],
     });
     expect(sources).toEqual([{ title: "bbc.co.uk", url: "https://bbc.co.uk/news" }]);
+  });
+
+  it("reads Anthropic web search sources with their titles", () => {
+    const sources = sourcesFromGenerateResult({
+      sources: [
+        {
+          type: "source",
+          sourceType: "url",
+          id: "src_1",
+          url: "https://www.gov.uk/government/ministers/prime-minister",
+          title: "Prime Minister",
+          providerMetadata: { anthropic: { pageAge: null } },
+        },
+      ],
+    });
+    expect(sources).toEqual([{ title: "Prime Minister", url: "https://www.gov.uk/government/ministers/prime-minister" }]);
+  });
+
+  it("uses the Anthropic web search tool output array when result.sources is empty", () => {
+    const sources = sourcesFromGenerateResult({
+      sources: [],
+      toolResults: [
+        {
+          type: "tool-result",
+          toolName: "web_search",
+          providerExecuted: true,
+          output: [
+            { type: "web_search_result", url: "https://www.gov.uk/government/ministers/prime-minister", title: "Prime Minister", pageAge: null, encryptedContent: "x" },
+            { type: "web_search_result", url: "https://example.com/a", title: null, pageAge: "2 days ago", encryptedContent: "y" },
+            { type: "web_search_result", url: "http://example.com/", title: "Old", pageAge: null, encryptedContent: "z" },
+          ],
+        },
+        { toolName: "web_search", output: { type: "web_search_tool_result_error", errorCode: "max_uses_exceeded" } },
+      ],
+    });
+    expect(sources).toEqual([
+      { title: "Prime Minister", url: "https://www.gov.uk/government/ministers/prime-minister" },
+      { title: "example.com", url: "https://example.com/a" },
+    ]);
   });
 
   it("prefers result.sources over toolResults", () => {

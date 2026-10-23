@@ -1,7 +1,7 @@
 import { isStepCount, streamText, type LanguageModel, type ToolSet } from "ai";
 import { z } from "zod";
 import { withTimeout } from "./abort";
-import { lunaProviderOptions } from "./gateway";
+import { guideProviderOptions } from "./gateway";
 import type { Snippet } from "./notes";
 import { MAX_TIPS, tipCap } from "./steering";
 import { lunaTools, sourcesFromGenerateResult, type BeeSource } from "./tools";
@@ -12,8 +12,9 @@ const MAX_STEPS = 8;
 const SCHEMA_ERROR = /json schema|propertyNames|input_?schema|tools?\b.*\bschema|functionality.*not supported|not supported.*schema/i;
 // Too many tools for the provider, e.g. "Invalid 'tools': array too long. Expected an array with maximum length 128".
 const TOOL_COUNT_ERROR = /tools'?\W.*\b(array too long|too many|maximum length)|too many tools/i;
-// A gateway provider (bedrock) that cannot run the web_search tool. Luna retries once without it.
-const WEB_SEARCH_ERROR = /web search is not supported/i;
+// A provider that rejects Anthropic's web_search tool, e.g. bedrock's "web search is not supported", or an error naming the
+// versioned tool type (web_search_20260318) as unknown or not enabled. Luna retries once without it.
+const WEB_SEARCH_ERROR = /web search is not (supported|enabled)|web_search_\d{8}/i;
 const MAX_ERROR_CHARS = 300;
 // Stream error parts can carry plain objects, not Errors. These are the shapes seen from providers and the gateway.
 const errorShape = z.union([
@@ -328,8 +329,9 @@ export async function guideWithLuna(args: {
       maxOutputTokens: 800,
       maxRetries: 1,
       abortSignal,
-      // User-facing: not flex (see gateway.ts). Only providers that accept web_search.
-      providerOptions: { ...lunaProviderOptions("default"), openai: { reasoningEffort: "low" } },
+      // User-facing: not flex (see gateway.ts). Anthropic only while web_search is sent; Anthropic first on the no-web retry.
+      // No reasoning options: thinking stays off for latency.
+      providerOptions: guideProviderOptions("default", { web }),
     });
     // Only the last step's text is the answer, so each step starts a fresh buffer.
     let text = "";

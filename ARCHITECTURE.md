@@ -31,7 +31,7 @@ simulateLine(text)  ← also "Simulate meeting line" (Manual test)
   → main: load notes, read API key                 key never leaves main
   → core/retrieve   BM25 keyword search, top 5 snippets
   → core/jev        Jev scores each snippet, re-orders (fails open)
-  → core/luna       GPT-6 Luna writes up to 2 tips from the top 3 notes, and may search the web
+  → core/luna       Luna (Claude Haiku 5.5) writes up to 2 tips from the top 3 notes, and may search the web
   → PipelineResult back to the renderer
 ```
 
@@ -152,8 +152,8 @@ All model calls use the Vercel AI SDK (`ai`, `@ai-sdk/gateway`) against Vercel A
 | --- | --- | --- | --- | --- |
 | Transcribe | `xai/grok-stt` | `experimental_transcribe` (Gateway transcription API) | 20 s | 1 |
 | Rank | `typesafe-ai/jev` | `experimental_evaluate` (Gateway evaluation API) | 15 s | 1 |
-| Guide | `openai/gpt-6-luna` | `generateText`, reasoning effort `low`, max 800 output tokens, tools `web_search` (OpenAI built-in, run by the provider) and the file tools, up to 5 steps | 45 s | 1 |
-| Summarise | `openai/gpt-6-luna` | `generateText`, reasoning effort `low`, max 2,000 output tokens | 60 s | 1 |
+| Guide | `anthropic/claude-haiku-5.5` | `generateText`, no reasoning options, Gateway provider `only: ["anthropic"]` (`order: ["anthropic"]` on the no-web retry), max 800 output tokens, tools `web_search` (Anthropic native web search, run by Anthropic) and the file tools, up to 5 steps | 45 s | 1 |
+| Summarise | `anthropic/claude-haiku-5.5` | `generateText`, no reasoning options, flex tier, Gateway provider `order: ["anthropic"]`, max 2,000 output tokens | 60 s | 1 |
 
 ### Why Jev does not use chat completions
 
@@ -191,7 +191,7 @@ Defined in `src/core/jev.ts`.
 Question keys are positional (`c0`…) rather than note ids. Note ids contain characters such as `#` and `.`, and positional keys keep the mapping simple.
 
 ### Tools and sources
-`src/core/tools.ts` holds the tool registry. `lunaTools()` returns the `ToolSet` passed to Luna. It always includes `web_search` (`openai.tools.webSearch({ searchContextSize: "low" })` from `@ai-sdk/openai`, sent through the Gateway). The model decides when to search; Bee never forces it. Search runs in one provider-side step. When `notesDir` is passed, the set also includes the four file tools below. New tools go into the same registry. `lunaTools({ notesDir, extraRoots, extra })` also takes `extra`, a `ToolSet` of MCP tools (see below). It stays synchronous; the caller loads MCP tools first. Built-in names win over an `extra` tool of the same name.
+`src/core/tools.ts` holds the tool registry. `lunaTools()` returns the `ToolSet` passed to Luna. It always includes `web_search` (`anthropic.tools.webSearch_20260318({ maxUses: 3 })` from `@ai-sdk/anthropic`). Anthropic runs the search itself, so Luna calls that send it pin the Gateway to the Anthropic provider (`guideProviderOptions(tier, { web: true })` sends `only: ["anthropic"]`); bedrock or vertex may reject the tool. If the provider still rejects it, `guideWithLuna` retries once without `web_search`, with `order: ["anthropic"]` so the Gateway can fail over. Calls without web search (the meeting summary) also use `order`. The model decides when to search; Bee never forces it. Search runs in one provider-side step, and `sourcesFromGenerateResult` reads the links from `result.sources`, or else from the tool output (an array of `web_search_result` items). When `notesDir` is passed, the set also includes the four file tools below. New tools go into the same registry. `lunaTools({ notesDir, extraRoots, extra })` also takes `extra`, a `ToolSet` of MCP tools (see below). It stays synchronous; the caller loads MCP tools first. Built-in names win over an `extra` tool of the same name.
 
 The file tools come from `src/core/fs-tools.ts` (`lunaTools({ notesDir, extraRoots })`); without `notesDir` they are omitted. They run in the main process (the pipeline does), so they use Node `fs`. They add to retrieval and Jev; they do not replace them.
 
