@@ -210,7 +210,7 @@ describe("runPipeline", () => {
       try {
         await hang(args.signal);
       } catch (error) {
-        return lunaOk({ tips: [], error: `Luna guidance failed: ${(error as Error).message}` });
+        return lunaOk({ tips: [], error: `AI guidance failed: ${(error as Error).message}` });
       }
       return lunaOk();
     });

@@ -108,7 +108,7 @@ export function timingsLabel(timings: PipelineTimings): string {
 /** Each stage in ms, so MCP is never hidden inside Luna's time. */
 export function timingsTitle(timings: PipelineTimings): string {
   const ms = (value: number) => `${Math.round(value)} ms`;
-  return `retrieve ${ms(timings.retrieve)} · Jev ${ms(timings.rank)} · MCP ${ms(timings.mcp)} · Luna ${ms(timings.guide)} (Jev runs beside MCP and Luna)`;
+  return `retrieve ${ms(timings.retrieve)} · Jev ${ms(timings.rank)} · MCP ${ms(timings.mcp)} · AI ${ms(timings.guide)} (Jev runs beside MCP and the AI)`;
 }
 
 /** How close to the end of the island body counts as "at the bottom", in CSS px. */

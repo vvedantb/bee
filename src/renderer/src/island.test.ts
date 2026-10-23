@@ -83,7 +83,7 @@ describe("shouldShowResponse", () => {
   it("is true for tips, sources only, or a guide error", () => {
     expect(shouldShowResponse({ ...empty, tips: ["Say yes"] })).toBe(true);
     expect(shouldShowResponse({ ...empty, sources: [source] })).toBe(true);
-    expect(shouldShowResponse({ ...empty, guideError: "Luna guidance failed: timeout" })).toBe(true);
+    expect(shouldShowResponse({ ...empty, guideError: "AI guidance failed: timeout" })).toBe(true);
   });
 
   it("is false once dismissed", () => {
@@ -146,7 +146,7 @@ describe("islandShowsBody", () => {
     expect(islandShowsBody({ ...empty, busy: true })).toBe(false);
     // Sources or an error alone are stale detail, not an answer to keep on screen.
     expect(islandShowsBody({ ...empty, sources: [source], busy: true })).toBe(false);
-    expect(islandShowsBody({ ...empty, guideError: "Luna guidance failed: x", busy: true })).toBe(false);
+    expect(islandShowsBody({ ...empty, guideError: "AI guidance failed: x", busy: true })).toBe(false);
   });
 
   it("keeps the body open while busy when tips exist, with the pill still thinking", () => {
@@ -256,7 +256,7 @@ describe("timingsLabel", () => {
   it("shows MCP on its own, not inside Luna's time", () => {
     const title = timingsTitle(timings);
     expect(title).toContain("MCP 400 ms");
-    expect(title).toContain("Luna 2000 ms");
+    expect(title).toContain("AI 2000 ms");
     expect(title).toContain("Jev 900 ms");
   });
 });

@@ -57,7 +57,7 @@ function McpForm({ server, error, onDone }: { server: McpServerView | null; erro
       <label>
         Name
         <Input className="h-9" name="name" defaultValue={server?.name} placeholder="vmem" maxLength={40} required spellCheck={false} />
-        <span className="muted">Luna sees its tools as name__tool.</span>
+        <span className="muted">The AI sees its tools as name__tool.</span>
       </label>
       <label>
         Transport

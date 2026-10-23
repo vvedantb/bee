@@ -130,7 +130,7 @@ describe("generateMeetingSummary", () => {
   it("fails open to the local summary when the reply is unusable", async () => {
     const result = await generateMeetingSummary({ model: mockModel("NONE"), transcript, when });
     expect(result.usedLlm).toBe(false);
-    expect(result.error).toMatch(/^Luna summary failed: /);
+    expect(result.error).toMatch(/^AI summary failed: /);
     expect(result.markdown).toBe(buildLocalSummary({ transcript, when }));
   });
 });
