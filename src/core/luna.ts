@@ -1,7 +1,7 @@
-import { isStepCount, streamText, type LanguageModel, type ToolSet } from "ai";
+import { isStepCount, streamText, type LanguageModel, type LanguageModelUsage, type ProviderMetadata, type SystemModelMessage, type ToolSet, type UserModelMessage } from "ai";
 import { z } from "zod";
 import { withTimeout } from "./abort";
-import { guideProviderOptions } from "./gateway";
+import { ANTHROPIC_CACHE, guideProviderOptions } from "./gateway";
 import type { Snippet } from "./notes";
 import { MAX_TIPS, tipCap } from "./steering";
 import { lunaTools, sourcesFromGenerateResult, type BeeSource } from "./tools";
@@ -51,9 +51,11 @@ function safeJson(value: unknown): string {
   }
 }
 
+// Cached (gateway.ts ANTHROPIC_CACHE), so it must not change between turns: the tip cap and the steering rules, which do,
+// go in the user message's tail (buildLunaPrompt).
 export const LUNA_SYSTEM = [
   "You are Bee, a quiet meeting copilot shown in a small overlay.",
-  "Give the user at most 2 short tips.",
+  "Give the user a few short tips, no more than the limit given at the end of the message.",
   "Each tip is one line, starts with \"- \", and is under 20 words.",
   "Reply in plain text only. No markdown: no bold, italic, headings or backticks, and no lists other than the \"- \" tip prefix.",
   "Do not write links or markdown citations. Bee shows the sources separately.",
@@ -63,15 +65,15 @@ export const LUNA_SYSTEM = [
   "After a search, you may end the tip with the site domain in plain text, or [web]. Do not add links.",
   "Do not search for stable general knowledge or arithmetic, for example 15% of 18000. Answer those directly.",
   "If the notes do not cover a question about the user's own notes or files, use list_dir, search_files and read_file, then answer from what you read.",
-  "Prefer the notes above ([n1]…) first. Do not use web_search for private facts about the user's own work or files.",
+  "Prefer the notes ([n1]…) first. Do not use web_search for private facts about the user's own work or files.",
   "Use append_note only when the user clearly asks to add or save a note.",
   "Otherwise, suggest what to say or do next, using the notes when they help and citing them.",
   "Never invent facts, figures or dates about the user's own work that are not in the transcript or notes.",
   "If nothing useful can be said, reply with exactly NONE.",
 ].join("\n");
 
-/** Added to the system prompt only when tips are already on screen (the user kept talking). */
-export const LUNA_STEERING_SYSTEM = [
+/** Added to the message tail only when tips are already on screen (the user kept talking). */
+export const LUNA_STEERING_RULES = [
   "If tips are already shown, add tips for new lines.",
   "Return the full set: copy each shown tip that still stands word for word, then add the new tips.",
   "Replace a shown tip only if the new line corrects it.",
@@ -79,8 +81,8 @@ export const LUNA_STEERING_SYSTEM = [
 ].join("\n");
 
 // The tip cap is 2 for a fresh turn and 3 while earlier tips are kept (steering.ts tipCap).
-function lunaSystem(maxTips: number): string {
-  return maxTips === MAX_TIPS ? LUNA_SYSTEM : LUNA_SYSTEM.replace("at most 2 short tips", `at most ${maxTips} short tips`);
+export function lunaTipLimit(maxTips: number): string {
+  return `Give at most ${maxTips} short tips.`;
 }
 
 /** A connected MCP server as Luna sees it: its tools are named `${prefix}__<tool>` (core/mcp.ts loadMcpTools). */
@@ -142,7 +144,11 @@ export function noteCitation(index: number): string {
   return `n${index + 1}`;
 }
 
-export type LunaPrompt = { system: string; prompt: string };
+/**
+ * Luna's prompt in cache order: the system (stable for a meeting), the context (meeting brief and notes, stable while the
+ * notes do not change), then the per-phrase transcript and tail (shown tips, tip cap, steering rules, the "Tips:" cue).
+ */
+export type LunaPrompt = { system: string; context: string; transcript: string; tail: string };
 
 export function buildLunaPrompt(args: {
   transcript: string[];
@@ -159,27 +165,44 @@ export function buildLunaPrompt(args: {
   const lines = args.transcript.slice(-TRANSCRIPT_WINDOW).map((line) => `- ${line.trim()}`);
   const shown = (args.shown ?? []).map((tip) => tip.replace(/\s+/g, " ").trim()).filter((tip) => tip.length > 0);
   const notes = args.notes.map((note, index) => `[${noteCitation(index)}] ${note.title}\n${note.text}`);
-  const prompt = [
+  const context = [
     ...(meeting ? ["Meeting context:", meeting, ""] : []),
-    "Recent transcript (oldest first):",
-    lines.join("\n"),
-    "",
+    "Relevant notes:",
+    notes.length > 0 ? notes.join("\n\n") : "(none)",
+  ].join("\n");
+  const transcript = ["Recent transcript (oldest first):", lines.join("\n")].join("\n");
+  const tail = [
     ...(shown.length > 0
       ? ["Already shown to the user (keep; do not repeat; refine only if the new line changes the answer):", ...shown.map((tip) => `- ${tip}`), ""]
       : []),
-    "Relevant notes:",
-    notes.length > 0 ? notes.join("\n\n") : "(none)",
+    lunaTipLimit(tipCap(shown.length)),
+    ...(shown.length > 0 ? [LUNA_STEERING_RULES] : []),
     "",
     "Tips:",
   ].join("\n");
   const mcp = lunaMcpSystem(args.connectedServers ?? [], args.unavailableServers ?? []);
-  const system = [
-    shown.length > 0 ? lunaSystem(tipCap(shown.length)) : LUNA_SYSTEM,
-    ...(mcp ? [mcp] : []),
-    ...(meeting ? [LUNA_MEETING_SYSTEM] : []),
-    ...(shown.length > 0 ? [LUNA_STEERING_SYSTEM] : []),
-  ];
-  return { system: system.join("\n"), prompt };
+  const system = [LUNA_SYSTEM, ...(mcp ? [mcp] : []), ...(meeting ? [LUNA_MEETING_SYSTEM] : [])];
+  return { system: system.join("\n"), context, transcript, tail };
+}
+
+/**
+ * The model call's instructions (the system) and messages, with cache breakpoints after the system and after the context.
+ * None after the transcript: it is a sliding window that changes every phrase, so a cache write there would rarely be read.
+ */
+export function lunaRequest(prompt: LunaPrompt): { instructions: SystemModelMessage; messages: UserModelMessage[] } {
+  return {
+    instructions: { role: "system", content: prompt.system, providerOptions: ANTHROPIC_CACHE },
+    messages: [
+      {
+        role: "user",
+        content: [
+          { type: "text", text: prompt.context, providerOptions: ANTHROPIC_CACHE },
+          { type: "text", text: prompt.transcript },
+          { type: "text", text: prompt.tail },
+        ],
+      },
+    ],
+  };
 }
 
 /** Removes markdown the model may still emit, keeping plain text and note cites such as [n1]. */
@@ -286,6 +309,8 @@ export async function guideWithLuna(args: {
   onPartial?: (tips: string[]) => void;
   /** Cancels the call (a superseded run). Tool calls already running are left to finish. */
   signal?: AbortSignal;
+  /** Called once after a successful run with its total usage (cache read and write tokens) and provider metadata (Gateway cost). */
+  onFinish?: (info: { usage: LanguageModelUsage; providerMetadata: ProviderMetadata | undefined }) => void;
 }): Promise<LunaResult> {
   const startedAt = performance.now();
   const maxTips = tipCap(args.shown?.length ?? 0);
@@ -299,9 +324,10 @@ export async function guideWithLuna(args: {
     if (dropped.length <= 3) return `Skipped connected tools: ${dropped.join(", ")}.`;
     return `Skipped ${dropped.length} connected tools.`;
   };
-  const timings = () => {
+  const timings = (usage?: LanguageModelUsage) => {
     const totalMs = performance.now() - startedAt;
-    console.debug(`perf luna firstToken=${firstTokenMs === null ? "none" : `${Math.round(firstTokenMs)}ms`} total=${Math.round(totalMs)}ms`);
+    const cache = usage ? ` cacheRead=${usage.inputTokenDetails.cacheReadTokens ?? 0} cacheWrite=${usage.inputTokenDetails.cacheWriteTokens ?? 0}` : "";
+    console.debug(`perf luna firstToken=${firstTokenMs === null ? "none" : `${Math.round(firstTokenMs)}ms`} total=${Math.round(totalMs)}ms${cache}`);
     return { firstTokenMs, totalMs };
   };
   const reported = new Set<string>();
@@ -311,12 +337,11 @@ export async function guideWithLuna(args: {
     args.onActivity?.(name);
   };
   const run = async () => {
-    const { system, prompt } = buildLunaPrompt({ ...args, ...mcpServers(args.connectedServers ?? [], args.unavailableServers ?? [], extra, dropped.length > 0) });
+    const prompt = buildLunaPrompt({ ...args, ...mcpServers(args.connectedServers ?? [], args.unavailableServers ?? [], extra, dropped.length > 0) });
     const abortSignal = withTimeout(args.signal, args.timeoutMs ?? LUNA_TIMEOUT_MS);
     const result = streamText({
       model: args.model,
-      system,
-      prompt,
+      ...lunaRequest(prompt),
       tools: lunaTools({ notesDir: args.notesDir, extraRoots: args.extraRoots, extra, web }),
       stopWhen: isStepCount(MAX_STEPS),
       // Local tools report as they start. Provider tools (web_search) report when their step finishes. Each call reports once.
@@ -357,14 +382,21 @@ export async function guideWithLuna(args: {
     }
     // The stream can also end quietly when the signal fires.
     if (abortSignal.aborted) throw abortSignal.reason instanceof Error ? abortSignal.reason : new Error("aborted");
-    return { text, sources: await result.sources, toolResults: await result.toolResults };
+    return {
+      text,
+      sources: await result.sources,
+      toolResults: await result.toolResults,
+      usage: await result.totalUsage,
+      providerMetadata: await result.providerMetadata,
+    };
   };
   // First try with every tool. A web-search rejection retries once without web_search.
   // A tools-schema error drops the named tools (else all), then all extras, then stops.
   for (let attempt = 0; ; ) {
     try {
       const result = await run();
-      return { tips: parseLunaTips(result.text, maxTips), sources: sourcesFromGenerateResult(result), error: null, skipped: skipped(), ...timings() };
+      args.onFinish?.({ usage: result.usage, providerMetadata: result.providerMetadata });
+      return { tips: parseLunaTips(result.text, maxTips), sources: sourcesFromGenerateResult(result), error: null, skipped: skipped(), ...timings(result.usage) };
     } catch (error) {
       // Match on the whole text so a tool named late in a long error is still found. Show the short one.
       const message = errorText(error, Number.POSITIVE_INFINITY);

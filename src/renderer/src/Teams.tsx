@@ -380,7 +380,7 @@ function TeamDetails({ teams, busy }: { teams: TeamsView; busy: boolean }) {
             <IconCopy {...ICON} /> {copied ? "Copied" : "Copy"}
           </Button>
         </span>
-        <span className="muted">Code {team.inviteCode}. Anyone with it can join, so share it only inside your company.</span>
+        <span className="muted">Code {team.inviteCode}. Anyone with it can join.</span>
       </label>
       <ul className="members">
         {team.members.map((member) => (
@@ -408,7 +408,7 @@ export function TeamSection({ state }: { state: BeeState }) {
       {!teams ? (
         <p className="muted">Loading…</p>
       ) : !teams.relayConfigured ? (
-        <p className="muted">Teams mode is off. Set BEE_RELAY_URL to your Bee relay to turn it on.</p>
+        <p className="muted">Teams mode is off. Set BEE_RELAY_URL to turn it on.</p>
       ) : teams.team ? (
         <TeamDetails teams={teams} busy={state.teamsBusy} />
       ) : (
@@ -416,10 +416,7 @@ export function TeamSection({ state }: { state: BeeState }) {
       )}
       {teams?.relayError ? <p className="error">{teams.relayError}</p> : null}
       {state.teamsError ? <p className="error">{state.teamsError}</p> : null}
-      <p className="muted">
-        Teammates on your team see when you are in a meeting. Bee never joins the call and only shares your own mic
-        phrases, after you join a sync.
-      </p>
+      <p className="muted">Teammates see when you are in a meeting.</p>
     </section>
   );
 }

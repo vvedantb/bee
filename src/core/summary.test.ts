@@ -1,5 +1,6 @@
 import { MockLanguageModelV4 } from "ai/test";
 import { describe, expect, it } from "vitest";
+import { ANTHROPIC_CACHE } from "./gateway";
 import { chunkNote } from "./notes";
 import {
   SPEAKER_RULES,
@@ -117,6 +118,13 @@ describe("generateMeetingSummary", () => {
     expect(call?.temperature).toBeUndefined();
     expect(call?.topP).toBeUndefined();
     expect(call?.providerOptions).toEqual({ gateway: { serviceTier: "flex", order: ["anthropic"] } });
+    // The system goes first with the cache breakpoint; the transcript after it carries none.
+    const [system, user] = call?.prompt ?? [];
+    expect(system).toEqual({ role: "system", content: SUMMARY_SYSTEM, providerOptions: ANTHROPIC_CACHE });
+    expect(user?.role).toBe("user");
+    expect(user?.providerOptions).toBeUndefined();
+    expect(JSON.stringify(user?.content)).toContain("Sam will send the quote by Friday.");
+    expect(JSON.stringify(user?.content)).not.toContain("cacheControl");
   });
 
   it("fails open to the local summary when the reply is unusable", async () => {

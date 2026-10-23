@@ -37,6 +37,16 @@ export function guideProviderOptions(
   return { gateway: { ...gatewayTier(tier).gateway, ...routing } };
 }
 
+/**
+ * Anthropic prompt-cache breakpoint for a GUIDE_MODEL message or content part: the prefix up to it (tools, then system,
+ * then messages) is cached. The Gateway forwards `anthropic` options to Anthropic. Bee sets explicit markers instead of
+ * the Gateway's `caching: "auto"`, which marks the last two messages: those hold the sliding transcript, and Anthropic
+ * allows at most 4 breakpoints per request, so the two must not be combined. A prefix below the model's minimum
+ * cacheable length (treat it as 4096 tokens for Haiku) is silently not cached, so a marker on a short prompt is harmless.
+ * Never send this to a non-Anthropic model (Jev, STT).
+ */
+export const ANTHROPIC_CACHE = { anthropic: { cacheControl: { type: "ephemeral" } } } as const;
+
 export const NO_GATEWAY_KEY = "No AI Gateway key. Add one in Settings.";
 
 export type BeeGateway = GatewayProvider;

@@ -348,21 +348,21 @@ function LiveTab({ state }: { state: BeeState }) {
 }
 
 const STORAGE_LABEL: Record<SettingsView["secretStorage"], string> = {
-  os: "Secrets are encrypted with the operating system key store.",
-  weak: "No OS keyring found: secrets use Electron's weak fallback encryption.",
-  memory: "Encryption unavailable: secrets are kept in memory for this session only.",
+  os: "Secrets are encrypted by the OS key store.",
+  weak: "No OS keyring: secrets use weak fallback encryption.",
+  memory: "No encryption: secrets stay in memory this session.",
 };
 
 const KEY_SOURCE_LABEL: Record<SettingsView["gatewayKeySource"], string> = {
-  saved: "A key is set in Settings and is in use.",
-  env: "Using BEE_AI_GATEWAY_API_KEY from the environment.",
+  saved: "Saved key in use.",
+  env: "Using BEE_AI_GATEWAY_API_KEY from env.",
   none: "No key set.",
 };
 
 function updateLabel(update: UpdateState): string {
   if (update.status === "checking") return "Checking for updates…";
   if (update.status === "downloading") return "Downloading update…";
-  if (update.status === "ready") return "Update downloaded. Bee will quit while the installer runs.";
+  if (update.status === "ready") return "Update ready. Bee quits to install.";
   const check = update.check;
   if (!check) return "Not checked yet.";
   if (check.available) return `Bee ${check.latestVersion} is available.`;
@@ -455,7 +455,7 @@ function SettingsTab({ state, settings }: { state: BeeState; settings: SettingsV
         className="flex-nowrap items-start max-sm:flex-nowrap [&>div:last-child]:min-h-5"
         id="personalised-links"
         label="Personalised link suggestions"
-        description="Sends the current line to Jev, and to vmem when connected under Connectors, to pick the exact page. Needs the Gateway key."
+        description="Sends the current line to Jev, and vmem if connected."
         checked={settings.personalisedLinks}
         onCheckedChange={(personalisedLinks) => void actions.saveSettings({ personalisedLinks })}
       />
@@ -463,7 +463,7 @@ function SettingsTab({ state, settings }: { state: BeeState; settings: SettingsV
         className="flex-nowrap items-start max-sm:flex-nowrap [&>div:last-child]:min-h-5"
         id="meeting-mode"
         label="Meeting mode"
-        description="Hide Bee from screen sharing, stay above full-screen apps."
+        description="Hidden from screen sharing, kept on top."
         checked={settings.meetingMode}
         onCheckedChange={(meetingMode) => void actions.saveSettings({ meetingMode })}
       />
@@ -490,7 +490,7 @@ function SettingsTab({ state, settings }: { state: BeeState; settings: SettingsV
             if (motionPreference) void actions.saveSettings({ motionPreference });
           }}
         />
-      <p className="muted">On keeps Bee's motion even when Windows or macOS reduces animations. System follows the OS. Off skips motion.</p>
+        <p className="muted">On ignores the OS reduced-motion setting.</p>
       </div>
 
       <MeetingContextSection
