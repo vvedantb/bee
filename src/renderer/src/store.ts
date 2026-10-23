@@ -23,6 +23,7 @@ import {
 import { ISLAND_IDLE_MS, islandPhase, islandShowsBody, shouldAutoCollapse } from "./island";
 import { LOGO_DONE_MS } from "./logo";
 import { openMic, openSystemAudio } from "./mic";
+import { motionReduced } from "./motion";
 import { startMicSession } from "./speech";
 
 export type Tab = "live" | "connectors" | "settings";
@@ -97,11 +98,6 @@ export type BeeState = {
   // The invite step shows after starting a sync, until Done.
   inviteOpen: boolean;
 };
-
-/** True when the root carries data-motion="reduce" (App sets it from the Animations setting). */
-export function motionReduced(): boolean {
-  return typeof document !== "undefined" && document.documentElement.dataset.motion === "reduce";
-}
 
 const PIPELINE_WINDOW = 8;
 // Matches the panel exit animation in styles.css.

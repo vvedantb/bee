@@ -3,6 +3,9 @@ import { activityLabel } from "./island";
 import type { LogoState } from "./logo";
 import type { BeeState } from "./store";
 
+/** The notch's round, raised size="sm" buttons (mic off, collapse). The logo is as tall as they are (logo.ts NOTCH_LOGO_PX). */
+export const NOTCH_BUTTON = "rounded-full bg-[var(--surface-raised)] hover:bg-[#2d271e]";
+
 type LogoInputs = Pick<BeeState, "busy" | "tools" | "done" | "mic" | "error" | "result" | "summary" | "mcp" | "update" | "teamsError">;
 
 /**

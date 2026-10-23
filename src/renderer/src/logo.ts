@@ -12,6 +12,9 @@ export type LogoDetail = {
 
 export const LOGO_TINY_BELOW = 24;
 
+/** The notch logo's size in CSS px: as tall as the notch's size="sm" buttons (h-8), so the row reads as one set of controls. */
+export const NOTCH_LOGO_PX = 32;
+
 export function logoDetail(size: number): LogoDetail {
   if (size < LOGO_TINY_BELOW) return { viewBox: "7 7 50 50", glow: false, antennae: false, catchlights: false, grain: false };
   return { viewBox: "0 0 64 64", glow: true, antennae: true, catchlights: size >= 32, grain: size >= 48 };
@@ -30,7 +33,8 @@ export function blinkTiming(seed: string): { periodS: number; delayS: number } {
 export type LogoState = "idle" | "listening" | "thinking" | "searching" | "tool" | "done" | "error";
 
 /**
- * Sizes for the state extras (rings, orbit, figure-8, loop) in view-box units, so they stay inside the view.
+ * Sizes for the state extras (rings, orbit, figure-8, loop) in view-box units, so they stay inside the view. The ring is
+ * centred on the orb (32, 35), so its largest size must fit the 29 units below it.
  * The tiny view is widened a little when animated (the static mark keeps its crop), and its paths are smaller to fit it.
  */
 export type LogoMotion = {
@@ -51,7 +55,7 @@ export function logoMotion(size: number): LogoMotion {
   if (size < LOGO_TINY_BELOW) {
     return { viewBox: "5 5 54 54", ringR: 22, ringGain: 0.09, echoScale: 1.09, eightX: 8, eightY: 3.5, orbitX: 24, loopR: 3, sparkAt: { x: 54, y: 22, scale: 0.8 } };
   }
-  return { viewBox: "0 0 64 64", ringR: 23, ringGain: 0.3, echoScale: 1.5, eightX: 11, eightY: 4.5, orbitX: 26, loopR: 7, sparkAt: { x: 57, y: 24, scale: 1 } };
+  return { viewBox: "0 0 64 64", ringR: 22, ringGain: 0.3, echoScale: 1.3, eightX: 11, eightY: 4.5, orbitX: 26, loopR: 7, sparkAt: { x: 57, y: 24, scale: 1 } };
 }
 
 // Paths are easier to state as maths than as hand-written keyframes. Amplitudes come from LogoMotion via CSS variables

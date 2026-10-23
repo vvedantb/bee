@@ -15,6 +15,7 @@ import { Badge, Button, Input, LabeledSwitchRow, PillTabs, Textarea } from "@vve
 import { useEffect, useState, type FormEvent } from "react";
 import { BeeLogo } from "./BeeLogo";
 import { Favicon } from "./Favicon";
+import { followBottom } from "./follow-bottom";
 import { Connectors } from "./Connectors";
 import { MeetingContextSection } from "./MeetingContextSection";
 import { SecretField } from "./SecretField";
@@ -24,7 +25,8 @@ import { visibleChips, type LinkChip } from "../../core/link-suggest";
 import { tipKey } from "../../core/steering";
 import type { PipelineResult, SettingsView } from "../../shared/ipc";
 import { mcpErrorNote, timingsLabel, timingsTitle } from "./island";
-import { logoState, notchStatus } from "./notch";
+import { NOTCH_LOGO_PX } from "./logo";
+import { NOTCH_BUTTON, logoState, notchStatus } from "./notch";
 import { actions, displayResult, islandOpen, useBee, type BeeState, type SummaryState, type UpdateState } from "./store";
 import { SyncCard, SyncSection, TeamSection, syncedWith } from "./Teams";
 
@@ -77,40 +79,45 @@ function IslandBody({
         <Button type="button" variant="ghost" size="icon-sm" className="island-close" title="Dismiss" aria-label="Dismiss" onClick={() => void actions.dismissIsland()}>
           <IconX {...ICON} />
         </Button>
-        {card.length > 0 ? (
-          <div className="island-card">
-            {card.map((line, index) => (
-              <p key={index}>{line}</p>
-            ))}
+        {/* Pinned to the newest line until the user scrolls up (follow-bottom.ts). */}
+        <div className="island-scroll scrollbar-thin" ref={followBottom}>
+          <div className="island-content">
+            {card.length > 0 ? (
+              <div className="island-card">
+                {card.map((line, index) => (
+                  <p key={index}>{line}</p>
+                ))}
+              </div>
+            ) : null}
+            {tips.length > 0 ? (
+              <ul className="island-tips">
+                {/* Keyed by position: a streaming line grows in place instead of replaying the entrance. Kept tips are dimmed while Bee updates them. */}
+                {tips.map((tip, index) => (
+                  <li key={index} className={kept.has(tipKey(tip)) ? "kept" : undefined}>
+                    {tip}
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+            <LinkChips chips={chips} />
+            {result?.guideError ? <p className="island-error">{result.guideError}</p> : null}
+            {result?.guideNote ? <p className="island-note">{result.guideNote}</p> : null}
+            {sources.length > 0 ? (
+              <div className="island-sources">
+                <h3>Sources</h3>
+                <ul>
+                  {sources.map((source) => (
+                    <li key={source.url}>
+                      <a href={source.url} target="_blank" rel="noreferrer" title={source.title}>
+                        {source.title}
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
           </div>
-        ) : null}
-        {tips.length > 0 ? (
-          <ul className="island-tips">
-            {/* Keyed by position: a streaming line grows in place instead of replaying the entrance. Kept tips are dimmed while Bee updates them. */}
-            {tips.map((tip, index) => (
-              <li key={index} className={kept.has(tipKey(tip)) ? "kept" : undefined}>
-                {tip}
-              </li>
-            ))}
-          </ul>
-        ) : null}
-        <LinkChips chips={chips} />
-        {result?.guideError ? <p className="island-error">{result.guideError}</p> : null}
-        {result?.guideNote ? <p className="island-note">{result.guideNote}</p> : null}
-        {sources.length > 0 ? (
-          <div className="island-sources">
-            <h3>Sources</h3>
-            <ul>
-              {sources.map((source) => (
-                <li key={source.url}>
-                  <a href={source.url} target="_blank" rel="noreferrer" title={source.title}>
-                    {source.title}
-                  </a>
-                </li>
-              ))}
-            </ul>
-          </div>
-        ) : null}
+        </div>
       </div>
     </section>
   );
@@ -137,7 +144,7 @@ function Island({ state }: { state: BeeState }) {
       onPointerLeave={() => actions.setIslandHover(false)}
     >
       <header className="notch">
-        <BeeLogo size={20} state={logoState(state)} level={state.mic.level} />
+        <BeeLogo size={NOTCH_LOGO_PX} state={logoState(state)} level={state.mic.level} />
         {canExpand ? (
           // Keyed so each new status fades in.
           <Button
@@ -181,7 +188,7 @@ function Island({ state }: { state: BeeState }) {
             type="button"
             variant={state.mic.on ? "default" : "ghost"}
             size="sm"
-            className={state.mic.on ? "rounded-full bg-[var(--accent)] text-[var(--surface)] hover:bg-[var(--accent)]" : "rounded-full bg-[var(--surface-raised)] hover:bg-[#2d271e]"}
+            className={state.mic.on ? "rounded-full bg-[var(--accent)] text-[var(--surface)] hover:bg-[var(--accent)]" : NOTCH_BUTTON}
             title={state.mic.error ?? (state.mic.on ? "Stop microphone" : "Start microphone")}
             onClick={() => void actions.toggleMic()}
           >
@@ -193,7 +200,7 @@ function Island({ state }: { state: BeeState }) {
           type="button"
           variant="ghost"
           size="sm"
-          className={open ? "chevron open rounded-full bg-[var(--surface-raised)] hover:bg-[#2d271e]" : "chevron rounded-full bg-[var(--surface-raised)] hover:bg-[#2d271e]"}
+          className={open ? `chevron open ${NOTCH_BUTTON}` : `chevron ${NOTCH_BUTTON}`}
           title={open ? "Collapse" : "Expand"}
           onClick={() => void actions.setExpanded(!open)}
         >
