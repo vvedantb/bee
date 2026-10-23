@@ -428,6 +428,8 @@ function SettingsTab({ state, settings }: { state: BeeState; settings: SettingsV
           placeholder="vck_…"
           saved={settings.gatewayKeySource === "saved"}
           status={KEY_SOURCE_LABEL[settings.gatewayKeySource]}
+          reveal={window.bee.revealGatewayKey}
+          copy={window.bee.copyGatewayKey}
         />
         <label>
           Extra folders Luna may read (one absolute path per line)

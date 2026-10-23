@@ -12,6 +12,7 @@ import { createMeetingMemoryStore } from "../core/meeting-memory";
 import { searchMcpNotes } from "../core/meeting-search";
 import { createVmemSearch } from "../core/vmem-history";
 import { registerFaviconIpc } from "./favicon-ipc";
+import { registerGatewayKeyIpc } from "./gateway-key-ipc";
 import { registerLinkIpc } from "./link-ipc";
 import { createCalendarReader, createWindowTitleReader } from "./local-readers";
 import { registerMcpIpc } from "./mcp-ipc";
@@ -252,6 +253,9 @@ if (clerk.isPrimaryInstance) {
       applyInterfaceScale(view.interfaceScale);
       return view;
     });
+
+    // Settings' eye and copy buttons. Only the overlay may ask, and only for the saved key.
+    registerGatewayKeyIpc({ savedKey: settings.savedGatewayApiKey, windowId: () => (win && !win.isDestroyed() ? win.webContents.id : undefined) });
 
     // One open connection to the vmem connector for link chips. Opened now when signed in, and after each Connectors change.
     const vmemSearch = createVmemSearch(() => settings.vmemConfig());
