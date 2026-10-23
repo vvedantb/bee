@@ -6,12 +6,13 @@
 // With BEE_E2E_SHOTS (the island screenshot test), the page is loaded once per name (comma-separated, as ?shot=) in a transparent
 // frameless 520 × 360 window, and each capturePage() is written to <BEE_E2E_SHOTS_DIR>/island-<name>.png. Each page's own
 // E2E_RESULT (e.g. measured boxes) is passed on in the report's `pages`.
-// Names starting with mcp- or settings- (the Settings and Connectors tab shots) use a taller 480 × 640 window and are written as <name>.png.
+// Names starting with mcp-, settings-, live- or gateway-key- (the tab shots) use a taller 480 × 640 window and are written as <name>.png.
+// Shot runs answer Settings' reveal and copy IPC with a fake Gateway key and leave the clipboard alone.
 // BEE_E2E_SHOTS_DIR alone does not change the run.
 // With BEE_E2E_MCP_FILE (the live MCP test), Luna gets the MCP servers in that JSON file, re-read on every run so tokens can
 // rotate while the test runs, and every MCP tool call is reported on stdout as "E2E_MCP_CALL {...}". Tokens are never printed.
 // BEE_E2E_QUESTIONS is passed to the page as ?questions=. Page lines starting "E2E_MARK " are copied to stdout.
-import { BrowserWindow, app, session } from "electron";
+import { BrowserWindow, app, ipcMain, session } from "electron";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -26,6 +27,10 @@ import { registerMeetingIpc } from "../../src/main/meeting-ipc";
 import { ensureNotesDir } from "../../src/main/notes";
 import { createStubDetector } from "../../src/main/teams-detector";
 import { registerTeamsIpc, relayUrlFromEnv } from "../../src/main/teams-sync";
+import { IPC, type CopyGatewayKeyResult } from "../../src/shared/ipc";
+
+// Obviously fake, so a screenshot can never show a real key.
+const FAKE_GATEWAY_KEY = "vck_test_1234567890_FAKE_KEY";
 
 const { BEE_E2E_SHOTS_DIR: shotsDir, BEE_E2E_SHOTS: shotNames } = process.env;
 const { BEE_E2E_PRELOAD: preload, BEE_E2E_PAGE: page, BEE_E2E_AUDIO: audioFile, BEE_E2E_NOTES_DIR: notesDirEnv } = process.env;
@@ -52,8 +57,8 @@ async function captureShots(dir: string, names: string[]): Promise<{ files: stri
   mkdirSync(dir, { recursive: true });
   const files: string[] = [];
   const pages: PageReport[] = [];
-  const tabShot = (name: string) => name.startsWith("mcp-") || name.startsWith("settings-") || name.startsWith("live-");
-  const tall = names.some(tabShot) || /(mcp|meeting)-settings-shots/.test(page as string);
+  const tabShot = (name: string) => name.startsWith("mcp-") || name.startsWith("settings-") || name.startsWith("live-") || name.startsWith("gateway-key-");
+  const tall = names.some(tabShot) || /(mcp|meeting)-settings-shots|gateway-key-shots/.test(page as string);
   // One window for every shot: closing the only window would quit the app.
   const shotWin = new BrowserWindow({
     show: false,
@@ -143,6 +148,8 @@ function reportingPool(pool: McpPool): McpPool {
 void app.whenReady().then(async () => {
   if (shotNames) {
     const dir = shotsDir || mkdtempSync(join(tmpdir(), "bee-island-shots-"));
+    ipcMain.handle(IPC.revealGatewayKey, () => FAKE_GATEWAY_KEY);
+    ipcMain.handle(IPC.copyGatewayKey, (): CopyGatewayKeyResult => ({ copied: true }));
     const { files, pages } = await captureShots(dir, shotNames.split(","));
     process.stdout.write(`E2E_RESULT ${JSON.stringify({ ok: true, files, pages })}\n`);
     app.exit(0);

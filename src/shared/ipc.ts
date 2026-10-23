@@ -6,6 +6,8 @@ import { MOTION_PREFERENCES } from "../core/motion-preference";
 export const IPC = {
   getSettings: "bee:settings:get",
   saveSettings: "bee:settings:save",
+  revealGatewayKey: "bee:settings:reveal-gateway-key",
+  copyGatewayKey: "bee:settings:copy-gateway-key",
   runPipeline: "bee:pipeline:run",
   transcribe: "bee:speech:transcribe",
   writeMeetingSummary: "bee:meeting:write-summary",
@@ -80,6 +82,12 @@ export const settingsUpdateSchema = z.object({
   meetingMemoryEnabled: z.boolean().optional(),
 });
 export type SettingsUpdate = z.infer<typeof settingsUpdateSchema>;
+
+// On request only, to Bee's own window: the saved Gateway key (never the env key), or null when none is saved.
+export const revealGatewayKeyResultSchema = z.string().max(500).nullable();
+// Copy writes the saved key to the clipboard in main; the reply only says whether there was one.
+export const copyGatewayKeyResultSchema = z.object({ copied: z.boolean() });
+export type CopyGatewayKeyResult = z.infer<typeof copyGatewayKeyResultSchema>;
 
 // Names one pipeline run, so the renderer can cancel it when a newer line supersedes it.
 const runIdSchema = z.union([z.string().max(100), z.number()]);

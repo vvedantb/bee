@@ -311,6 +311,11 @@ export function createSettingsStore(args: {
     return getSecret(read(), "gatewayApiKey") ?? (args.envGatewayKey?.trim() || undefined);
   }
 
+  /** The key saved in Settings, never the env key. Only for an explicit reveal or copy. Main only. */
+  function savedGatewayApiKey(): string | undefined {
+    return getSecret(read(), "gatewayApiKey");
+  }
+
   function hasVmemConnector(file: SettingsFile): boolean {
     return file.mcpServers.some((server) => server.enabled && isVmemConnector(server));
   }
@@ -389,5 +394,5 @@ export function createSettingsStore(args: {
     write({ ...read(), overlayPosition: position });
   }
 
-  return { view, save, meetingContext, overlayPosition, saveOverlayPosition, gatewayApiKey, linkSettings, vmemConfig, fsRoots, mcpList, mcpSave, mcpRemove, mcpSetEnabled, mcpRecordTools, mcpConfigs, mcpSignedOut, mcpConfig, mcpOAuthStorage };
+  return { view, save, meetingContext, overlayPosition, saveOverlayPosition, gatewayApiKey, savedGatewayApiKey, linkSettings, vmemConfig, fsRoots, mcpList, mcpSave, mcpRemove, mcpSetEnabled, mcpRecordTools, mcpConfigs, mcpSignedOut, mcpConfig, mcpOAuthStorage };
 }
