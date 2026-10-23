@@ -401,3 +401,27 @@ describe("settings meeting context", () => {
     expect(settingsUpdateSchema.parse({ meetingContextEnabled: false })).toEqual({ meetingContextEnabled: false });
   });
 });
+
+describe("settings savedGatewayApiKey", () => {
+  const withEnv = () => createSettingsStore({ userDataDir: dir, notesDir: join(dir, "notes"), envGatewayKey: "env-key-FAKE" });
+
+  for (const encrypted of [false, true]) {
+    it(`returns the saved key, not the env key (${encrypted ? "encrypted" : "memory"} mode)`, () => {
+      crypto.on = encrypted;
+      const store = withEnv();
+      store.save({ gatewayApiKey: " saved-key-FAKE " });
+      expect(store.savedGatewayApiKey()).toBe("saved-key-FAKE");
+      expect(store.view()).not.toHaveProperty("gatewayApiKey");
+      expect(JSON.stringify(store.view())).not.toContain("saved-key-FAKE");
+    });
+  }
+
+  it("is undefined with only an env key, and after the saved key is removed", () => {
+    const store = withEnv();
+    expect(store.savedGatewayApiKey()).toBeUndefined();
+    expect(store.gatewayApiKey()).toBe("env-key-FAKE");
+    store.save({ gatewayApiKey: "saved-key-FAKE" });
+    store.save({ gatewayApiKey: "" });
+    expect(store.savedGatewayApiKey()).toBeUndefined();
+  });
+});

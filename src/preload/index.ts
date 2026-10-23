@@ -8,12 +8,14 @@ import {
   lunaActivitySchema,
   lunaPartialSchema,
   clearMeetingMemoryResultSchema,
+  copyGatewayKeyResultSchema,
   meetingContextViewSchema,
   mcpListSchema,
   mcpTestResultSchema,
   meetingSummaryResultSchema,
   openExternalUrlResultSchema,
   pipelineResultSchema,
+  revealGatewayKeyResultSchema,
   settingsViewSchema,
   teamsActionResultSchema,
   teamsPublishResultSchema,
@@ -40,6 +42,10 @@ const api = {
   getSettings: async () => settingsViewSchema.parse(await ipcRenderer.invoke(IPC.getSettings)),
   saveSettings: async (update: SettingsUpdate) =>
     settingsViewSchema.parse(await ipcRenderer.invoke(IPC.saveSettings, update)),
+  // The saved Gateway key (never the env key) after the eye button is pressed; undefined when none is saved.
+  revealGatewayKey: async () => revealGatewayKeyResultSchema.parse(await ipcRenderer.invoke(IPC.revealGatewayKey)) ?? undefined,
+  // Main copies the saved key to the clipboard; false when none is saved.
+  copyGatewayKey: async () => copyGatewayKeyResultSchema.parse(await ipcRenderer.invoke(IPC.copyGatewayKey)).copied,
   runPipeline: async (request: PipelineRequest) =>
     pipelineResultSchema.parse(await ipcRenderer.invoke(IPC.runPipeline, request)),
   // Cancels a run a newer line has superseded. Fire and forget: the run's own result is dropped anyway.
