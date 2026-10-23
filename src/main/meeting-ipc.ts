@@ -13,6 +13,7 @@ import {
   pipelineCancelSchema,
   pipelineRequestSchema,
   transcribeRequestSchema,
+  type LunaActivity,
   type MeetingSummaryResult,
 } from "../shared/ipc";
 import { assertSignedIn } from "./auth";
@@ -85,8 +86,8 @@ export function registerMeetingIpc(args: { notesDir: string; fsRoots: () => stri
           return { ...mcp, errors: [...signedOut, ...mcp.errors] };
         },
         signal: controller.signal,
-        onActivity: (tool) => {
-          if (!event.sender.isDestroyed()) event.sender.send(IPC.lunaActivity, { tool });
+        onActivity: (activity) => {
+          if (!event.sender.isDestroyed()) event.sender.send(IPC.lunaActivity, { runId: request.runId, ...activity } satisfies LunaActivity);
         },
         onPartial: (tips) => {
           if (!controller.signal.aborted && !event.sender.isDestroyed()) event.sender.send(IPC.lunaPartial, { runId: request.runId, tips });

@@ -24,7 +24,7 @@ import { visibleChips, type LinkChip } from "../../core/link-suggest";
 import { tipKey } from "../../core/steering";
 import type { PipelineResult, SettingsView } from "../../shared/ipc";
 import { mcpErrorNote, timingsLabel, timingsTitle } from "./island";
-import { notchStatus } from "./notch";
+import { logoState, notchStatus } from "./notch";
 import { actions, displayResult, islandOpen, useBee, type BeeState, type SummaryState, type UpdateState } from "./store";
 import { SyncCard, SyncSection, TeamSection, syncedWith } from "./Teams";
 
@@ -137,7 +137,7 @@ function Island({ state }: { state: BeeState }) {
       onPointerLeave={() => actions.setIslandHover(false)}
     >
       <header className="notch">
-        <BeeLogo size={20} busy={state.busy} />
+        <BeeLogo size={20} state={logoState(state)} level={state.mic.level} />
         {canExpand ? (
           // Keyed so each new status fades in.
           <Button

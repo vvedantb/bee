@@ -4,7 +4,7 @@
 // nearly done), keeps complete tips on screen, and merges the new answer over them.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { END_SILENCE_MS } from "../src/renderer/src/speech";
-import type { PipelineResult } from "../src/shared/ipc";
+import type { LunaActivity, PipelineResult } from "../src/shared/ipc";
 
 vi.mock("@clerk/electron/react", () => ({ getToken: async () => "token" }));
 
@@ -38,6 +38,7 @@ async function setup() {
   const cancelled: Array<string | number> = [];
   let tickImpl: () => Promise<unknown> = () => Promise.reject(new Error("no relay"));
   let partialListener: (partial: { runId?: string | number; tips: string[] }) => void = () => undefined;
+  let activityListener: (activity: LunaActivity) => void = () => undefined;
 
   vi.doMock("../src/renderer/src/mic", () => ({
     openMic: async () => ({ sampleRate: RATE, start: (cb: typeof onFrame) => (onFrame = cb), attachExtra: () => undefined, stop: () => undefined }),
@@ -62,7 +63,10 @@ async function setup() {
         return done.promise;
       },
       cancelPipeline: async ({ runId }: { runId: string | number }) => void cancelled.push(runId),
-      onLunaActivity: () => () => undefined,
+      onLunaActivity: (listener: typeof activityListener) => {
+        activityListener = listener;
+        return () => undefined;
+      },
       onLunaPartial: (listener: typeof partialListener) => {
         partialListener = listener;
         return () => undefined;
@@ -70,7 +74,7 @@ async function setup() {
     },
   });
   const store = await import("../src/renderer/src/store");
-  const { notchStatus } = await import("../src/renderer/src/notch");
+  const { logoState, notchStatus } = await import("../src/renderer/src/notch");
   await store.actions.toggleMic();
 
   /** One spoken phrase: speech, then the end silence. The ack fires on the last frame. */
@@ -89,6 +93,8 @@ async function setup() {
     },
     status,
     shown,
+    logo: () => logoState(store.getBeeState()),
+    emitActivity: (activity: LunaActivity) => activityListener(activity),
     stts,
     runs,
     cancelled,
@@ -181,6 +187,51 @@ describe("latency path, scripted", () => {
     await vi.waitFor(() => expect(t.store.getBeeState().busy).toBe(false));
     expect(t.store.getBeeState().partialTips).toBeNull();
     expect(t.store.getBeeState().result?.tips).toHaveLength(2);
+  });
+
+  it("drives the notch logo through a run: listening, thinking, searching, tool, done once, then listening", async () => {
+    const t = await setup();
+    expect(t.logo()).toBe("listening");
+    t.speak();
+    await vi.waitFor(() => expect(t.stts).toHaveLength(1));
+    t.stts[0]?.resolve({ text: "Who won last night?", error: null });
+    await t.waitRuns(1);
+    const run = t.runId(0);
+    expect(t.logo()).toBe("thinking");
+
+    t.emitActivity({ runId: run, tool: "web_search", phase: "start" });
+    expect(t.logo()).toBe("searching");
+    expect(t.status()).toBe("Searching the web");
+    t.emitActivity({ runId: run, tool: "vmem__search", phase: "start" });
+    // Web search wins while both are in flight.
+    expect(t.logo()).toBe("searching");
+    t.emitActivity({ runId: run, tool: "web_search", phase: "end" });
+    expect(t.logo()).toBe("tool");
+    // Another run's events are ignored.
+    t.emitActivity({ runId: run + 1, tool: "vmem__search", phase: "end" });
+    expect(t.logo()).toBe("tool");
+    t.emitActivity({ runId: run, tool: "vmem__search", phase: "end" });
+    expect(t.logo()).toBe("thinking");
+
+    t.runs[0]?.done.resolve(result(["They won 2-1 in extra time"]));
+    await vi.waitFor(() => expect(t.store.getBeeState().busy).toBe(false));
+    expect(t.logo()).toBe("done");
+    await vi.waitFor(() => expect(t.logo()).toBe("listening"), { timeout: 3000 });
+  });
+
+  it("clears tool calls when the run ends without their end events", async () => {
+    const t = await setup();
+    t.speak();
+    await vi.waitFor(() => expect(t.stts).toHaveLength(1));
+    t.stts[0]?.resolve({ text: "Check the notes", error: null });
+    await t.waitRuns(1);
+    t.emitActivity({ runId: t.runId(0), tool: "read_file", phase: "start" });
+    expect(t.logo()).toBe("tool");
+    t.runs[0]?.done.resolve(result([]));
+    await vi.waitFor(() => expect(t.store.getBeeState().busy).toBe(false));
+    expect(t.store.getBeeState().tools).toEqual([]);
+    // No tips: no done loop.
+    expect(t.logo()).toBe("listening");
   });
 
   it("keeps the previous tips on screen while the next run is busy, cancels the old run, and ignores its late partials", async () => {

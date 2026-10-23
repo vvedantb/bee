@@ -1,7 +1,11 @@
-import { useId } from "react";
-import { blinkTiming, logoDetail } from "./logo";
+import { useId, type CSSProperties } from "react";
+import { EIGHT, ORBIT, blinkTiming, eightAt, logoDetail, logoMotion, logoMotionCss, orbitAt, trailTurn, type LogoState } from "./logo";
 
 const INK = "#2a1e0c";
+const HEX = "50,37 57.79,41.5 57.79,50.5 50,55 42.21,50.5 42.21,41.5";
+const SPARK = "M0 -4.5Q0.7 -0.7 4.5 0Q0.7 0.7 0 4.5Q-0.7 0.7 -4.5 0Q-0.7 -0.7 0 -4.5Z";
+// Generated once; React hoists the <style> by href, so many logos share one copy.
+const MOTION_CSS = logoMotionCss();
 // Amber, not ink, so the antennae read on the dark surface and on white.
 const ANTENNA = "#d0901a";
 // Glassy white wings vanish on a light background, so `tone="light"` draws them grey with a darker outline.
@@ -12,13 +16,16 @@ const WINGS = {
 
 /**
  * Bee's mark: a glossy honey orb with two stripes, glassy wings, antennae and pill eyes.
- * Motion is CSS only (styles.css, `.bee-logo`): blink, an occasional wing flutter, hover scale, and a buzz while busy.
- * Decorative unless `title` is given. `tone` is the background the mark sits on.
+ * Motion is CSS only (styles.css, `.bee-logo`, plus generated paths from logo.ts): one pose and set of extras per `state`.
+ * `busy` without `state` is thinking. `level` (0..1, mic input) drives the listening ring. With `animated` off the mark is
+ * the plain static logo, whatever the state. Decorative unless `title` is given. `tone` is the background the mark sits on.
  */
 export function BeeLogo({
   size = 28,
   animated = true,
   busy = false,
+  state,
+  level = 0,
   tone = "dark",
   className,
   title,
@@ -26,6 +33,8 @@ export function BeeLogo({
   size?: number;
   animated?: boolean;
   busy?: boolean;
+  state?: LogoState;
+  level?: number;
   tone?: "dark" | "light";
   className?: string;
   title?: string;
@@ -36,15 +45,79 @@ export function BeeLogo({
   const detail = logoDetail(size);
   const blink = blinkTiming(uid);
   const timing = { animationDelay: `${blink.delayS}s` };
+  // Animated wings take the phase from --blink-delay (idle flutter only), so one-shot and fast states start at once.
+  const wingTiming = animated ? undefined : timing;
   const wings = WINGS[tone];
-  return (
+  const shown = animated ? (state ?? (busy ? "thinking" : "idle")) : undefined;
+  const motion = logoMotion(size);
+  const vars: CSSProperties & Record<`--${string}`, string | number> = {
+    "--blink-delay": `${blink.delayS}s`,
+    "--level": Math.min(1, Math.max(0, level)),
+    "--ring-gain": motion.ringGain,
+    "--echo-scale": motion.echoScale,
+    "--eight-x": `${motion.eightX}px`,
+    "--eight-y": `${motion.eightY}px`,
+    "--orbit-x": `${motion.orbitX}px`,
+    "--loop-r": `${motion.loopR}px`,
+    "--mute": `url(#${ref("mute")})`,
+    // A sub-pixel blur is invisible in the tiny view, so it is not paid for there.
+    ...(detail.glow ? { "--blur": `url(#${ref("blur")})` } : {}),
+  };
+  const glow = detail.glow ? <circle className={shown ? "bee-logo-glow" : undefined} cx="32" cy="35" r="29" fill={`url(#${ref("glow")})`} /> : null;
+  const orbit = (layer: "front" | "back") => (
+    <g className={`bee-fx-orbit ${layer}`} fill="#ffd75e">
+      {[0, 1, 2].map((k) => (
+        <circle key={k} cx="32" cy="35" r="1.9" style={{ ...orbitAt(k / 3 + 0.08, layer), animationDelay: `${-((k / 3) * ORBIT.periodS).toFixed(2)}s` }} />
+      ))}
+    </g>
+  );
+  const art = (
+    <g className="bee-logo-art">
+      <g className="bee-logo-wing left" style={wingTiming}>
+        <ellipse cx="17.5" cy="15.5" rx="10" ry="5" transform="rotate(30 17.5 15.5)" fill={`url(#${ref("wing")})`} stroke={wings.stroke} strokeOpacity={wings.strokeOpacity} strokeWidth="1" />
+      </g>
+      <g className="bee-logo-wing right" style={wingTiming}>
+        <ellipse cx="46.5" cy="15.5" rx="10" ry="5" transform="rotate(-30 46.5 15.5)" fill={`url(#${ref("wing")})`} stroke={wings.stroke} strokeOpacity={wings.strokeOpacity} strokeWidth="1" />
+      </g>
+      {detail.antennae ? (
+        <g fill={ANTENNA} stroke={ANTENNA} strokeWidth="2.2" strokeLinecap="round">
+          <path d="M28.5 17Q27.5 10.5 24.5 6.5" fill="none" />
+          <path d="M35.5 17Q36.5 10.5 39.5 6.5" fill="none" />
+          <circle cx="24.5" cy="6.5" r="2.2" stroke="none" />
+          <circle cx="39.5" cy="6.5" r="2.2" stroke="none" />
+        </g>
+      ) : null}
+      <circle cx="32" cy="35" r="20" fill={`url(#${ref("body")})`} />
+      {/* Stripes bow downward to follow the sphere. */}
+      <g clipPath={`url(#${ref("orb")})`} fill={INK}>
+        <path d="M10 36Q32 45 54 36V41Q32 50 10 41Z" />
+        <path d="M10 45Q32 54 54 45V49.5Q32 58.5 10 49.5Z" />
+        <circle cx="32" cy="35" r="20" fill={`url(#${ref("shade")})`} />
+        {detail.grain ? <rect x="12" y="15" width="40" height="40" filter={`url(#${ref("grain")})`} opacity="0.18" /> : null}
+      </g>
+      <ellipse cx="25" cy="23" rx="8" ry="6" transform="rotate(-30 25 23)" fill={`url(#${ref("spec")})`} />
+      <circle cx="32" cy="35" r="19.4" fill="none" stroke={`url(#${ref("rim")})`} strokeWidth="1.2" />
+      <g className="bee-logo-eyes" style={{ ...timing, animationDuration: `${blink.periodS}s` }}>
+        <rect x="23.6" y="24.5" width="5.4" height="9" rx="2.7" fill={INK} />
+        <rect x="35" y="24.5" width="5.4" height="9" rx="2.7" fill={INK} />
+        {detail.catchlights ? (
+          <g fill="#ffffff" opacity="0.9">
+            <circle cx="25.6" cy="26.9" r="1.15" />
+            <circle cx="37" cy="26.9" r="1.15" />
+          </g>
+        ) : null}
+      </g>
+    </g>
+  );
+  const svg = (
     <svg
       xmlns="http://www.w3.org/2000/svg"
       className={["bee-logo", animated && "animated", className].filter(Boolean).join(" ")}
-      data-busy={busy || undefined}
+      data-state={shown}
+      style={shown ? vars : undefined}
       width={size}
       height={size}
-      viewBox={detail.viewBox}
+      viewBox={shown ? motion.viewBox : detail.viewBox}
       role={title ? "img" : undefined}
       aria-label={title}
       aria-hidden={title ? undefined : true}
@@ -88,44 +161,103 @@ export function BeeLogo({
             <feColorMatrix values="0 0 0 0 0.35  0 0 0 0 0.22  0 0 0 0 0.02  0 0 0 0.9 0" />
           </filter>
         ) : null}
-      </defs>
-      {detail.glow ? <circle cx="32" cy="35" r="29" fill={`url(#${ref("glow")})`} /> : null}
-      <g className="bee-logo-art">
-        <g className="bee-logo-wing left" style={timing}>
-          <ellipse cx="17.5" cy="15.5" rx="10" ry="5" transform="rotate(30 17.5 15.5)" fill={`url(#${ref("wing")})`} stroke={wings.stroke} strokeOpacity={wings.strokeOpacity} strokeWidth="1" />
-        </g>
-        <g className="bee-logo-wing right" style={timing}>
-          <ellipse cx="46.5" cy="15.5" rx="10" ry="5" transform="rotate(-30 46.5 15.5)" fill={`url(#${ref("wing")})`} stroke={wings.stroke} strokeOpacity={wings.strokeOpacity} strokeWidth="1" />
-        </g>
-        {detail.antennae ? (
-          <g fill={ANTENNA} stroke={ANTENNA} strokeWidth="2.2" strokeLinecap="round">
-            <path d="M28.5 17Q27.5 10.5 24.5 6.5" fill="none" />
-            <path d="M35.5 17Q36.5 10.5 39.5 6.5" fill="none" />
-            <circle cx="24.5" cy="6.5" r="2.2" stroke="none" />
-            <circle cx="39.5" cy="6.5" r="2.2" stroke="none" />
-          </g>
+        {shown === "error" ? (
+          <filter id={ref("mute")} x="-50%" y="-50%" width="200%" height="200%" colorInterpolationFilters="sRGB">
+            <feColorMatrix type="saturate" values="0.2" />
+            <feComponentTransfer>
+              <feFuncR type="linear" slope="0.7" />
+              <feFuncG type="linear" slope="0.7" />
+              <feFuncB type="linear" slope="0.7" />
+            </feComponentTransfer>
+          </filter>
         ) : null}
-        <circle cx="32" cy="35" r="20" fill={`url(#${ref("body")})`} />
-        {/* Stripes bow downward to follow the sphere. */}
-        <g clipPath={`url(#${ref("orb")})`} fill={INK}>
-          <path d="M10 36Q32 45 54 36V41Q32 50 10 41Z" />
-          <path d="M10 45Q32 54 54 45V49.5Q32 58.5 10 49.5Z" />
-          <circle cx="32" cy="35" r="20" fill={`url(#${ref("shade")})`} />
-          {detail.grain ? <rect x="12" y="15" width="40" height="40" filter={`url(#${ref("grain")})`} opacity="0.18" /> : null}
-        </g>
-        <ellipse cx="25" cy="23" rx="8" ry="6" transform="rotate(-30 25 23)" fill={`url(#${ref("spec")})`} />
-        <circle cx="32" cy="35" r="19.4" fill="none" stroke={`url(#${ref("rim")})`} strokeWidth="1.2" />
-        <g className="bee-logo-eyes" style={{ ...timing, animationDuration: `${blink.periodS}s` }}>
-          <rect x="23.6" y="24.5" width="5.4" height="9" rx="2.7" fill={INK} />
-          <rect x="35" y="24.5" width="5.4" height="9" rx="2.7" fill={INK} />
-          {detail.catchlights ? (
-            <g fill="#ffffff" opacity="0.9">
-              <circle cx="25.6" cy="26.9" r="1.15" />
-              <circle cx="37" cy="26.9" r="1.15" />
+        {shown === "thinking" && detail.glow ? (
+          <filter id={ref("blur")} x="-30%" y="-30%" width="160%" height="160%">
+            <feGaussianBlur stdDeviation="0.45" />
+          </filter>
+        ) : null}
+        {shown === "tool" ? (
+          <>
+            <clipPath id={ref("hex")}>
+              <polygon points={HEX} />
+            </clipPath>
+            <linearGradient id={ref("honey")} x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stopColor="#ffd75e" />
+              <stop offset="1" stopColor="#e09a12" />
+            </linearGradient>
+          </>
+        ) : null}
+      </defs>
+      {shown ? (
+        <>
+          {shown === "listening" ? (
+            <g fill="none" stroke="#fabe28">
+              <circle className="bee-fx-ring echo" cx="32" cy="35" r={motion.ringR} strokeWidth="1" />
+              <circle className="bee-fx-ring level" cx="32" cy="35" r={motion.ringR} strokeWidth="1.4" />
             </g>
           ) : null}
-        </g>
-      </g>
+          {shown === "searching" ? (
+            <g className="bee-fx-trail" fill="#fabe28">
+              {Array.from({ length: EIGHT.dots - 1 }, (_, i) => i + 1).map((k) => (
+                <circle
+                  key={k}
+                  cx="32"
+                  cy="35"
+                  r={(1.6 - k * 0.1).toFixed(2)}
+                  opacity={(0.7 - k * 0.07).toFixed(2)}
+                  style={{ ...eightAt(trailTurn(k)), animationDelay: `${-(EIGHT.periodS - k * EIGHT.lagS).toFixed(2)}s` }}
+                />
+              ))}
+            </g>
+          ) : null}
+          {shown === "tool" ? (
+            <g>
+              <polygon points={HEX} fill="#221e17" />
+              <g clipPath={`url(#${ref("hex")})`}>
+                <rect className="bee-fx-honey" x="41" y="36" width="18" height="19" fill={`url(#${ref("honey")})`} />
+              </g>
+              <polygon points={HEX} fill="none" stroke="#fabe28" strokeOpacity="0.85" strokeWidth="1.4" strokeLinejoin="round" />
+            </g>
+          ) : null}
+          <g className="bee-flight">
+            {glow}
+            {shown === "thinking" ? orbit("back") : null}
+            {art}
+            {shown === "thinking" ? orbit("front") : null}
+            {shown === "searching" ? (
+              <g className="bee-fx-glass">
+                <circle cx="50" cy="51" r="4.6" fill="#17140f" fillOpacity="0.55" stroke="#f4efe6" strokeWidth="1.9" />
+                <path d="M53.3 54.3L57 58" stroke="#f4efe6" strokeWidth="2.6" strokeLinecap="round" />
+              </g>
+            ) : null}
+          </g>
+          {shown === "done" ? (
+            <g fill="#fff1b0">
+              <g transform={`translate(${motion.sparkAt.x} ${motion.sparkAt.y}) scale(${motion.sparkAt.scale})`}>
+                <path className="bee-fx-spark" d={SPARK} />
+              </g>
+              <g transform="translate(8 28) scale(0.65)">
+                <path className="bee-fx-spark late" d={SPARK} />
+              </g>
+            </g>
+          ) : null}
+          {shown === "error" ? <circle cx="52" cy="11" r="3.6" fill="#ff8a7a" stroke="#17140f" strokeWidth="1.6" /> : null}
+        </>
+      ) : (
+        <>
+          {glow}
+          {art}
+        </>
+      )}
     </svg>
+  );
+  if (!shown) return svg;
+  return (
+    <>
+      <style href="bee-logo-motion" precedence="default">
+        {MOTION_CSS}
+      </style>
+      {svg}
+    </>
   );
 }

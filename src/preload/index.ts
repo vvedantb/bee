@@ -22,6 +22,7 @@ import {
   updateActionSchema,
   updateCheckSchema,
   type EnrichLinksRequest,
+  type LunaActivity,
   type McpSave,
   type McpSetEnabled,
   type MeetingSummaryRequest,
@@ -68,11 +69,11 @@ const api = {
   installUpdate: async () => updateActionSchema.parse(await ipcRenderer.invoke(IPC.installUpdate)),
   // A screen source id when system audio may be capturable, else null. The mic path never depends on it.
   systemAudioSource: async () => z.string().nullable().parse(await ipcRenderer.invoke(IPC.systemAudioSource)),
-  // Tool activity while a run is in flight. Returns the unsubscribe function.
-  onLunaActivity: (listener: (tool: string) => void): (() => void) => {
+  // Tool calls starting and ending while a run is in flight. Returns the unsubscribe function.
+  onLunaActivity: (listener: (activity: LunaActivity) => void): (() => void) => {
     const handler = (_event: unknown, payload: unknown) => {
       const parsed = lunaActivitySchema.safeParse(payload);
-      if (parsed.success) listener(parsed.data.tool);
+      if (parsed.success) listener(parsed.data);
     };
     ipcRenderer.on(IPC.lunaActivity, handler);
     return () => {

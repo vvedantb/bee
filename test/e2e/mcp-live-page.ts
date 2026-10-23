@@ -34,7 +34,9 @@ async function run(): Promise<void> {
   for (const [index, question] of questions().entries()) {
     console.log(`E2E_MARK ${JSON.stringify({ run: index })}`);
     const activity: string[] = [];
-    const stop = window.bee.onLunaActivity((tool) => activity.push(tool));
+    const stop = window.bee.onLunaActivity(({ tool, phase }) => {
+      if (phase === "start") activity.push(tool);
+    });
     try {
       const result = await window.bee.runPipeline({ transcript: [question], sessionToken });
       runs.push({ question, tips: result.tips, mcpErrors: result.mcpErrors ?? [], guideError: result.guideError, guideNote: result.guideNote ?? null, activity });

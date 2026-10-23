@@ -193,8 +193,8 @@ export const pipelineResultSchema = z.object({
 });
 export type PipelineResult = z.infer<typeof pipelineResultSchema>;
 
-// Main → renderer while Luna runs: the tool it just used or is using (renderer/src/island.ts: activityLabel).
-export const lunaActivitySchema = z.object({ tool: z.string().max(80) });
+// Main → renderer while Luna runs: a tool call starting or ending, for the run that asked (renderer/src/island.ts: activityLabel).
+export const lunaActivitySchema = z.object({ runId: runIdSchema.optional(), tool: z.string().max(80), phase: z.enum(["start", "end"]) });
 export type LunaActivity = z.infer<typeof lunaActivitySchema>;
 
 // Main → renderer while Luna streams: the tips so far (finished lines, plus a line with a few words). Never the transcript.
