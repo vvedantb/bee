@@ -20,7 +20,7 @@ import {
   type UpdateCheck,
   type WindowSize,
 } from "../../shared/ipc";
-import { ISLAND_IDLE_MS, islandPhase, islandShowsBody, shouldAutoCollapse } from "./island";
+import { islandOpenMs, islandShowsBody, shouldAutoCollapse, shouldShowResponse } from "./island";
 import { LOGO_DONE_MS } from "./logo";
 import { openMic, openSystemAudio } from "./mic";
 import { motionReduced } from "./motion";
@@ -83,6 +83,9 @@ export type BeeState = {
   dismissed: boolean;
   // True while the body plays its exit animation, before the window shrinks.
   islandClosing: boolean;
+  // The user clicked the one-line answer in the pill to read it in full in the island. It never closes on its own: only the
+  // dismiss button, a click outside the island, the panel or a new turn close it.
+  fullText: boolean;
   // Link chips for the current turn (the latest line plus the tips that came back), and the ones the user closed.
   chips: LinkChip[];
   dismissedChipIds: string[];
@@ -142,6 +145,7 @@ let state: BeeState = {
   done: false,
   dismissed: false,
   islandClosing: false,
+  fullText: false,
   chips: [],
   dismissedChipIds: [],
   meeting: null,
@@ -182,9 +186,12 @@ let sampleIndex = 0;
 let localSeq = 0;
 let turnSeq = 0;
 let turnText = "";
-// Live steering. A turn is the lines since the last gap of TURN_GAP_MS or dismissal; inside it a new line keeps the tips on screen.
+// Live steering. A turn is a line and those that interrupt its run (core/steering.ts isNewTurn); inside it a new line keeps
+// the tips on screen. A dismissal closes it.
 let turnOpen = false;
 let lastLineAt = 0;
+// A phrase ended while a run was busy; its line may land after the run settles and still steers it.
+let spokenDuringRun = false;
 // The line that opened this turn has not started a run yet: nothing is kept.
 let pendingFresh = false;
 // A run is waiting out its debounce (runTimer), or waiting for a run in its commit window to finish (deferred).
@@ -223,18 +230,28 @@ export function displayResult(current: Pick<BeeState, "result" | "partialTips" |
 
 const ZERO_TIMINGS = { retrieve: 0, rank: 0, guide: 0, mcp: 0, lunaFirstToken: null, lunaTotal: 0 };
 
-/** Restart the inactivity clock. The body closes ISLAND_IDLE_MS after the last result or pointer leave. */
+/** The words the island body shows, for its reading time (island.ts islandOpenMs). */
+function islandText(current: BeeState): string {
+  const result = displayResult(current);
+  return [...(current.meetingCard?.lines ?? []), ...(result?.tips ?? []), result?.guideError ?? ""].join(" ");
+}
+
+/**
+ * Restart the inactivity clock. The body folds back to the pill's one line islandOpenMs after the last result, scroll or pointer
+ * leave: at least 30 s plus reading time. An answer the user opened in full never folds on its own.
+ */
 function touchIsland(): void {
   islandActivityAt = Date.now();
   clearTimeout(islandTimer);
-  if (!islandOpen(state) || islandHovered) return;
-  islandTimer = setTimeout(autoCollapseIsland, ISLAND_IDLE_MS);
+  if (!islandOpen(state) || islandHovered || state.fullText) return;
+  islandTimer = setTimeout(autoCollapseIsland, islandOpenMs(islandText(state)));
 }
 
 function autoCollapseIsland(): void {
   // Chips can hold the body open while Luna thinks; the pill's phase then stays "thinking" and nothing collapses.
   const phase = state.busy ? "thinking" : islandOpen(state) ? "expanded" : "idle";
-  if (shouldAutoCollapse({ phase, hovered: islandHovered, lastActivityAt: islandActivityAt, now: Date.now() })) void closeIsland();
+  const openMs = islandOpenMs(islandText(state));
+  if (shouldAutoCollapse({ phase, hovered: islandHovered, fullText: state.fullText, lastActivityAt: islandActivityAt, now: Date.now(), openMs })) void closeIsland();
 }
 
 async function closeIsland(): Promise<void> {
@@ -244,7 +261,7 @@ async function closeIsland(): Promise<void> {
   if (!state.islandClosing) return;
   // Dismissed tips are a finished turn: the next line starts afresh. A run in flight carries on.
   turnOpen = false;
-  set({ dismissed: true, islandClosing: false, meetingCard: null });
+  set({ dismissed: true, islandClosing: false, fullText: false, meetingCard: null });
   await applyWindowSize();
 }
 
@@ -261,6 +278,15 @@ export function syncCard(current: BeeState): SyncCard {
 export function islandOpen(current: BeeState): boolean {
   if (current.expanded || syncCard(current)) return false;
   return islandShowsBody(islandArgs(current));
+}
+
+/**
+ * The pill shows an answer folded to one line (the body is closed, nothing is running or being heard): a click on it opens the
+ * answer in full in the island (island.ts islandClick).
+ */
+export function answerFolded(current: BeeState): boolean {
+  if (current.busy || current.heard) return false;
+  return shouldShowResponse({ ...islandArgs(current), dismissed: false });
 }
 
 /** What island.ts needs from the state: the result (or an empty one), the chips still shown, and the flags. */
@@ -329,14 +355,15 @@ async function enrichChips(sent: LinkChip[], text: string, seq: number): Promise
 }
 
 /**
- * New spoken or simulated lines with content. Chips from their links open the island body even before Luna answers. Inside a turn
- * the chips merge and turnSeq stays, so enrichChips for earlier chips is not dropped; after a gap or a dismissal they start over.
+ * New spoken or simulated lines with content. Chips from their links open the island body even before Luna answers. A line that
+ * interrupts a run steers it: the chips merge and turnSeq stays, so enrichChips for earlier chips is not dropped. Any other line
+ * starts afresh: the last answer, its chips and the full-text view go at once, so only the new answer shows.
  */
 function startTurn(lines: SessionLine[]): void {
-  const now = Date.now();
-  const fresh = isNewTurn({ open: turnOpen, lastLineAt, now });
+  const fresh = isNewTurn({ open: turnOpen, busy: state.busy, spokenDuringRun });
+  spokenDuringRun = false;
   turnOpen = true;
-  lastLineAt = now;
+  lastLineAt = Date.now();
   const text = lines.map((line) => line.text).join("\n");
   const found = mergeChips([], lines.flatMap((line) => detectLinks(line.text)));
   if (fresh) {
@@ -344,11 +371,11 @@ function startTurn(lines: SessionLine[]): void {
     const seq = ++turnSeq;
     turnText = text;
     void enrichChips(found, turnText, seq);
-    set(found.length > 0 ? { chips: found, dismissedChipIds: [], dismissed: false, islandClosing: false } : { chips: found, dismissedChipIds: [] });
-    if (found.length > 0) {
-      touchIsland();
-      void applyWindowSize();
-    }
+    const cleared = { result: null, partialTips: null, fullText: false, chips: found, dismissedChipIds: [] };
+    set(found.length > 0 ? { ...cleared, dismissed: false, islandClosing: false } : cleared);
+    clearTimeout(islandTimer);
+    if (found.length > 0) touchIsland();
+    void applyWindowSize();
     return;
   }
   turnText = `${turnText}\n${text}`;
@@ -730,6 +757,24 @@ export const actions = {
     }
   },
 
+  /** The one-line answer in the pill was clicked: show it in full in the island itself (never the panel) until the user closes it. */
+  openFullText(): void {
+    if (!answerFolded(state) || state.expanded) return;
+    clearTimeout(islandTimer);
+    set({ fullText: true, dismissed: false, islandClosing: false });
+    void applyWindowSize();
+  },
+
+  /** The user clicked outside the island (the window's clear area, or another app took focus): an answer open in full folds back. */
+  clickedOutside(): void {
+    if (state.fullText) void closeIsland();
+  },
+
+  /** Scrolling the body is reading it: restart the clock. */
+  islandScrolled(): void {
+    if (!islandHovered) touchIsland();
+  },
+
   /** The pointer on the island holds the body open; leaving restarts the clock. */
   setIslandHover(hovered: boolean): void {
     islandHovered = hovered;
@@ -739,7 +784,7 @@ export const actions = {
   async setExpanded(expanded: boolean): Promise<void> {
     if (expanded) {
       clearTimeout(islandTimer);
-      set({ collapsing: false, expanded: true });
+      set({ collapsing: false, expanded: true, fullText: false });
       await applyWindowSize();
       return;
     }
@@ -861,6 +906,8 @@ export const actions = {
         // The phrase is over: show "Got it…" now, before speech-to-text. A cough never gets here.
         onSpeechEnd: () => {
           heardPending += 1;
+          // Spoken over a run: the line steers it even if the run settles before speech-to-text is done.
+          if (state.busy) spokenDuringRun = true;
           set({ heard: true });
         },
         // Same path as a typed line; latestRun drops results from superseded runs.
@@ -869,6 +916,7 @@ export const actions = {
         // After onLine, so busy is already set when the ack ends and the pill never falls back to "Listening…".
         onSettled: () => {
           heardPending = Math.max(0, heardPending - 1);
+          if (heardPending === 0) spokenDuringRun = false;
           if (heardPending === 0 && state.heard) set({ heard: false });
         },
       });

@@ -554,27 +554,6 @@ body {
   animation: island-rise 460ms var(--spring) backwards;
 }
 
-/* A tip is a plain-text button: a tap opens it in full in the panel (App.tsx onTipClick). Text stays selectable. */
-.island-tip {
-  display: block;
-  width: 100%;
-  margin: 0;
-  padding: 0;
-  border: 0;
-  background: none;
-  color: inherit;
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-  user-select: text;
-}
-
-.island-tip:focus-visible {
-  border-radius: 6px;
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-
 /* Tips kept from before the newest line, while Bee updates them. New tips are not dimmed. */
 .island-tips li.kept {
   opacity: 0.55;

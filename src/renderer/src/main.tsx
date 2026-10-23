@@ -4,7 +4,11 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { CLERK_PUBLISHABLE_KEY } from "../../shared/clerk";
 import { App } from "./App";
+import { actions } from "./store";
 import "./styles.css";
+
+// Focus went to another app: the user clicked outside Bee, so an answer open in full folds back to the pill.
+window.addEventListener("blur", () => actions.clickedOutside());
 
 const root = document.getElementById("root");
 if (root) {

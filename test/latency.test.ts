@@ -1,7 +1,7 @@
 // Scripted check of the perceived-latency path, with no Electron, mic or Gateway key: synthetic mic frames go through the real
-// store, and a fake `window.bee` stands in for main. Covers: the ack shows before speech-to-text finishes, tips stream in, and the
-// previous tips stay on screen while the next run is busy. Live steering: a new line mid-answer cancels the run (unless it is
-// nearly done), keeps complete tips on screen, and merges the new answer over them.
+// store, and a fake `window.bee` stands in for main. Covers: the ack shows before speech-to-text finishes, tips stream in, and a
+// fresh question after an answer settled shows only the new answer. Live steering: a line spoken over a run cancels it (unless it
+// is nearly done), keeps complete tips on screen, and merges the new answer over them.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { END_SILENCE_MS } from "../src/renderer/src/speech";
 import type { LunaActivity, PipelineResult } from "../src/shared/ipc";
@@ -36,6 +36,7 @@ async function setup() {
   const stts: Array<Deferred<Stt>> = [];
   const runs: Array<{ runId?: string | number; request: { transcript: string[]; shown?: string[] }; done: Deferred<PipelineResult> }> = [];
   const cancelled: Array<string | number> = [];
+  const sizes: string[] = [];
   let tickImpl: () => Promise<unknown> = () => Promise.reject(new Error("no relay"));
   let partialListener: (partial: { runId?: string | number; tips: string[] }) => void = () => undefined;
   let activityListener: (activity: LunaActivity) => void = () => undefined;
@@ -49,7 +50,7 @@ async function setup() {
       getSettings: async () => ({ gatewayKeySource: "saved", personalisedLinks: false, vmemConnected: false, meetingMode: false }),
       mcp: { list: async () => [] },
       checkForUpdate: async () => ({ currentVersion: "0", latestVersion: null, available: false, error: null }),
-      setWindowSize: async () => undefined,
+      setWindowSize: async (size: string) => void sizes.push(size),
       teams: { tick: () => tickImpl(), publish: async () => ({ sent: false, error: null }) },
       enrichLinks: async () => ({ chips: [] }),
       transcribe: () => {
@@ -98,6 +99,8 @@ async function setup() {
     stts,
     runs,
     cancelled,
+    /** Every window size the store asked main for, in order. */
+    sizes,
     emitPartial: (tips: string[], runId?: number) => partialListener({ runId, tips }),
     /** Steering runs start after a 500 ms debounce, so waits are longer than a bare tick. */
     waitRuns: (count: number) => vi.waitFor(() => expect(runs).toHaveLength(count), { timeout: 4000 }),
@@ -234,7 +237,7 @@ describe("latency path, scripted", () => {
     expect(t.logo()).toBe("listening");
   });
 
-  it("keeps the previous tips on screen while the next run is busy, cancels the old run, and ignores its late partials", async () => {
+  it("drops the last answer for a fresh question after it settled: only the new answer shows, and late partials are ignored", async () => {
     const t = await setup();
     t.speak();
     await vi.waitFor(() => expect(t.stts).toHaveLength(1));
@@ -246,31 +249,73 @@ describe("latency path, scripted", () => {
 
     t.speak();
     await vi.waitFor(() => expect(t.stts).toHaveLength(2));
-    // Heard, but the old tip still shows in the body while STT runs.
+    // Heard: the old answer is still the latest until the new line lands.
     expect(t.status()).toBe("Got it…");
-    expect(t.shown()?.tips).toEqual(["First answer tip for you"]);
     t.stts[1]?.resolve({ text: "Second question", error: null });
     await t.waitRuns(2);
 
-    // Busy with a new run: the old tips stay (dimmed), the body stays open, and the pill says Updating….
-    expect(t.store.getBeeState().busy).toBe(true);
-    expect(t.status()).toBe("Updating…");
-    expect(t.shown()?.tips).toEqual(["First answer tip for you"]);
-    expect(t.store.islandOpen(t.store.getBeeState())).toBe(true);
-    // Run 1 is cancelled in main.
-    expect(t.cancelled).toEqual([t.runs[0]?.runId]);
+    // A new turn: nothing kept, no earlier answer on screen, the pill thinks.
+    expect(t.store.getBeeState()).toMatchObject({ busy: true, revising: false, keptTips: [] });
+    expect(t.status()).toBe("Thinking…");
+    expect(t.shown()).toBeNull();
+    expect(t.runs[1]?.request.shown).toBeUndefined();
 
-    // A late partial from the old run is dropped. The new run's partial shows after the kept tip, which leaves at the final result.
+    // A late partial from the old run is dropped; the new run's partial shows alone.
     t.emitPartial(["Stale tip from the old run"], t.runs[0]?.runId as number);
-    expect(t.shown()?.tips).toEqual(["First answer tip for you"]);
+    expect(t.shown()).toBeNull();
     t.emitPartial(["Second answer tip arrives now"], t.runs[1]?.runId as number);
-    expect(t.shown()?.tips).toEqual(["First answer tip for you", "Second answer tip arrives now"]);
+    expect(t.shown()?.tips).toEqual(["Second answer tip arrives now"]);
 
-    // A superseded run's result never lands.
     t.runs[1]?.done.resolve(result(["Second answer tip arrives now"]));
     await vi.waitFor(() => expect(t.store.getBeeState().busy).toBe(false));
     expect(t.store.getBeeState().result?.tips).toEqual(["Second answer tip arrives now"]);
   });
+
+  it("keeps the answer for a phrase spoken over it, even when speech-to-text finishes after the run settled", async () => {
+    const t = await setup();
+    t.store.actions.simulateLine("Could we offer twenty percent off?");
+    await t.waitRuns(1);
+    // First tip complete, second in progress: the user interrupts.
+    t.emitPartial(["Offer 10% if they sign this week [n1]", "Ask who owns the rol"], t.runId(0));
+    t.speak();
+    await vi.waitFor(() => expect(t.stts).toHaveLength(1));
+    t.runs[0]?.done.resolve(result(["Offer 10% if they sign this week [n1]", "Ask who owns the rollout plan"]));
+    await vi.waitFor(() => expect(t.store.getBeeState().busy).toBe(false));
+
+    t.stts[0]?.resolve({ text: "No, make it fifteen", error: null });
+    await t.waitRuns(2);
+    // An interruption steers: the answer stays (dimmed) and goes to Luna as the keep list.
+    expect(t.runs[1]?.request.shown).toEqual(["Offer 10% if they sign this week [n1]", "Ask who owns the rollout plan"]);
+    expect(t.status()).toBe("Updating…");
+    expect(t.shown()?.tips).toEqual(["Offer 10% if they sign this week [n1]", "Ask who owns the rollout plan"]);
+  });
+
+  it("opens the one-line answer in full in the island, not the panel, and folds it back on a click outside", async () => {
+    const t = await setup();
+    t.store.actions.simulateLine("Does Convex support local deployments?");
+    await t.waitRuns(1);
+    t.runs[0]?.done.resolve(result(["Convex does support local deployments, per the docs."]));
+    await vi.waitFor(() => expect(t.store.getBeeState().busy).toBe(false));
+    await t.store.actions.dismissIsland();
+    // Folded: the pill shows the answer on one line, and the window is the collapsed notch.
+    expect(t.status()).toBe("Convex does support local deployments, per the docs.");
+    expect(t.store.answerFolded(t.store.getBeeState())).toBe(true);
+    expect(t.sizes.at(-1)).toBe("collapsed");
+
+    t.store.actions.openFullText();
+    expect(t.store.getBeeState()).toMatchObject({ fullText: true, expanded: false, dismissed: false });
+    expect(t.store.islandOpen(t.store.getBeeState())).toBe(true);
+    // The window grows for the island body, never to the panel.
+    await vi.waitFor(() => expect(t.sizes.at(-1)).toBe("response"));
+    expect(t.sizes).not.toContain("expanded");
+
+    t.store.actions.clickedOutside();
+    await vi.waitFor(() => expect(t.store.getBeeState()).toMatchObject({ fullText: false, dismissed: true }));
+    await vi.waitFor(() => expect(t.sizes.at(-1)).toBe("collapsed"));
+    // The answer is still the latest: it stays on the pill's one line.
+    expect(t.status()).toBe("Convex does support local deployments, per the docs.");
+  });
+
   describe("live steering", () => {
     const A = "Offer 10% if they sign this week [n1]";
     const B = "SSO ships in Q4 for enterprise [n2]";
@@ -297,7 +342,7 @@ describe("latency path, scripted", () => {
       await t.waitRuns(2);
     });
 
-    it("keeps settled tips, sends them as the keep list, merges the new answer, and adds the turn to the session once", async () => {
+    it("starts afresh for a new question after the answer settled: nothing kept, and each turn joins the session once", async () => {
       const t = await setup();
       say(t, "Could we offer twenty percent off?");
       await t.waitRuns(1);
@@ -307,23 +352,17 @@ describe("latency path, scripted", () => {
       expect(t.store.getBeeState().session.tips).toEqual([A]);
 
       say(t, "Also, when does SSO ship?");
-      // Busy at once, with the kept tip dimmed and the pill reading Updating….
-      expect(t.store.getBeeState()).toMatchObject({ busy: true, revising: true, keptTips: [A] });
-      expect(t.status()).toBe("Updating…");
+      // A fresh turn: the old answer goes at once, nothing dimmed, the pill thinks.
+      expect(t.store.getBeeState()).toMatchObject({ busy: true, revising: false, keptTips: [], result: null });
+      expect(t.shown()).toBeNull();
       await t.waitRuns(2);
-      expect(t.runs[1]?.request.shown).toEqual([A]);
+      expect(t.runs[1]?.request.shown).toBeUndefined();
+      // Luna still reads the recent transcript for context.
       expect(t.runs[1]?.request.transcript).toHaveLength(2);
-      expect(t.cancelled).toEqual([t.runId(0)]);
 
-      // Luna returns the full set. The shown tip is a no-op; the new one is added after it.
-      t.emitPartial([A, B], t.runId(1));
-      expect(t.shown()?.tips).toEqual([A, B]);
-      expect(t.store.getBeeState().keptTips).toEqual([A]);
-      t.runs[1]?.done.resolve(result([A, B]));
+      t.runs[1]?.done.resolve(result([B]));
       await vi.waitFor(() => expect(t.store.getBeeState().busy).toBe(false));
-      expect(t.store.getBeeState()).toMatchObject({ revising: false, keptTips: [], partialTips: null });
-      expect(t.store.getBeeState().result?.tips).toEqual([A, B]);
-      // The kept tip was not added twice.
+      expect(t.store.getBeeState().result?.tips).toEqual([B]);
       expect(t.store.getBeeState().session.tips).toEqual([A, B]);
     });
 
@@ -370,19 +409,21 @@ describe("latency path, scripted", () => {
       const t = await setup();
       say(t, "Could we offer twenty percent off?");
       await t.waitRuns(1);
-      t.runs[0]?.done.resolve(result([A, C]));
-      await vi.waitFor(() => expect(t.store.getBeeState().busy).toBe(false));
-
+      // A correction while Luna is still answering (in the commit window, so it waits for this run).
+      t.emitPartial([A, "Ask who owns the rol"], t.runId(0));
       say(t, "No, I meant when SSO ships");
+      t.runs[0]?.done.resolve(result([A, C]));
       await t.waitRuns(2);
-      t.runs[1]?.done.resolve(result([A, B]));
-      await vi.waitFor(() => expect(t.store.getBeeState().busy).toBe(false));
-      expect(t.store.getBeeState().result?.tips).toEqual([A, B]);
+      expect(t.runs[1]?.request.shown).toEqual([A, C]);
 
-      // The next line is aimed at someone else: Luna says NONE, and the tips stay.
+      // The next line, aimed at someone else, comes while the corrected answer is still streaming.
+      t.emitPartial([A, B], t.runId(1));
       say(t, "Dave, can you share your screen");
+      t.runs[1]?.done.resolve(result([A, B]));
       await t.waitRuns(3);
+      expect(t.store.getBeeState().result?.tips).toEqual([A, B]);
       expect(t.runs[2]?.request.shown).toEqual([A, B]);
+      // Luna says NONE, and the tips stay.
       t.runs[2]?.done.resolve(result([]));
       await vi.waitFor(() => expect(t.store.getBeeState().busy).toBe(false));
       expect(t.store.getBeeState().result?.tips).toEqual([A, B]);
@@ -441,7 +482,7 @@ describe("latency path, scripted", () => {
       await t.waitRuns(5);
     });
 
-    it("keeps link chips and the turn through a burst, and starts afresh after a turn gap", async () => {
+    it("keeps link chips and the turn through a burst, and starts afresh once the answer settled", async () => {
       const t = await setup();
       say(t, "See https://example.com/pricing for the plan");
       await t.waitRuns(1);
@@ -455,9 +496,7 @@ describe("latency path, scripted", () => {
 
       t.runs[1]?.done.resolve(result([A]));
       await vi.waitFor(() => expect(t.store.getBeeState().busy).toBe(false));
-      // A long gap makes the next line a new turn: nothing is kept and chips restart.
-      const later = Date.now() + 11_000;
-      vi.spyOn(Date, "now").mockReturnValue(later);
+      // The answer settled, so the next line is a new turn however soon it comes: nothing is kept and chips restart.
       say(t, "Different topic, what is the salary band?");
       await t.waitRuns(3);
       expect(t.runs[2]?.request.shown).toBeUndefined();
@@ -486,8 +525,8 @@ describe("latency path, scripted", () => {
       const t = await setup();
       say(t, "Could we offer twenty percent off?");
       await t.waitRuns(1);
-      t.runs[0]?.done.resolve(result([A]));
-      await vi.waitFor(() => expect(t.store.getBeeState().busy).toBe(false));
+      // Luna is still answering when the teammate speaks.
+      t.emitPartial([A, "Ask who owns the rol"], t.runId(0));
       // A relay tick delivers a line from a teammate (the store reads it through the same addLines path).
       const lines = [{ id: "room:1", own: false, speakerId: "u2", speakerName: "Alice", text: "What about the SSO date", clientTs: Date.now(), serverTs: null }];
       let sent = false;
@@ -498,8 +537,9 @@ describe("latency path, scripted", () => {
       });
       await vi.waitFor(() => expect(t.store.getBeeState().revising).toBe(true), { timeout: 4000 });
       expect(t.status()).toBe("Updating…");
+      t.runs[0]?.done.resolve(result([A, C]));
       await t.waitRuns(2);
-      expect(t.runs[1]?.request.shown).toEqual([A]);
+      expect(t.runs[1]?.request.shown).toEqual([A, C]);
       expect(t.runs[1]?.request.transcript.at(-1)).toBe("Alice: What about the SSO date");
     });
   });

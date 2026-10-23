@@ -14,7 +14,7 @@ import {
   IconX,
 } from "@tabler/icons-react";
 import { Badge, Button, Input, PillTabs, Textarea } from "@vvedantb/ui";
-import { useEffect, useState, type FormEvent, type MouseEvent, type PointerEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { BeeLogo } from "./BeeLogo";
 import { Favicon } from "./Favicon";
 import { followBottom } from "./follow-bottom";
@@ -27,10 +27,10 @@ import { DEFAULT_MOTION_PREFERENCE, MOTION_PREFERENCES, resolveReducedMotion, ty
 import { visibleChips, type LinkChip } from "../../core/link-suggest";
 import { tipKey } from "../../core/steering";
 import type { PipelineResult, SettingsView } from "../../shared/ipc";
-import { isTipTap, mcpErrorNote, timingsLabel, timingsTitle, type PointerPoint } from "./island";
+import { islandClick, mcpErrorNote, timingsLabel, timingsTitle } from "./island";
 import { NOTCH_LOGO_PX } from "./logo";
 import { NOTCH_BUTTON, NOTCH_UPDATE_BUTTON, logoState, notchStatus } from "./notch";
-import { actions, displayResult, islandOpen, useBee, type BeeState, type SummaryState, type UpdateState } from "./store";
+import { actions, answerFolded, displayResult, islandOpen, useBee, type BeeState, type SummaryState, type UpdateState } from "./store";
 import { SyncCard, SyncSection, TeamSection, syncedWith } from "./Teams";
 import { updateButton } from "./update";
 
@@ -61,21 +61,6 @@ function LinkChips({ chips }: { chips: LinkChip[] }) {
   );
 }
 
-// Where the last press on a tip started. One pointer at a time, so one slot will do; each click clears it.
-let tipPress: PointerPoint | null = null;
-
-function onTipPress(event: PointerEvent<HTMLButtonElement>): void {
-  tipPress = { x: event.clientX, y: event.clientY };
-}
-
-// A tap on a tip opens the panel's Live tab, which shows every tip in full. Only the chevron collapses the island. The
-// scrollbar belongs to .island-scroll, so pressing or dragging it never reaches a tip; a drag that starts on a tip is ignored.
-function onTipClick(event: MouseEvent<HTMLButtonElement>): void {
-  const press = tipPress;
-  tipPress = null;
-  if (isTipTap({ keyboard: event.detail === 0, press, release: { x: event.clientX, y: event.clientY } })) void actions.openTab("live");
-}
-
 function IslandBody({
   result,
   chips,
@@ -98,8 +83,8 @@ function IslandBody({
         <Button type="button" variant="ghost" size="icon-sm" className="island-close" title="Dismiss" aria-label="Dismiss" onClick={() => void actions.dismissIsland()}>
           <IconX {...ICON} />
         </Button>
-        {/* Pinned to the newest line until the user scrolls up (follow-bottom.ts). */}
-        <div className="island-scroll scrollbar-thin" ref={followBottom}>
+        {/* Pinned to the newest line until the user scrolls up (follow-bottom.ts). Scrolling keeps the body open. */}
+        <div className="island-scroll scrollbar-thin" ref={followBottom} onScroll={() => actions.islandScrolled()}>
           <div className="island-content">
             {card.length > 0 ? (
               <div className="island-card">
@@ -113,9 +98,7 @@ function IslandBody({
                 {/* Keyed by position: a streaming line grows in place instead of replaying the entrance. Kept tips are dimmed while Bee updates them. */}
                 {tips.map((tip, index) => (
                   <li key={index} className={kept.has(tipKey(tip)) ? "kept" : undefined}>
-                    <button type="button" className="island-tip" title="Show in full" onPointerDown={onTipPress} onClick={onTipClick}>
-                      {tip}
-                    </button>
+                    {tip}
                   </li>
                 ))}
               </ul>
@@ -171,8 +154,8 @@ function Island({ state }: { state: BeeState }) {
   const result = displayResult(state);
   const chips = visibleChips(state.chips, state.dismissedChipIds);
   const showBody = islandOpen(state);
-  // Collapsed, the status text opens the panel like the chevron, whatever it says.
-  const canExpand = !state.expanded;
+  // An answer folded to one line: clicking it opens it in full in the island itself. Only the chevron opens the panel.
+  const canOpenFullText = islandClick("status", { panelOpen: state.expanded, bodyShown: showBody, hasResponse: answerFolded(state) }) === "full-text";
   // While Luna thinks, chips may open the body but the pill keeps its thinking text.
   const cardOnly = (state.meetingCard?.lines.length ?? 0) > 0 && (result?.tips.length ?? 0) === 0;
   const status = showBody && !state.busy && !state.heard && !state.mic.error ? (cardOnly ? "Last time" : "Tips") : notchStatus(state, isSignedIn);
@@ -186,7 +169,7 @@ function Island({ state }: { state: BeeState }) {
     >
       <header className="notch">
         <BeeLogo size={NOTCH_LOGO_PX} state={logoState(state)} level={state.mic.level} />
-        {canExpand ? (
+        {canOpenFullText ? (
           // Keyed so each new status fades in.
           <Button
             key={status}
@@ -194,7 +177,7 @@ function Island({ state }: { state: BeeState }) {
             variant="ghost"
             title={status}
             className={`${statusClass} h-auto justify-start rounded-none p-0 text-[13px] font-normal text-foreground hover:bg-transparent hover:text-foreground hover:underline`}
-            onClick={() => void actions.setExpanded(true)}
+            onClick={() => actions.openFullText()}
           >
             {status}
           </Button>
@@ -236,7 +219,7 @@ function Island({ state }: { state: BeeState }) {
           size="sm"
           className={open ? `chevron open ${NOTCH_BUTTON}` : `chevron ${NOTCH_BUTTON}`}
           title={open ? "Collapse" : "Expand"}
-          onClick={() => void actions.setExpanded(!open)}
+          onClick={() => void actions.setExpanded(islandClick("chevron", { panelOpen: open, bodyShown: showBody, hasResponse: false }) === "open-panel")}
         >
           <IconChevronDown {...ICON} />
         </Button>
@@ -601,7 +584,13 @@ export function App() {
   const state = useBee();
   useMotionAttribute(state.settings?.motionPreference ?? DEFAULT_MOTION_PREFERENCE);
   return (
-    <div className={["shell", state.expanded && "expanded", state.collapsing && "collapsing"].filter(Boolean).join(" ")}>
+    // A press on the shell itself is on the window's clear area, outside the island: an answer open in full folds back.
+    <div
+      className={["shell", state.expanded && "expanded", state.collapsing && "collapsing"].filter(Boolean).join(" ")}
+      onPointerDown={(event) => {
+        if (event.target === event.currentTarget) actions.clickedOutside();
+      }}
+    >
       <Island state={state} />
       <Show when="signed-in">
         <SyncCard state={state} />

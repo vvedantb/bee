@@ -3,8 +3,10 @@
 // revising: a new line arrived while tips were on screen. They stay (dimmed) while the run updates them.
 export type IslandPhase = "idle" | "thinking" | "revising" | "expanded";
 
-/** Time with no new result, no busy run and no pointer on the island before the body closes. */
-export const ISLAND_IDLE_MS = 10_000;
+/** The least time an answer that opened on its own stays open with no new result, scroll or pointer on the island. */
+export const ISLAND_MIN_OPEN_MS = 30_000;
+/** Reading speed for the time on top of ISLAND_MIN_OPEN_MS, in words a second (about 200 a minute). */
+export const READ_WORDS_PER_SECOND = 3.3;
 
 const ACTIVITY_LABELS = new Map([
   ["web_search", "Searching the web"],
@@ -69,13 +71,31 @@ export function islandPhase(args: ResponseArgs & { busy: boolean; revising?: boo
   return shouldShowResponse(args) ? "expanded" : "idle";
 }
 
+/** How long the body stays open after the last activity: ISLAND_MIN_OPEN_MS plus time to read what it shows, in ms. */
+export function islandOpenMs(text: string): number {
+  const words = text.split(/\s+/).filter(Boolean).length;
+  return ISLAND_MIN_OPEN_MS + Math.round((words / READ_WORDS_PER_SECOND) * 1000);
+}
+
 /**
- * True when the body should close now. lastActivityAt: when the result arrived or the pointer last left.
- * Never while busy, while the pointer is on the island, or when no body is open.
+ * True when the body should fold back to the one-line pill now. lastActivityAt: when the result arrived, or the pointer last left
+ * or scrolled the body. Never while busy, while the pointer is on the island, while the user has the answer open in full (they
+ * clicked the one-line answer; only they close it), or when no body is open. The answer itself stays in the pill until a new turn.
  */
-export function shouldAutoCollapse(args: { phase: IslandPhase; hovered: boolean; lastActivityAt: number; now: number }): boolean {
-  if (args.phase !== "expanded" || args.hovered) return false;
-  return args.now - args.lastActivityAt >= ISLAND_IDLE_MS;
+export function shouldAutoCollapse(args: { phase: IslandPhase; hovered: boolean; fullText: boolean; lastActivityAt: number; now: number; openMs: number }): boolean {
+  if (args.phase !== "expanded" || args.hovered || args.fullText) return false;
+  return args.now - args.lastActivityAt >= args.openMs;
+}
+
+export type IslandClick = "full-text" | "open-panel" | "close-panel" | null;
+
+/**
+ * What a click on the pill does. The status text, when it shows an answer folded to one line, opens that answer in full in the
+ * island itself, never the panel; otherwise it does nothing. Only the chevron opens or closes the panel.
+ */
+export function islandClick(target: "status" | "chevron", args: { panelOpen: boolean; bodyShown: boolean; hasResponse: boolean }): IslandClick {
+  if (target === "chevron") return args.panelOpen ? "close-panel" : "open-panel";
+  return !args.panelOpen && !args.bodyShown && args.hasResponse ? "full-text" : null;
 }
 
 export type PipelineTimings = { retrieve: number; rank: number; guide: number; mcp: number };
@@ -108,19 +128,4 @@ export function keepFollowing(following: boolean, previousTop: number, metrics: 
   if (nearBottom(metrics)) return true;
   if (metrics.scrollTop < previousTop) return false;
   return following;
-}
-
-/** How far the pointer may move between press and release for a click on a tip to count, in CSS px. */
-export const TAP_SLOP_PX = 4;
-
-export type PointerPoint = { x: number; y: number };
-
-/**
- * Whether a click on a tip was a tap that should open its full text. A drag (selecting text, or the pointer moving off the
- * scrollbar) is not, and neither is a click with no press on the tip. Keyboard clicks are taps.
- */
-export function isTipTap(args: { keyboard: boolean; press: PointerPoint | null; release: PointerPoint }): boolean {
-  if (args.keyboard) return true;
-  if (!args.press) return false;
-  return Math.hypot(args.release.x - args.press.x, args.release.y - args.press.y) <= TAP_SLOP_PX;
 }
