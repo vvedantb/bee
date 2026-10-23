@@ -116,7 +116,7 @@ describe("generateMeetingSummary", () => {
     const call = model.doGenerateCalls[0];
     expect(call?.temperature).toBeUndefined();
     expect(call?.topP).toBeUndefined();
-    expect(call?.providerOptions).toMatchObject({ gateway: { serviceTier: "flex" }, openai: { reasoningEffort: "low" } });
+    expect(call?.providerOptions).toEqual({ gateway: { serviceTier: "flex", order: ["anthropic"] } });
   });
 
   it("fails open to the local summary when the reply is unusable", async () => {

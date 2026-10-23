@@ -1,4 +1,4 @@
-import { openai } from "@ai-sdk/openai";
+import { gateway } from "@ai-sdk/gateway";
 import type { ToolSet } from "ai";
 import { fsTools } from "./fs-tools";
 import { MAX_URL_LENGTH, stripTrackingParams } from "./url-safety";
@@ -11,7 +11,9 @@ export type BeeSource = { title: string; url: string };
 /** Tools Luna may call. Add new tools here; guideWithLuna passes the whole set. */
 /** `web: false` leaves out web_search (a provider that rejects it, see guideWithLuna). */
 export function lunaTools(options: { notesDir?: string; extraRoots?: readonly string[]; extra?: ToolSet; web?: boolean } = {}): ToolSet {
-  const web: ToolSet = options.web === false ? {} : { web_search: openai.tools.webSearch({ searchContextSize: "low" }) };
+  // The Gateway runs this search itself, so it works whichever provider serves the model.
+  const web: ToolSet =
+    options.web === false ? {} : { web_search: gateway.tools.perplexitySearch({ maxResults: MAX_SOURCES, maxTokensPerPage: 512 }) };
   const local = options.notesDir ? { ...web, ...fsTools({ notesDir: options.notesDir, extraRoots: options.extraRoots }) } : web;
   // MCP tools (core/mcp.ts) are namespaced; spreading them first also means they can never replace a built-in.
   return { ...options.extra, ...local };
@@ -26,8 +28,11 @@ function collectRaw(result: { sources?: readonly unknown[]; toolResults?: readon
   if (direct.length > 0) return direct;
   const fromTools: RawSource[] = [];
   for (const toolResult of result.toolResults ?? []) {
-    const output = (toolResult as { output?: { sources?: unknown } } | null)?.output;
-    if (Array.isArray(output?.sources)) fromTools.push(...output.sources.filter((item): item is RawSource => typeof item === "object" && item !== null));
+    // Provider search tools return `sources`; the Gateway's Perplexity search returns `results`.
+    const output = (toolResult as { output?: { sources?: unknown; results?: unknown } } | null)?.output;
+    for (const list of [output?.sources, output?.results]) {
+      if (Array.isArray(list)) fromTools.push(...list.filter((item): item is RawSource => typeof item === "object" && item !== null));
+    }
   }
   return fromTools;
 }

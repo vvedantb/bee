@@ -33,7 +33,7 @@ npm run dist:mac
 
 Signing is off by default. To sign and notarise, set `CSC_LINK` and `CSC_KEY_PASSWORD` for electron-builder, and set `build.mac.notarize` to `true` (it is `false` now), with `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD` and `APPLE_TEAM_ID` in the environment.
 
-Bee is a desktop overlay for meetings. It sits as a small "notch" at the top centre of the screen. It listens to the meeting, finds relevant local notes, ranks them with Jev and shows one or two short tips from GPT-6 Luna. When a question is about a public or current fact that the notes do not cover, Luna can search the web, and the Live tab lists the source links under the tips. This uses the same Gateway key.
+Bee is a desktop overlay for meetings. It sits as a small "notch" at the top centre of the screen. It listens to the meeting, finds relevant local notes, ranks them with Jev and shows one or two short tips from Luna (Claude Haiku 5.5). When a question is about a public or current fact that the notes do not cover, Luna can search the web, and the Live tab lists the source links under the tips. This uses the same Gateway key.
 
 Windows and macOS are supported. The Teams detector is Windows only.
 
@@ -43,7 +43,7 @@ Typical use: in a weekly meeting someone says "last time we discussed the Acme r
 
 - Windows 10 or 11 (x64), or macOS (Apple Silicon arm64 or Intel x64). Linux runs in development.
 - Node.js 22 or later, with npm.
-- A Vercel AI Gateway API key with access to `xai/grok-stt`, `openai/gpt-6-luna` and `typesafe-ai/jev`.
+- A Vercel AI Gateway API key with access to `xai/grok-stt`, `anthropic/claude-haiku-5.5` and `typesafe-ai/jev`.
 - A Bee account. Sign-in uses Clerk (the vedantb.com instance). See [Sign-in (Clerk)](#sign-in-clerk).
 
 ## Run on Windows
@@ -240,10 +240,10 @@ npm run typecheck
 
 1. `xai/grok-stt`: transcribes `test/fixtures/sso-question.wav` (a synthesised question with silence either side).
 2. `xai/grok-stt` with an invalid key: checks for a short `Speech-to-text failed:` error.
-3. `openai/gpt-6-luna`: one short guidance completion.
-4. `openai/gpt-6-luna`: a current-events question ("who is the current Prime Minister of the UK?"), checked for a tip and at least one `https://` source.
-5. `openai/gpt-6-luna`: a question about a local note (a room number in a temp notes folder), checked that the tip holds the answer, so Luna used the file tools.
-6. `openai/gpt-6-luna`: a meeting summary from a short transcript, checked for every section and the named owner.
+3. `anthropic/claude-haiku-5.5`: one short guidance completion.
+4. `anthropic/claude-haiku-5.5`: a current-events question ("who is the current Prime Minister of the UK?"), checked for a tip and at least one `https://` source.
+5. `anthropic/claude-haiku-5.5`: a question about a local note (a room number in a temp notes folder), checked that the tip holds the answer, so Luna used the file tools.
+6. `anthropic/claude-haiku-5.5`: a meeting summary from a short transcript, checked for every section and the named owner.
 7. `typesafe-ai/jev`: scores three note snippets against a fake transcript and checks that the relevant note ranks first.
 8. `typesafe-ai/jev` with an invalid key: checks that ranking fails open, keeps the original order, and returns a clear error.
 

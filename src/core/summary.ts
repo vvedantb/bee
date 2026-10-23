@@ -1,5 +1,5 @@
 import { generateText, type LanguageModel } from "ai";
-import { FLEX_PROVIDER_OPTIONS } from "./gateway";
+import { guideProviderOptions } from "./gateway";
 
 const SUMMARY_TIMEOUT_MS = 60_000;
 
@@ -156,7 +156,8 @@ export async function generateMeetingSummary(
       maxOutputTokens: 2000,
       maxRetries: 1,
       abortSignal: AbortSignal.timeout(args.timeoutMs ?? SUMMARY_TIMEOUT_MS),
-      providerOptions: { ...FLEX_PROVIDER_OPTIONS, openai: { reasoningEffort: "low" } },
+      // Background work: flex, Anthropic first. Flex may not apply on Anthropic.
+      providerOptions: guideProviderOptions("flex"),
     });
     const body = parseSummaryMarkdown(result.text);
     if (!body) throw new Error("reply did not have the expected sections");

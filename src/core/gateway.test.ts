@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { FLEX_PROVIDER_OPTIONS, LUNA_PROVIDERS, gatewayTier, lunaProviderOptions } from "./gateway";
+import { FLEX_PROVIDER_OPTIONS, GUIDE_MODEL, GUIDE_PROVIDER_ORDER, gatewayTier, guideProviderOptions } from "./gateway";
 
 describe("gatewayTier", () => {
   it("sends flex only when asked for it", () => {
@@ -16,10 +16,11 @@ describe("gatewayTier", () => {
   });
 });
 
-describe("lunaProviderOptions", () => {
-  it("limits Luna to providers that accept web_search and keeps the tier", () => {
-    expect(LUNA_PROVIDERS).toEqual(["openai", "azure"]);
-    expect(lunaProviderOptions("default")).toEqual({ gateway: { only: ["openai", "azure"] } });
-    expect(lunaProviderOptions("flex")).toEqual({ gateway: { serviceTier: "flex", only: ["openai", "azure"] } });
+describe("guideProviderOptions", () => {
+  it("prefers Anthropic without excluding fail-over providers, and keeps the tier", () => {
+    expect(GUIDE_MODEL).toBe("anthropic/claude-haiku-5.5");
+    expect(GUIDE_PROVIDER_ORDER).toEqual(["anthropic"]);
+    expect(guideProviderOptions("default")).toEqual({ gateway: { order: ["anthropic"] } });
+    expect(guideProviderOptions("flex")).toEqual({ gateway: { serviceTier: "flex", order: ["anthropic"] } });
   });
 });

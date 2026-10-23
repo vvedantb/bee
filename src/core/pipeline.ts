@@ -1,5 +1,5 @@
 import type { PipelineResult } from "../shared/ipc";
-import { JEV_MODEL, LUNA_MODEL, NO_GATEWAY_KEY, type BeeGateway } from "./gateway";
+import { JEV_MODEL, GUIDE_MODEL, NO_GATEWAY_KEY, type BeeGateway } from "./gateway";
 import { rankWithJev } from "./jev";
 import type { McpTools } from "./mcp";
 import { guideWithLuna, noteCitation } from "./luna";
@@ -82,7 +82,7 @@ export async function runPipeline(args: {
     const { value: mcp, ms: mcpMs } = await mcpRun;
     const started = performance.now();
     const guide = await guideWithLuna({
-      model: args.gateway!(LUNA_MODEL),
+      model: args.gateway!(GUIDE_MODEL),
       transcript: args.transcript,
       shown: args.shown,
       meetingBrief: args.meetingBrief,

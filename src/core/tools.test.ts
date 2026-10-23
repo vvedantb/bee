@@ -9,6 +9,10 @@ describe("lunaTools", () => {
     expect(Object.keys(lunaTools({ extraRoots: ["/x"] }))).toEqual(["web_search"]);
   });
 
+  it("uses the Gateway's own search, so web_search works on any provider", () => {
+    expect(lunaTools().web_search).toMatchObject({ type: "provider", id: "gateway.perplexity_search" });
+  });
+
   it("adds the file tools when a notes folder is passed", () => {
     expect(Object.keys(lunaTools({ notesDir: "/notes" }))).toEqual([
       "web_search",
@@ -75,6 +79,25 @@ describe("sourcesFromGenerateResult", () => {
       toolResults: [{ output: { sources: [{ type: "url", url: "https://bbc.co.uk/news" }] } }],
     });
     expect(sources).toEqual([{ title: "bbc.co.uk", url: "https://bbc.co.uk/news" }]);
+  });
+
+  it("uses toolResults output.results from the Gateway Perplexity search", () => {
+    const sources = sourcesFromGenerateResult({
+      toolResults: [
+        {
+          toolName: "web_search",
+          output: {
+            id: "s1",
+            results: [
+              { title: "Prime Minister", url: "https://www.gov.uk/government/ministers/prime-minister", snippet: "..." },
+              { title: "Old", url: "http://example.com/", snippet: "..." },
+            ],
+          },
+        },
+        { toolName: "web_search", output: { error: "rate_limit", message: "slow down" } },
+      ],
+    });
+    expect(sources).toEqual([{ title: "Prime Minister", url: "https://www.gov.uk/government/ministers/prime-minister" }]);
   });
 
   it("prefers result.sources over toolResults", () => {

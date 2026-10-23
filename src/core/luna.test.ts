@@ -575,14 +575,14 @@ describe("guideWithLuna providers and web search", () => {
     });
   const extraTools = { vmem__wobble: tool({ inputSchema: jsonSchema({ type: "object", properties: {} }), execute: async () => "X" }) };
 
-  it("routes Luna only to providers that accept web_search, with low reasoning effort", async () => {
+  it("prefers the Anthropic provider and sends no reasoning options", async () => {
     let providerOptions = "";
     const model = streamModel((options) => {
       providerOptions = options.providerOptions;
       return textChunks("- ok");
     });
     await guideWithLuna({ model, transcript: ["Hi"], notes: [] });
-    expect(JSON.parse(providerOptions)).toEqual({ gateway: { only: ["openai", "azure"] }, openai: { reasoningEffort: "low" } });
+    expect(JSON.parse(providerOptions)).toEqual({ gateway: { order: ["anthropic"] } });
   });
 
   it("retries once without web_search when the provider rejects it, keeping MCP tools", async () => {

@@ -11,7 +11,7 @@
 - Superseded runs are cancelled in main (`bee:pipeline:cancel`). A started tool call is never aborted.
 - Jev no longer gates Luna: Luna gets the BM25 top 3 at once, and Jev runs beside it for the panel.
 
-**Service tier pick (`core/gateway.ts`).** STT and Luna use the Gateway default tier (no `serviceTier` sent). Summary, link Jev and ranking Jev stay on `flex`. `ultrafast` is NOT used: no call in this repo has shown that `xai/grok-stt` or `openai/gpt-6-luna` accept it, and a rejected tier would fail the turn. The default tier is the lowest-risk change that removes flex queueing from the user-facing path. This is a hypothesis, not a measurement: the Phase 0 A/B (flex vs default vs ultrafast, with a real key) has not been run, and the cost effect is unknown.
+**Service tier pick (`core/gateway.ts`).** STT and Luna use the Gateway default tier (no `serviceTier` sent). Summary, link Jev and ranking Jev stay on `flex`. `ultrafast` is NOT used: no call in this repo has shown that `xai/grok-stt` or `anthropic/claude-haiku-5.5` accept it, and a rejected tier would fail the turn. The default tier is the lowest-risk change that removes flex queueing from the user-facing path. This is a hypothesis, not a measurement: the Phase 0 A/B (flex vs default vs ultrafast, with a real key) has not been run, and the cost effect is unknown.
 
 **Status of the rest of this document.** Sections 1 to 4 describe the code before this PR. The `perf` logs now give the Phase 0 numbers; no real timings have been collected yet.
 **Date:** 17 October 2026.
@@ -53,7 +53,7 @@ Facts about ChatGPT voice, Gemini Live and Grok Bot come from general knowledge.
  [8]   retrieve()                   BM25 over snippets, top 5 (sync, CPU)                        → timingsMs.retrieve
  [9]   rankWithJev()                experimental_evaluate, 15 s timeout, flex; skipped if 0 candidates   → timingsMs.rank
  [10]  loadMcp()                    loadMcpTools(): connect to every server in parallel, listTools, wrap  (AFTER Jev, BEFORE Luna)
- [11]  guideWithLuna()              generateText (not streamText), openai/gpt-6-luna, reasoningEffort low,
+ [11]  guideWithLuna()              generateText (not streamText), anthropic/claude-haiku-5.5, no reasoning,
    │                                maxOutputTokens 800, stopWhen isStepCount(8), tools = web_search + fs + MCP,
    │                                LUNA_TIMEOUT_MS=45 s, flex                                      → timingsMs.guide
    │                                .finally(() => mcp.close())  – every connection (and stdio child) closes
@@ -93,9 +93,9 @@ Reference moment: the user stops speaking. All values in seconds unless stated. 
 | 9 | Jev rank | `jev.ts` `experimental_evaluate`, 15 s timeout, flex, retry 1 | One Gateway evaluation call, 5 questions. Sequential before Luna. Zero if no candidates | 0 (no candidates) / 0.8 / 3 s (15 s on timeout, then fail open) | ESTIMATE | Low | Yes, and Luna waits for it |
 | 10 | MCP connect + list | `mcp.ts loadMcpTools` → `connectMcp` | Per server, in parallel: transport connect, MCP `initialize`, `listTools` (paged). Streamable HTTP with OAuth may add a token refresh. Stdio spawns a process. Runs every turn. Slowest server sets the time. 10 s timeout each for connect and list | 0 (none enabled) / 0.5–1 / 3 s (10 s+ if a server hangs, 2 stages) | ESTIMATE. One MEASURED anchor: a tool call on an already-open vmem connection took 450–790 ms (comment in `core/vmem-history.ts`). That is a call, not connect. | Low | Yes, and Luna waits for it |
 | 11 | Prompt build | `luna.ts buildLunaPrompt`, `lunaTools` | String concat; `sanitizeMcpSchema` per tool; SDK converts every tool to JSON schema. Large tool sets add input tokens (up to 100 tools × 20 servers allowed by `MCP_MAX_TOOLS` / limits) | < 0.01 s CPU, but input tokens grow with tools | ESTIMATE | Medium for CPU; the token cost shows up in stage 12 | Yes |
-| 12 | Luna time to first token | `luna.ts generateText`, `openai/gpt-6-luna`, `reasoningEffort: "low"`, flex | Prefill of system (~350 tokens), transcript, 3 notes (up to 600 chars each), tool schemas; then hidden reasoning tokens; then output. Nothing is surfaced until the whole call ends | 0.8 / 2 / 5 s (no tool call) | ESTIMATE. Model `gpt-6-luna` is not known to this analysis; flex tier is documented in `gateway.ts` as "cheaper, may be slower" | Low | Yes |
+| 12 | Luna time to first token | `luna.ts generateText`, `anthropic/claude-haiku-5.5`, no reasoning options, flex | Prefill of system (~350 tokens), transcript, 3 notes (up to 600 chars each), tool schemas; then output (thinking is off). Nothing is surfaced until the whole call ends | 0.8 / 2 / 5 s (no tool call) | ESTIMATE. Not measured for `claude-haiku-5.5`; flex tier is documented in `gateway.ts` as "cheaper, may be slower" | Low | Yes |
 | 13 | Luna generation | same | ≤ 2 tips, each < 20 words ≈ 25–50 output tokens | 0.3 / 0.6 / 1.5 s | ESTIMATE | Medium | Yes (non-streaming: user sees none of it) |
-| 14 | Tool round trips | `luna.ts` loop `MAX_STEPS=8`; AI SDK executes tool calls in a step, then a new model call | Each step = one more full model call (prefill again) plus the tool. `web_search` runs provider-side (`searchContextSize: "low"`). MCP calls: 15 s each (`MCP_CALL_TIMEOUT_MS`). The SDK runs the calls of one step in parallel; multiple steps are sequential by nature | 0 (no tools) / 3–6 s per tool step / 15–45 s (hits the 45 s ceiling) | ESTIMATE | Low | Yes |
+| 14 | Tool round trips | `luna.ts` loop `MAX_STEPS=8`; AI SDK executes tool calls in a step, then a new model call | Each step = one more full model call (prefill again) plus the tool. `web_search` runs Gateway-side (Perplexity search, `maxResults: 5`). MCP calls: 15 s each (`MCP_CALL_TIMEOUT_MS`). The SDK runs the calls of one step in parallel; multiple steps are sequential by nature | 0 (no tools) / 3–6 s per tool step / 15–45 s (hits the 45 s ceiling) | ESTIMATE | Low | Yes |
 | 15 | MCP close | `loadMcp`… `.finally(() => mcp?.close())` | Awaited before the result returns. `CLOSE_TIMEOUT_MS` 3 s per connection, in parallel. HTTP close is usually fast; a stuck stdio child is not | 0.01 / 0.1 / 3 s | ESTIMATE | Low | **Yes**: the result waits for close because `.finally` is awaited inside the `await guideWithLuna(...)` chain |
 | 16 | Return + render | IPC return, zod parse in preload, `set`, `applyWindowSize`, CSS fade (150–220 ms) | Result appears whole | 0.05 / 0.2 / 0.4 s | ESTIMATE (CSS motion is documented) | Medium | End of thinking |
 | 17 | TTS start | none | Not built | N/A | n/a | n/a | n/a |
@@ -163,7 +163,7 @@ Impact is the ESTIMATE of perceived or actual latency removed on a typical turn.
 | 12 | **Prewarm** Gateway connection and MCP at mic-on | −0.1 to −0.5 s on the first turn | S | `store.toggleMic`, a new `bee:warm` IPC | Wasted work if no speech follows |
 | 13 | **Streaming STT with partials and early endpoint** | −1 to −2 s | L | `transcribe.ts`, `speech.ts`, new IPC stream | Reverses a deliberate ARCHITECTURE decision; needs a streaming STT provider via the Gateway |
 | 14 | **Speculative start on partial transcripts** | −1 to −2 s more, if 13 exists | L | `store.ts`, `pipeline.ts` | Wasted calls; depends on 9 and 13 |
-| 15 | **Lower reasoning effort** (`low` → `minimal`/none where supported) | −0.3 to −1.5 s (unknown) | S | `luna.ts` `providerOptions` | Quality; model support unverified |
+| 15 | **Lower reasoning effort** (done: Claude Haiku 5.5 with no reasoning options, so thinking is off) | −0.3 to −1.5 s (unknown, not measured) | S | `luna.ts` `providerOptions` | Quality; not measured |
 | 16 | **Streaming TTS by sentence** | N/A today | L, future | none | Only if voice output is wanted (section 6) |
 
 ### Verdicts on the items in the brief
@@ -223,7 +223,7 @@ Impact is the ESTIMATE of perceived or actual latency removed on a typical turn.
 
 **13–14. Streaming STT and speculative start.** `ARCHITECTURE.md` records that `experimental_streamTranscribe` was deliberately not used: "Phrase-level batch calls are simpler, and one call per phrase matches one pipeline run per line." That reasoning still holds for v1. Revisit only if Phase 0 shows STT is a large share. Speculation also needs cancellation (rank 9) and a way to commit or discard a partial answer; it multiplies model spend. Not recommended before live steering exists, because partial transcripts are the same mechanism steering needs.
 
-**15. Reasoning effort.** The call already sets `openai: { reasoningEffort: "low" }` (`luna.ts`). I cannot verify whether `gpt-6-luna` accepts a lower setting. Put it in the Phase 0 A/B matrix.
+**15. Reasoning effort.** Luna now runs on `anthropic/claude-haiku-5.5` with no reasoning options, so thinking is off. Whether a small thinking budget improves tips enough to justify the latency is open. Put it in the Phase 0 A/B matrix.
 
 **16. TTS.** See section 6 and Phase 4.
 
@@ -466,7 +466,7 @@ Only production traces (Phase 0) can answer:
 11. How often Jev changes the top-3 notes, and whether Luna's tips differ without it.
 12. How often fast speech creates overlapping runs, and the share of Luna spend on superseded runs.
 13. STT share of total latency, and how often a second phrase waits in the sequential queue.
-14. Whether `gpt-6-luna` accepts a lower reasoning setting, and how the latency changes.
+14. Whether a small thinking budget on `claude-haiku-5.5` improves tips, and how the latency changes.
 15. Whether Chromium's echo cancellation holds when the same app plays TTS, on macOS and Windows.
 
 Outside the repo, to verify before decisions:

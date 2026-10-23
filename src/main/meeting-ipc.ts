@@ -2,7 +2,7 @@ import { ipcMain, shell } from "electron";
 import { z } from "zod";
 import { loadMcpTools, type McpPool, type McpServerConfig } from "../core/mcp";
 import type { MeetingContext } from "../core/meeting-context";
-import { LUNA_MODEL, NO_GATEWAY_KEY, STT_MODEL, createBeeGateway } from "../core/gateway";
+import { GUIDE_MODEL, NO_GATEWAY_KEY, STT_MODEL, createBeeGateway } from "../core/gateway";
 import { runPipeline } from "../core/pipeline";
 import { buildLocalSummary, generateMeetingSummary } from "../core/summary";
 import { transcribeSpeech } from "../core/transcribe";
@@ -111,7 +111,7 @@ export function registerMeetingIpc(args: { notesDir: string; fsRoots: () => stri
     const when = new Date();
     const apiKey = args.gatewayApiKey();
     const summary = apiKey
-      ? await generateMeetingSummary({ ...input, model: createBeeGateway(apiKey)(LUNA_MODEL), when })
+      ? await generateMeetingSummary({ ...input, model: createBeeGateway(apiKey)(GUIDE_MODEL), when })
       : { markdown: buildLocalSummary({ ...input, when }), usedLlm: false, error: NO_GATEWAY_KEY };
     const path = writeMeetingSummaryFile(args.notesDir, summary.markdown, when);
     // Structured fields go to meeting memory too (when it is on and the meeting has a name). Failing to save never loses the note.

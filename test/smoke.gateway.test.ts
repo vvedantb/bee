@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { JEV_MODEL, LUNA_MODEL, STT_MODEL, createBeeGateway } from "../src/core/gateway";
+import { JEV_MODEL, GUIDE_MODEL, STT_MODEL, createBeeGateway } from "../src/core/gateway";
 import { rankWithJev } from "../src/core/jev";
 import { guideWithLuna } from "../src/core/luna";
 import { loadMcpTools } from "../src/core/mcp";
@@ -51,16 +51,16 @@ describe("Vercel AI Gateway smoke", () => {
     expect(outcome.error).toMatch(/^Speech-to-text failed: /);
   });
 
-  it(`${LUNA_MODEL} returns short guidance`, async () => {
-    const result = await guideWithLuna({ model: gateway(LUNA_MODEL), transcript, notes: notes.filter((note) => note.id === "acme") });
+  it(`${GUIDE_MODEL} returns short guidance`, async () => {
+    const result = await guideWithLuna({ model: gateway(GUIDE_MODEL), transcript, notes: notes.filter((note) => note.id === "acme") });
     console.log("Luna tips:", result.tips);
     expect(result.error).toBeNull();
     expect(result.tips.length).toBeGreaterThan(0);
   });
 
-  it(`${LUNA_MODEL} searches the web for a current-events question and returns sources`, async () => {
+  it(`${GUIDE_MODEL} searches the web for a current-events question and returns sources`, async () => {
     const result = await guideWithLuna({
-      model: gateway(LUNA_MODEL),
+      model: gateway(GUIDE_MODEL),
       transcript: ["Quick aside: who is the current Prime Minister of the UK?"],
       notes: [],
     });
@@ -72,14 +72,14 @@ describe("Vercel AI Gateway smoke", () => {
     for (const source of result.sources) expect(source.url).toMatch(/^https:\/\//);
   });
 
-  it(`${LUNA_MODEL} answers from a local note by reading it with the file tools`, async () => {
+  it(`${GUIDE_MODEL} answers from a local note by reading it with the file tools`, async () => {
     const notesDir = mkdtempSync(join(tmpdir(), "bee-smoke-notes-"));
     try {
       mkdirSync(join(notesDir, "projects"));
       writeFileSync(join(notesDir, "projects", "wobblefinch.md"), "# Project WOBBLEFINCH\n\nLaunch review is on 14 March 2031 in room 4417.\n");
       writeFileSync(join(notesDir, "lunch.md"), "# Lunch\n\nFriday is pizza.\n");
       const result = await guideWithLuna({
-        model: gateway(LUNA_MODEL),
+        model: gateway(GUIDE_MODEL),
         transcript: ["Can you check my notes: what room is the WOBBLEFINCH launch review in?"],
         notes: [],
         notesDir,
@@ -92,14 +92,14 @@ describe("Vercel AI Gateway smoke", () => {
     }
   });
 
-  it(`${LUNA_MODEL} calls an MCP tool and uses its result`, async () => {
+  it(`${GUIDE_MODEL} calls an MCP tool and uses its result`, async () => {
     const server = await startMockMcpServer();
     const mcp = await loadMcpTools([{ id: "vmem", name: "vmem", transport: "http", url: server.url, auth: { type: "none" } }]);
     try {
       expect(Object.keys(mcp.tools)).toContain("vmem__wobble");
       const activity: string[] = [];
       const result = await guideWithLuna({
-        model: gateway(LUNA_MODEL),
+        model: gateway(GUIDE_MODEL),
         transcript: ["Can you check vmem for the WOBBLE project code? I need the exact code before we continue."],
         notes: [],
         extraTools: mcp.tools,
@@ -115,9 +115,9 @@ describe("Vercel AI Gateway smoke", () => {
     }
   });
 
-  it(`${LUNA_MODEL} writes a meeting summary with every section`, async () => {
+  it(`${GUIDE_MODEL} writes a meeting summary with every section`, async () => {
     const result = await generateMeetingSummary({
-      model: gateway(LUNA_MODEL),
+      model: gateway(GUIDE_MODEL),
       transcript: [
         ...transcript,
         "We agreed to hold the discount at 10% and not go to 15%.",
