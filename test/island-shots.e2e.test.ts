@@ -10,7 +10,7 @@ import { runHarness } from "./e2e/run";
 
 const dir = process.env.BEE_E2E_SHOTS_DIR || mkdtempSync(join(tmpdir(), "bee-island-shots-"));
 const PNG_MAGIC = "89504e470d0a1a0a";
-const SHOTS = ["collapsed", "thinking", "expanded", "meeting-card", "long-tip-bottom", "long-tip-scrolled-up"];
+const SHOTS = ["collapsed", "thinking", "expanded", "meeting-card", "long-tip-bottom", "long-tip-scrolled-up", "update-available"];
 
 const box = z.object({ width: z.number(), height: z.number(), centerY: z.number() });
 const page = z.object({
@@ -36,6 +36,9 @@ describe("island screenshots (Electron E2E)", () => {
         expect(Math.abs(notch.logo.centerY - button.centerY)).toBeLessThanOrEqual(0.5);
       }
     }
+
+    // The update button sits before the mic and collapse buttons.
+    expect(report.pages.find((item) => item.shot === "update-available")?.notch.buttons).toHaveLength(3);
 
     const scroll = (shot: string) => z.object({ scrollTop: z.number(), scrollHeight: z.number(), clientHeight: z.number() }).parse(report.pages.find((item) => item.shot === shot)?.scroll);
     const bottom = scroll("long-tip-bottom");

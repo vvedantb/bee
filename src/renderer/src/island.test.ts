@@ -3,11 +3,13 @@ import { TURN_GAP_MS } from "../../core/steering";
 import {
   FOLLOW_SLACK_PX,
   ISLAND_IDLE_MS,
+  TAP_SLOP_PX,
   activityLabel,
   islandPhase,
   keepFollowing,
   mcpErrorNote,
   islandShowsBody,
+  isTipTap,
   nearBottom,
   shouldAutoCollapse,
   shouldShowResponse,
@@ -276,5 +278,24 @@ describe("keepFollowing", () => {
 
   it("keeps following when shorter content pulls the scroll position up to the new bottom", () => {
     expect(keepFollowing(true, 700, { scrollTop: 400, scrollHeight: 700, clientHeight: 300 })).toBe(true);
+  });
+});
+
+describe("isTipTap", () => {
+  const press = { x: 100, y: 40 };
+
+  it("opens the tip on a tap, including a small wobble", () => {
+    expect(isTipTap({ keyboard: false, press, release: press })).toBe(true);
+    expect(isTipTap({ keyboard: false, press, release: { x: 100 + TAP_SLOP_PX, y: 40 } })).toBe(true);
+  });
+
+  it("ignores a drag, such as selecting text or dragging the scrollbar", () => {
+    expect(isTipTap({ keyboard: false, press, release: { x: 100, y: 40 + TAP_SLOP_PX + 1 } })).toBe(false);
+    expect(isTipTap({ keyboard: false, press, release: { x: 160, y: 90 } })).toBe(false);
+  });
+
+  it("ignores a click whose press did not start on the tip, and lets the keyboard open it", () => {
+    expect(isTipTap({ keyboard: false, press: null, release: press })).toBe(false);
+    expect(isTipTap({ keyboard: true, press: null, release: { x: 0, y: 0 } })).toBe(true);
   });
 });

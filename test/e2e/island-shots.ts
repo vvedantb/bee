@@ -1,14 +1,16 @@
 // Static island states for screenshots, styled by the real styles.css (no Clerk, no store). harness-main.ts loads this
-// page once per ?shot=collapsed|thinking|expanded|meeting-card|long-tip-bottom|long-tip-scrolled-up and captures it; the
+// page once per ?shot=collapsed|thinking|expanded|meeting-card|long-tip-bottom|long-tip-scrolled-up|update-available and captures it; the
 // page reports once it has rendered, with the notch's measured logo and button boxes.
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { IconChevronDown, IconExternalLink, IconMicrophoneOff, IconX } from "@tabler/icons-react";
+import { IconChevronDown, IconDownload, IconExternalLink, IconMicrophoneOff, IconX } from "@tabler/icons-react";
 import { Button } from "@vvedantb/ui";
 import { BeeLogo } from "../../src/renderer/src/BeeLogo";
 import { followBottom } from "../../src/renderer/src/follow-bottom";
 import { NOTCH_LOGO_PX } from "../../src/renderer/src/logo";
-import { NOTCH_BUTTON } from "../../src/renderer/src/notch";
+import { NOTCH_BUTTON, NOTCH_UPDATE_BUTTON } from "../../src/renderer/src/notch";
+import type { UpdateState } from "../../src/renderer/src/store";
+import { updateButton } from "../../src/renderer/src/update";
 import "../../src/renderer/src/styles.css";
 
 const ICON = { size: 16, stroke: 1.75 };
@@ -19,8 +21,20 @@ const SOURCE = { title: "Acme enterprise pricing – example.com", url: "https:/
 // Fake streamed tips, long enough to overflow the body several times over.
 const LONG_TIPS = Array.from({ length: 12 }, (_, i) => `Tip ${i + 1}: confirm the renewal date and the seat count before quoting the two-year discount.`);
 
-// The real pill (App.tsx Island): the logo at NOTCH_LOGO_PX, then the mic (off) and collapse buttons as size="sm" Buttons.
-function pill(status: string, busy: boolean): string {
+// A static update check (no network): a newer release is out, nothing downloaded yet.
+const UPDATE: UpdateState = { status: "idle", check: { currentVersion: "0.3.14", latestVersion: "0.3.15", available: true, releaseUrl: null, error: null }, error: null };
+
+// App.tsx UpdateButton at rest: the download icon, titled with what a click does.
+function updateButtonMarkup(): string {
+  const { title } = updateButton(UPDATE);
+  return renderToStaticMarkup(
+    createElement(Button, { type: "button", variant: "ghost", size: "icon-sm", className: NOTCH_UPDATE_BUTTON, title, "aria-label": title }, createElement(IconDownload, ICON)),
+  );
+}
+
+// The real pill (App.tsx Island): the logo at NOTCH_LOGO_PX, the update button when one is available, then the mic (off) and
+// collapse buttons as size="sm" Buttons.
+function pill(status: string, busy: boolean, update = false): string {
   const mic = createElement(
     Button,
     { type: "button", variant: "ghost", size: "sm", className: NOTCH_BUTTON, title: "Start microphone" },
@@ -31,7 +45,7 @@ function pill(status: string, busy: boolean): string {
   return `<header class="notch">
     ${renderToStaticMarkup(createElement(BeeLogo, { size: NOTCH_LOGO_PX, busy }))}
     <span class="notch-status">${status}</span>
-    ${renderToStaticMarkup(mic)}${renderToStaticMarkup(chevron)}
+    ${update ? updateButtonMarkup() : ""}${renderToStaticMarkup(mic)}${renderToStaticMarkup(chevron)}
   </header>`;
 }
 
@@ -53,7 +67,8 @@ function islandBody(content: string): string {
   </div></section>`;
 }
 
-const tipList = (tips: string[]) => `<ul class="island-tips">${tips.map((tip) => `<li>${tip}</li>`).join("")}</ul>`;
+// Each tip is a button that opens it in full (App.tsx IslandBody).
+const tipList = (tips: string[]) => `<ul class="island-tips">${tips.map((tip) => `<li><button type="button" class="island-tip" title="Show in full">${tip}</button></li>`).join("")}</ul>`;
 
 function tipsContent(): string {
   const chips = `<ul class="link-chips" aria-label="Suggested links"><li class="chip link-chip"><button type="button" class="link-chip-open" title="https://convex.dev/">${icon(IconExternalLink)}convex.dev</button><button type="button" class="link-chip-dismiss" aria-label="Dismiss convex.dev">${icon(IconX)}</button></li></ul>`;
@@ -71,6 +86,7 @@ const states: Record<string, string> = {
   "meeting-card": `<div class="island open">${pill("Last time", false)}${islandBody(card())}</div>`,
   "long-tip-bottom": longTip,
   "long-tip-scrolled-up": longTip,
+  "update-available": `<div class="island">${pill("Bee is ready", false, true)}</div>`,
 };
 const html = states[shot];
 if (!html) throw new Error(`Unknown shot: ${shot}`);

@@ -1,7 +1,8 @@
 import { IconTrash } from "@tabler/icons-react";
-import { Button, LabeledSwitchRow } from "@vvedantb/ui";
+import { Button } from "@vvedantb/ui";
 import { useState } from "react";
 import type { SettingsUpdate, SettingsView } from "../../shared/ipc";
+import { SettingRow } from "./SettingRow";
 
 // Settings → Meeting context. Presentational: it takes the saved switches and callbacks, so the screenshot page can render it
 // without the store or Electron.
@@ -46,16 +47,14 @@ export function MeetingContextSection({
     <section>
       <h2>Meeting context</h2>
       <p className="muted">Read on this device. Sent to Luna and your connectors.</p>
-      <LabeledSwitchRow
-        className="flex-nowrap items-start max-sm:flex-nowrap [&>div:last-child]:min-h-5"
+      <SettingRow
         id="meeting-context"
         label="Know which meeting I am in"
         description="Adds people, agenda and past decisions to tips."
         checked={on}
         onCheckedChange={(meetingContextEnabled) => onChange({ meetingContextEnabled })}
       />
-      <LabeledSwitchRow
-        className="flex-nowrap items-start max-sm:flex-nowrap [&>div:last-child]:min-h-5"
+      <SettingRow
         id="meeting-calendar"
         label="Read my Outlook calendar"
         description="Classic Outlook on Windows only."
@@ -63,8 +62,7 @@ export function MeetingContextSection({
         disabled={!on}
         onCheckedChange={(meetingCalendarEnabled) => onChange({ meetingCalendarEnabled })}
       />
-      <LabeledSwitchRow
-        className="flex-nowrap items-start max-sm:flex-nowrap [&>div:last-child]:min-h-5"
+      <SettingRow
         id="meeting-memory"
         label="Save meeting notes to local memory"
         description="Last 40 meetings, stored on this device."

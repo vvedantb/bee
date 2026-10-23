@@ -8,6 +8,7 @@ import {
   LUNA_STEERING_RULES,
   LUNA_SYSTEM,
   MEETING_BLOCK_MAX,
+  answerText,
   buildLunaPrompt,
   errorText,
   guideWithLuna,
@@ -15,6 +16,7 @@ import {
   lunaRequest,
   parseLunaTips,
   streamingTips,
+  type AnswerSegment,
 } from "./luna";
 import { loadMcpTools } from "./mcp";
 
@@ -234,6 +236,34 @@ describe("streamingTips", () => {
   });
 });
 
+describe("answerText", () => {
+  const text = (value: string): AnswerSegment => ({ type: "text", text: value });
+  const TOOL: AnswerSegment = { type: "tool" };
+
+  it("drops narration before and between tool calls", () => {
+    const segments = [text("I'll search for the latest score."), TOOL, text("The search call failed."), text("Let me retry."), TOOL, TOOL, text("- The match ended 2-1 today")];
+    expect(answerText(segments)).toBe("- The match ended 2-1 today");
+  });
+
+  it("leaves a run with no tools as it was", () => {
+    expect(answerText([text("- Offer 10% off [n1]\n- Ask about timing\n")])).toBe("- Offer 10% off [n1]\n- Ask about timing\n");
+  });
+
+  it("joins parts with one space, or a newline before a tip, never doubled", () => {
+    expect(answerText([text("The search failed."), text("Let me retry")])).toBe("The search failed. Let me retry");
+    expect(answerText([text("- The match ended "), text(" 2-1 today")])).toBe("- The match ended 2-1 today");
+    expect(answerText([text("- Offer 10% off"), text("- Ask about timing")])).toBe("- Offer 10% off\n- Ask about timing");
+    expect(answerText([text("- Offer 10% off  \n"), text("  - Ask about timing")])).toBe("- Offer 10% off\n- Ask about timing");
+    expect(answerText([text("- Ships in Q4"), text(", per the roadmap")])).toBe("- Ships in Q4, per the roadmap");
+  });
+
+  it("is empty when no text follows the last tool, so the run reports no answer instead of narration", () => {
+    expect(answerText([text("Let me search the web."), TOOL])).toBe("");
+    expect(answerText([text("Let me search the web."), TOOL, text(" \n")])).toBe(" \n");
+    expect(answerText([])).toBe("");
+  });
+});
+
 const usage = (cache: { read?: number; write?: number } = {}, reasoning?: number) => ({
   inputTokens: { total: 1, noCache: 1, cacheRead: cache.read, cacheWrite: cache.write },
   outputTokens: reasoning === undefined ? { total: 1, text: 1, reasoning } : { total: reasoning, text: 0, reasoning },
@@ -309,6 +339,36 @@ describe("guideWithLuna streaming", () => {
     const extraTools = { vmem__wobble: tool({ inputSchema: jsonSchema({ type: "object", properties: {} }), execute: async () => "X" }) };
     const result = await guideWithLuna({ model, transcript: ["Code?"], notes: [], extraTools });
     expect(result.tips).toEqual(["The code is X"]);
+  });
+
+  it("drops web_search narration in the same step and takes back a narrated partial", async () => {
+    const partials: string[][] = [];
+    const search = (id: string): Chunk[] => [
+      { type: "tool-call", toolCallId: id, toolName: "web_search", input: "{}", providerExecuted: true },
+      { type: "tool-result", toolCallId: id, toolName: "web_search", result: [], providerExecuted: true },
+    ];
+    const model = streamModel(() => [
+      ...textChunks("I'll search for the latest score now.").slice(0, -1),
+      ...search("ws1"),
+      { type: "text-start", id: "t2" },
+      { type: "text-delta", id: "t2", delta: "The search call failed." },
+      { type: "text-end", id: "t2" },
+      ...search("ws2"),
+      { type: "text-start", id: "t3" },
+      { type: "text-delta", id: "t3", delta: "- The match ended " },
+      { type: "text-end", id: "t3" },
+      { type: "text-start", id: "t4" },
+      { type: "text-delta", id: "t4", delta: "2-1 today\n" },
+      { type: "text-end", id: "t4" },
+      finish("stop"),
+    ]);
+    const result = await guideWithLuna({ model, transcript: ["Score?"], notes: [], onPartial: (tips) => partials.push(tips) });
+    expect(result.tips).toEqual(["The match ended 2-1 today"]);
+    // The narration streams before Bee can know a tool follows; the tool call takes it back.
+    expect(partials[0]).toEqual(["I'll search for the latest score"]);
+    expect(partials[1]).toEqual([]);
+    expect(partials.at(-1)).toEqual(["The match ended 2-1 today"]);
+    expect(partials.flat().join(" ")).not.toContain("failed");
   });
 
   it("reports provider-run web_search as it starts and when its result lands, before the answer", async () => {

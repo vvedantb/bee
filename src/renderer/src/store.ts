@@ -25,6 +25,7 @@ import { LOGO_DONE_MS } from "./logo";
 import { openMic, openSystemAudio } from "./mic";
 import { motionReduced } from "./motion";
 import { startMicSession } from "./speech";
+import { downloadUpdate, installUpdate, updateNow } from "./update";
 
 export type Tab = "live" | "connectors" | "settings";
 
@@ -755,9 +756,10 @@ export const actions = {
     set({ tab });
   },
 
-  async openSettings(): Promise<void> {
-    set({ tab: "settings" });
-    if (!state.expanded) await actions.setExpanded(true);
+  /** Show a tab, opening the panel if it is closed (a tip's full text, the sync status). */
+  async openTab(tab: Tab): Promise<void> {
+    set({ tab });
+    if (!state.expanded || state.collapsing) await actions.setExpanded(true);
   },
 
   nextSampleLine(): string {
@@ -905,14 +907,16 @@ export const actions = {
   },
 
   async downloadUpdate(): Promise<void> {
-    setUpdate({ status: "downloading", error: null });
-    const { error } = await window.bee.downloadUpdate();
-    setUpdate({ status: error ? "idle" : "ready", error });
+    await downloadUpdate(window.bee, setUpdate);
   },
 
   async installUpdate(): Promise<void> {
-    const { error } = await window.bee.installUpdate();
-    setUpdate({ error });
+    await installUpdate(window.bee, setUpdate);
+  },
+
+  /** The notch button: download if needed, then quit and install (update.ts). */
+  async updateNow(): Promise<void> {
+    await updateNow(state.update.status, window.bee, setUpdate);
   },
 
   /** Teams mode: team, popup and sync actions. Resolves true on success; errors show in the UI. */
