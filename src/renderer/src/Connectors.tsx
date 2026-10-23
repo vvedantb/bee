@@ -104,7 +104,7 @@ function McpForm({ server, error, onDone }: { server: McpServerView | null; erro
               label={authType === "bearer" ? "Token" : "Header value"}
               placeholder={authType === "bearer" ? "Paste a token" : "Paste the value"}
               saved={savedAuth}
-              status={savedAuth ? "A value is stored." : "For OAuth servers, authorise elsewhere and paste the token here."}
+              status={savedAuth ? "A value is stored." : "OAuth: authorise elsewhere, then paste the token."}
             />
           ) : null}
         </>

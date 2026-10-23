@@ -8,12 +8,6 @@ import type { SettingsUpdate, SettingsView } from "../../shared/ipc";
 
 export type MeetingContextSettings = Pick<SettingsView, "meetingContextEnabled" | "meetingCalendarEnabled" | "meetingMemoryEnabled">;
 
-const COPY =
-  "Bee reads the Teams window title and, on Windows with classic Outlook, today's calendar, to know which meeting you are in. " +
-  "Everything is read on this device and saved here: no Microsoft Graph and no sign-in. The meeting name, people, agenda excerpt and " +
-  "earlier decisions go to Luna with each request, like your notes do. Once per meeting, Bee also searches your connected tools " +
-  "for the meeting name and people.";
-
 function clearMessage(count: number): string {
   return count === 0 ? "No saved meeting notes to clear." : `Cleared ${count} saved meeting ${count === 1 ? "note" : "notes"}.`;
 }
@@ -51,12 +45,12 @@ export function MeetingContextSection({
   return (
     <section>
       <h2>Meeting context</h2>
-      <p className="muted">{COPY}</p>
+      <p className="muted">Read on this device. Sent to Luna and your connectors.</p>
       <LabeledSwitchRow
         className="flex-nowrap items-start max-sm:flex-nowrap [&>div:last-child]:min-h-5"
         id="meeting-context"
         label="Know which meeting I am in"
-        description="Loads the meeting's people, agenda and earlier decisions into every tip."
+        description="Adds people, agenda and past decisions to tips."
         checked={on}
         onCheckedChange={(meetingContextEnabled) => onChange({ meetingContextEnabled })}
       />
@@ -64,7 +58,7 @@ export function MeetingContextSection({
         className="flex-nowrap items-start max-sm:flex-nowrap [&>div:last-child]:min-h-5"
         id="meeting-calendar"
         label="Read my Outlook calendar"
-        description="Classic Outlook on Windows only, through its desktop COM interface. Does nothing where it is unavailable."
+        description="Classic Outlook on Windows only."
         checked={settings.meetingCalendarEnabled}
         disabled={!on}
         onCheckedChange={(meetingCalendarEnabled) => onChange({ meetingCalendarEnabled })}
@@ -73,7 +67,7 @@ export function MeetingContextSection({
         className="flex-nowrap items-start max-sm:flex-nowrap [&>div:last-child]:min-h-5"
         id="meeting-memory"
         label="Save meeting notes to local memory"
-        description="Keeps decisions and action items from your last 40 meetings in a file on this device."
+        description="Last 40 meetings, stored on this device."
         checked={settings.meetingMemoryEnabled}
         disabled={!on}
         onCheckedChange={(meetingMemoryEnabled) => onChange({ meetingMemoryEnabled })}
