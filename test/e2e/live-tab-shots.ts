@@ -5,15 +5,10 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { IconLogout, IconMicrophoneOff, IconUsersGroup } from "@tabler/icons-react";
 import { Badge, Button } from "@vvedantb/ui";
 import "../../src/renderer/src/styles.css";
+import { panelPage, smallButton } from "./panel-shot";
 
 const ICON = { size: 16, stroke: 1.75 };
 const icon = (component: typeof IconUsersGroup) => renderToStaticMarkup(createElement(component, ICON));
-
-// Class strings match @vvedantb/ui PillTabs (root export in 0.4+; shell path before).
-const PILL =
-  "inline-flex h-8 items-center justify-center gap-1.5 whitespace-nowrap rounded-full border border-border px-3.5 py-1 text-sm font-medium";
-const PILL_IDLE = "text-muted";
-const PILL_ACTIVE = "bg-default text-foreground";
 
 function syncChip(): string {
   return renderToStaticMarkup(
@@ -47,7 +42,7 @@ function liveBody(): string {
     <h2>Teams sync</h2>
     <div class="row">${syncChip()}<code>amber-otter</code></div>
     <div class="row actions">${pause}${leave}
-      <button type="button" class="inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-lg text-xs font-medium h-8 px-3 text-primary">Invite</button>
+      ${smallButton("Invite", "link")}
     </div>
     <p class="muted">Sharing your mic to the sync. Alice is here.</p>
   </section>
@@ -68,22 +63,9 @@ function liveBody(): string {
   </section>`;
 }
 
-function page(body: string): string {
-  return `<main class="panel">
-    <nav class="tabs">
-      <div role="tablist" class="inline-flex items-center gap-1.5">
-        <button type="button" role="tab" aria-selected="true" class="${PILL} ${PILL_ACTIVE}"><span>Live</span></button>
-        <button type="button" role="tab" aria-selected="false" class="${PILL} ${PILL_IDLE}"><span>Connectors</span></button>
-        <button type="button" role="tab" aria-selected="false" class="${PILL} ${PILL_IDLE}"><span>Settings</span></button>
-      </div>
-    </nav>
-    <div class="tab-body">${body}</div>
-  </main>`;
-}
-
 const shot = new URLSearchParams(location.search).get("shot") ?? "live-sync-notes";
 const states: Record<string, string> = {
-  "live-sync-notes": page(liveBody()),
+  "live-sync-notes": panelPage("live", liveBody()),
 };
 const html = states[shot];
 if (!html) throw new Error(`Unknown shot: ${shot}`);

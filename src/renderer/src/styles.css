@@ -5,7 +5,6 @@
 @import "@vvedantb/ui/tokens/css/modal.css";
 @import "@vvedantb/ui/tokens/css/tabs.css";
 @import "@vvedantb/ui/tokens/css/tabs-pills.css";
-@import "@vvedantb/ui/tokens/css/scrollbar-thin.css";
 @import "@vvedantb/ui/tokens/css/animations.css";
 @import "shadow-plugin";
 @plugin "tailwindcss-animate";
@@ -54,14 +53,11 @@
   --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
   /* Slight overshoot: the island and its content settle like a spring. */
   --spring: cubic-bezier(0.22, 1.2, 0.36, 1);
-  /* Shared modal and tab motion variables (see @vvedantb/ui/tokens css). */
+  /* Bee's modal timing; the ease and the tab motion come from @vvedantb/ui/tokens. */
   --modal-open-dur: 200ms;
   --modal-close-dur: 150ms;
   --modal-scale: 0.97;
   --modal-scale-close: 0.98;
-  --modal-ease: cubic-bezier(0.22, 1, 0.36, 1);
-  --tabs-dur: 200ms;
-  --tabs-ease: cubic-bezier(0.22, 1, 0.36, 1);
   --tabs-text-muted: var(--muted);
   --tabs-text-active: var(--text);
   --tabs-pill-bg: var(--surface-raised);
@@ -829,8 +825,6 @@ html[data-motion="reduce"] .bee-logo:hover {
 .spacer {
   margin-left: auto;
 }
-
-/* KEY=value secrets: drawn as dots while typing, like a password field. */
 
 /* Link suggestion chips: domain pills under the tips. A click opens the browser through main; X hides the chip. */
 
