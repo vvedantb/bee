@@ -5,34 +5,17 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MeetingContextSection } from "../../src/renderer/src/MeetingContextSection";
 import "../../src/renderer/src/styles.css";
-
-// Class strings match @vvedantb/ui PillTabs.
-const PILL = "inline-flex h-8 items-center justify-center gap-1.5 whitespace-nowrap rounded-full border border-border px-3.5 py-1 text-sm font-medium";
-const PILL_IDLE = "text-muted";
-const PILL_ACTIVE = "bg-default text-foreground";
+import { panelPage } from "./panel-shot";
 
 function section(settings: { meetingContextEnabled: boolean; meetingCalendarEnabled: boolean; meetingMemoryEnabled: boolean }): string {
   return renderToStaticMarkup(createElement(MeetingContextSection, { settings, onChange: () => undefined, onClear: async () => 0 }));
 }
 
-function page(body: string): string {
-  return `<main class="panel">
-    <nav class="tabs">
-      <div role="tablist" class="inline-flex items-center gap-1.5">
-        <button type="button" role="tab" aria-selected="false" class="${PILL} ${PILL_IDLE}"><span>Live</span></button>
-        <button type="button" role="tab" aria-selected="false" class="${PILL} ${PILL_IDLE}"><span>Connectors</span></button>
-        <button type="button" role="tab" aria-selected="true" class="${PILL} ${PILL_ACTIVE}"><span>Settings</span></button>
-      </div>
-    </nav>
-    <div class="tab-body">${body}</div>
-  </main>`;
-}
-
 const shot = new URLSearchParams(location.search).get("shot") ?? "settings-meeting-context";
 const on = { meetingContextEnabled: true, meetingCalendarEnabled: true, meetingMemoryEnabled: true };
 const states: Record<string, string> = {
-  "settings-meeting-context": page(section(on)),
-  "settings-meeting-context-off": page(section({ ...on, meetingContextEnabled: false })),
+  "settings-meeting-context": panelPage("settings", section(on)),
+  "settings-meeting-context-off": panelPage("settings", section({ ...on, meetingContextEnabled: false })),
 };
 const html = states[shot];
 if (!html) throw new Error(`Unknown shot: ${shot}`);
