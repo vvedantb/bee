@@ -109,3 +109,18 @@ export function keepFollowing(following: boolean, previousTop: number, metrics: 
   if (metrics.scrollTop < previousTop) return false;
   return following;
 }
+
+/** How far the pointer may move between press and release for a click on a tip to count, in CSS px. */
+export const TAP_SLOP_PX = 4;
+
+export type PointerPoint = { x: number; y: number };
+
+/**
+ * Whether a click on a tip was a tap that should open its full text. A drag (selecting text, or the pointer moving off the
+ * scrollbar) is not, and neither is a click with no press on the tip. Keyboard clicks are taps.
+ */
+export function isTipTap(args: { keyboard: boolean; press: PointerPoint | null; release: PointerPoint }): boolean {
+  if (args.keyboard) return true;
+  if (!args.press) return false;
+  return Math.hypot(args.release.x - args.press.x, args.release.y - args.press.y) <= TAP_SLOP_PX;
+}

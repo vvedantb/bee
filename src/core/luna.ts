@@ -70,6 +70,7 @@ export const LUNA_SYSTEM = [
   "Otherwise, suggest what to say or do next, using the notes when they help and citing them.",
   "Never invent facts, figures or dates about the user's own work that are not in the transcript or notes.",
   "If nothing useful can be said, reply with exactly NONE.",
+  "Never narrate tool use or searching: no \"I'll search\", \"Let me check\" or \"The search failed\". Output only the final tips.",
 ].join("\n");
 
 /** Added to the message tail only when tips are already on screen (the user kept talking). */
@@ -233,6 +234,33 @@ export function parseLunaTips(text: string, maxTips = MAX_TIPS): string[] {
     .slice(0, maxTips);
 }
 
+/** One step's stream in order: its text parts and its tool calls (local or provider-run, such as web_search). */
+export type AnswerSegment = { type: "text"; text: string } | { type: "tool" };
+
+const TIP_START = /^(?:[-*•]|\d+[.)])\s/;
+const NO_SPACE_BEFORE = /^[.,;:!?)\]'’]/;
+
+/** Two text parts as one: the whitespace between becomes one newline (if it had one, or a tip starts) or one space. */
+function joinParts(joined: string, part: string): string {
+  const head = joined.trimEnd();
+  const tail = part.trimStart();
+  // Nothing to separate yet. A whitespace-only part is kept for the next join to read.
+  if (!head || !tail) return joined + part;
+  const gap = joined.slice(head.length) + part.slice(0, part.length - tail.length);
+  if (gap.includes("\n") || TIP_START.test(tail)) return `${head}\n${tail}`;
+  return gap === "" && NO_SPACE_BEFORE.test(tail) ? head + tail : `${head} ${tail}`;
+}
+
+/**
+ * The answer in a step: only the text parts after its last tool call or result. Text before a tool is narration ("I'll search
+ * for…", "The search failed. Let me retry…") and is dropped. Anthropic also splits a cited answer into parts mid-sentence, so
+ * parts are joined with one space, or a newline before a tip. Empty when no text follows the last tool: there is no answer yet.
+ */
+export function answerText(segments: readonly AnswerSegment[]): string {
+  const after = segments.slice(segments.findLastIndex((segment) => segment.type === "tool") + 1);
+  return after.reduce((joined, segment) => (segment.type === "text" ? joinParts(joined, segment.text) : joined), "");
+}
+
 /** A streamed line shows once it has this many words, so a lone "NONE" or "- " never flashes. */
 const MIN_LIVE_WORDS = 4;
 
@@ -384,24 +412,40 @@ export async function guideWithLuna(args: {
       // and can spend the whole output budget before any tip.
       providerOptions: guideProviderOptions("default", { web }),
     });
-    // Only the last step's text is the answer, so each step starts a fresh buffer.
-    let text = "";
+    // Only the last step's text is the answer, so each step starts a fresh list. Within a step, text before a tool is
+    // narration (answerText); provider-run web_search stays inside one step.
+    let segments: AnswerSegment[] = [];
     let sent = "";
     firstTokenMs = null;
+    // A tool started after narration was streamed as a tip: take it back off the overlay.
+    const toolSegment = () => {
+      if (segments.at(-1)?.type !== "tool") segments.push({ type: "tool" });
+      if (sent !== "" && sent !== "[]") {
+        sent = "[]";
+        args.onPartial?.([]);
+      }
+    };
     for await (const part of result.stream) {
       if (part.type === "start-step") {
-        text = "";
+        segments = [];
       } else if (part.type === "tool-input-start") {
         // The earliest sign of a call: web_search shows while the provider runs it, not after.
         report(part.id, part.toolName, "start");
+        toolSegment();
       } else if (part.type === "tool-call") {
         report(part.toolCallId, part.toolName, "start");
+        toolSegment();
       } else if ((part.type === "tool-result" && !part.preliminary) || part.type === "tool-error") {
         report(part.toolCallId, part.toolName, "end");
+        toolSegment();
+      } else if (part.type === "text-start") {
+        segments.push({ type: "text", text: "" });
       } else if (part.type === "text-delta") {
-        text += part.text;
+        const last = segments.at(-1);
+        if (last?.type === "text") last.text += part.text;
+        else segments.push({ type: "text", text: part.text });
         if (firstTokenMs === null && part.text.trim()) firstTokenMs = performance.now() - startedAt;
-        const tips = streamingTips(text, maxTips);
+        const tips = streamingTips(answerText(segments), maxTips);
         const key = JSON.stringify(tips);
         if (tips.length > 0 && key !== sent) {
           sent = key;
@@ -416,7 +460,7 @@ export async function guideWithLuna(args: {
     // The stream can also end quietly when the signal fires.
     if (abortSignal.aborted) throw abortSignal.reason instanceof Error ? abortSignal.reason : new Error("aborted");
     return {
-      text,
+      text: answerText(segments),
       sources: await result.sources,
       toolResults: await result.toolResults,
       finishReason: await result.finishReason,

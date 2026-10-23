@@ -1,8 +1,10 @@
 import { ClerkFailed, Show, SignIn, UserButton, useAuth } from "@clerk/electron/react";
 import {
+  IconAlertTriangle,
   IconChevronDown,
   IconDownload,
   IconExternalLink,
+  IconLoader2,
   IconMicrophone,
   IconMicrophoneOff,
   IconNotebook,
@@ -11,24 +13,26 @@ import {
   IconUsersGroup,
   IconX,
 } from "@tabler/icons-react";
-import { Badge, Button, Input, LabeledSwitchRow, PillTabs, Textarea } from "@vvedantb/ui";
-import { useEffect, useState, type FormEvent } from "react";
+import { Badge, Button, Input, PillTabs, Textarea } from "@vvedantb/ui";
+import { useEffect, useState, type FormEvent, type MouseEvent, type PointerEvent } from "react";
 import { BeeLogo } from "./BeeLogo";
 import { Favicon } from "./Favicon";
 import { followBottom } from "./follow-bottom";
 import { Connectors } from "./Connectors";
 import { MeetingContextSection } from "./MeetingContextSection";
 import { SecretField } from "./SecretField";
+import { SettingRow } from "./SettingRow";
 import { INTERFACE_SCALES } from "../../core/interface-scale";
 import { DEFAULT_MOTION_PREFERENCE, MOTION_PREFERENCES, resolveReducedMotion, type MotionPreference } from "../../core/motion-preference";
 import { visibleChips, type LinkChip } from "../../core/link-suggest";
 import { tipKey } from "../../core/steering";
 import type { PipelineResult, SettingsView } from "../../shared/ipc";
-import { mcpErrorNote, timingsLabel, timingsTitle } from "./island";
+import { isTipTap, mcpErrorNote, timingsLabel, timingsTitle, type PointerPoint } from "./island";
 import { NOTCH_LOGO_PX } from "./logo";
-import { NOTCH_BUTTON, logoState, notchStatus } from "./notch";
+import { NOTCH_BUTTON, NOTCH_UPDATE_BUTTON, logoState, notchStatus } from "./notch";
 import { actions, displayResult, islandOpen, useBee, type BeeState, type SummaryState, type UpdateState } from "./store";
 import { SyncCard, SyncSection, TeamSection, syncedWith } from "./Teams";
+import { updateButton } from "./update";
 
 const ICON = { size: 16, stroke: 1.75 };
 
@@ -55,6 +59,21 @@ function LinkChips({ chips }: { chips: LinkChip[] }) {
       ))}
     </ul>
   );
+}
+
+// Where the last press on a tip started. One pointer at a time, so one slot will do; each click clears it.
+let tipPress: PointerPoint | null = null;
+
+function onTipPress(event: PointerEvent<HTMLButtonElement>): void {
+  tipPress = { x: event.clientX, y: event.clientY };
+}
+
+// A tap on a tip opens the panel's Live tab, which shows every tip in full. Only the chevron collapses the island. The
+// scrollbar belongs to .island-scroll, so pressing or dragging it never reaches a tip; a drag that starts on a tip is ignored.
+function onTipClick(event: MouseEvent<HTMLButtonElement>): void {
+  const press = tipPress;
+  tipPress = null;
+  if (isTipTap({ keyboard: event.detail === 0, press, release: { x: event.clientX, y: event.clientY } })) void actions.openTab("live");
 }
 
 function IslandBody({
@@ -94,7 +113,9 @@ function IslandBody({
                 {/* Keyed by position: a streaming line grows in place instead of replaying the entrance. Kept tips are dimmed while Bee updates them. */}
                 {tips.map((tip, index) => (
                   <li key={index} className={kept.has(tipKey(tip)) ? "kept" : undefined}>
-                    {tip}
+                    <button type="button" className="island-tip" title="Show in full" onPointerDown={onTipPress} onClick={onTipClick}>
+                      {tip}
+                    </button>
                   </li>
                 ))}
               </ul>
@@ -120,6 +141,26 @@ function IslandBody({
         </div>
       </div>
     </section>
+  );
+}
+
+// Same flow as Settings → Updates, in one click: download if needed, then quit and install. Busy and failed show on the button.
+function UpdateButton({ update }: { update: UpdateState }) {
+  const { busy, failed, title } = updateButton(update);
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="icon-sm"
+      className={NOTCH_UPDATE_BUTTON}
+      title={title}
+      aria-label={title}
+      aria-busy={busy}
+      disabled={busy}
+      onClick={() => void actions.updateNow()}
+    >
+      {busy ? <IconLoader2 {...ICON} className="spin" /> : failed ? <IconAlertTriangle {...ICON} className="error-text" /> : <IconDownload {...ICON} />}
+    </Button>
   );
 }
 
@@ -162,11 +203,7 @@ function Island({ state }: { state: BeeState }) {
             {status}
           </span>
         )}
-        {newVersion ? (
-          <Button type="button" variant="ghost" size="icon-sm" className="notch-update bg-[var(--surface-raised)] hover:bg-[#2d271e]" title={`Bee ${newVersion} is available`} onClick={() => void actions.openSettings()}>
-            <IconDownload {...ICON} />
-          </Button>
-        ) : null}
+        {newVersion ? <UpdateButton update={state.update} /> : null}
         {state.teams?.room ? (
           <Button
             type="button"
@@ -174,10 +211,7 @@ function Island({ state }: { state: BeeState }) {
             size="sm"
             className="sync-chip rounded-full"
             title={`${syncedWith(state.teams)}${state.teams.shareMuted ? " · sharing paused" : ""}`}
-            onClick={() => {
-              actions.setTab("live");
-              if (!open) void actions.setExpanded(true);
-            }}
+            onClick={() => void actions.openTab("live")}
           >
             <IconUsersGroup {...ICON} />
             {state.teams.room.members.length}
@@ -341,8 +375,7 @@ function LiveTab({ state }: { state: BeeState }) {
           </Button>
         </form>
         {state.teams?.team ? (
-          <LabeledSwitchRow
-            className="flex-nowrap items-start max-sm:flex-nowrap [&>div:last-child]:min-h-5"
+          <SettingRow
             id="simulate-teams"
             label="Simulate Teams meeting (the sync popup shows after about 10 s)"
             checked={state.teams.detection.source === "simulated"}
@@ -460,16 +493,14 @@ function SettingsTab({ state, settings }: { state: BeeState; settings: SettingsV
           ) : null}
         </div>
       </form>
-      <LabeledSwitchRow
-        className="flex-nowrap items-start max-sm:flex-nowrap [&>div:last-child]:min-h-5"
+      <SettingRow
         id="personalised-links"
         label="Personalised link suggestions"
         description="Sends the current line to Jev, and vmem if connected."
         checked={settings.personalisedLinks}
         onCheckedChange={(personalisedLinks) => void actions.saveSettings({ personalisedLinks })}
       />
-      <LabeledSwitchRow
-        className="flex-nowrap items-start max-sm:flex-nowrap [&>div:last-child]:min-h-5"
+      <SettingRow
         id="meeting-mode"
         label="Meeting mode"
         description="Hidden from screen sharing, kept on top."
