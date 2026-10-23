@@ -1,5 +1,5 @@
-import { generateText, type LanguageModel } from "ai";
-import { guideProviderOptions } from "./gateway";
+import { generateText, type LanguageModel, type SystemModelMessage, type UserModelMessage } from "ai";
+import { ANTHROPIC_CACHE, guideProviderOptions } from "./gateway";
 
 const SUMMARY_TIMEOUT_MS = 60_000;
 
@@ -77,6 +77,14 @@ export function buildSummaryPrompt(args: SummaryInput): { system: string; prompt
   return { system: speakers.length > 0 ? `${SUMMARY_SYSTEM}\n${SPEAKER_RULES}` : SUMMARY_SYSTEM, prompt };
 }
 
+/** The system first, with a cache breakpoint (gateway.ts ANTHROPIC_CACHE), then the transcript. */
+export function summaryRequest(prompt: { system: string; prompt: string }): { instructions: SystemModelMessage; messages: UserModelMessage[] } {
+  return {
+    instructions: { role: "system", content: prompt.system, providerOptions: ANTHROPIC_CACHE },
+    messages: [{ role: "user", content: prompt.prompt }],
+  };
+}
+
 /** Title first, then the given sections, the synced speakers (if any), then the notes and tips from the session. */
 function assemble(when: Date, body: string, args: SummaryInput): string {
   const parts = [`# Meeting summary — ${summaryStamp(when)}`, body.trim()];
@@ -148,11 +156,9 @@ export async function generateMeetingSummary(
 ): Promise<{ markdown: string; usedLlm: boolean; error: string | null }> {
   const when = args.when ?? new Date();
   try {
-    const { system, prompt } = buildSummaryPrompt(args);
     const result = await generateText({
       model: args.model,
-      system,
-      prompt,
+      ...summaryRequest(buildSummaryPrompt(args)),
       maxOutputTokens: 2000,
       maxRetries: 1,
       abortSignal: AbortSignal.timeout(args.timeoutMs ?? SUMMARY_TIMEOUT_MS),

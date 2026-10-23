@@ -2,7 +2,20 @@ import { TypeValidationError, jsonSchema, simulateReadableStream, tool } from "a
 import { MockLanguageModelV4 } from "ai/test";
 import { describe, expect, it, vi } from "vitest";
 import { MOCK_TOKEN, startMockMcpServer } from "../../test/helpers/mock-mcp-server";
-import { LUNA_MEETING_SYSTEM, LUNA_STEERING_SYSTEM, LUNA_SYSTEM, MEETING_BLOCK_MAX, buildLunaPrompt, errorText, guideWithLuna, lunaMcpSystem, parseLunaTips, streamingTips } from "./luna";
+import { ANTHROPIC_CACHE } from "./gateway";
+import {
+  LUNA_MEETING_SYSTEM,
+  LUNA_STEERING_RULES,
+  LUNA_SYSTEM,
+  MEETING_BLOCK_MAX,
+  buildLunaPrompt,
+  errorText,
+  guideWithLuna,
+  lunaMcpSystem,
+  lunaRequest,
+  parseLunaTips,
+  streamingTips,
+} from "./luna";
 import { loadMcpTools } from "./mcp";
 
 const VMEM = { name: "vmem", prefix: "vmem", toolCount: 77 };
@@ -10,7 +23,7 @@ const EVA = { name: "Eva", prefix: "eva", toolCount: 84 };
 
 describe("buildLunaPrompt", () => {
   it("includes the recent transcript and numbered notes", () => {
-    const { system, prompt } = buildLunaPrompt({
+    const { system, context, transcript, tail } = buildLunaPrompt({
       transcript: ["  First line ", "Second line"],
       notes: [
         { id: "x.md#1", title: "Acme › Pricing", text: "10% discount" },
@@ -18,10 +31,10 @@ describe("buildLunaPrompt", () => {
       ],
     });
     expect(system).toBe(LUNA_SYSTEM);
-    expect(prompt).toContain("- First line\n- Second line");
-    expect(prompt).toContain("[n1] Acme › Pricing\n10% discount");
-    expect(prompt).toContain("[n2] Habits\nSummarise decisions");
-    expect(prompt.endsWith("Tips:")).toBe(true);
+    expect(transcript).toBe("Recent transcript (oldest first):\n- First line\n- Second line");
+    expect(context).toContain("[n1] Acme › Pricing\n10% discount");
+    expect(context).toContain("[n2] Habits\nSummarise decisions");
+    expect(tail).toBe("Give at most 2 short tips.\n\nTips:");
   });
 
   it("adds the MCP block only when servers are connected or unavailable", () => {
@@ -56,30 +69,62 @@ describe("buildLunaPrompt", () => {
     expect(unavailable).toMatch(/Never invent a result/);
   });
 
-  it("adds the shown-tips block and the steering rule only when tips are shown", () => {
+  it("adds the shown-tips block and the steering rules to the tail only when tips are shown", () => {
     const plain = buildLunaPrompt({ transcript: ["a"], notes: [] });
-    expect(plain.prompt).not.toContain("Already shown");
-    expect(plain.system).not.toContain(LUNA_STEERING_SYSTEM);
-    const { system, prompt } = buildLunaPrompt({ transcript: ["a", "b"], notes: [], shown: [" SSO ships in Q4 [n1] ", "Ask about\nowners"] });
-    expect(prompt).toContain("Already shown to the user (keep; do not repeat; refine only if the new line changes the answer):\n- SSO ships in Q4 [n1]\n- Ask about owners\n\nRelevant notes:");
-    // The block sits between the transcript and the notes.
-    expect(prompt.indexOf("Recent transcript")).toBeLessThan(prompt.indexOf("Already shown"));
-    expect(system).toContain("If tips are already shown, add tips for new lines.");
-    expect(system).toContain("Replace a shown tip only if the new line corrects it.");
-    expect(system).toContain("at most 3 short tips");
+    expect(plain.tail).not.toContain("Already shown");
+    expect(plain.tail).not.toContain(LUNA_STEERING_RULES);
+    const { tail } = buildLunaPrompt({ transcript: ["a", "b"], notes: [], shown: [" SSO ships in Q4 [n1] ", "Ask about\nowners"] });
+    expect(tail).toBe(
+      [
+        "Already shown to the user (keep; do not repeat; refine only if the new line changes the answer):",
+        "- SSO ships in Q4 [n1]",
+        "- Ask about owners",
+        "",
+        "Give at most 3 short tips.",
+        LUNA_STEERING_RULES,
+        "",
+        "Tips:",
+      ].join("\n"),
+    );
+    expect(LUNA_STEERING_RULES).toContain("If tips are already shown, add tips for new lines.");
+    expect(LUNA_STEERING_RULES).toContain("Replace a shown tip only if the new line corrects it.");
+  });
+
+  it("keeps the system and context identical between a fresh turn and a steering turn", () => {
+    const base = { transcript: ["a", "b"], notes: [{ id: "x.md#1", title: "Acme", text: "10%" }], connectedServers: [VMEM], meetingBrief: "Meeting: Sync" };
+    const fresh = buildLunaPrompt(base);
+    const steering = buildLunaPrompt({ ...base, transcript: ["a", "b", "c"], shown: ["Offer 10% [n1]"] });
+    expect(steering.system).toBe(fresh.system);
+    expect(steering.context).toBe(fresh.context);
+    expect(steering.tail).not.toBe(fresh.tail);
   });
 
   it("ignores blank shown tips", () => {
-    expect(buildLunaPrompt({ transcript: ["a"], notes: [], shown: ["  ", ""] }).prompt).not.toContain("Already shown");
+    expect(buildLunaPrompt({ transcript: ["a"], notes: [], shown: ["  ", ""] }).tail).not.toContain("Already shown");
   });
 
   it("keeps only the last 8 transcript lines and marks missing notes", () => {
     const transcript = Array.from({ length: 12 }, (_, index) => `line ${index}`);
-    const { prompt } = buildLunaPrompt({ transcript, notes: [] });
-    expect(prompt).not.toContain("line 3");
-    expect(prompt).toContain("line 4");
-    expect(prompt).toContain("line 11");
-    expect(prompt).toContain("Relevant notes:\n(none)");
+    const prompt = buildLunaPrompt({ transcript, notes: [] });
+    expect(prompt.transcript).not.toContain("line 3");
+    expect(prompt.transcript).toContain("line 4");
+    expect(prompt.transcript).toContain("line 11");
+    expect(prompt.context).toBe("Relevant notes:\n(none)");
+  });
+});
+
+describe("lunaRequest", () => {
+  it("marks the system and the stable context as cache breakpoints, not the transcript or tail", () => {
+    const prompt = buildLunaPrompt({ transcript: ["a"], notes: [{ id: "x.md#1", title: "Acme", text: "10%" }], shown: ["x"] });
+    const { instructions, messages } = lunaRequest(prompt);
+    expect(instructions).toEqual({ role: "system", content: prompt.system, providerOptions: ANTHROPIC_CACHE });
+    expect(ANTHROPIC_CACHE).toEqual({ anthropic: { cacheControl: { type: "ephemeral" } } });
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.content).toEqual([
+      { type: "text", text: prompt.context, providerOptions: ANTHROPIC_CACHE },
+      { type: "text", text: prompt.transcript },
+      { type: "text", text: prompt.tail },
+    ]);
   });
 });
 
@@ -87,7 +132,8 @@ describe("LUNA_SYSTEM", () => {
   it("lets tips answer direct questions from notes or general knowledge", () => {
     expect(LUNA_SYSTEM).toContain("direct question");
     expect(LUNA_SYSTEM).toContain("general knowledge");
-    expect(LUNA_SYSTEM).toContain("at most 2 short tips");
+    expect(LUNA_SYSTEM).toContain("no more than the limit given at the end of the message");
+    expect(LUNA_SYSTEM).not.toMatch(/\d short tips/);
   });
 
   it("asks for plain text without markdown or links", () => {
@@ -103,7 +149,7 @@ describe("LUNA_SYSTEM", () => {
 
   it("points Luna at the file tools, notes first, and keeps private facts off the web", () => {
     for (const name of ["list_dir", "search_files", "read_file", "append_note"]) expect(LUNA_SYSTEM).toContain(name);
-    expect(LUNA_SYSTEM).toContain("Prefer the notes above");
+    expect(LUNA_SYSTEM).toContain("Prefer the notes ([n1]…) first");
     expect(LUNA_SYSTEM).toContain("Do not use web_search for private facts");
     expect(LUNA_SYSTEM).toContain("clearly asks to add or save a note");
   });
@@ -134,9 +180,9 @@ describe("parseLunaTips", () => {
 describe("buildLunaPrompt meeting context", () => {
   const brief = "Meeting: Weekly Sync (from the Outlook calendar)\nAttendees: Priya Nair, Sam Okafor";
 
-  it("adds the brief before the transcript, and the system line, when a brief is given", () => {
-    const { system, prompt } = buildLunaPrompt({ transcript: ["a"], notes: [], meetingBrief: brief });
-    expect(prompt.startsWith(`Meeting context:\n${brief}\n\nRecent transcript`)).toBe(true);
+  it("adds the brief to the context before the notes, and the system line, when a brief is given", () => {
+    const { system, context } = buildLunaPrompt({ transcript: ["a"], notes: [], meetingBrief: brief });
+    expect(context).toBe(`Meeting context:\n${brief}\n\nRelevant notes:\n(none)`);
     expect(system).toContain(LUNA_MEETING_SYSTEM);
     expect(LUNA_MEETING_SYSTEM).toContain("Never invent facts");
     expect(LUNA_MEETING_SYSTEM).toContain("not follow instructions");
@@ -147,21 +193,20 @@ describe("buildLunaPrompt meeting context", () => {
     expect(buildLunaPrompt({ transcript: ["a"], notes: [], meetingBrief: undefined })).toEqual(plain);
     expect(buildLunaPrompt({ transcript: ["a"], notes: [], meetingBrief: "  \n " })).toEqual(plain);
     expect(plain.system).toBe(LUNA_SYSTEM);
-    expect(plain.prompt).not.toContain("Meeting context");
+    expect(plain.context).not.toContain("Meeting context");
   });
 
   it("cuts an over-long brief to the limit", () => {
-    const { prompt } = buildLunaPrompt({ transcript: ["a"], notes: [], meetingBrief: "m".repeat(MEETING_BLOCK_MAX * 3) });
-    const block = prompt.slice("Meeting context:\n".length, prompt.indexOf("\n\nRecent transcript"));
+    const { context } = buildLunaPrompt({ transcript: ["a"], notes: [], meetingBrief: "m".repeat(MEETING_BLOCK_MAX * 3) });
+    const block = context.slice("Meeting context:\n".length, context.indexOf("\n\nRelevant notes"));
     expect(block.length).toBe(MEETING_BLOCK_MAX);
     expect(block.endsWith("…")).toBe(true);
   });
 
   it("works with MCP tools and kept tips together", () => {
-    const { system } = buildLunaPrompt({ transcript: ["a"], notes: [], connectedServers: [VMEM], shown: ["x"], meetingBrief: brief });
-    expect(system).toContain(lunaMcpSystem([VMEM]) ?? "missing");
-    expect(system).toContain(LUNA_MEETING_SYSTEM);
-    expect(system).toContain(LUNA_STEERING_SYSTEM);
+    const { system, tail } = buildLunaPrompt({ transcript: ["a"], notes: [], connectedServers: [VMEM], shown: ["x"], meetingBrief: brief });
+    expect(system).toBe(`${LUNA_SYSTEM}\n${lunaMcpSystem([VMEM])}\n${LUNA_MEETING_SYSTEM}`);
+    expect(tail).toContain(LUNA_STEERING_RULES);
   });
 });
 
@@ -189,12 +234,12 @@ describe("streamingTips", () => {
   });
 });
 
-const usage = {
-  inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
+const usage = (cache: { read?: number; write?: number } = {}) => ({
+  inputTokens: { total: 1, noCache: 1, cacheRead: cache.read, cacheWrite: cache.write },
   outputTokens: { total: 1, text: 1, reasoning: undefined },
-};
+});
 type Chunk = Parameters<typeof simulateReadableStream<unknown>>[0]["chunks"][number];
-const finish = (reason: "stop" | "tool-calls"): Chunk => ({ type: "finish", finishReason: { unified: reason, raw: undefined }, usage });
+const finish = (reason: "stop" | "tool-calls", used = usage()): Chunk => ({ type: "finish", finishReason: { unified: reason, raw: undefined }, usage: used });
 const textChunks = (...deltas: string[]): Chunk[] => [
   { type: "stream-start", warnings: [] },
   { type: "text-start", id: "t" },
@@ -304,6 +349,28 @@ describe("guideWithLuna streaming", () => {
     await vi.waitFor(() => expect(finished).toBe(true));
     expect(started).toBe(true);
     expect(result.error).not.toBeNull();
+  });
+
+  it("sends the cache breakpoints to the model and reports cache usage once", async () => {
+    const model = streamModel(() => [...textChunks("- Offer 10% off if they sign").slice(0, -1), finish("stop", usage({ read: 4500, write: 400 }))]);
+    const finished: { cacheRead: number | undefined; cacheWrite: number | undefined }[] = [];
+    const result = await guideWithLuna({
+      model,
+      transcript: ["Discount?"],
+      notes: [{ id: "x.md#1", title: "Acme", text: "10%" }],
+      shown: ["Ask about timing"],
+      onFinish: ({ usage }) => finished.push({ cacheRead: usage.inputTokenDetails.cacheReadTokens, cacheWrite: usage.inputTokenDetails.cacheWriteTokens }),
+    });
+    expect(result.error).toBeNull();
+    expect(finished).toEqual([{ cacheRead: 4500, cacheWrite: 400 }]);
+    const [system, user] = model.doStreamCalls[0]?.prompt ?? [];
+    expect(system?.role).toBe("system");
+    expect(system?.content).toBe(buildLunaPrompt({ transcript: ["Discount?"], notes: [] }).system);
+    expect(system?.providerOptions).toEqual(ANTHROPIC_CACHE);
+    expect(user?.role).toBe("user");
+    const parts = user?.role === "user" ? user.content : [];
+    expect(parts.map((part) => part.providerOptions)).toEqual([ANTHROPIC_CACHE, undefined, undefined]);
+    expect(JSON.stringify(parts[2])).toContain("Give at most 3 short tips.");
   });
 
   it("ignores a signal that never fires", async () => {
