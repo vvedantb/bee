@@ -445,7 +445,7 @@ describe("guideWithLuna streaming", () => {
     setTimeout(() => controller.abort(), 30);
     const result = await pending;
     expect(Date.now() - started).toBeLessThan(2000);
-    expect(result.error).toMatch(/^Luna guidance failed/);
+    expect(result.error).toMatch(/^AI guidance failed/);
     expect(result.tips).toEqual([]);
   });
 
@@ -755,7 +755,7 @@ describe("guideWithLuna stream errors", () => {
   ])("reads the message from %s", async (_label, error, message) => {
     const result = await guideWithLuna({ model: failWith(error), transcript: ["Hi"], notes: [] });
     expect(result.tips).toEqual([]);
-    expect(result.error).toBe(`Luna guidance failed: ${message}`);
+    expect(result.error).toBe(`AI guidance failed: ${message}`);
   });
 });
 
@@ -836,7 +836,7 @@ describe("guideWithLuna providers and web search", () => {
       const result = await guideWithLuna({ model, transcript: ["Hi"], notes: [], extraTools });
       expect(calls).toBe(2);
       expect(result.tips).toEqual([]);
-      expect(result.error).toBe("Luna guidance failed: Mantle streaming error for requestId abc: web search is not supported for this request");
+      expect(result.error).toBe("AI guidance failed: Mantle streaming error for requestId abc: web search is not supported for this request");
     } finally {
       warn.mockRestore();
     }
@@ -872,7 +872,7 @@ describe("guideWithLuna with no answer text", () => {
     );
     expect(calls).toBe(1);
     expect(result.tips).toEqual([]);
-    expect(result.error).toBe("Luna guidance failed: the model returned no text (hit the output limit while reasoning)");
+    expect(result.error).toBe("AI guidance failed: the model returned no text (hit the output limit while reasoning)");
     expect(result.firstTokenMs).toBeNull();
     // The call still cost tokens, so usage is reported.
     expect(finished).toEqual([800]);
@@ -883,14 +883,14 @@ describe("guideWithLuna with no answer text", () => {
   it("fails when the run stops with no text", async () => {
     const { result, logs } = await quiet(streamModel(() => [{ type: "stream-start", warnings: [] }, finish("stop")]));
     expect(result.tips).toEqual([]);
-    expect(result.error).toBe("Luna guidance failed: the model returned no text");
+    expect(result.error).toBe("AI guidance failed: the model returned no text");
     expect(logs[0]).toContain("finish=stop");
     expect(logs[0]).toContain("empty=true");
   });
 
   it("treats whitespace-only text as no text", async () => {
     const { result } = await quiet(streamModel(() => textChunks("  \n ")));
-    expect(result.error).toBe("Luna guidance failed: the model returned no text");
+    expect(result.error).toBe("AI guidance failed: the model returned no text");
   });
 
   it("keeps a literal NONE as a successful empty result", async () => {

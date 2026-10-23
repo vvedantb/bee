@@ -173,7 +173,7 @@ export async function generateMeetingSummary(
     return {
       markdown: buildLocalSummary({ ...args, when }),
       usedLlm: false,
-      error: `Luna summary failed: ${error instanceof Error ? error.message : String(error)}`,
+      error: `AI summary failed: ${error instanceof Error ? error.message : String(error)}`,
     };
   }
 }

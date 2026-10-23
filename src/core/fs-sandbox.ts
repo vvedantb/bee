@@ -98,12 +98,12 @@ export function resolveInRoots(roots: readonly string[], input: string | undefin
   if (base === undefined) return { ok: false, error: "No folders are available." };
   const target = resolve(base, normalised);
   const root = roots.find((candidate) => isInside(candidate, target));
-  if (root === undefined) return { ok: false, error: "Path is outside the folders Luna may use." };
+  if (root === undefined) return { ok: false, error: "Path is outside the folders the AI may use." };
 
   const realRoot = realpathOrNull(root);
   const realTarget = realNearest(target);
   if (realRoot === null || realTarget === null || !isInside(realRoot, realTarget)) {
-    return { ok: false, error: "Path is outside the folders Luna may use." };
+    return { ok: false, error: "Path is outside the folders the AI may use." };
   }
   try {
     if (lstatSync(target).isSymbolicLink()) return { ok: false, error: "Symbolic links are not followed." };

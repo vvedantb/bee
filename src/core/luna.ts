@@ -490,7 +490,7 @@ export async function guideWithLuna(args: {
       args.onFinish?.({ usage: result.usage, providerMetadata: result.providerMetadata });
       const done = { usage: result.usage, finishReason: result.finishReason, empty: result.text.trim() === "" };
       // No answer text is a failure, not "no tips" (that is a literal NONE). Not retried: it would double latency and cost.
-      if (done.empty) return { tips: [], sources: [], error: `Luna guidance failed: ${emptyReason(done)}`, skipped: skipped(), ...timings(done) };
+      if (done.empty) return { tips: [], sources: [], error: `AI guidance failed: ${emptyReason(done)}`, skipped: skipped(), ...timings(done) };
       return { tips: parseLunaTips(result.text, maxTips), sources: sourcesFromGenerateResult(result), error: null, skipped: skipped(), ...timings(done) };
     } catch (error) {
       // Match on the whole text so a tool named late in a long error is still found. Show the short one.
@@ -502,7 +502,7 @@ export async function guideWithLuna(args: {
       }
       const tooMany = TOOL_COUNT_ERROR.test(message);
       if (args.signal?.aborted || !(tooMany || SCHEMA_ERROR.test(message)) || attempt >= 2 || Object.keys(extra).length === 0) {
-        return { tips: [], sources: [], error: `Luna guidance failed: ${errorText(error)}`, skipped: skipped(), ...timings() };
+        return { tips: [], sources: [], error: `AI guidance failed: ${errorText(error)}`, skipped: skipped(), ...timings() };
       }
       // Too many tools: no single tool is at fault, so every MCP tool goes at once.
       const drop = attempt === 0 && !tooMany ? toolsToDrop(message, extra) : Object.keys(extra);

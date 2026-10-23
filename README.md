@@ -33,7 +33,7 @@ npm run dist:mac
 
 Signing is off by default. To sign and notarise, set `CSC_LINK` and `CSC_KEY_PASSWORD` for electron-builder, and set `build.mac.notarize` to `true` (it is `false` now), with `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD` and `APPLE_TEAM_ID` in the environment.
 
-Bee is a desktop overlay for meetings. It sits as a small "notch" at the top centre of the screen. It listens to the meeting, finds relevant local notes, ranks them with Jev and shows one or two short tips from Luna (Claude Haiku 5.5). When a question is about a public or current fact that the notes do not cover, Luna can search the web, and the Live tab lists the source links under the tips. This uses the same Gateway key. The search is Anthropic's own web search tool, so the Gateway sends those calls only to the Anthropic provider.
+Bee is a desktop overlay for meetings. It sits as a small "notch" at the top centre of the screen. It listens to the meeting, finds relevant local notes, ranks them with Jev and shows one or two short tips from the AI (Claude Haiku 5.5). When a question is about a public or current fact that the notes do not cover, the AI can search the web, and the Live tab lists the source links under the tips. This uses the same Gateway key. The search is Anthropic's own web search tool, so the Gateway sends those calls only to the Anthropic provider.
 
 Windows and macOS are supported. The Teams detector is Windows only.
 
@@ -84,18 +84,18 @@ The installer is not code-signed. Windows SmartScreen will warn on first run unt
 2. Open **Settings** and paste your AI Gateway key, then click **Save**.
 3. Click the **microphone** on the notch and talk. The bar in the mic button shows the input level. Each phrase you say runs the pipeline. Bee does not show what was said; only tips and notes appear. Click the microphone again to stop.
 4. To test without speaking, use **Manual test** at the bottom of **Live**: type a line (or leave it blank for a sample) and click **Simulate meeting line**. Typed and spoken lines take the same path.
-5. Bee retrieves matching notes, ranks them with Jev, and shows up to two tips. While Luna works, the notch shows what it is doing (for example "Searching the web"). When the answer arrives, the notch grows downward into an island with the tips and any source links. Click **×** to dismiss it. If you leave the pointer off it, it folds back to one line in the notch after at least 30 seconds (longer for longer answers), and the same tips stay on **Live**. Click that line to read the answer in full in the island again; click outside to fold it. The chevron opens the full panel. A new question after an answer has finished shows only the new answer; speaking while Bee is still answering updates the answer on screen.
+5. Bee retrieves matching notes, ranks them with Jev, and shows up to two tips. While the AI works, the notch shows what it is doing (for example "Searching the web"). When the answer arrives, the notch grows downward into an island with the tips and any source links. Click **×** to dismiss it. If you leave the pointer off it, it folds back to one line in the notch after at least 30 seconds (longer for longer answers), and the same tips stay on **Live**. Click that line to read the answer in full in the island again; click outside to fold it. The chevron opens the full panel. A new question after an answer has finished shows only the new answer; speaking while Bee is still answering updates the answer on screen.
 6. When the meeting ends, click **End meeting & save summary** on **Live**. Bee writes `meeting-YYYY-MM-DD-HHmm.md` to the notes folder, with decisions, action items (with owners), topics and the notes cited. Click **Open summary** to view it. Next time, Bee finds it like any other note. Without a key, or if the AI call fails, Bee saves a plain summary with the meeting lines instead.
 
 Notes are markdown files in the notes folder (Settings shows the path and has an **Open** button). On Windows this is `%APPDATA%\Bee\notes`; on macOS it is `~/Library/Application Support/Bee/notes`. Four fictional seed notes are written the first time the folder is empty. Edits are picked up on the next line; no restart is needed.
 
-Luna can also list, search and read these notes with file tools, for questions the top three notes do not cover. In Settings, **Extra folders Luna may read** takes one absolute path per line; Luna can read them but never write to them. Luna can add to a note (create or append, `.md` only, notes folder only) when you clearly ask it to. It never overwrites a file. Limits: paths must stay inside the notes folder or an approved folder (`..`, either slash style, and symbolic links are refused); binary files and files over 256 KiB are skipped; lists stop at 200 entries, searches at 20 hits, and a read returns at most 64 KiB.
+The AI can also list, search and read these notes with file tools, for questions the top three notes do not cover. In Settings, **Extra folders the AI may read** takes one absolute path per line; the AI can read them but never write to them. The AI can add to a note (create or append, `.md` only, notes folder only) when you clearly ask it to. It never overwrites a file. Limits: paths must stay inside the notes folder or an approved folder (`..`, either slash style, and symbolic links are refused); binary files and files over 256 KiB are skipped; lists stop at 200 entries, searches at 20 hits, and a read returns at most 64 KiB.
 
 **Meeting mode** hides Bee from screen sharing and keeps it above full-screen apps.
 
 ### Link suggestions and personalised links
 
-When a spoken line or a tip names a website (a URL, `convex.dev`, "convex dot dev", or a short list of names such as GitHub or Vercel), Bee shows a chip under the tips, with the site's icon. The chip shows at once, even while Luna is still working. A click opens the link in your default browser. **×** hides the chip for this turn. Bee never opens a link by itself.
+When a spoken line or a tip names a website (a URL, `convex.dev`, "convex dot dev", or a short list of names such as GitHub or Vercel), Bee shows a chip under the tips, with the site's icon. The chip shows at once, even while the AI is still working. A click opens the link in your default browser. **×** hides the chip for this turn. Bee never opens a link by itself.
 
 **Personalised link suggestions** pick the exact page you mean. For "vercel logs for vibot", the chip can read `vercel.com › vibot › logs` and open that page, taken from your browsing history or bookmarks in [vmem](https://github.com/vedantb2/vmem), when vmem is connected.
 
@@ -115,7 +115,7 @@ It fails open. The whole step has a 2 second limit. With the switch off or the G
 
 ### Speech-to-text
 
-Bee transcribes with **Grok STT** (`xai/grok-stt`) through Vercel AI Gateway, using the same Gateway key as Luna and Jev.
+Bee transcribes with **Grok STT** (`xai/grok-stt`) through Vercel AI Gateway, using the same Gateway key as the AI and Jev.
 
 1. The mic is captured with Web Audio. A simple level detector cuts the audio into phrases: speech, then 0.8 s of silence, up to 15 s per phrase. Blips under 0.3 s are dropped without a Gateway call. The mic is primary; system audio is mixed in when loopback or ScreenCaptureKit works.
 2. Each phrase is sent to the main process as a 16 kHz mono WAV. Main calls Grok STT (flex tier) and returns the text.
@@ -159,7 +159,7 @@ Teams mode lets teammates who are in the same Microsoft Teams meeting pool what 
 4. **Synced.** The notch shows a team icon with the member count. **Live → Teams sync** shows "Synced with Alice, Bob", **Pause sharing** / **Resume sharing** and **Leave sync**. Your mic phrases go to the sync only while the Bee mic is on and sharing is not paused. Typed test lines stay on your device. Teammates' phrases join your transcript in spoken order, labelled "Alice: …", and feed tips too.
 5. **Simultaneous starts.** If a teammate in a meeting started a sync within 30 seconds of yours, both of you see **Merge with Bob's sync?**. It merges only once both tap **Merge**.
 6. **Leaving.** When Teams has been out of the call for about 15 seconds, Bee leaves the sync. A new detection always shows a new popup; Bee never rejoins an old sync by itself.
-7. **Summary.** **End meeting & save summary** works as before. Each Bee writes its own markdown file locally. With synced lines, the transcript sent to Luna is `Speaker: text`, action items are attributed to the speaker who committed to them, and the file adds a `## Speakers` section that says the transcript is partial (Bee members only).
+7. **Summary.** **End meeting & save summary** works as before. Each Bee writes its own markdown file locally. With synced lines, the transcript sent to the AI is `Speaker: text`, action items are attributed to the speaker who committed to them, and the file adds a `## Speakers` section that says the transcript is partial (Bee members only).
 
 If the relay cannot be reached, Bee says "Bee is working solo" and carries on with your own lines only.
 
@@ -229,9 +229,9 @@ On Linux without a keyring (for example, under Xvfb), Electron cannot encrypt to
 ## Tests
 
 ```powershell
-npm test               # unit tests: retrieval, Jev ranking parser, Luna prompt, meeting summary, pipeline, sign-in gate, phrase detection, WAV, STT, update checks, Teams mode (relay, JWT, room ranking, detection, sync)
+npm test               # unit tests: retrieval, Jev ranking parser, AI prompt, meeting summary, pipeline, sign-in gate, phrase detection, WAV, STT, update checks, Teams mode (relay, JWT, room ranking, detection, sync)
 npm run test:gateway   # live smoke test against Vercel AI Gateway (needs BEE_AI_GATEWAY_API_KEY)
-npm run test:e2e       # Electron E2E: fake mic → Grok STT → Jev → Luna, meeting summary files, Teams sync (needs BEE_AI_GATEWAY_API_KEY; xvfb-run on Linux)
+npm run test:e2e       # Electron E2E: fake mic → Grok STT → Jev → AI, meeting summary files, Teams sync (needs BEE_AI_GATEWAY_API_KEY; xvfb-run on Linux)
 npm run relay:mock     # in-memory relay on http://127.0.0.1:8787 for local Teams mode
 npm run typecheck
 ```
@@ -242,18 +242,18 @@ npm run typecheck
 2. `xai/grok-stt` with an invalid key: checks for a short `Speech-to-text failed:` error.
 3. `anthropic/claude-haiku-5.5`: one short guidance completion.
 4. `anthropic/claude-haiku-5.5`: a current-events question ("who is the current Prime Minister of the UK?"), checked for a tip and at least one `https://` source.
-5. `anthropic/claude-haiku-5.5`: a question about a local note (a room number in a temp notes folder), checked that the tip holds the answer, so Luna used the file tools.
+5. `anthropic/claude-haiku-5.5`: a question about a local note (a room number in a temp notes folder), checked that the tip holds the answer, so the AI used the file tools.
 6. `anthropic/claude-haiku-5.5`: a meeting summary from a short transcript, checked for every section and the named owner.
 7. `typesafe-ai/jev`: scores three note snippets against a fake transcript and checks that the relevant note ranks first.
 8. `typesafe-ai/jev` with an invalid key: checks that ranking fails open, keeps the original order, and returns a clear error.
 
-`test:e2e` builds the app, then starts Electron with Chromium's fake audio device playing the same WAV. A small harness (`test/e2e/`) loads Bee's real preload and main IPC handlers, and a page that runs Bee's real mic capture and phrase detector. It checks that Grok STT returns the question, the roadmap note ranks first and Luna gives a tip. It skips Clerk and sends an unsigned token with Bee's issuer, which is all the main-process gate checks.
+`test:e2e` builds the app, then starts Electron with Chromium's fake audio device playing the same WAV. A small harness (`test/e2e/`) loads Bee's real preload and main IPC handlers, and a page that runs Bee's real mic capture and phrase detector. It checks that Grok STT returns the question, the roadmap note ranks first and the AI gives a tip. It skips Clerk and sends an unsigned token with Bee's issuer, which is all the main-process gate checks.
 
-The summary E2E uses the same harness without a mic. It runs a short fake meeting, ends it, checks the markdown file in a temp notes folder (every section, the notes cited, the named owner), and checks that the next pipeline run retrieves the summary. It runs once with Luna and once without a key (plain summary).
+The summary E2E uses the same harness without a mic. It runs a short fake meeting, ends it, checks the markdown file in a temp notes folder (every section, the notes cited, the named owner), and checks that the next pipeline run retrieves the summary. It runs once with the AI and once without a key (plain summary).
 
 Both fail straight away with a clear message if `BEE_AI_GATEWAY_API_KEY` is not set.
 
-The live MCP E2E (`test/mcp-live.e2e.test.ts`) is skipped, including under `test:e2e`, unless both `BEE_E2E_MCP_FILE` and `BEE_AI_GATEWAY_API_KEY` are set. `BEE_E2E_MCP_FILE` points to a JSON file (keep it mode 0600) shaped `{ "servers": [{ "id", "name", "url", "bearer"? , "oauth"? }] }`, where `oauth` is the stored MCP OAuth state; the harness re-reads it on every run and writes refreshed tokens back. Run it with `npx electron-vite build && npx vitest run --config vitest.e2e.config.ts test/mcp-live.e2e.test.ts` (on Linux without a display, `test/e2e/run.ts` uses `xvfb-run`). It asks three questions without the mic and checks that Luna names vmem and Eva as Bee's connectors, calls an Eva tool for a table count, and calls a vmem tool for a memory search. The harness prints each MCP call as an `E2E_MCP_CALL` line (tool, server, ok, size, a short preview; never tokens).
+The live MCP E2E (`test/mcp-live.e2e.test.ts`) is skipped, including under `test:e2e`, unless both `BEE_E2E_MCP_FILE` and `BEE_AI_GATEWAY_API_KEY` are set. `BEE_E2E_MCP_FILE` points to a JSON file (keep it mode 0600) shaped `{ "servers": [{ "id", "name", "url", "bearer"? , "oauth"? }] }`, where `oauth` is the stored MCP OAuth state; the harness re-reads it on every run and writes refreshed tokens back. Run it with `npx electron-vite build && npx vitest run --config vitest.e2e.config.ts test/mcp-live.e2e.test.ts` (on Linux without a display, `test/e2e/run.ts` uses `xvfb-run`). It asks three questions without the mic and checks that the AI names vmem and Eva as Bee's connectors, calls an Eva tool for a table count, and calls a vmem tool for a memory search. The harness prints each MCP call as an `E2E_MCP_CALL` line (tool, server, ok, size, a short preview; never tokens).
 
 The Teams E2E needs no key. The test serves the in-memory relay over HTTP, with a local RS256 key pair and JWKS, and plays "Bob": it creates the team and a sync. Bee's real preload and main (with a stub detector) run as "Alice". Alice joins by invite link, simulates a meeting, takes the popup's **Join**, shares one mic phrase and one while sharing is paused, and receives Bob's phrase. She then writes the summary and turns the meeting off. The test checks that the relay stamped both speakers from their tokens and that the paused phrase never left Alice's device. It also checks that Alice left the sync after the debounce and that the plain summary lists `Alice: …` and `Bob Jones: …` lines and a `## Speakers` section.
 

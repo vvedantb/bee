@@ -455,7 +455,7 @@ function SettingsTab({ state, settings }: { state: BeeState; settings: SettingsV
           copy={window.bee.copyGatewayKey}
         />
         <label>
-          Extra folders Luna may read (one absolute path per line)
+          Extra folders the AI may read (one absolute path per line)
           <Textarea name="fsRoots" rows={3} defaultValue={settings.fsRoots.join("\n")} spellCheck={false} />
         </label>
         <p className="muted">

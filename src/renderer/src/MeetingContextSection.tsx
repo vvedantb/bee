@@ -46,7 +46,7 @@ export function MeetingContextSection({
   return (
     <section>
       <h2>Meeting context</h2>
-      <p className="muted">Read on this device. Sent to Luna and your connectors.</p>
+      <p className="muted">Read on this device. Sent to the AI and your connectors.</p>
       <SettingRow
         id="meeting-context"
         label="Know which meeting I am in"

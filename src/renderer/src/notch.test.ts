@@ -21,7 +21,7 @@ const failedRun: PipelineResult = {
   rankError: null,
   tips: [],
   sources: [],
-  guideError: "Luna guidance failed: timeout",
+  guideError: "AI guidance failed: timeout",
   timingsMs: { retrieve: 0, rank: 0, guide: 0, mcp: 0, lunaFirstToken: null, lunaTotal: 0 },
 };
 
