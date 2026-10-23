@@ -6,7 +6,6 @@ import {
   MAX_TIPS,
   PAUSE_MS,
   RESTART_WINDOW_MS,
-  TURN_GAP_MS,
   inCommitWindow,
   isFiller,
   isNewTurn,
@@ -126,13 +125,20 @@ describe("inCommitWindow", () => {
 });
 
 describe("isNewTurn", () => {
-  it("starts a turn when none is open or the gap is over", () => {
-    expect(isNewTurn({ open: false, lastLineAt: 1000, now: 1500 })).toBe(true);
-    expect(isNewTurn({ open: true, lastLineAt: 1000, now: 1000 + TURN_GAP_MS + 1 })).toBe(true);
+  it("starts afresh for a new utterance after the last answer settled, however soon: no earlier answer is shown", () => {
+    expect(isNewTurn({ open: true, busy: false, spokenDuringRun: false })).toBe(true);
   });
 
-  it("extends the turn inside the gap", () => {
-    expect(isNewTurn({ open: true, lastLineAt: 1000, now: 1000 + TURN_GAP_MS })).toBe(false);
-    expect(isNewTurn({ open: true, lastLineAt: 1000, now: 1200 })).toBe(false);
+  it("steers the run when the line comes while Bee is still answering: earlier tips stay", () => {
+    expect(isNewTurn({ open: true, busy: true, spokenDuringRun: false })).toBe(false);
+  });
+
+  it("counts an interruption whose speech-to-text finished after the answer settled", () => {
+    expect(isNewTurn({ open: true, busy: false, spokenDuringRun: true })).toBe(false);
+  });
+
+  it("always starts afresh after a dismissal", () => {
+    expect(isNewTurn({ open: false, busy: true, spokenDuringRun: true })).toBe(true);
+    expect(isNewTurn({ open: false, busy: false, spokenDuringRun: false })).toBe(true);
   });
 });

@@ -12,8 +12,6 @@ export const DEBOUNCE_MS = 500;
 export const MAX_RESTARTS = 3;
 export const RESTART_WINDOW_MS = 10_000;
 export const PAUSE_MS = 1_500;
-/** No new line for this long: the next line starts a new turn. Same length as ISLAND_IDLE_MS (island.ts). */
-export const TURN_GAP_MS = 10_000;
 
 /** True when the line has no content words ("yeah", "okay", "um"). Such a line joins the transcript but never starts or aborts a run. */
 export function isFiller(line: string): boolean {
@@ -94,11 +92,12 @@ export function runDelayMs(restarts: readonly number[], now: number, steering: b
     : DEBOUNCE_MS;
 }
 
-/** A line starts a new turn when no turn is open (first line, or the island was dismissed) or the last line is older than TURN_GAP_MS. */
-export function isNewTurn(args: {
-  open: boolean;
-  lastLineAt: number;
-  now: number;
-}): boolean {
-  return !args.open || args.now - args.lastLineAt > TURN_GAP_MS;
+/**
+ * Whether a line starts a new turn: the last answer goes and nothing is kept or shown from it. A line steers the current turn
+ * (earlier tips stay, dimmed) only when it interrupts a run: it came while Bee was busy (debounce, run or deferred restart), or
+ * its phrase ended while Bee was busy and its speech-to-text finished after. A fresh question after an answer has settled, or any
+ * line after the island was dismissed (open false), starts afresh, however soon it follows.
+ */
+export function isNewTurn(args: { open: boolean; busy: boolean; spokenDuringRun: boolean }): boolean {
+  return !args.open || !(args.busy || args.spokenDuringRun);
 }

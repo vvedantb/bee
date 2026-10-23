@@ -6,17 +6,31 @@ import { z } from "zod";
 import { runHarness } from "./e2e/run";
 
 // Electron screenshots of static island states (test/e2e/island-shots.ts, real styles.css) via capturePage().
-// No Gateway key needed. Set BEE_E2E_SHOTS_DIR to choose where the PNGs go (default: a temp folder).
+// No Gateway key needed. Set BEE_SHOTS_DIR (or BEE_E2E_SHOTS_DIR) to choose where the PNGs go (default: a temp folder).
 
-const dir = process.env.BEE_E2E_SHOTS_DIR || mkdtempSync(join(tmpdir(), "bee-island-shots-"));
+const dir = process.env.BEE_SHOTS_DIR || process.env.BEE_E2E_SHOTS_DIR || mkdtempSync(join(tmpdir(), "bee-island-shots-"));
 const PNG_MAGIC = "89504e470d0a1a0a";
-const SHOTS = ["collapsed", "thinking", "expanded", "meeting-card", "long-tip-bottom", "long-tip-scrolled-up", "update-available"];
+const SHOTS = [
+  "collapsed",
+  "thinking",
+  "expanded",
+  "meeting-card",
+  "long-tip-bottom",
+  "long-tip-scrolled-up",
+  "update-available",
+  "response-folded",
+  "response-full-text",
+  "fresh-utterance",
+];
 
 const box = z.object({ width: z.number(), height: z.number(), centerY: z.number() });
 const page = z.object({
   shot: z.string(),
   notch: z.object({ logo: box, buttons: z.array(box) }),
   scroll: z.object({ scrollTop: z.number(), scrollHeight: z.number(), clientHeight: z.number() }).optional(),
+  clicked: z.string().nullable(),
+  open: z.boolean(),
+  tips: z.number(),
 });
 
 describe("island screenshots (Electron E2E)", () => {
@@ -37,8 +51,16 @@ describe("island screenshots (Electron E2E)", () => {
       }
     }
 
+    const pageFor = (shot: string) => report.pages.find((item) => item.shot === shot);
+
+    // The folded answer is one line with no body; clicking it opens the full text in the island, never the panel.
+    expect(pageFor("response-folded")).toMatchObject({ open: false, clicked: null });
+    expect(pageFor("response-full-text")).toMatchObject({ open: true, clicked: "full-text", tips: 1 });
+    // A fresh question after the last answer settled shows only the new answer.
+    expect(pageFor("fresh-utterance")).toMatchObject({ open: true, tips: 1 });
+
     // The update button sits before the mic and collapse buttons.
-    expect(report.pages.find((item) => item.shot === "update-available")?.notch.buttons).toHaveLength(3);
+    expect(pageFor("update-available")?.notch.buttons).toHaveLength(3);
 
     const scroll = (shot: string) => z.object({ scrollTop: z.number(), scrollHeight: z.number(), clientHeight: z.number() }).parse(report.pages.find((item) => item.shot === shot)?.scroll);
     const bottom = scroll("long-tip-bottom");

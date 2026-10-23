@@ -1,15 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { TURN_GAP_MS } from "../../core/steering";
 import {
   FOLLOW_SLACK_PX,
-  ISLAND_IDLE_MS,
-  TAP_SLOP_PX,
+  ISLAND_MIN_OPEN_MS,
+  READ_WORDS_PER_SECOND,
   activityLabel,
   islandPhase,
   keepFollowing,
   mcpErrorNote,
   islandShowsBody,
-  isTipTap,
+  islandClick,
+  islandOpenMs,
   nearBottom,
   shouldAutoCollapse,
   shouldShowResponse,
@@ -133,10 +133,6 @@ describe("islandPhase revising", () => {
     expect(islandPhase({ ...args, revising: false })).toBe("thinking");
     expect(islandPhase({ ...args, busy: false })).toBe("expanded");
   });
-
-  it("uses one clock for the island and the turn gap", () => {
-    expect(TURN_GAP_MS).toBe(ISLAND_IDLE_MS);
-  });
 });
 
 describe("islandShowsBody", () => {
@@ -177,42 +173,75 @@ describe("islandShowsBody", () => {
   });
 });
 
-describe("shouldAutoCollapse", () => {
-  const base = { phase: "expanded" as const, hovered: false, lastActivityAt: 1_000 };
-
-  it("collapses after the idle time", () => {
-    expect(shouldAutoCollapse({ ...base, now: 1_000 + ISLAND_IDLE_MS })).toBe(true);
+describe("islandOpenMs", () => {
+  it("is at least 30 s, plus reading time at 3.3 words a second", () => {
+    expect(ISLAND_MIN_OPEN_MS).toBe(30_000);
+    expect(READ_WORDS_PER_SECOND).toBe(3.3);
+    expect(islandOpenMs("")).toBe(30_000);
+    expect(islandOpenMs("  Say   yes ")).toBe(30_000 + Math.round((2 / 3.3) * 1000));
   });
 
-  it("waits until the idle time has passed", () => {
-    expect(shouldAutoCollapse({ ...base, now: 1_000 + ISLAND_IDLE_MS - 1 })).toBe(false);
+  it("grows with the answer: 66 words add 20 s", () => {
+    expect(islandOpenMs(Array.from({ length: 66 }, () => "word").join(" "))).toBe(50_000);
+  });
+});
+
+describe("shouldAutoCollapse", () => {
+  const openMs = islandOpenMs("Offer 15% off for a two-year term.");
+  const base = { phase: "expanded" as const, hovered: false, fullText: false, lastActivityAt: 1_000, openMs };
+
+  it("folds the body to the pill once the reading time has passed", () => {
+    expect(shouldAutoCollapse({ ...base, now: 1_000 + openMs })).toBe(true);
+  });
+
+  it("never folds within 30 s, the old 10 s included", () => {
+    expect(shouldAutoCollapse({ ...base, now: 1_000 + 10_000 })).toBe(false);
+    expect(shouldAutoCollapse({ ...base, now: 1_000 + openMs - 1 })).toBe(false);
   });
 
   it("does not collapse while thinking", () => {
-    expect(shouldAutoCollapse({ ...base, phase: "thinking", now: 1_000 + ISLAND_IDLE_MS * 5 })).toBe(false);
+    expect(shouldAutoCollapse({ ...base, phase: "thinking", now: 1_000 + openMs * 5 })).toBe(false);
   });
 
   it("does not collapse while the pointer is on the island", () => {
-    expect(shouldAutoCollapse({ ...base, hovered: true, now: 1_000 + ISLAND_IDLE_MS * 5 })).toBe(false);
+    expect(shouldAutoCollapse({ ...base, hovered: true, now: 1_000 + openMs * 5 })).toBe(false);
+  });
+
+  it("never collapses an answer the user opened in full", () => {
+    expect(shouldAutoCollapse({ ...base, fullText: true, now: 1_000 + openMs * 100 })).toBe(false);
   });
 
   it("has nothing to collapse when idle", () => {
-    expect(shouldAutoCollapse({ ...base, phase: "idle", now: 1_000 + ISLAND_IDLE_MS })).toBe(false);
+    expect(shouldAutoCollapse({ ...base, phase: "idle", now: 1_000 + openMs })).toBe(false);
   });
 
-  it("keeps the delay between 8 and 12 s", () => {
-    expect(ISLAND_IDLE_MS).toBeGreaterThanOrEqual(8_000);
-    expect(ISLAND_IDLE_MS).toBeLessThanOrEqual(12_000);
-  });
-
-  it("dismiss closes the body, and a new result opens it again", () => {
+  it("dismiss closes the body, and a new result (or a scroll) restarts the clock", () => {
     const result = { ...empty, tips: ["Say yes"] };
     expect(islandPhase({ ...result, dismissed: true, busy: false })).toBe("idle");
     // The store clears dismissed when the next result arrives.
     expect(islandPhase({ ...result, dismissed: false, busy: false })).toBe("expanded");
-    // The idle clock restarts with that result.
     const arrivedAt = 50_000;
-    expect(shouldAutoCollapse({ phase: "expanded", hovered: false, lastActivityAt: arrivedAt, now: arrivedAt + 1_000 })).toBe(false);
+    expect(shouldAutoCollapse({ ...base, lastActivityAt: arrivedAt, now: arrivedAt + openMs - 1 })).toBe(false);
+  });
+});
+
+describe("islandClick", () => {
+  const folded = { panelOpen: false, bodyShown: false, hasResponse: true };
+
+  it("opens the one-line answer in full in the island, never the panel", () => {
+    expect(islandClick("status", folded)).toBe("full-text");
+  });
+
+  it("does nothing for status text that is not an answer, or an answer already open", () => {
+    expect(islandClick("status", { ...folded, hasResponse: false })).toBeNull();
+    expect(islandClick("status", { ...folded, bodyShown: true })).toBeNull();
+    expect(islandClick("status", { ...folded, panelOpen: true })).toBeNull();
+  });
+
+  it("leaves the panel to the chevron, which still toggles it", () => {
+    expect(islandClick("chevron", folded)).toBe("open-panel");
+    expect(islandClick("chevron", { ...folded, panelOpen: true })).toBe("close-panel");
+    expect(islandClick("chevron", { ...folded, bodyShown: true })).toBe("open-panel");
   });
 });
 
@@ -278,24 +307,5 @@ describe("keepFollowing", () => {
 
   it("keeps following when shorter content pulls the scroll position up to the new bottom", () => {
     expect(keepFollowing(true, 700, { scrollTop: 400, scrollHeight: 700, clientHeight: 300 })).toBe(true);
-  });
-});
-
-describe("isTipTap", () => {
-  const press = { x: 100, y: 40 };
-
-  it("opens the tip on a tap, including a small wobble", () => {
-    expect(isTipTap({ keyboard: false, press, release: press })).toBe(true);
-    expect(isTipTap({ keyboard: false, press, release: { x: 100 + TAP_SLOP_PX, y: 40 } })).toBe(true);
-  });
-
-  it("ignores a drag, such as selecting text or dragging the scrollbar", () => {
-    expect(isTipTap({ keyboard: false, press, release: { x: 100, y: 40 + TAP_SLOP_PX + 1 } })).toBe(false);
-    expect(isTipTap({ keyboard: false, press, release: { x: 160, y: 90 } })).toBe(false);
-  });
-
-  it("ignores a click whose press did not start on the tip, and lets the keyboard open it", () => {
-    expect(isTipTap({ keyboard: false, press: null, release: press })).toBe(false);
-    expect(isTipTap({ keyboard: true, press: null, release: { x: 0, y: 0 } })).toBe(true);
   });
 });
