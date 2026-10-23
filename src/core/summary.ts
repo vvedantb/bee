@@ -156,8 +156,8 @@ export async function generateMeetingSummary(
       maxOutputTokens: 2000,
       maxRetries: 1,
       abortSignal: AbortSignal.timeout(args.timeoutMs ?? SUMMARY_TIMEOUT_MS),
-      // Background work: flex, Anthropic first. Flex may not apply on Anthropic.
-      providerOptions: guideProviderOptions("flex"),
+      // Background work: flex, Anthropic first (no web search, so fail-over stays). Flex may not apply on Anthropic.
+      providerOptions: guideProviderOptions("flex", { web: false }),
     });
     const body = parseSummaryMarkdown(result.text);
     if (!body) throw new Error("reply did not have the expected sections");

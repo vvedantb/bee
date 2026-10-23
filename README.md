@@ -33,7 +33,7 @@ npm run dist:mac
 
 Signing is off by default. To sign and notarise, set `CSC_LINK` and `CSC_KEY_PASSWORD` for electron-builder, and set `build.mac.notarize` to `true` (it is `false` now), with `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD` and `APPLE_TEAM_ID` in the environment.
 
-Bee is a desktop overlay for meetings. It sits as a small "notch" at the top centre of the screen. It listens to the meeting, finds relevant local notes, ranks them with Jev and shows one or two short tips from Luna (Claude Haiku 5.5). When a question is about a public or current fact that the notes do not cover, Luna can search the web, and the Live tab lists the source links under the tips. This uses the same Gateway key.
+Bee is a desktop overlay for meetings. It sits as a small "notch" at the top centre of the screen. It listens to the meeting, finds relevant local notes, ranks them with Jev and shows one or two short tips from Luna (Claude Haiku 5.5). When a question is about a public or current fact that the notes do not cover, Luna can search the web, and the Live tab lists the source links under the tips. This uses the same Gateway key. The search is Anthropic's own web search tool, so the Gateway sends those calls only to the Anthropic provider.
 
 Windows and macOS are supported. The Teams detector is Windows only.
 

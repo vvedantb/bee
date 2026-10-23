@@ -21,13 +21,20 @@ export function gatewayTier(tier: GatewayTier): { gateway?: { serviceTier: strin
 
 export const FLEX_PROVIDER_OPTIONS = gatewayTier("flex");
 
-// Gateway provider order for GUIDE_MODEL calls. Anthropic first (the owner's BYOK key); `order`, not `only`,
-// so the Gateway can still fail over to bedrock or vertex.
-export const GUIDE_PROVIDER_ORDER: readonly string[] = ["anthropic"];
+// The Gateway provider for GUIDE_MODEL calls: Anthropic (the owner's BYOK key).
+export const GUIDE_PROVIDER = "anthropic";
 
-/** The tier's options plus the GUIDE_MODEL provider order. Flex may not apply on Anthropic; the Gateway decides. */
-export function guideProviderOptions(tier: GatewayTier): { gateway: { serviceTier?: string; order: string[] } } {
-  return { gateway: { ...gatewayTier(tier).gateway, order: [...GUIDE_PROVIDER_ORDER] } };
+/**
+ * The tier's options plus GUIDE_MODEL routing. Flex may not apply on Anthropic; the Gateway decides.
+ * `web: true` (Luna with web_search) pins the call with `only`: Anthropic's provider-run web search may be rejected
+ * by bedrock or vertex. Without web search, `order` keeps fail-over to those providers.
+ */
+export function guideProviderOptions(
+  tier: GatewayTier,
+  options: { web: boolean },
+): { gateway: { serviceTier?: string; only?: string[]; order?: string[] } } {
+  const routing = options.web ? { only: [GUIDE_PROVIDER] } : { order: [GUIDE_PROVIDER] };
+  return { gateway: { ...gatewayTier(tier).gateway, ...routing } };
 }
 
 export const NO_GATEWAY_KEY = "No AI Gateway key. Add one in Settings.";
