@@ -9,8 +9,9 @@ describe("lunaTools", () => {
     expect(Object.keys(lunaTools({ extraRoots: ["/x"] }))).toEqual(["web_search"]);
   });
 
-  it("uses Anthropic's native web search with a small search budget", () => {
-    expect(lunaTools().web_search).toMatchObject({ type: "provider", id: "anthropic.web_search_20260318", args: { maxUses: 3 } });
+  it("uses Anthropic's basic web search (not dynamic filtering) with a small search budget", () => {
+    expect(lunaTools().web_search).toMatchObject({ type: "provider", id: "anthropic.web_search_20250305", args: { maxUses: 3 } });
+    expect(lunaTools({ web: false })).not.toHaveProperty("web_search");
   });
 
   it("adds the file tools when a notes folder is passed", () => {
@@ -162,6 +163,21 @@ describe("sourcesFromGenerateResult", () => {
       ],
     });
     expect(sources.map((s) => s.url)).toEqual(["https://a.com/page", "https://b.com/p", "https://c.com/a.b/(x)/y"]);
+  });
+
+  it("keeps a balanced closing paren and strips an unbalanced one", () => {
+    const sources = sourcesFromGenerateResult({
+      sources: [
+        { sourceType: "url", id: "1", url: "https://en.wikipedia.org/wiki/Today_(BBC_Radio_4)", title: "A" },
+        { sourceType: "url", id: "2", url: "https://en.wikipedia.org/wiki/Mercury_(planet)).", title: "B" },
+        { sourceType: "url", id: "3", url: "https://c.com/x),", title: "C" },
+      ],
+    });
+    expect(sources.map((s) => s.url)).toEqual([
+      "https://en.wikipedia.org/wiki/Today_(BBC_Radio_4)",
+      "https://en.wikipedia.org/wiki/Mercury_(planet)",
+      "https://c.com/x",
+    ]);
   });
 
   it("strips utm_ params and dedupes after stripping", () => {
