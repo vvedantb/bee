@@ -22,6 +22,8 @@ import { loadMcpTools } from "./mcp";
 
 const VMEM = { name: "vmem", prefix: "vmem", toolCount: 77 };
 const EVA = { name: "Eva", prefix: "eva", toolCount: 84 };
+// Local noon, so the date is the same in every time zone the tests run in.
+const NOW = new Date(2026, 9, 24, 12);
 
 describe("buildLunaPrompt", () => {
   it("includes the recent transcript and numbered notes", () => {
@@ -31,12 +33,13 @@ describe("buildLunaPrompt", () => {
         { id: "x.md#1", title: "Acme › Pricing", text: "10% discount" },
         { id: "y.md#0", title: "Habits", text: "Summarise decisions" },
       ],
+      now: NOW,
     });
     expect(system).toBe(LUNA_SYSTEM);
     expect(transcript).toBe("Recent transcript (oldest first):\n- First line\n- Second line");
     expect(context).toContain("[n1] Acme › Pricing\n10% discount");
     expect(context).toContain("[n2] Habits\nSummarise decisions");
-    expect(tail).toBe("Give at most 2 short tips.\n\nTips:");
+    expect(tail).toBe("Today's date: Saturday 24 October 2026.\nGive at most 2 short tips.\n\nTips:");
   });
 
   it("adds the MCP block only when servers are connected or unavailable", () => {
@@ -75,13 +78,14 @@ describe("buildLunaPrompt", () => {
     const plain = buildLunaPrompt({ transcript: ["a"], notes: [] });
     expect(plain.tail).not.toContain("Already shown");
     expect(plain.tail).not.toContain(LUNA_STEERING_RULES);
-    const { tail } = buildLunaPrompt({ transcript: ["a", "b"], notes: [], shown: [" SSO ships in Q4 [n1] ", "Ask about\nowners"] });
+    const { tail } = buildLunaPrompt({ transcript: ["a", "b"], notes: [], shown: [" SSO ships in Q4 [n1] ", "Ask about\nowners"], now: NOW });
     expect(tail).toBe(
       [
         "Already shown to the user (keep; do not repeat; refine only if the new line changes the answer):",
         "- SSO ships in Q4 [n1]",
         "- Ask about owners",
         "",
+        "Today's date: Saturday 24 October 2026.",
         "Give at most 3 short tips.",
         LUNA_STEERING_RULES,
         "",
@@ -99,6 +103,14 @@ describe("buildLunaPrompt", () => {
     expect(steering.system).toBe(fresh.system);
     expect(steering.context).toBe(fresh.context);
     expect(steering.tail).not.toBe(fresh.tail);
+  });
+
+  it("puts today's date in the uncached tail, not the system or context", () => {
+    const prompt = buildLunaPrompt({ transcript: ["a"], notes: [], meetingBrief: "Meeting: Sync", now: NOW });
+    expect(prompt.tail).toContain("Today's date: Saturday 24 October 2026.");
+    expect(prompt.system).not.toContain("2026");
+    expect(prompt.context).not.toContain("2026");
+    expect(buildLunaPrompt({ transcript: ["a"], notes: [], meetingBrief: "Meeting: Sync", now: new Date(2027, 0, 1, 12) }).system).toBe(prompt.system);
   });
 
   it("ignores blank shown tips", () => {
@@ -391,6 +403,33 @@ describe("guideWithLuna streaming", () => {
     expect(result.tips).toEqual(["The match ended 2-1 today"]);
     expect(events.slice(0, 2)).toEqual(["start:web_search", "end:web_search"]);
     expect(events.filter((event) => event !== "partial")).toHaveLength(2);
+  });
+
+  it("answers from the text after a web_search and keeps its sources", async () => {
+    const events: string[] = [];
+    const hit = (url: string, title: string) => ({ type: "web_search_result", url, title, pageAge: null, encryptedContent: "x" });
+    const model = streamModel(() => [
+      ...textChunks("Let me look up today's headline.").slice(0, -1),
+      { type: "tool-call", toolCallId: "ws1", toolName: "web_search", input: '{"query":"BBC News headline"}', providerExecuted: true },
+      {
+        type: "tool-result",
+        toolCallId: "ws1",
+        toolName: "web_search",
+        result: [hit("https://www.bbc.co.uk/news/a", "Headline A"), hit("https://www.bbc.co.uk/news/b", "Headline B")],
+        providerExecuted: true,
+      },
+      { type: "text-start", id: "t2" },
+      { type: "text-delta", id: "t2", delta: "- Today's top story is A" },
+      { type: "text-end", id: "t2" },
+      finish("stop"),
+    ]);
+    const result = await guideWithLuna({ model, transcript: ["News?"], notes: [], onActivity: ({ tool, phase }) => events.push(`${phase}:${tool}`) });
+    expect(result.tips).toEqual(["Today's top story is A"]);
+    expect(result.sources).toEqual([
+      { title: "Headline A", url: "https://www.bbc.co.uk/news/a" },
+      { title: "Headline B", url: "https://www.bbc.co.uk/news/b" },
+    ]);
+    expect(events).toEqual(["start:web_search", "end:web_search"]);
   });
 
   it("stops a hanging call when the run is cancelled, and reports it as an error", async () => {
@@ -749,7 +788,7 @@ describe("guideWithLuna providers and web search", () => {
     const seen: { tools: string[]; providerOptions: string }[] = [];
     const model = streamModel((options, call) => {
       seen.push(options);
-      if (call === 1) throw new Error("tools.0: Input tag 'web_search_20260318' found using 'type' does not match any of the expected tags");
+      if (call === 1) throw new Error("tools.0: Input tag 'web_search_20250305' found using 'type' does not match any of the expected tags");
       return textChunks("- Answer from the notes");
     });
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);

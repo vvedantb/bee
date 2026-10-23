@@ -14,7 +14,9 @@ export type BeeSource = { title: string; url: string };
 /** `web: false` leaves out web_search (a provider that rejects it, see guideWithLuna). */
 export function lunaTools(options: { notesDir?: string; extraRoots?: readonly string[]; extra?: ToolSet; web?: boolean } = {}): ToolSet {
   // Anthropic runs this search itself, so the Gateway must route the call to Anthropic (gateway.ts guideProviderOptions).
-  const web: ToolSet = options.web === false ? {} : { web_search: anthropic.tools.webSearch_20260318({ maxUses: MAX_WEB_SEARCHES }) };
+  // The basic version: 20260209/20260318 add dynamic filtering, which searches from a code execution sandbox, and Haiku
+  // via the Gateway only called code_execution there and never searched.
+  const web: ToolSet = options.web === false ? {} : { web_search: anthropic.tools.webSearch_20250305({ maxUses: MAX_WEB_SEARCHES }) };
   const local = options.notesDir ? { ...web, ...fsTools({ notesDir: options.notesDir, extraRoots: options.extraRoots }) } : web;
   // MCP tools (core/mcp.ts) are namespaced; spreading them first also means they can never replace a built-in.
   return { ...options.extra, ...local };
@@ -44,10 +46,19 @@ function collectRaw(result: { sources?: readonly unknown[]; toolResults?: readon
   });
 }
 
+// Drops sentence punctuation glued to a url. A trailing ")" goes only when unbalanced, so Today_(BBC_Radio_4) keeps it.
+function trimUrl(url: string): string {
+  let trimmed = url.trim().replace(/[.,]+$/, "");
+  while (trimmed.endsWith(")") && trimmed.split(")").length > trimmed.split("(").length) {
+    trimmed = trimmed.slice(0, -1).replace(/[.,]+$/, "");
+  }
+  return trimmed;
+}
+
 function toSource(raw: RawSource): BeeSource | null {
   let parsed: URL;
   try {
-    parsed = new URL(raw.url.trim().replace(/[.,)]+$/, ""));
+    parsed = new URL(trimUrl(raw.url));
   } catch {
     return null;
   }

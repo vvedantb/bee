@@ -13,7 +13,7 @@ const SCHEMA_ERROR = /json schema|propertyNames|input_?schema|tools?\b.*\bschema
 // Too many tools for the provider, e.g. "Invalid 'tools': array too long. Expected an array with maximum length 128".
 const TOOL_COUNT_ERROR = /tools'?\W.*\b(array too long|too many|maximum length)|too many tools/i;
 // A provider that rejects Anthropic's web_search tool, e.g. bedrock's "web search is not supported", or an error naming the
-// versioned tool type (web_search_20260318) as unknown or not enabled. Luna retries once without it.
+// versioned tool type (web_search_20250305) as unknown or not enabled. Luna retries once without it.
 const WEB_SEARCH_ERROR = /web search is not (supported|enabled)|web_search_\d{8}/i;
 const MAX_ERROR_CHARS = 300;
 // Stream error parts can carry plain objects, not Errors. These are the shapes seen from providers and the gateway.
@@ -62,6 +62,7 @@ export const LUNA_SYSTEM = [
   "If the latest transcript lines ask a direct question (a fact, a definition, a quick sum), the first tip answers it.",
   "Answer from the notes when they cover it and cite them by id, for example [n1].",
   "If the notes do not cover it and the fact is public, may have changed, or is current events (office holders, news, scores, prices, releases), use the web_search tool.",
+  "For current events, put today's date or year (given at the end of the message) in the search query, and prefer the newest results.",
   "After a search, you may end the tip with the site domain in plain text, or [web]. Do not add links.",
   "Do not search for stable general knowledge or arithmetic, for example 15% of 18000. Answer those directly.",
   "If the notes do not cover a question about the user's own notes or files, use list_dir, search_files and read_file, then answer from what you read.",
@@ -154,6 +155,15 @@ export function noteCitation(index: number): string {
  */
 export type LunaPrompt = { system: string; context: string; transcript: string; tail: string };
 
+// e.g. "Saturday 24 October 2026" in the user's time zone. Built from parts: ICU versions differ on the comma after the weekday.
+const TODAY_FORMAT = new Intl.DateTimeFormat("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
+
+function todayLine(now: Date): string {
+  const parts = TODAY_FORMAT.formatToParts(now);
+  const part = (type: Intl.DateTimeFormatPartTypes) => parts.find((p) => p.type === type)?.value ?? "";
+  return `Today's date: ${part("weekday")} ${part("day")} ${part("month")} ${part("year")}.`;
+}
+
 export function buildLunaPrompt(args: {
   transcript: string[];
   notes: Snippet[];
@@ -164,6 +174,8 @@ export function buildLunaPrompt(args: {
   shown?: string[];
   /** The brief for the meeting in progress (core/meeting-brief.ts). Omitted outside a detected meeting. */
   meetingBrief?: string;
+  /** Today's date goes in the tail (not cached). Defaults to now; tests pass a fixed date. */
+  now?: Date;
 }): LunaPrompt {
   const meeting = meetingBlock(args.meetingBrief);
   const lines = args.transcript.slice(-TRANSCRIPT_WINDOW).map((line) => `- ${line.trim()}`);
@@ -179,6 +191,7 @@ export function buildLunaPrompt(args: {
     ...(shown.length > 0
       ? ["Already shown to the user (keep; do not repeat; refine only if the new line changes the answer):", ...shown.map((tip) => `- ${tip}`), ""]
       : []),
+    todayLine(args.now ?? new Date()),
     lunaTipLimit(tipCap(shown.length)),
     ...(shown.length > 0 ? [LUNA_STEERING_RULES] : []),
     "",
