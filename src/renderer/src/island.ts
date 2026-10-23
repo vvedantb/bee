@@ -90,3 +90,22 @@ export function timingsTitle(timings: PipelineTimings): string {
   const ms = (value: number) => `${Math.round(value)} ms`;
   return `retrieve ${ms(timings.retrieve)} · Jev ${ms(timings.rank)} · MCP ${ms(timings.mcp)} · Luna ${ms(timings.guide)} (Jev runs beside MCP and Luna)`;
 }
+
+/** How close to the end of the island body counts as "at the bottom", in CSS px. */
+export const FOLLOW_SLACK_PX = 24;
+
+export type ScrollMetrics = { scrollTop: number; scrollHeight: number; clientHeight: number };
+
+export function nearBottom(metrics: ScrollMetrics): boolean {
+  return metrics.scrollHeight - metrics.clientHeight - metrics.scrollTop <= FOLLOW_SLACK_PX;
+}
+
+/**
+ * Whether the body keeps pinning its newest line after a scroll. Near the bottom it follows; moving up (the user) pauses it.
+ * Moving down without reaching the bottom keeps the current choice, so Bee's own smooth scroll never pauses itself.
+ */
+export function keepFollowing(following: boolean, previousTop: number, metrics: ScrollMetrics): boolean {
+  if (nearBottom(metrics)) return true;
+  if (metrics.scrollTop < previousTop) return false;
+  return following;
+}

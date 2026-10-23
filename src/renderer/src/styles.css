@@ -48,6 +48,7 @@
   --default-foreground: var(--text);
   --field-background: var(--surface-sunken);
   --border: #2d271e;
+  --notch-height: 52px;
   --fast: 150ms;
   --medium: 220ms;
   --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
@@ -120,7 +121,7 @@ body {
   display: flex;
   align-items: center;
   gap: 10px;
-  height: 52px;
+  height: var(--notch-height);
   flex: none;
   padding: 0 10px 0 16px;
   -webkit-app-region: drag;
@@ -506,8 +507,6 @@ body {
   display: grid;
   grid-template-rows: 1fr;
   min-height: 0;
-  /* Content-sized; scrolls only when the answer is taller than the window. */
-  overflow-y: auto;
   animation: island-open 420ms var(--spring);
 }
 
@@ -515,17 +514,28 @@ body {
   animation: island-close 200ms ease-in forwards;
 }
 
+/* Clips the body while it opens; the scroll area inside keeps its own height, so no scrollbar flashes during the spring. */
 .island-inner {
   position: relative;
   min-height: 0;
   overflow: hidden;
-  padding: 2px 18px 18px;
+  padding: 2px 4px 18px 0;
 }
 
 .island-close {
   position: absolute;
   top: 0;
-  right: 10px;
+  right: 16px;
+  z-index: 1;
+}
+
+/* Content-sized up to what the window leaves under the notch (shell padding, notch, inner padding), then it scrolls.
+   The scrollbar sits near the island's edge, clear of the dismiss button and the rounded corner. */
+.island-scroll {
+  max-height: calc(100vh - 8px - var(--notch-height) - 20px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0 14px 0 18px;
 }
 
 .island-tips {

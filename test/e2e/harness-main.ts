@@ -4,7 +4,8 @@
 // all main/auth.ts checks. BEE_E2E_TOKEN replaces that token (the Teams E2E signs real RS256 tokens for its mock
 // relay at BEE_RELAY_URL). Teams detection uses a stub the page drives with the simulateMeeting action.
 // With BEE_E2E_SHOTS (the island screenshot test), the page is loaded once per name (comma-separated, as ?shot=) in a transparent
-// frameless 520 × 360 window, and each capturePage() is written to <BEE_E2E_SHOTS_DIR>/island-<name>.png.
+// frameless 520 × 360 window, and each capturePage() is written to <BEE_E2E_SHOTS_DIR>/island-<name>.png. Each page's own
+// E2E_RESULT (e.g. measured boxes) is passed on in the report's `pages`.
 // Names starting with mcp-, settings-, live- or gateway-key- (the tab shots) use a taller 480 × 640 window and are written as <name>.png.
 // Shot runs answer Settings' reveal and copy IPC with a fake Gateway key and leave the clipboard alone.
 // BEE_E2E_SHOTS_DIR alone does not change the run.
@@ -48,10 +49,14 @@ function fakeSessionToken(): string {
   return `${part({ alg: "none" })}.${part({ iss: CLERK_ISSUER, sub: "user_e2e", exp })}.`;
 }
 
-/** Loads the page once per shot name, waits for its E2E_RESULT, and writes the PNG. Resolves the written files. */
-async function captureShots(dir: string, names: string[]): Promise<string[]> {
+const pageReport = z.json();
+type PageReport = z.infer<typeof pageReport>;
+
+/** Loads the page once per shot name, waits for its E2E_RESULT, and writes the PNG. Resolves the written files and page reports. */
+async function captureShots(dir: string, names: string[]): Promise<{ files: string[]; pages: PageReport[] }> {
   mkdirSync(dir, { recursive: true });
   const files: string[] = [];
+  const pages: PageReport[] = [];
   const tabShot = (name: string) => name.startsWith("mcp-") || name.startsWith("settings-") || name.startsWith("live-") || name.startsWith("gateway-key-");
   const tall = names.some(tabShot) || /(mcp|meeting)-settings-shots|gateway-key-shots/.test(page as string);
   // One window for every shot: closing the only window would quit the app.
@@ -69,23 +74,23 @@ async function captureShots(dir: string, names: string[]): Promise<string[]> {
     if (level === "error") process.stderr.write(`page error: ${message}\n`);
   });
   for (const name of names) {
-    const rendered = new Promise<void>((resolve, reject) => {
+    const rendered = new Promise<PageReport>((resolve, reject) => {
       const onMessage = ({ message }: { message: string }) => {
         if (!message.startsWith("E2E_RESULT ")) return;
         shotWin.webContents.off("console-message", onMessage);
-        resolve();
+        resolve(pageReport.parse(JSON.parse(message.slice("E2E_RESULT ".length))));
       };
       shotWin.webContents.on("console-message", onMessage);
       setTimeout(() => reject(new Error(`Shot "${name}" did not render in 15 s`)), 15_000);
     });
     await shotWin.loadFile(page as string, { query: { shot: name } });
-    await rendered;
+    pages.push(await rendered);
     const image = await shotWin.webContents.capturePage();
     const file = join(dir, tabShot(name) ? `${name}.png` : `island-${name}.png`);
     writeFileSync(file, image.toPNG());
     files.push(file);
   }
-  return files;
+  return { files, pages };
 }
 
 const mcpFileSchema = z.object({
@@ -145,8 +150,8 @@ void app.whenReady().then(async () => {
     const dir = shotsDir || mkdtempSync(join(tmpdir(), "bee-island-shots-"));
     ipcMain.handle(IPC.revealGatewayKey, () => FAKE_GATEWAY_KEY);
     ipcMain.handle(IPC.copyGatewayKey, (): CopyGatewayKeyResult => ({ copied: true }));
-    const files = await captureShots(dir, shotNames.split(","));
-    process.stdout.write(`E2E_RESULT ${JSON.stringify({ ok: true, files })}\n`);
+    const { files, pages } = await captureShots(dir, shotNames.split(","));
+    process.stdout.write(`E2E_RESULT ${JSON.stringify({ ok: true, files, pages })}\n`);
     app.exit(0);
     return;
   }

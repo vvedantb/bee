@@ -1,6 +1,19 @@
 import { describe, expect, it } from "vitest";
 import { TURN_GAP_MS } from "../../core/steering";
-import { ISLAND_IDLE_MS, activityLabel, islandPhase, mcpErrorNote, islandShowsBody, shouldAutoCollapse, shouldShowResponse, timingsLabel, timingsTitle } from "./island";
+import {
+  FOLLOW_SLACK_PX,
+  ISLAND_IDLE_MS,
+  activityLabel,
+  islandPhase,
+  keepFollowing,
+  mcpErrorNote,
+  islandShowsBody,
+  nearBottom,
+  shouldAutoCollapse,
+  shouldShowResponse,
+  timingsLabel,
+  timingsTitle,
+} from "./island";
 
 const empty = { tips: [], sources: [], guideError: null, dismissed: false };
 const source = { title: "Example", url: "https://example.com/" };
@@ -228,5 +241,40 @@ describe("meeting card", () => {
   it("stays on screen while Luna thinks, unless dismissed", () => {
     expect(islandShowsBody({ ...empty, cardLines: 2, busy: true })).toBe(true);
     expect(islandShowsBody({ ...empty, cardLines: 2, busy: true, dismissed: true })).toBe(false);
+  });
+});
+
+// A 300 px tall body over 1000 px of tips: the bottom is at scrollTop 700.
+const at = (scrollTop: number) => ({ scrollTop, scrollHeight: 1000, clientHeight: 300 });
+
+describe("nearBottom", () => {
+  it("counts the last FOLLOW_SLACK_PX as the bottom", () => {
+    expect(nearBottom(at(700))).toBe(true);
+    expect(nearBottom(at(700 - FOLLOW_SLACK_PX))).toBe(true);
+    expect(nearBottom(at(700 - FOLLOW_SLACK_PX - 1))).toBe(false);
+    expect(nearBottom(at(0))).toBe(false);
+  });
+
+  it("is at the bottom when the content fits", () => {
+    expect(nearBottom({ scrollTop: 0, scrollHeight: 200, clientHeight: 300 })).toBe(true);
+  });
+});
+
+describe("keepFollowing", () => {
+  it("pauses when the user scrolls up away from the bottom", () => {
+    expect(keepFollowing(true, 700, at(500))).toBe(false);
+  });
+
+  it("keeps following while Bee's smooth scroll moves down towards the bottom", () => {
+    expect(keepFollowing(true, 300, at(450))).toBe(true);
+  });
+
+  it("stays paused while the user scrolls down short of the bottom, and resumes near it", () => {
+    expect(keepFollowing(false, 300, at(450))).toBe(false);
+    expect(keepFollowing(false, 450, at(690))).toBe(true);
+  });
+
+  it("keeps following when shorter content pulls the scroll position up to the new bottom", () => {
+    expect(keepFollowing(true, 700, { scrollTop: 400, scrollHeight: 700, clientHeight: 300 })).toBe(true);
   });
 });

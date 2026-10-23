@@ -2,7 +2,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { BeeLogo } from "./BeeLogo";
-import { LOGO_TINY_BELOW, blinkTiming, logoDetail, logoMotion, logoMotionCss, type LogoState } from "./logo";
+import { LOGO_TINY_BELOW, NOTCH_LOGO_PX, blinkTiming, logoDetail, logoMotion, logoMotionCss, type LogoState } from "./logo";
 
 const STATES: LogoState[] = ["idle", "listening", "thinking", "searching", "tool", "done", "error"];
 const viewBox = (box: string) => {
@@ -47,8 +47,8 @@ describe("logoMotion", () => {
     expect(logoMotion(LOGO_TINY_BELOW).viewBox).toBe(logoDetail(LOGO_TINY_BELOW).viewBox);
   });
 
-  // The notch sizes. The ring is centred on the orb (32, 35); its largest size must stay inside the view.
-  it.each([16, 20, LOGO_TINY_BELOW - 1])("keeps the listening rings inside the view at %i px", (size) => {
+  // The ring is centred on the orb (32, 35); its largest size must stay inside the view, so it never paints past the box.
+  it.each([16, 20, LOGO_TINY_BELOW - 1, LOGO_TINY_BELOW, NOTCH_LOGO_PX, 48, 64])("keeps the listening rings inside the view at %i px", (size) => {
     const motion = logoMotion(size);
     const view = viewBox(motion.viewBox);
     for (const radius of [motion.ringR * (1 + motion.ringGain), motion.ringR * motion.echoScale]) {
@@ -80,6 +80,14 @@ describe("BeeLogo", () => {
     expect(markup.includes("bee-fx-honey")).toBe(state === "tool");
     expect(markup.includes("bee-fx-spark")).toBe(state === "done");
     expect(markup.includes("#ff8a7a")).toBe(state === "error");
+  });
+
+  it("draws the full mark, ring included, at the notch size", () => {
+    const markup = renderToStaticMarkup(createElement(BeeLogo, { size: NOTCH_LOGO_PX, state: "listening" }));
+    expect(markup).toContain(`width="${NOTCH_LOGO_PX}" height="${NOTCH_LOGO_PX}"`);
+    expect(markup).toContain('viewBox="0 0 64 64"');
+    expect(markup).toContain('r="22"');
+    expect(markup).toContain("bee-fx-ring");
   });
 
   it("treats busy without a state as thinking, sets the mic level, and stays static when not animated", () => {
