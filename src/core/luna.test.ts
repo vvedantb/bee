@@ -311,6 +311,28 @@ describe("guideWithLuna streaming", () => {
     expect(result.tips).toEqual(["The code is X"]);
   });
 
+  it("reports provider-run web_search as it starts and when its result lands, before the answer", async () => {
+    const events: string[] = [];
+    const model = streamModel(() => [
+      { type: "stream-start", warnings: [] },
+      { type: "tool-input-start", id: "ws1", toolName: "web_search", providerExecuted: true },
+      { type: "tool-input-end", id: "ws1" },
+      { type: "tool-call", toolCallId: "ws1", toolName: "web_search", input: "{}", providerExecuted: true },
+      { type: "tool-result", toolCallId: "ws1", toolName: "web_search", result: [], providerExecuted: true },
+      ...textChunks("- The match ended 2-1 today").slice(1),
+    ]);
+    const result = await guideWithLuna({
+      model,
+      transcript: ["Score?"],
+      notes: [],
+      onActivity: ({ tool, phase }) => events.push(`${phase}:${tool}`),
+      onPartial: () => events.push("partial"),
+    });
+    expect(result.tips).toEqual(["The match ended 2-1 today"]);
+    expect(events.slice(0, 2)).toEqual(["start:web_search", "end:web_search"]);
+    expect(events.filter((event) => event !== "partial")).toHaveLength(2);
+  });
+
   it("stops a hanging call when the run is cancelled, and reports it as an error", async () => {
     const model = streamModel(
       (options) =>
@@ -399,12 +421,20 @@ describe("guideWithLuna with MCP tools", () => {
         return textChunks(`- Code is ${MOCK_TOKEN}`);
       });
       const activity: string[] = [];
-      const result = await guideWithLuna({ model, transcript: ["What is the WOBBLE code?"], notes: [], extraTools: mcp.tools, connectedServers: mcp.servers, onActivity: (tool) => activity.push(tool) });
+      const result = await guideWithLuna({
+        model,
+        transcript: ["What is the WOBBLE code?"],
+        notes: [],
+        extraTools: mcp.tools,
+        connectedServers: mcp.servers,
+        onActivity: ({ tool, phase }) => activity.push(`${phase}:${tool}`),
+      });
       expect(result.error).toBeNull();
       expect(result.tips).toEqual([`Code is ${MOCK_TOKEN}`]);
       expect(toolResult).toContain(MOCK_TOKEN);
       expect(system).toContain("Bee connectors connected now: vmem (3 tools, named vmem__<tool>)");
-      expect(activity.filter((name) => name === "vmem__wobble")).toHaveLength(1);
+      // Start before end, each once, though the stream and the execution callbacks both see the call.
+      expect(activity).toEqual(["start:vmem__wobble", "end:vmem__wobble"]);
     } finally {
       await mcp.close();
       await server.close();

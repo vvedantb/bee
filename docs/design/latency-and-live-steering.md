@@ -67,7 +67,7 @@ Facts about ChatGPT voice, Gemini Live and Grok Bot come from general knowledge.
 
 Side paths:
 
-- **Activity label.** `guideWithLuna` calls `onActivity` from `onToolExecutionStart` and `onStepFinish`. Main sends `bee:luna:activity`. The pill shows `activityLabel(tool)`. Before the first tool call it reads "Thinking…" (`island.ts`).
+- **Activity label.** `guideWithLuna` calls `onActivity` with each tool call's start and end (stream tool parts, the execution callbacks, and `onStepFinish` as a fallback). Main sends `bee:luna:activity` with the run id. The pill shows `activityLabel(tool)`. Before the first tool call it reads "Thinking…" (`island.ts`).
 - **Link chips.** `startTurn` runs `enrichChips` (Jev plus vmem, 2.5 s budget, `ENRICH_TIMEOUT_MS` in `core/link-rank.ts`) in parallel with the pipeline. Chips can open the island body while Luna is busy (`islandShowsBody`). So chips can give early visual feedback, but only when the line contains a link.
 - **Teams.** Mic phrases are also published with `shareLine` (fire and forget). It does not block the pipeline.
 - **Superseded runs are not cancelled.** `latestRun` only discards the result in the renderer. No abort signal crosses IPC, so a superseded run keeps running in main: Jev, MCP connect, Luna and every tool call, up to 45 s. Fast speech therefore starts overlapping pipelines that each pay for Jev, MCP connections and Luna.

@@ -103,7 +103,9 @@ describe("Vercel AI Gateway smoke", () => {
         transcript: ["Can you check vmem for the WOBBLE project code? I need the exact code before we continue."],
         notes: [],
         extraTools: mcp.tools,
-        onActivity: (tool) => activity.push(tool),
+        onActivity: ({ tool, phase }) => {
+          if (phase === "start") activity.push(tool);
+        },
       });
       console.log("Luna MCP tips:", result.tips, "activity:", activity);
       expect(result.error).toBeNull();

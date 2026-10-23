@@ -90,6 +90,9 @@ export type LunaMcpServer = { name: string; prefix: string; toolCount: number };
 /** A server that is not usable this turn, with a short reason. */
 export type LunaMcpUnavailable = { name: string; error: string };
 
+/** A tool call starting or ending. `tool` is the raw name (web_search, read_file, vmem__search…). */
+export type LunaToolActivity = { tool: string; phase: "start" | "end" };
+
 const MAX_REASON_CHARS = 120;
 const oneLine = (text: string, max: number) => {
   const line = text.replace(/\s+/g, " ").trim();
@@ -311,8 +314,8 @@ export async function guideWithLuna(args: {
   connectedServers?: readonly LunaMcpServer[];
   /** Enabled servers that cannot be used this turn, with a short reason. */
   unavailableServers?: readonly LunaMcpUnavailable[];
-  /** Called with each tool Luna calls, so the overlay can show what it is doing. */
-  onActivity?: (toolName: string) => void;
+  /** Called when each tool call Luna makes starts and ends, so the overlay can show what it is doing. */
+  onActivity?: (activity: LunaToolActivity) => void;
   /** Called with the tips so far as lines stream in. Only when they change. */
   onPartial?: (tips: string[]) => void;
   /** Cancels the call (a superseded run). Tool calls already running are left to finish. */
@@ -347,11 +350,14 @@ export async function guideWithLuna(args: {
     console.debug(`perf luna firstToken=${firstTokenMs === null ? "none" : `${Math.round(firstTokenMs)}ms`} total=${Math.round(totalMs)}ms${details}`);
     return { firstTokenMs, totalMs };
   };
+  // Each call reports start once, then end once. An end with no start yet reports both, in order.
   const reported = new Set<string>();
-  const report = (id: string, name: string) => {
-    if (reported.has(id)) return;
-    reported.add(id);
-    args.onActivity?.(name);
+  const report = (id: string, tool: string, phase: LunaToolActivity["phase"]) => {
+    if (phase === "end") report(id, tool, "start");
+    const key = `${phase}:${id}`;
+    if (reported.has(key)) return;
+    reported.add(key);
+    args.onActivity?.({ tool, phase });
   };
   const run = async () => {
     const prompt = buildLunaPrompt({ ...args, ...mcpServers(args.connectedServers ?? [], args.unavailableServers ?? [], extra, dropped.length > 0) });
@@ -361,10 +367,12 @@ export async function guideWithLuna(args: {
       ...lunaRequest(prompt),
       tools: lunaTools({ notesDir: args.notesDir, extraRoots: args.extraRoots, extra, web }),
       stopWhen: isStepCount(MAX_STEPS),
-      // Local tools report as they start. Provider tools (web_search) report when their step finishes. Each call reports once.
-      onToolExecutionStart: ({ toolCall }) => report(toolCall.toolCallId, toolCall.toolName),
+      // Local tools report around their execution. Provider tools (web_search) report from the stream below.
+      // A finished step reports any call that was missed, so every start gets an end.
+      onToolExecutionStart: ({ toolCall }) => report(toolCall.toolCallId, toolCall.toolName, "start"),
+      onToolExecutionEnd: ({ toolCall }) => report(toolCall.toolCallId, toolCall.toolName, "end"),
       onStepFinish: (step) => {
-        for (const call of step.toolCalls) report(call.toolCallId, call.toolName);
+        for (const call of step.toolCalls) report(call.toolCallId, call.toolName, "end");
       },
       // Errors arrive as stream parts and are thrown below, so the schema retry sees them.
       onError: () => undefined,
@@ -383,6 +391,13 @@ export async function guideWithLuna(args: {
     for await (const part of result.stream) {
       if (part.type === "start-step") {
         text = "";
+      } else if (part.type === "tool-input-start") {
+        // The earliest sign of a call: web_search shows while the provider runs it, not after.
+        report(part.id, part.toolName, "start");
+      } else if (part.type === "tool-call") {
+        report(part.toolCallId, part.toolName, "start");
+      } else if ((part.type === "tool-result" && !part.preliminary) || part.type === "tool-error") {
+        report(part.toolCallId, part.toolName, "end");
       } else if (part.type === "text-delta") {
         text += part.text;
         if (firstTokenMs === null && part.text.trim()) firstTokenMs = performance.now() - startedAt;

@@ -2,7 +2,7 @@ import type { PipelineResult } from "../shared/ipc";
 import { JEV_MODEL, GUIDE_MODEL, NO_GATEWAY_KEY, type BeeGateway } from "./gateway";
 import { rankWithJev } from "./jev";
 import type { McpTools } from "./mcp";
-import { guideWithLuna, noteCitation } from "./luna";
+import { guideWithLuna, noteCitation, type LunaToolActivity } from "./luna";
 import type { Snippet } from "./notes";
 import { retrieve, transcriptQuery } from "./retrieve";
 
@@ -47,7 +47,7 @@ export async function runPipeline(args: {
   extraRoots?: readonly string[];
   /** Connects the user's MCP servers. It starts at once, beside Jev. The run lets go of them in the background when it ends. */
   loadMcpTools?: () => Promise<McpTools>;
-  onActivity?: (toolName: string) => void;
+  onActivity?: (activity: LunaToolActivity) => void;
   /** Tips so far, as Luna streams them. Does not wait for Jev. */
   onPartial?: (tips: string[]) => void;
   /** Cancels Jev and Luna for a superseded run. */

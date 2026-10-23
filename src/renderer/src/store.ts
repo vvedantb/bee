@@ -21,6 +21,7 @@ import {
   type WindowSize,
 } from "../../shared/ipc";
 import { ISLAND_IDLE_MS, islandPhase, islandShowsBody, shouldAutoCollapse } from "./island";
+import { LOGO_DONE_MS } from "./logo";
 import { openMic, openSystemAudio } from "./mic";
 import { startMicSession } from "./speech";
 
@@ -72,6 +73,10 @@ export type BeeState = {
   revising: boolean;
   // The tool Luna last used in this run (a raw tool name; island.ts activityLabel turns it into text). Null otherwise.
   activity: string | null;
+  // Raw names of the run's tool calls in flight, one entry per call. Empty when no run is busy.
+  tools: string[];
+  // True for LOGO_DONE_MS after a run settles with tips, so the logo plays its done loop once.
+  done: boolean;
   // Island: the user closed the body for the result on screen. A new result clears it.
   dismissed: boolean;
   // True while the body plays its exit animation, before the window shrinks.
@@ -136,6 +141,8 @@ let state: BeeState = {
   keptTips: [],
   revising: false,
   activity: null,
+  tools: [],
+  done: false,
   dismissed: false,
   islandClosing: false,
   chips: [],
@@ -185,6 +192,7 @@ let lastLineAt = 0;
 let pendingFresh = false;
 // A run is waiting out its debounce (runTimer), or waiting for a run in its commit window to finish (deferred).
 let runTimer: ReturnType<typeof setTimeout> | undefined;
+let doneTimer: ReturnType<typeof setTimeout> | undefined;
 let deferred = false;
 // The run in flight: its keep list, and the tips it has streamed so far (the last may be half written).
 let inFlight: number | null = null;
@@ -395,6 +403,19 @@ function fireRun(): void {
  * Retrieve → Jev → Luna on the last 8 lines, teammates' lines labelled "Alice: …". Tips already on screen go to Luna as a keep
  * list; the run's tips merge over them (core/steering.ts mergeTips), so a newer line adds to the answer instead of wiping it.
  */
+/** The list less one copy of `item`: a tool call ended, and another call to the same tool may still run. */
+function withoutOne(list: string[], item: string): string[] {
+  const at = list.indexOf(item);
+  return at < 0 ? list : [...list.slice(0, at), ...list.slice(at + 1)];
+}
+
+/** Shows the logo's done state once, then lets it rest. */
+function celebrate(): void {
+  clearTimeout(doneTimer);
+  set({ done: true });
+  doneTimer = setTimeout(() => set({ done: false }), LOGO_DONE_MS);
+}
+
 async function runPipeline(): Promise<void> {
   const transcript = state.session.lines.slice(-PIPELINE_WINDOW).map(pipelineText);
   if (transcript.length === 0) return;
@@ -418,6 +439,8 @@ async function runPipeline(): Promise<void> {
     busy: true,
     heard: false,
     activity: null,
+    tools: [],
+    done: false,
     error: null,
     keptTips: keep,
     revising: keep.length > 0,
@@ -425,9 +448,11 @@ async function runPipeline(): Promise<void> {
     ...(fresh ? { result: null } : {}),
   });
   void applyWindowSize();
-  // Tool events carry no run id; the latest run owns them, and finishing clears the label.
-  const stopActivity = window.bee.onLunaActivity((tool) => {
-    if (run === latestRun) set({ activity: tool });
+  // The latest run owns tool events (and the run id, when sent, must match). Finishing clears the label and the calls.
+  const stopActivity = window.bee.onLunaActivity(({ runId, tool, phase }) => {
+    if (run !== latestRun || (runId !== undefined && runId !== run)) return;
+    if (phase === "start") set({ activity: tool, tools: [...state.tools, tool] });
+    else set({ tools: withoutOne(state.tools, tool) });
   });
   // Streamed tips show at once, over the kept ones, without waiting for the whole run.
   const stopPartial = window.bee.onLunaPartial(({ runId, tips }) => {
@@ -462,10 +487,12 @@ async function runPipeline(): Promise<void> {
       keptTips: waiting ? tips : [],
       revising: waiting && tips.length > 0,
       activity: null,
+      tools: [],
       dismissed: false,
       islandClosing: false,
     });
     if (!waiting) addToSession(shown);
+    if (!waiting && tips.length > 0) celebrate();
     touchIsland();
   } catch (error) {
     if (run === latestRun) {
@@ -475,6 +502,7 @@ async function runPipeline(): Promise<void> {
         revising: false,
         partialTips: null,
         activity: null,
+        tools: [],
         error: error instanceof Error ? error.message : "Pipeline failed",
       });
     }
