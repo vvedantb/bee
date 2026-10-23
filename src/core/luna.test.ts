@@ -234,12 +234,13 @@ describe("streamingTips", () => {
   });
 });
 
-const usage = (cache: { read?: number; write?: number } = {}) => ({
+const usage = (cache: { read?: number; write?: number } = {}, reasoning?: number) => ({
   inputTokens: { total: 1, noCache: 1, cacheRead: cache.read, cacheWrite: cache.write },
-  outputTokens: { total: 1, text: 1, reasoning: undefined },
+  outputTokens: reasoning === undefined ? { total: 1, text: 1, reasoning } : { total: reasoning, text: 0, reasoning },
 });
 type Chunk = Parameters<typeof simulateReadableStream<unknown>>[0]["chunks"][number];
-const finish = (reason: "stop" | "tool-calls", used = usage()): Chunk => ({ type: "finish", finishReason: { unified: reason, raw: undefined }, usage: used });
+const finish = (reason: "stop" | "tool-calls" | "length", used = usage()): Chunk => ({ type: "finish", finishReason: { unified: reason, raw: undefined }, usage: used });
+const NO_THINKING = { anthropic: { thinking: { type: "disabled" } } };
 const textChunks = (...deltas: string[]): Chunk[] => [
   { type: "stream-start", warnings: [] },
   { type: "text-start", id: "t" },
@@ -371,6 +372,8 @@ describe("guideWithLuna streaming", () => {
     const parts = user?.role === "user" ? user.content : [];
     expect(parts.map((part) => part.providerOptions)).toEqual([ANTHROPIC_CACHE, undefined, undefined]);
     expect(JSON.stringify(parts[2])).toContain("Give at most 3 short tips.");
+    // Thinking is off at the call level; the message-level cache markers above stay as they were.
+    expect(model.doStreamCalls[0]?.providerOptions).toEqual({ gateway: { only: ["anthropic"] }, ...NO_THINKING });
   });
 
   it("ignores a signal that never fires", async () => {
@@ -642,14 +645,14 @@ describe("guideWithLuna providers and web search", () => {
     });
   const extraTools = { vmem__wobble: tool({ inputSchema: jsonSchema({ type: "object", properties: {} }), execute: async () => "X" }) };
 
-  it("pins the Anthropic provider while web_search is sent and sends no reasoning options", async () => {
+  it("pins the Anthropic provider while web_search is sent and turns thinking off", async () => {
     let providerOptions = "";
     const model = streamModel((options) => {
       providerOptions = options.providerOptions;
       return textChunks("- ok");
     });
     await guideWithLuna({ model, transcript: ["Hi"], notes: [] });
-    expect(JSON.parse(providerOptions)).toEqual({ gateway: { only: ["anthropic"] } });
+    expect(JSON.parse(providerOptions)).toEqual({ gateway: { only: ["anthropic"] }, ...NO_THINKING });
   });
 
   it("retries without web_search when the error names Anthropic's web search tool type", async () => {
@@ -666,8 +669,8 @@ describe("guideWithLuna providers and web search", () => {
       expect(seen).toHaveLength(2);
       expect(seen[1]?.tools).not.toContain("web_search");
       // The retry sends no Anthropic-run tool, so the Gateway may fail over again.
-      expect(JSON.parse(seen[0]?.providerOptions ?? "")).toEqual({ gateway: { only: ["anthropic"] } });
-      expect(JSON.parse(seen[1]?.providerOptions ?? "")).toEqual({ gateway: { order: ["anthropic"] } });
+      expect(JSON.parse(seen[0]?.providerOptions ?? "")).toEqual({ gateway: { only: ["anthropic"] }, ...NO_THINKING });
+      expect(JSON.parse(seen[1]?.providerOptions ?? "")).toEqual({ gateway: { order: ["anthropic"] }, ...NO_THINKING });
     } finally {
       warn.mockRestore();
     }
@@ -708,6 +711,65 @@ describe("guideWithLuna providers and web search", () => {
     } finally {
       warn.mockRestore();
     }
+  });
+});
+
+describe("guideWithLuna with no answer text", () => {
+  const reasoningOnly = (finishReason: "stop" | "length", reasoning: number): Chunk[] => [
+    { type: "stream-start", warnings: [] },
+    { type: "reasoning-start", id: "r" },
+    { type: "reasoning-delta", id: "r", delta: "Let me think about the discount" },
+    { type: "reasoning-end", id: "r" },
+    finish(finishReason, usage({}, reasoning)),
+  ];
+  const quiet = async (model: ReturnType<typeof streamModel>) => {
+    const debug = vi.spyOn(console, "debug").mockImplementation(() => undefined);
+    const finished: number[] = [];
+    try {
+      const result = await guideWithLuna({ model, transcript: ["Discount?"], notes: [], onFinish: ({ usage }) => finished.push(usage.outputTokens ?? 0) });
+      return { result, finished, logs: debug.mock.calls.map((call) => String(call[0])).filter((line) => line.startsWith("perf luna")) };
+    } finally {
+      debug.mockRestore();
+    }
+  };
+
+  it("fails, without a retry, when the output limit is spent on reasoning", async () => {
+    let calls = 0;
+    const { result, finished, logs } = await quiet(
+      streamModel(() => {
+        calls++;
+        return reasoningOnly("length", 800);
+      }),
+    );
+    expect(calls).toBe(1);
+    expect(result.tips).toEqual([]);
+    expect(result.error).toBe("Luna guidance failed: the model returned no text (hit the output limit while reasoning)");
+    expect(result.firstTokenMs).toBeNull();
+    // The call still cost tokens, so usage is reported.
+    expect(finished).toEqual([800]);
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toContain("finish=length reasoning=800 empty=true");
+  });
+
+  it("fails when the run stops with no text", async () => {
+    const { result, logs } = await quiet(streamModel(() => [{ type: "stream-start", warnings: [] }, finish("stop")]));
+    expect(result.tips).toEqual([]);
+    expect(result.error).toBe("Luna guidance failed: the model returned no text");
+    expect(logs[0]).toContain("finish=stop");
+    expect(logs[0]).toContain("empty=true");
+  });
+
+  it("treats whitespace-only text as no text", async () => {
+    const { result } = await quiet(streamModel(() => textChunks("  \n ")));
+    expect(result.error).toBe("Luna guidance failed: the model returned no text");
+  });
+
+  it("keeps a literal NONE as a successful empty result", async () => {
+    const { result, logs } = await quiet(streamModel(() => textChunks("NONE")));
+    expect(result.tips).toEqual([]);
+    expect(result.error).toBeNull();
+    expect(logs[0]).toContain("finish=stop");
+    expect(logs[0]).not.toContain("empty=true");
   });
 });
 

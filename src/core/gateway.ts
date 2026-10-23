@@ -21,20 +21,28 @@ export function gatewayTier(tier: GatewayTier): { gateway?: { serviceTier: strin
 
 export const FLEX_PROVIDER_OPTIONS = gatewayTier("flex");
 
-// The Gateway provider for GUIDE_MODEL calls: Anthropic (the owner's BYOK key).
+// The provider Bee routes GUIDE_MODEL calls to. The Gateway uses the team's own Anthropic key (BYOK) only if the team
+// that owns the Gateway API key has set one up; otherwise it uses the Gateway's system credentials.
 export const GUIDE_PROVIDER = "anthropic";
 
 /**
- * The tier's options plus GUIDE_MODEL routing. Flex may not apply on Anthropic; the Gateway decides.
+ * Turns off extended thinking for a GUIDE_MODEL call. Haiku thinks by default: a live Luna call spent its whole
+ * output budget on reasoning and returned no text. The Gateway forwards `anthropic` options to Anthropic.
+ * Never send this to a non-Anthropic model (Jev, STT).
+ */
+export const ANTHROPIC_NO_THINKING = { anthropic: { thinking: { type: "disabled" } } } as const;
+
+/**
+ * The tier's options plus GUIDE_MODEL routing, with thinking off. Flex may not apply on Anthropic; the Gateway decides.
  * `web: true` (Luna with web_search) pins the call with `only`: Anthropic's provider-run web search may be rejected
  * by bedrock or vertex. Without web search, `order` keeps fail-over to those providers.
  */
 export function guideProviderOptions(
   tier: GatewayTier,
   options: { web: boolean },
-): { gateway: { serviceTier?: string; only?: string[]; order?: string[] } } {
+): { gateway: { serviceTier?: string; only?: string[]; order?: string[] } } & typeof ANTHROPIC_NO_THINKING {
   const routing = options.web ? { only: [GUIDE_PROVIDER] } : { order: [GUIDE_PROVIDER] };
-  return { gateway: { ...gatewayTier(tier).gateway, ...routing } };
+  return { gateway: { ...gatewayTier(tier).gateway, ...routing }, ...ANTHROPIC_NO_THINKING };
 }
 
 /**

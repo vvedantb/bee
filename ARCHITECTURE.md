@@ -152,8 +152,8 @@ All model calls use the Vercel AI SDK (`ai`, `@ai-sdk/gateway`) against Vercel A
 | --- | --- | --- | --- | --- |
 | Transcribe | `xai/grok-stt` | `experimental_transcribe` (Gateway transcription API) | 20 s | 1 |
 | Rank | `typesafe-ai/jev` | `experimental_evaluate` (Gateway evaluation API) | 15 s | 1 |
-| Guide | `anthropic/claude-haiku-5.5` | `streamText`, no reasoning options, Anthropic cache breakpoints on the system and context, Gateway provider `only: ["anthropic"]` (`order: ["anthropic"]` on the no-web retry), max 800 output tokens, tools `web_search` (Anthropic native web search, run by Anthropic) and the file tools, up to 8 steps | 45 s | 1 |
-| Summarise | `anthropic/claude-haiku-5.5` | `generateText`, no reasoning options, cache breakpoint on the system, flex tier, Gateway provider `order: ["anthropic"]`, max 2,000 output tokens | 60 s | 1 |
+| Guide | `anthropic/claude-haiku-5.5` | `streamText`, thinking disabled (`anthropic.thinking: { type: "disabled" }`), Anthropic cache breakpoints on the system and context, Gateway provider `only: ["anthropic"]` (`order: ["anthropic"]` on the no-web retry), max 800 output tokens, tools `web_search` (Anthropic native web search, run by Anthropic) and the file tools, up to 8 steps | 45 s | 1 |
+| Summarise | `anthropic/claude-haiku-5.5` | `generateText`, thinking disabled (`anthropic.thinking: { type: "disabled" }`), cache breakpoint on the system, flex tier, Gateway provider `order: ["anthropic"]`, max 2,000 output tokens | 60 s | 1 |
 
 ### Why Jev does not use chat completions
 

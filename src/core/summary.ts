@@ -163,6 +163,7 @@ export async function generateMeetingSummary(
       maxRetries: 1,
       abortSignal: AbortSignal.timeout(args.timeoutMs ?? SUMMARY_TIMEOUT_MS),
       // Background work: flex, Anthropic first (no web search, so fail-over stays). Flex may not apply on Anthropic.
+      // Thinking off: a structured extraction gains nothing from it, and reasoning would eat the output budget.
       providerOptions: guideProviderOptions("flex", { web: false }),
     });
     const body = parseSummaryMarkdown(result.text);

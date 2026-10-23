@@ -1,4 +1,4 @@
-import { isStepCount, streamText, type LanguageModel, type LanguageModelUsage, type ProviderMetadata, type SystemModelMessage, type ToolSet, type UserModelMessage } from "ai";
+import { isStepCount, streamText, type FinishReason, type LanguageModel, type LanguageModelUsage, type ProviderMetadata, type SystemModelMessage, type ToolSet, type UserModelMessage } from "ai";
 import { z } from "zod";
 import { withTimeout } from "./abort";
 import { ANTHROPIC_CACHE, guideProviderOptions } from "./gateway";
@@ -285,6 +285,14 @@ function mcpServers(connected: readonly LunaMcpServer[], unavailable: readonly L
   };
 }
 
+/** Why a finished run had no answer text, for the user. */
+function emptyReason(done: { usage: LanguageModelUsage; finishReason: FinishReason }): string {
+  if (done.finishReason !== "length") return "the model returned no text";
+  return (done.usage.outputTokenDetails.reasoningTokens ?? 0) > 0
+    ? "the model returned no text (hit the output limit while reasoning)"
+    : "the model returned no text (hit the output limit)";
+}
+
 export async function guideWithLuna(args: {
   model: LanguageModel;
   transcript: string[];
@@ -309,7 +317,7 @@ export async function guideWithLuna(args: {
   onPartial?: (tips: string[]) => void;
   /** Cancels the call (a superseded run). Tool calls already running are left to finish. */
   signal?: AbortSignal;
-  /** Called once after a successful run with its total usage (cache read and write tokens) and provider metadata (Gateway cost). */
+  /** Called once after a run that finished (with or without answer text) with its total usage (cache read and write tokens) and provider metadata (Gateway cost). */
   onFinish?: (info: { usage: LanguageModelUsage; providerMetadata: ProviderMetadata | undefined }) => void;
 }): Promise<LunaResult> {
   const startedAt = performance.now();
@@ -324,10 +332,19 @@ export async function guideWithLuna(args: {
     if (dropped.length <= 3) return `Skipped connected tools: ${dropped.join(", ")}.`;
     return `Skipped ${dropped.length} connected tools.`;
   };
-  const timings = (usage?: LanguageModelUsage) => {
+  // `done` is a run that finished (with or without answer text); absent when the call failed.
+  const timings = (done?: { usage: LanguageModelUsage; finishReason: FinishReason; empty: boolean }) => {
     const totalMs = performance.now() - startedAt;
-    const cache = usage ? ` cacheRead=${usage.inputTokenDetails.cacheReadTokens ?? 0} cacheWrite=${usage.inputTokenDetails.cacheWriteTokens ?? 0}` : "";
-    console.debug(`perf luna firstToken=${firstTokenMs === null ? "none" : `${Math.round(firstTokenMs)}ms`} total=${Math.round(totalMs)}ms${cache}`);
+    const reasoning = done?.usage.outputTokenDetails.reasoningTokens;
+    const details = done
+      ? [
+          ` cacheRead=${done.usage.inputTokenDetails.cacheReadTokens ?? 0} cacheWrite=${done.usage.inputTokenDetails.cacheWriteTokens ?? 0}`,
+          ` finish=${done.finishReason}`,
+          reasoning === undefined ? "" : ` reasoning=${reasoning}`,
+          done.empty ? " empty=true" : "",
+        ].join("")
+      : "";
+    console.debug(`perf luna firstToken=${firstTokenMs === null ? "none" : `${Math.round(firstTokenMs)}ms`} total=${Math.round(totalMs)}ms${details}`);
     return { firstTokenMs, totalMs };
   };
   const reported = new Set<string>();
@@ -355,7 +372,8 @@ export async function guideWithLuna(args: {
       maxRetries: 1,
       abortSignal,
       // User-facing: not flex (see gateway.ts). Anthropic only while web_search is sent; Anthropic first on the no-web retry.
-      // No reasoning options: thinking stays off for latency.
+      // Thinking is explicitly disabled (gateway.ts ANTHROPIC_NO_THINKING): Haiku thinks by default, which costs latency
+      // and can spend the whole output budget before any tip.
       providerOptions: guideProviderOptions("default", { web }),
     });
     // Only the last step's text is the answer, so each step starts a fresh buffer.
@@ -386,6 +404,7 @@ export async function guideWithLuna(args: {
       text,
       sources: await result.sources,
       toolResults: await result.toolResults,
+      finishReason: await result.finishReason,
       usage: await result.totalUsage,
       providerMetadata: await result.providerMetadata,
     };
@@ -395,8 +414,12 @@ export async function guideWithLuna(args: {
   for (let attempt = 0; ; ) {
     try {
       const result = await run();
+      // Cost was incurred even when the run gave no answer.
       args.onFinish?.({ usage: result.usage, providerMetadata: result.providerMetadata });
-      return { tips: parseLunaTips(result.text, maxTips), sources: sourcesFromGenerateResult(result), error: null, skipped: skipped(), ...timings(result.usage) };
+      const done = { usage: result.usage, finishReason: result.finishReason, empty: result.text.trim() === "" };
+      // No answer text is a failure, not "no tips" (that is a literal NONE). Not retried: it would double latency and cost.
+      if (done.empty) return { tips: [], sources: [], error: `Luna guidance failed: ${emptyReason(done)}`, skipped: skipped(), ...timings(done) };
+      return { tips: parseLunaTips(result.text, maxTips), sources: sourcesFromGenerateResult(result), error: null, skipped: skipped(), ...timings(done) };
     } catch (error) {
       // Match on the whole text so a tool named late in a long error is still found. Show the short one.
       const message = errorText(error, Number.POSITIVE_INFINITY);
