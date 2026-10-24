@@ -208,7 +208,7 @@ describe("LUNA_SYSTEM", () => {
     expect(LUNA_SYSTEM).toContain("the first tip answers that question directly");
     expect(LUNA_SYSTEM).toContain("A follow-up question");
     expect(LUNA_SYSTEM).toContain("Never repeat an earlier answer in place of an answer.");
-    expect(LUNA_SYSTEM).toContain("Output only the tips, starting with the answer.");
+    expect(LUNA_SYSTEM).toContain("Output only the tips. Start every tip with a fact about the world or words to say.");
   });
 
   it("asks for the publisher once, after the source delimiter, never in the tip text", () => {
@@ -224,7 +224,7 @@ describe("LUNA_SYSTEM", () => {
 
   it("asks for a range when sources disagree on a number, with every publisher in the label and none in the text", () => {
     expect(LUNA_SYSTEM).toContain('If sources disagree on a number, give the range, for example "6–15 mm of rain on Saturday.", with every publisher in the label and no source names in the text.');
-    expect(LUNA_SYSTEM).toContain("If they disagree on anything else, say so plainly in one tip, with every publisher in the label.");
+    expect(LUNA_SYSTEM).toContain('If they disagree on anything else, state each version in one tip, for example "Track work or signal upgrades.", with every publisher in the label.');
     expect(LUNA_SYSTEM).not.toContain("TfL says Saturday, the BBC says Sunday");
     const example = LUNA_SYSTEM.split("\n").find((line) => line.startsWith("- 6–15 mm")) ?? "";
     expect(parseLunaTips(example)).toEqual([{ text: "6–15 mm of rain on Saturday.", source: "Météo-France, Météo Paris" }]);
@@ -691,13 +691,81 @@ describe("meta text from live runs", () => {
   });
 });
 
+// Live run after the consolidation on fix/source-wording (24 October 2026): sentences about the sources and the answer.
+const LIVE_META_T1A =
+  "The most useful headline from today's coverage is the Canning Town evacuation. The source is a round-up from ianVisits, not a primary outlet, and it is dated 23 October, the day before today.";
+const LIVE_META_T2A =
+  "The closures are planned engineering works, mostly track work, rather than an emergency. The reason is given in the TfL planned closures document and in the coverage of it.";
+const LIVE_META_T4A =
+  "The London tips drop because the request is now Paris. The newest Paris reports agree on rain Saturday and a drier, windy Sunday, with highs of about 15–16°C.";
+
+describe("sentences about the sources or the answer", () => {
+  it("drops them from the live run, keeping the facts about the world", () => {
+    const cases: [string, string | null][] = [
+      [LIVE_META_T1A, null],
+      [LIVE_META_T2A, "The closures are planned engineering works, mostly track work, rather than an emergency."],
+      [LIVE_META_T4A, "Rain Saturday and a drier, windy Sunday, with highs of about 15–16°C."],
+    ];
+    for (const [line, kept] of cases) {
+      expect(isMetaTip(line), line).toBe(true);
+      expect(parsed(`- ${line}`), line).toEqual(kept === null ? [] : [{ text: kept, source: null }]);
+      expect(parsed(`- ${line} | src: TfL`), line).toEqual(kept === null ? [] : [{ text: kept, source: "TfL" }]);
+      expect(streamingTips(`- ${line}\n`), line).toEqual(parsed(`- ${line}`));
+    }
+  });
+
+  it("drops the sources as the subject, what was picked, where a reason is given, and a disagreement with no facts", () => {
+    const cases: [string, string][] = [
+      ["The sources are Sortiraparis and Météo-France. Rain on Saturday.", "Rain on Saturday."],
+      ["Rain on Saturday. The BBC source is dated 22 October.", "Rain on Saturday."],
+      ["The sources do not give a reason.", ""],
+      ["The top story is the Canning Town evacuation.", ""],
+      ["The cause is explained in the round-up. Signal failures closed the line.", "Signal failures closed the line."],
+      ["Sources differ on the cause.", ""],
+      ["Reports disagree. Check TfL before travelling.", "Check TfL before travelling."],
+      ["Both reports agree.", ""],
+      ["These tips stand.", ""],
+      ["Both sources agree that the line reopens on Monday.", "The line reopens on Monday."],
+      ["Rain on Saturday. Both sources agree on a dry Sunday.", "Rain on Saturday. A dry Sunday."],
+    ];
+    for (const [line, kept] of cases) {
+      expect(isMetaTip(line), line).toBe(true);
+      expect(parseTexts(`- ${line}`), line).toEqual(kept ? [kept] : []);
+      expect(streamTexts(`- ${line}\n`), line).toEqual(kept ? [kept] : []);
+    }
+  });
+
+  it("keeps disagreements that state what differs, and claims with a source-like subject", () => {
+    for (const line of [
+      "Sources differ on rainfall: 6 mm or 15 mm.",
+      "Forecasts differ: rain Saturday or Sunday.",
+      "Reports differ on the cause, track work or signal upgrades.",
+      "The data source is the Q3 export [n1].",
+      "The main source of delays is signal failures.",
+      "Water sources are scarce in the region.",
+      "The report is due on Friday [n1].",
+      "The document is ready for sign-off.",
+      "The key item on the agenda is the budget.",
+      "The most important point is the renewal date.",
+      "The answer is 2,700.",
+      "The tips in Paris are usually included in the bill.",
+      "Fees are set out in the contract [n1].",
+      "The coverage is £2m per claim.",
+      "The election results are due on Friday.",
+    ]) {
+      expect(isMetaTip(line), line).toBe(false);
+      expect(parsed(`- ${line}`), line).toEqual([{ text: line, source: null }]);
+    }
+  });
+});
+
 // Live STEER turn on fix/source-wording (24 October 2026): a whole first tip of notes on sources and tips.
 const STEER_NOTES =
   "The most recent Paris source is a Sortiraparis piece from today, so I'll rely on it. The London Storm Boelo tips were about London, so they're dropped. The Sortiraparis line also differs from older forecasts, which put Saturday at 10°C; I'll use the newer one.";
 
 describe("Bee's own voice and note lines", () => {
   it("asks for notes on a \"~ \" line and no first person in tips", () => {
-    expect(LUNA_SYSTEM).toContain('Any note to yourself goes on its own line starting with "~ ". Bee never shows those lines.');
+    expect(LUNA_SYSTEM).toContain('Any plan or note to yourself goes on its own line starting with "~ ", or nowhere. Bee never shows those lines.');
     expect(LUNA_SYSTEM).toContain('Never write as yourself ("I", "me", "my") or about your own work');
     expect(LUNA_STEERING_RULES).toContain('goes on a "~ " line, never in a tip.');
   });
@@ -750,7 +818,6 @@ describe("Bee's own voice and note lines", () => {
       "Traffic is slow on the I-95 near Boston.",
       "World War I ended in 1918.",
       "Grade-I listed buildings need consent for works.",
-      "Sources differ on details, so check TfL before travelling.",
       "The tips in Paris are usually included in the bill.",
       "Tips are about 10% in London restaurants.",
       "Fares rose, so they dropped the discount.",
@@ -822,7 +889,7 @@ describe("Bee's own voice and note lines", () => {
   });
 
   it("does not flag sources as the subject of a claim", () => {
-    for (const line of ["Sources differ on details, so check TfL.", "Sources of funding include the ICB [n1]."]) {
+    for (const line of ["Sources of funding include the ICB [n1].", "Sources differ on rainfall: 6 mm or 15 mm."]) {
       expect(parsed(`- ${line}`), line).toEqual([{ text: line, source: null }]);
       expect(hasSourceWording(line), line).toBe(false);
     }
@@ -848,7 +915,8 @@ const labelOf = (line: string) => line.split(" | src: ")[1] ?? null;
 const tipLine = (text: string, source: string | null) => (source ? `${text} | src: ${source}` : text);
 // T4A as the prompt now asks for it, without the source preamble: its third sentence restates the first.
 const T4A_PLAIN = textOf(LIVE_T4A).replace("The newest Paris sources agree on a", "A");
-const T4A_TIP: LunaTip = { text: textOf(LIVE_T4A), source: "Sortiraparis" };
+// Rule c turns the agreement into its fact, and rule d then drops the restated third sentence.
+const T4A_TIP: LunaTip = { text: "A rainy Saturday and a brighter but windy Sunday. Rain is forecast for Saturday afternoon with highs near 15°C.", source: "Sortiraparis" };
 const T4C_TIP: LunaTip = { text: textOf(LIVE_T4C), source: "Sortiraparis" };
 
 describe("the label's publisher and other source forms in the tip text", () => {
@@ -863,8 +931,6 @@ describe("the label's publisher and other source forms in the tip text", () => {
       "The TfL page lists two closures. | src: TfL",
       "Met Police said they will add patrols. | src: Met Police",
       "The latest TfL updates say the Circle line reopens on Monday. | src: TfL",
-      "The newest Paris sources agree that Sunday is dry. | src: Météo-France",
-      "Rain on Saturday. Both sources agree on a dry Sunday. | src: BBC",
     ]) {
       const tip = { text: textOf(line), source: labelOf(line) };
       expect(parsed(`- ${line}`), line).toEqual([tip]);
@@ -884,7 +950,6 @@ describe("the label's publisher and other source forms in the tip text", () => {
       ["The TfL list says the Circle line shuts.", null],
       [textOf(LIVE_T4C), "Sortiraparis"],
       ["Reasons differ: track work vs Piccadilly line upgrade works.", "TfL, Evening Standard"],
-      ["Sources differ on details, so check TfL.", null],
       ["Water sources show high nitrate levels.", null],
     ];
     for (const [text, source] of kept) {
@@ -917,9 +982,9 @@ describe("restated facts", () => {
     expect(parsed(`- ${T4A_PLAIN}`)).toEqual([{ text: first, source: null }]);
     expect(repeatsSentence(T4A_PLAIN)).toBe(true);
     expect(repeatsSentence(first)).toBe(false);
-    // As written live, the preamble makes the first sentence too different to match; the live test flags the preamble.
+    // As written live: the agreement preamble goes first, so the restatement matches.
     expect(parsed(`- ${LIVE_T4A}`)).toEqual([T4A_TIP]);
-    expect(hasSourceWording(T4A_TIP.text)).toBe(true);
+    expect(T4A_TIP.text).toBe(first);
   });
 
   it("keeps sentences with distinct facts", () => {

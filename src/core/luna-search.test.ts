@@ -36,7 +36,7 @@ describe("Luna's search and consistency guidance", () => {
     expect(LUNA_SYSTEM).toMatch(/consistent with your last answer/);
     expect(LUNA_SYSTEM).toMatch(/which lines are closed today, say it changed/);
     expect(LUNA_SYSTEM).toMatch(/If sources disagree on a number, give the range/);
-    expect(LUNA_SYSTEM).toMatch(/If they disagree on anything else, say so plainly/);
+    expect(LUNA_SYSTEM).toMatch(/If they disagree on anything else, state each version in one tip/);
   });
 
   it("says in the tail when web search is off, and only then", () => {

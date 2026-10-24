@@ -36,18 +36,6 @@ const FOLLOW_UP_MS = 15_000;
 const PNG_MAGIC = "89504e470d0a1a0a";
 const SHOTS = ["conversation-turn2-fulltext", "conversation-turn4-fulltext"];
 const STATE_SHOT = "conversation-searching";
-// The model talking about its rules instead of answering ("The newest line asks…", "copy them word for word", "The limit is 3 tips").
-const META_WORDS = /\b(?:tips?|newest line|word for word|limit is)\b/i;
-// A header left at the end of a tip or alone: "…upgrade works. Tips:", "Sources:".
-const META_HEADER = /(?:^|[.!?]\s+)(?:here (?:are|is) (?:the |my |some |your )?)?(?:tips?|answers?|sources?|summary)\s*:\s*$/i;
-// Bee in its own voice outside quotes ("I'll rely on it", "so they're dropped") or a "~ " note line.
-const BEE_VOICE = /^~\s|\bI['’](?:ll|m|ve|d)\b|\b(?:me|my)\b/;
-// The search or its results described instead of the news: "Nothing newer appeared in the results.", "<Publisher> newsroom has the
-// most recent items".
-const SEARCH_NARRATION = /\b(?:in|from) (?:the |my )?(?:search )?results\b|\bthe results (?:show|include)\b|\bnothing (?:newer|more recent)\b|\bmy search\b|\bthe (?:web )?search (?:found|returned|shows?)\b|\bnewsroom has the\b/i;
-// isMetaTip flags each part core/luna.ts rule c would drop; BEE_VOICE and SEARCH_NARRATION are cruder second checks.
-const looksMeta = (tip: string) =>
-  isMetaTip(tip) || META_WORDS.test(tip) || META_HEADER.test(tip) || SEARCH_NARRATION.test(tip) || BEE_VOICE.test(tip.replace(/"[^"]*"|“[^”]*”/g, ""));
 // Source wording left in a tip's text ("(TfL)", "per TfL", "[2-2]", "The latest BBC piece says", "Met Police reported" with its
 // label) or a sentence restated later in the same tip. The source belongs in its own field (core/luna.ts parseLunaTips).
 const hasSourceWordingOrRepeat = (tip: string, source: string | null) => hasSourceWording(tip, source) || repeatsSentence(tip);
@@ -106,7 +94,8 @@ const prefixed = <T extends z.ZodType>(lines: string[], prefix: string, schema: 
  */
 function withTipChecks(turn: Turn): Turn {
   const own = {
-    noMetaTips: !turn.tips.some(looksMeta),
+    // The parser's own rule c check (core/luna.ts), so a tip flagged here is one parseLunaTips failed to clean.
+    noMetaTips: !turn.tips.some(isMetaTip),
     cleanWording: !turn.tips.some((tip, index) => hasSourceWordingOrRepeat(tip, turn.tipSources[index] ?? null)) && !repeatsTips(turn.tips).includes(true),
   };
   return { ...turn, checks: { ...turn.checks, ...own }, pass: turn.pass && own.noMetaTips && own.cleanWording };
@@ -223,7 +212,7 @@ describe.skipIf(mode !== "replay" && !process.env.BEE_AI_GATEWAY_API_KEY?.trim()
     for (const item of report.turns) expect(item.webTag, `turn ${item.turn} shows [web]`).toBe(false);
     expect(report.runs).toBeLessThanOrEqual(MAX_RUNS);
     for (const item of report.turns) {
-      expect(item.tips.filter(looksMeta), `turn ${item.turn} shows reasoning about the rules, not a tip`).toEqual([]);
+      expect(item.tips.filter(isMetaTip), `turn ${item.turn} shows reasoning about the rules, not a tip`).toEqual([]);
       expect(item.checks.cleanWording, `turn ${item.turn} repeats a sentence or a tip, garbles a "per" or names or describes its source in a tip's text: ${item.tips.join(" / ")}`).toBe(true);
     }
     expect(runs.length, "every run started returns to main").toBe(report.runs);

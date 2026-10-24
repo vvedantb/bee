@@ -90,14 +90,15 @@ export const LUNA_SYSTEM = [
   "If the results are only blogs, newsletters, aggregators or local listings, search again for the official source or a major outlet before answering.",
   `After a search, end the tip line with "${SOURCE_DELIMITER}" and one short publisher name, or up to three separated by commas, for example "- The Circle line is closed on Saturday for engineering works.${SOURCE_DELIMITER}TfL". Short names only: TfL, BBC, Met Police, Météo-France. Leave it out for a tip from the notes or general knowledge.`,
   "Never credit or describe a source in the tip text: no \"per TfL\", \"(TfL)\", \"TfL reports\", \"the latest BBC piece says\" or \"another report\". Note cites such as [n1] stay in the text.",
-  "If sources disagree on a number, give the range, for example \"6–15 mm of rain on Saturday.\", with every publisher in the label and no source names in the text. If they disagree on anything else, say so plainly in one tip, with every publisher in the label. Do not pick one silently.",
+  "If sources disagree on a number, give the range, for example \"6–15 mm of rain on Saturday.\", with every publisher in the label and no source names in the text. If they disagree on anything else, state each version in one tip, for example \"Track work or signal upgrades.\", with every publisher in the label. Do not pick one silently.",
+  "Never comment on a source's quality or date, or on where a reason is given.",
   "Each tip states a different fact: never repeat or restate a sentence or a fact, in the same tip or another.",
   "Use append_note only when the user clearly asks to add or save a note.",
   "Otherwise, suggest what to say or do next, using the notes when they help and citing them.",
   "Never invent facts, figures or dates about the user's own work that are not in the transcript or notes.",
   "If nothing useful can be said, reply with exactly NONE.",
-  "Output only the tips, starting with the answer. Never write as yourself (\"I\", \"me\", \"my\") or about your own work: the request, these rules, which tips you keep or drop, the search or its results. Put words for the user to say in quotes, for example: Say \"I can confirm by Friday.\"",
-  `Any note to yourself goes on its own line starting with "${NOTE_PREFIX}". Bee never shows those lines.`,
+  "Output only the tips. Start every tip with a fact about the world or words to say. Never write as yourself (\"I\", \"me\", \"my\") or about your own work: the request, these rules, which tips you keep or drop, the search or its results. Put words for the user to say in quotes, for example: Say \"I can confirm by Friday.\"",
+  `Any plan or note to yourself goes on its own line starting with "${NOTE_PREFIX}", or nowhere. Bee never shows those lines.`,
   "Good tip lines (they show the format only: never reuse their facts):",
   `- ${tipLine("Circle and District lines are closed this weekend for track work.", "TfL")}`,
   `- ${tipLine("6–15 mm of rain on Saturday.", "Météo-France, Météo Paris")}`,
@@ -286,8 +287,10 @@ export function lunaRequest(prompt: LunaPrompt): { instructions: SystemModelMess
  *     and "per Publisher" move to the label, unless the model's label field names one. A "per" before a title or a clause instead
  *     of a name goes with it. Not a tag: a rate ("£2 per GB", "per cent"), a reference ("per Section 4"), an acronym's
  *     definition ("(ARR)"). The line in progress keeps its tags until it ends, as a "per …" may be half written.
- *  c) Sentences in the model's own voice go: first person outside quotes and suggested speech, and talk about its tips, the
- *     request, the search or its results. A tip with nothing left goes.
+ *  c) Sentences in the model's own voice go: first person outside quotes and suggested speech, and sentences about its own
+ *     material rather than the world: its tips, the request, the search or its results, the sources themselves ("The source is
+ *     a round-up…"), what it picked ("The most useful headline is…") and where a reason is given. "Sources agree on X" keeps X;
+ *     "Sources differ" stays only with what differs. A tip with nothing left goes. isMetaTip is this same check, for the live test.
  *  d) Repeats go: a sentence or pasted snippet that repeats or restates an earlier one in the tip, and a tip that repeats an
  *     earlier tip of the same answer.
  * A source still described in the text ("The latest BBC piece says", "another report says", "Met Police reported") is only
@@ -428,6 +431,35 @@ const OWN_WORK = [
   /\b(?:my|the) (?:web )?search(?:es)? (?:found|finds|returned|returns|turned up|shows?|showed) (?:no|nothing|only|(?:\d+ )?(?:items?|results?|articles?|stories|pieces?|posts?)\b|the (?:most recent|newest|latest))/i,
   /\b(?:has|had|lists?|listed|carries|shows?) the (?:most recent|newest|latest) (?:[\p{L}'’-]+ ){0,3}(?:items|results|articles|stories|pieces|posts)\b/iu,
 ];
+// Its own material as the subject: a sentence about its tips, its sources or what it picked, not about the world. A subject is a
+// determiner, up to three modifiers (a name, "newest", "two") and one of a few nouns; the clause shape is the verb after it.
+// Case-sensitive, so a modifier must be a name: "Water sources show…" and "The data source is Snowflake" are claims.
+const DETERMINER = "(?:[Tt]he|[Tt]hese|[Tt]hose|[Bb]oth|[Aa]ll|[Mm]ost|[Ii]ts|[Tt]oday['’]s)";
+const MODIFIER = String.raw`(?:${SOURCE_WORD}|newest|latest|newer|new|recent|most\s+recent|older|oldest|old|other|earlier|previous|shown|main|only|primary|original|first|second|two|three|several|weather|news|local|official)`;
+const subject = (nouns: string) => String.raw`${DETERMINER}\s+(?:${MODIFIER}\s+){0,3}(?:${nouns})`;
+// Things that report the news; bare at the start too: "Sources differ…", "Reports agree…".
+const REPORTERS = "sources?|reports?|forecasts?|outlets?|articles?|pieces?|coverage|headlines?";
+const REPORTERS_SUBJECT = String.raw`(?:${subject(REPORTERS)}|[Ss]ources|[Rr]eports|[Ff]orecasts)`;
+// "The newest Paris reports agree on rain Saturday…" states what they agree on: the agreement goes, the fact stays.
+const AGREEMENT = new RegExp(String.raw`(^|[.!?]\s+)${REPORTERS_SUBJECT}\s+(?:all\s+|both\s+|broadly\s+|mostly\s+|also\s+)?agrees?\s+(?:on|that)\s+(\p{L})`, "gu");
+const dropAgreement = (tip: string) => tip.replace(AGREEMENT, (_, start: string, letter: string) => start + letter.toUpperCase());
+// A disagreement stays when it states what differs: a figure, two versions ("or", "vs", "while") or a list after ":".
+const STATES_DIFFERENCE = /\p{N}|\b(?:or|while|but|whereas|versus|vs)\b|:\s*$/u;
+const ABOUT_SOURCES = [
+  // "The source is a round-up from ianVisits", "The Paris sources are Sortiraparis and Météo-France", "The sources do not give a
+  // reason". "The sources say…" is a reported claim (hasSourceWording); "The main source of delays is…" is about the world.
+  new RegExp(String.raw`^${subject("sources?|round-?ups?")}\s+(?:also\s+|both\s+|all\s+|now\s+)?(?:is|are|was|were|seems?|looks?|appears?|comes?|came|dates?|dated|covers?|covered|mentions?|focus(?:es)?|leads?|do not|does not|did not|don['’]t|doesn['’]t|didn['’]t)\b`, "u"),
+  // "Both reports agree." with nothing after it.
+  new RegExp(String.raw`^${REPORTERS_SUBJECT}\s+(?:all\s+|both\s+|broadly\s+|mostly\s+|also\s+)?agrees?\b`, "u"),
+  // "The London tips drop because…", "These tips stand". Not "Your tips are kept by staff" nor "The tips in Paris are included".
+  new RegExp(String.raw`^${DETERMINER}\s+(?:${MODIFIER}\s+){0,3}tips\s+(?!(?:in|for|on|at|about|of|to|from|with|below|above)\b)\p{Ll}`, "u"),
+  // What it picked: "The most useful headline from today's coverage is…", "The top story is…".
+  /^[Tt]he\s+(?:most\s+(?:useful|relevant|important|interesting|notable|newsworthy)\s+(?:[\p{L}'’-]+\s+){0,2}?(?:headlines?|items?|news|stories|story)|(?:main|top|key|best|biggest|lead)\s+(?:headline|story|news)s?)\b/u,
+  // Where something is said: "The reason is given in the TfL planned closures document and in the coverage of it."
+  /\b(?:is|are|was|were)\s+(?:also\s+|not\s+)?(?:given|stated|explained|described|covered|mentioned|noted|set out|cited|listed|found)\s+(?:in|by|on)\s+(?:the|a|an|its|their|this|that)\s+(?:[\p{L}\p{N}'’-]+\s+){0,4}?(?:coverage|sources?|round-?ups?|search(?:es)?|results|articles?|pieces?|documents?)\b/u,
+];
+const DIFFERS = new RegExp(String.raw`^${REPORTERS_SUBJECT}\s+(?:\p{Ll}+ly\s+)?(?:differ|differs|disagree|disagrees|conflict|conflicts|vary|varies)\b`, "u");
+const aboutSources = (part: string) => (DIFFERS.test(part) && !STATES_DIFFERENCE.test(part)) || ABOUT_SOURCES.some((pattern) => pattern.test(part));
 // Quoted speech, and words for the user to say after "Say:" or "Ask:", are not the model speaking: 'TfL said: "I'll mention it."'.
 const QUOTED = /"[^"]*"|“[^”]*”|‘[^’]*’(?!\p{L})/gu;
 const SPEECH = /\b(?:say|ask|tell them|reply|respond|try|suggest|propose|open with)\s*:[^.!?]*/gi;
@@ -452,9 +484,9 @@ function dropParts(tip: string, breaks: RegExp, drop: (part: string, kept: reado
   return kept[0]?.[0] === 0 ? text : text.replace(/^\p{Ll}(?!\p{Lu})/u, (letter) => letter.toUpperCase());
 }
 
-const ownVoice = (part: string) => FIRST_PERSON.test(part) || OWN_WORK.some((pattern) => pattern.test(part.trim()));
-/** A line without a trailing header and its parts in the model's own voice (rules a and c). */
-const dropOwnVoice = (line: string) => dropParts(line.replace(TRAILING_HEADER, "").trim(), CLAUSE_BREAK, ownVoice);
+const ownVoice = (part: string) => FIRST_PERSON.test(part) || OWN_WORK.some((pattern) => pattern.test(part.trim())) || aboutSources(part.trim());
+/** A line without a trailing header, an agreement preamble and its parts in the model's own voice (rules a and c). */
+const dropOwnVoice = (line: string) => dropParts(dropAgreement(line.replace(TRAILING_HEADER, "").trim()), CLAUSE_BREAK, ownVoice);
 
 // d) Repeats.
 // Words too common to tell two sentences apart.
