@@ -76,7 +76,7 @@ export const LUNA_SYSTEM = [
   "If the results are only blogs, newsletters, aggregators or local listings, search again for the official source or a major outlet before answering.",
   "If sources disagree, say so plainly in the tip, for example \"TfL says Saturday, the BBC says Sunday\". Do not pick one silently.",
   "Keep a follow-up consistent with your last answer. If a newer source changes an earlier fact, such as which lines are closed today, say it changed. Never contradict it silently.",
-  "After a search, name the source in the tip in plain words, for example \"per TfL\" or \"the BBC reports\". Do not add links or tags such as [web].",
+  "After a search, name the source once, by publisher name only, in brackets at the end of the tip before its full stop, for example \"… disruption (TfL).\" or \"… heist (Met Police).\". Keep it short: \"(TfL)\", not \"(TfL planned closures)\". Never write \"per TfL\" or a separate sentence such as \"Per the BBC.\", and no source or date in brackets mid-sentence, such as \"(Time Out, 23 Oct)\". Never put a date, snippet text or another sentence after it, and never repeat a sentence. Do not add links or tags such as [web].",
   "Do not search for stable general knowledge or arithmetic, for example 15% of 18000. Answer those directly.",
   "If the notes do not cover a question about the user's own notes or files, use list_dir, search_files and read_file, then answer from what you read.",
   "Prefer the notes ([n1]…) first. Do not use web_search for private facts about the user's own work or files.",
@@ -328,12 +328,155 @@ export function isMetaTip(line: string): boolean {
 /** A tip line worth showing: not blank, not NONE, not reasoning. */
 const isTip = (line: string) => line.length > 0 && line.toUpperCase() !== "NONE" && !isMetaTip(line);
 
+// Words too common to tell two sentences apart.
+const STOP_WORDS = new Set(
+  "a an the and or but of to in on at for from by with as is are was were be been being has have had it its this that these those about around over under per due than then so not no into out up also there their they we you will would can could may might do does did all both each just only more most some such near".split(" "),
+);
+const REPEAT_MIN_WORDS = 4;
+const REPEAT_SHARE = 0.8;
+const contentWords = (text: string) => new Set((text.toLowerCase().match(/[\p{L}\p{N}%°]+/gu) ?? []).filter((word) => !STOP_WORDS.has(word)));
+
+/**
+ * A tip without a sentence that repeats its own earlier words, often a search snippet pasted after the source:
+ * "…issues, per the London Buzz from 23 October Around 211 households have been evacuated…" → "…per the London Buzz from 23 October."
+ * A repeat starts at a capitalised word (after a full stop or mid-sentence) and runs to the next full stop; at least 80% of its
+ * content words are already earlier in the tip. Of several starts, the one most fully repeated wins, as words before the real
+ * start are new.
+ */
+function dropRepeat(tip: string): string {
+  let best: { start: number; end: number; share: number } | null = null;
+  for (const match of tip.matchAll(/\s+(?=\p{Lu})/gu)) {
+    const from = match.index + match[0].length;
+    const stop = tip.slice(from).search(/[.!?;](?=\s|$)/);
+    const end = stop < 0 ? tip.length : from + stop;
+    const words = contentWords(tip.slice(from, end));
+    const earlier = contentWords(tip.slice(0, match.index));
+    if (words.size < REPEAT_MIN_WORDS || earlier.size < REPEAT_MIN_WORDS) continue;
+    const share = [...words].filter((word) => earlier.has(word)).length / words.size;
+    if (share >= REPEAT_SHARE && (!best || share > best.share)) best = { start: match.index, end, share };
+  }
+  if (!best) return tip;
+  const head = tip.slice(0, best.start);
+  // Keep one full stop: the repeat's own, unless the sentence before it already ended.
+  const rest = /[.!?;:,]$/.test(head) ? tip.slice(best.end).replace(/^[.!?;]/, "") : tip.slice(best.end);
+  return dropRepeat(head + rest);
+}
+
+// A publisher name: capitalised or camel-case words or a domain, such as "TfL", "the BBC", "Time Out London", "ianVisits",
+// "sortiraparis.com", optionally "citing" or "via" others: "Sortiraparis citing Météo-France and Météo Paris", "Météo-France via
+// Sortiraparis".
+const SOURCE_WORD = String.raw`(?:\p{Lu}[\p{L}\p{N}'’&.-]*|\p{Ll}+\p{Lu}[\p{L}\p{N}'’&.-]*|[\p{Ll}\p{N}-]+\.\p{Ll}{2,}(?:\.\p{Ll}{2,})?)`;
+const SOURCE_NAME = String.raw`(?:the\s+)?${SOURCE_WORD}(?:\s+(?:(?:of|and|&|de|du|des|la|le|for)\s+)?${SOURCE_WORD}){0,4}`;
+const SOURCE_FULL = String.raw`${SOURCE_NAME}(?:\s+(?:citing|via)\s+${SOURCE_NAME})?`;
+const SOURCE = new RegExp(String.raw`^${SOURCE_FULL}$`, "u");
+// A name and a few lowercase words about it, such as "TfL planned closures" or "the Met Police news page": the name is kept.
+const SOURCE_DESCRIBED = new RegExp(String.raw`^(${SOURCE_FULL})((?:\s+\p{Ll}[\p{Ll}'’-]*){1,3})$`, "u");
+// A list of names after "per", such as "per the Circle, Elizabeth and Mildmay lines…": the tip's content, not a publisher.
+const SOURCE_LIST = new RegExp(String.raw`^${SOURCE_NAME}(?:\s*,\s*${SOURCE_NAME})+,?\s+and\s`, "u");
+const SOURCE_DATE = /\s+(?:from|on|dated)\s+(?:\d{1,2}\s+\p{Lu}\p{Ll}+|\p{Lu}\p{Ll}+\s+\d{1,2})(?:,?\s+\d{4})?$/u;
+const SOURCE_VERB = /\b(?:is|are|was|were|be|been|has|have|had|will|would|can|could|says?|said|shows?|faces?|runs?|closes?|opens?)\b/i;
+// "per" before a capital or a domain; "per cent", "per line" and "per day" never match.
+const PER = /(?:\s*,)?\s*\bper\s+(?=(?:the\s+)?\p{Lu}|[\p{Ll}\p{N}-]+\.\p{Ll}{2,})/gu;
+
+/**
+ * The text after "per" as it should read: unchanged, without a trailing date or the words about the name ("TfL planned closures"
+ * → "TfL"), or null when it is not a publisher name.
+ */
+function sourceName(rest: string): string | null {
+  const undated = rest.replace(SOURCE_DATE, "");
+  if (SOURCE.test(undated)) return undated;
+  const [, name, about = ""] = undated.match(SOURCE_DESCRIBED) ?? [];
+  if (name !== undefined && !SOURCE_VERB.test(about)) return name;
+  if (rest.includes(",")) return SOURCE_LIST.test(rest) ? null : rest;
+  return rest.split(/\s+/).length > 5 || SOURCE_VERB.test(rest) ? null : rest;
+}
+
+/**
+ * A tip whose "per …" source is a publisher name: a date after it is dropped ("per the London Buzz from 23 October" → "per the
+ * London Buzz"), and a "per" followed by content instead of a name is dropped with it ("…, per the Circle, Elizabeth and Mildmay
+ * lines all face disruption." → "…."). "per TfL", "per cent" and "per Sortiraparis citing Météo-France, Saturday…" stay.
+ */
+function cleanSource(tip: string): string {
+  // Last first, so earlier indices stay valid.
+  return [...tip.matchAll(PER)].reverse().reduce((out, match) => {
+    const from = match.index + match[0].length;
+    const stop = out.slice(from).search(/[.!?;]+(?=\s|$)/);
+    const end = stop < 0 ? out.length : from + stop;
+    const rest = out.slice(from, end);
+    const name = sourceName(rest);
+    if (name === rest) return out;
+    return name === null ? out.slice(0, match.index) + out.slice(end) : out.slice(0, from) + name + out.slice(end);
+  }, tip);
+}
+
+// A source tag at the end of the text: "per X" (group 1) or "(X)" (group 2), with any comma before and full stop after.
+const END_TAG = new RegExp(String.raw`(?:\s*,)?\s*(?:\bper\s+(${SOURCE_FULL})|\((${SOURCE_FULL})\))\s*[.!?]?\s*$`, "u");
+// A dated source in brackets mid-sentence: "(ianVisits, 23 Oct)", "(the BBC, October 23, 2026)".
+const MONTH = String.raw`(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)\p{Ll}*\.?`;
+const DATED_SOURCE = new RegExp(
+  String.raw`\s*\(\s*${SOURCE_NAME}\s*,\s*(?:\d{1,2}\s+${MONTH}|${MONTH}\s+\d{1,2})(?:,?\s+\d{4})?\s*\)`,
+  "gu",
+);
+const tagName = (match: RegExpMatchArray) => (match[1] ?? match[2] ?? "").replace(/^the\s+/i, "").replace(/\.+$/, "").toLowerCase();
+
+/**
+ * A tip with one source tag: a second tag naming the same publisher at the end is dropped ("…, per Météo-France. (Météo-France)"
+ * → "…, per Météo-France."; "(ONS) (ONS)" → "(ONS)"). Of a "per X" and an "(X)", the "per X" stays, for sourceTag to bracket. A
+ * dated source in brackets mid-sentence is dropped when the tip already ends with a tag ("Round-ups (ianVisits, 23 Oct) lead with
+ * …, per Newham Council.").
+ */
+function dropDoubleSource(tip: string): string {
+  const last = tip.match(END_TAG);
+  if (!last || last.index === undefined) return tip;
+  const head = tip.slice(0, last.index);
+  const undated = head.replace(DATED_SOURCE, "");
+  if (undated !== head) return dropDoubleSource(undated + tip.slice(last.index));
+  const before = head.match(END_TAG);
+  if (!before || before.index === undefined || tagName(before) !== tagName(last)) return tip;
+  // "(X) per X": keep the "per", with the tip's own end.
+  if (before[2] !== undefined && last[1] !== undefined) return dropDoubleSource(head.slice(0, before.index) + tip.slice(last.index));
+  const kept = head.trimEnd();
+  return dropDoubleSource(/[.!?]$/.test(kept) ? kept : kept + (tip.trimEnd().match(/[.!?]$/)?.[0] ?? ""));
+}
+
+// A sentence that is only a source, such as "Per the Met Police." (group 2), and the end of the sentence before it (group 1).
+const SOURCE_SENTENCE = /(^|[.!?])\s*\bPer\s+((?:[^.!?,;:]|\.(?=\S))+?)\s*(?:[.!?]+|$)(?=\s|$)/gu;
+
+/**
+ * A tip whose source sentence joins the sentence before it as a "per" tag, when it names a publisher: "…jewellery heist. Per the
+ * Met Police." → "…jewellery heist, per the Met Police.", which sourceTag then puts in brackets.
+ */
+const joinSourceSentence = (tip: string) =>
+  tip.replace(SOURCE_SENTENCE, (sentence, end: string, rest: string) => {
+    const name = end ? sourceName(rest) : null;
+    return name !== null && SOURCE.test(name) ? `, per ${name}${end}` : sentence;
+  });
+
+// A "per X" tag at the end of a sentence, with any comma before it. The name never ends in a full stop: that is the sentence's.
+const PER_TAG = new RegExp(String.raw`(?:\s*,)?\s+\bper\s+(${SOURCE_FULL})(?<!\.)(?=[.!?]+(?:\s|$)|\s*$)`, "gu");
+
+/** A tip with its sources in one style, in brackets: "…disruption, per TfL." → "…disruption (TfL)." A "per" mid-sentence stays. */
+const sourceTag = (tip: string) => tip.replace(PER_TAG, (_, name: string) => ` (${name.replace(/^the\s+/, "")})`);
+
+/** True when a tip repeats one of its own sentences. Exported for the live conversation test. */
+export const repeatsSentence = (tip: string) => dropRepeat(tip) !== tip;
+/** True when a tip's "per …" is followed by a date or content rather than a publisher name. Exported for the live conversation test. */
+export const hasGarbledSource = (tip: string) => cleanSource(tip) !== tip;
+
+/** True when a tip names its source twice or adds a dated source mid-sentence. Exported for the live conversation test. */
+export const hasDoubleSource = (tip: string) => dropDoubleSource(tip) !== tip;
+/** True when a tip names its source in a sentence of its own, such as "Per TfL.". Exported for the live conversation test. */
+export const hasSourceSentence = (tip: string) => tip.search(SOURCE_SENTENCE) >= 0;
+
+const cleanTip = (tip: string) => sourceTag(dropDoubleSource(cleanSource(joinSourceSentence(dropRepeat(tip)))));
+
 export function parseLunaTips(text: string, maxTips = MAX_TIPS): string[] {
   if (text.trim().toUpperCase() === "NONE") return [];
   return text
     .split("\n")
     .map((line) => tidyTip(stripMarkdown(line.trim())))
     .filter(isTip)
+    .map(cleanTip)
     .slice(0, maxTips)
     .map(clampTip);
 }
@@ -375,9 +518,11 @@ const MIN_LIVE_WORDS = 4;
 export function streamingTips(text: string, maxTips = MAX_TIPS): string[] {
   const parts = text.split("\n");
   const open = (parts.pop() ?? "").replace(/\S*$/, "");
-  const tips = parts.map((line) => tidyTip(stripMarkdown(line.trim()))).filter(isTip);
+  const tips = parts.map((line) => tidyTip(stripMarkdown(line.trim()))).filter(isTip).map(cleanTip);
   const live = tidyTip(stripMarkdown(open.trim()));
-  if (live.split(/\s+/).length >= MIN_LIVE_WORDS && isTip(live)) tips.push(live);
+  // The line in progress only loses a repeat: its "per …" may still be half written, so the source is checked once the line ends,
+  // and a source does not vanish and come back while a repeat after it is still too short to spot.
+  if (live.split(/\s+/).length >= MIN_LIVE_WORDS && isTip(live)) tips.push(dropRepeat(live));
   return tips.slice(0, maxTips).map(clampTip);
 }
 

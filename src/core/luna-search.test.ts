@@ -105,7 +105,7 @@ describe("guideWithLuna search option errors", () => {
       const llm = failing(DOMAINS_ERROR, 1);
       const result = await guideWithLuna({ model: llm, transcript: ["why are there tube closures"], notes: [], searchLocation: location });
       expect(result.error).toBeNull();
-      expect(result.tips).toEqual(["Planned works, per TfL"]);
+      expect(result.tips).toEqual(["Planned works (TfL)"]);
       const [first, retry] = webTools(llm);
       expect(llm.doStreamCalls).toHaveLength(2);
       expect(first).toHaveProperty("args.userLocation");

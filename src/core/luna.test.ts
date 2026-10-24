@@ -13,10 +13,14 @@ import {
   buildLunaPrompt,
   errorText,
   guideWithLuna,
+  hasDoubleSource,
+  hasGarbledSource,
+  hasSourceSentence,
   isMetaTip,
   lunaMcpSystem,
   lunaRequest,
   parseLunaTips,
+  repeatsSentence,
   streamingTips,
   type AnswerSegment,
 } from "./luna";
@@ -204,6 +208,14 @@ describe("LUNA_SYSTEM", () => {
     expect(LUNA_SYSTEM).toContain("Never repeat an earlier answer in place of an answer.");
   });
 
+  it("asks for the publisher once, in short brackets at the end", () => {
+    expect(LUNA_SYSTEM).toContain("by publisher name only, in brackets at the end of the tip before its full stop");
+    expect(LUNA_SYSTEM).toContain('Keep it short: "(TfL)", not "(TfL planned closures)".');
+    expect(LUNA_SYSTEM).toContain('Never write "per TfL" or a separate sentence such as "Per the BBC."');
+    expect(LUNA_SYSTEM).toContain("Never put a date, snippet text or another sentence after it, and never repeat a sentence.");
+    expect(LUNA_SYSTEM).toContain("no source or date in brackets mid-sentence");
+  });
+
   it("never asks for a [web] tag", () => {
     expect(LUNA_SYSTEM).not.toContain("or [web]");
     expect(LUNA_SYSTEM).toContain("Do not add links or tags such as [web].");
@@ -385,6 +397,132 @@ describe("parseLunaTips", () => {
   it("drops markdown links and citations but keeps the label and note cites", () => {
     expect(parseLunaTips("- Node 22 is current ([nodejs.org](https://nodejs.org/en?utm_source=openai))")).toEqual(["Node 22 is current nodejs.org"]);
     expect(parseLunaTips("- See [the docs](https://a.com/x) [n2]")).toEqual(["See the docs [n2]"]);
+  });
+});
+
+// From a live run (24 October 2026): a snippet pasted after the source, and a "per" followed by content.
+const REPEATED =
+  "Canning Town: about 211 households were evacuated from two tower blocks over structural issues, per the London Buzz from 23 October Around 211 households have been evacuated from two tower blocks in Canning Town due to serious structural issues.";
+const GARBLED =
+  "The tube closures are planned engineering works; TfL's track-closure list shows the Circle and District lines both shut this weekend, per the Circle, Elizabeth and Mildmay lines all face disruption.";
+const CLEAN_TIPS = [
+  "Rents rose 9 per cent in London last year (ONS).",
+  "Free museum entry runs on the first Sunday (sortiraparis.com).",
+  "15% of 18,000 is 2,700.",
+  "Sources differ on details, so check TfL before travelling: Lasttrip says the Circle line shuts Saturday, while TfL's own document lists specific dates per line.",
+  "For Paris this weekend, per Sortiraparis citing Météo-France and Météo Paris, Saturday brings rain with highs near 15 to 16°C, with rain totals of about 6 mm versus 10 to 15 mm.",
+  "Offer 10% off if they sign this week [n1].",
+  "The Circle line is closed this weekend for engineering works (TfL).",
+  "Rain on Saturday (Météo-France via Sortiraparis).",
+  "Met Police latest: a tunnel-digging gang was jailed after a jewellery heist (Met Police).",
+];
+// A "per" tag at the end of a sentence, or a source sentence of its own, as the tip should read: in brackets.
+const PER_TAGS: [string, string][] = [
+  ["The Circle line is closed this weekend for engineering works, per TfL.", "The Circle line is closed this weekend for engineering works (TfL)."],
+  ["Storm warnings cover the south coast on Saturday, per the BBC.", "Storm warnings cover the south coast on Saturday (BBC)."],
+  ["Expect queues at the Eiffel Tower, per Time Out London.", "Expect queues at the Eiffel Tower (Time Out London)."],
+  ["Paris: rain on Saturday, per Sortiraparis citing Météo-France and Météo Paris.", "Paris: rain on Saturday (Sortiraparis citing Météo-France and Météo Paris)."],
+  ["Paris: rain on Saturday, per Météo-France via Sortiraparis.", "Paris: rain on Saturday (Météo-France via Sortiraparis)."],
+  ["TfL closes the Circle line on Saturday. The Circle line reopens on Monday, per TfL.", "TfL closes the Circle line on Saturday. The Circle line reopens on Monday (TfL)."],
+  ["The Office for National Statistics (ONS) says rents rose 9 per cent, per the BBC.", "The Office for National Statistics (ONS) says rents rose 9 per cent (BBC)."],
+  ["Met Office warnings cover Saturday (Met Office), and TfL plans closures, per TfL.", "Met Office warnings cover Saturday (Met Office), and TfL plans closures (TfL)."],
+  ["Opening hours changed on 23 Oct (see the venue site), per Time Out.", "Opening hours changed on 23 Oct (see the venue site) (Time Out)."],
+  ["The Circle line shuts on Saturday per TfL. The District line runs as normal.", "The Circle line shuts on Saturday (TfL). The District line runs as normal."],
+  ["Rain on Saturday, per the Met Police news page.", "Rain on Saturday (Met Police)."],
+];
+// From a live run (24 October 2026), with the "…" filled in: a source sentence of its own, at the end and mid-tip.
+const MET_POLICE = "Met Police latest: a tunnel-digging gang was jailed after a jewellery heist. Per the Met Police.";
+const TFL_PLANNED = "The Circle, Elizabeth and Mildmay lines all face disruption. Per TfL planned closures. Check before travelling.";
+// From a live run (24 October 2026): the source named twice, and a dated source mid-sentence.
+const DOUBLED = "Paris this weekend: Saturday brings rain, with 6 to 15 mm forecast, and highs near 15 to 16°C, per Météo-France. (Météo-France)";
+const TWO_SOURCES =
+  "Latest London round-ups (ianVisits, 23 Oct) lead with about 211 households evacuated from two Canning Town tower blocks over structural issues, per Newham Council.";
+
+describe("tip wording clean-up", () => {
+  it("drops a sentence the tip repeats after its source, and the date after the source", () => {
+    const clean = "Canning Town: about 211 households were evacuated from two tower blocks over structural issues (London Buzz).";
+    expect(parseLunaTips(`- ${REPEATED}`)).toEqual([clean]);
+    expect(streamingTips(`- ${REPEATED}\n`)).toEqual([clean]);
+    expect(repeatsSentence(REPEATED)).toBe(true);
+    expect(parseLunaTips("- The Circle line is shut on Saturday for works. The Circle line is shut on Saturday for engineering works.")).toEqual([
+      "The Circle line is shut on Saturday for works.",
+    ]);
+  });
+
+  it("drops a per that is followed by content instead of a publisher", () => {
+    const clean = "The tube closures are planned engineering works; TfL's track-closure list shows the Circle and District lines both shut this weekend.";
+    expect(parseLunaTips(`- ${GARBLED}`)).toEqual([clean]);
+    expect(streamingTips(`- ${GARBLED}\n`)).toEqual([clean]);
+    expect(hasGarbledSource(GARBLED)).toBe(true);
+    expect(parseLunaTips("- The pool is shut on Sunday, per Circle lines all face disruption this week.")).toEqual(["The pool is shut on Sunday."]);
+  });
+
+  it("keeps one source tag when the tip names it twice", () => {
+    const clean = "Paris this weekend: Saturday brings rain, with 6 to 15 mm forecast, and highs near 15 to 16°C (Météo-France).";
+    expect(parseLunaTips(`- ${DOUBLED}`)).toEqual([clean]);
+    expect(streamingTips(`- ${DOUBLED}\n`)).toEqual([clean]);
+    expect(hasDoubleSource(DOUBLED)).toBe(true);
+    expect(parseLunaTips("- Saturday brings rain (Météo-France) per Météo-France.")).toEqual(["Saturday brings rain (Météo-France)."]);
+    expect(parseLunaTips("- Saturday brings rain (Météo-France), per Météo-France.")).toEqual(["Saturday brings rain (Météo-France)."]);
+    expect(parseLunaTips("- Rents rose 9 per cent (ONS) (ONS)")).toEqual(["Rents rose 9 per cent (ONS)"]);
+    expect(parseLunaTips("- Rents rose 9 per cent (ONS). (ONS).")).toEqual(["Rents rose 9 per cent (ONS)."]);
+    expect(parseLunaTips("- Rain on Saturday, per the BBC, per BBC.")).toEqual(["Rain on Saturday (BBC)."]);
+    expect(parseLunaTips("- Rain on Saturday (BBC). Per the BBC.")).toEqual(["Rain on Saturday (BBC)."]);
+  });
+
+  it("drops a dated source mid-sentence when the tip ends with its source", () => {
+    const clean =
+      "Latest London round-ups lead with about 211 households evacuated from two Canning Town tower blocks over structural issues (Newham Council).";
+    expect(parseLunaTips(`- ${TWO_SOURCES}`)).toEqual([clean]);
+    expect(streamingTips(`- ${TWO_SOURCES}\n`)).toEqual([clean]);
+    expect(hasDoubleSource(TWO_SOURCES)).toBe(true);
+    // Without a tag at the end, the dated source is the tip's only source and stays.
+    const only = "Latest round-ups (ianVisits, 23 Oct) lead with the Canning Town evacuations.";
+    expect(parseLunaTips(`- ${only}`)).toEqual([only]);
+  });
+
+  it("puts a per tag or a source sentence in brackets at the end of the sentence", () => {
+    for (const [line, clean] of PER_TAGS) {
+      expect(parseLunaTips(`- ${line}`), line).toEqual([clean]);
+      expect(parseLunaTips(`- ${clean}`), clean).toEqual([clean]);
+    }
+    const met = "Met Police latest: a tunnel-digging gang was jailed after a jewellery heist (Met Police).";
+    expect(parseLunaTips(`- ${MET_POLICE}`)).toEqual([met]);
+    expect(streamingTips(`- ${MET_POLICE}\n`)).toEqual([met]);
+    expect(parseLunaTips(`- ${TFL_PLANNED} `)).toEqual(["The Circle, Elizabeth and Mildmay lines all face disruption (TfL). Check before travelling."]);
+    expect(parseLunaTips("- Rain on Saturday. Per Météo-France via Sortiraparis.")).toEqual(["Rain on Saturday (Météo-France via Sortiraparis)."]);
+    expect(hasSourceSentence(MET_POLICE)).toBe(true);
+    expect(hasSourceSentence(TFL_PLANNED)).toBe(true);
+    expect(hasSourceSentence("Per the BBC.")).toBe(true);
+    // Not a publisher, or a source that leads its sentence: left as written.
+    expect(parseLunaTips("- Rain on Saturday. Per Circle lines all face disruption.")).toEqual(["Rain on Saturday. Per Circle lines all face disruption."]);
+    for (const line of ["Per TfL, the Circle and District lines both have weekend closures.", "Rents rose 9 per cent.", "Rain on Saturday (BBC)."]) {
+      expect(hasSourceSentence(line), line).toBe(false);
+      expect(parseLunaTips(`- ${line}`), line).toEqual([line]);
+    }
+  });
+
+  it("leaves normal tips byte for byte", () => {
+    expect(parseLunaTips(CLEAN_TIPS.map((tip) => `- ${tip}`).join("\n"), CLEAN_TIPS.length)).toEqual(CLEAN_TIPS);
+    expect(streamingTips(CLEAN_TIPS.map((tip) => `- ${tip}`).join("\n") + "\n", CLEAN_TIPS.length)).toEqual(CLEAN_TIPS);
+    for (const tip of CLEAN_TIPS) {
+      expect(repeatsSentence(tip), tip).toBe(false);
+      expect(hasGarbledSource(tip), tip).toBe(false);
+      expect(hasDoubleSource(tip), tip).toBe(false);
+      expect(hasSourceSentence(tip), tip).toBe(false);
+    }
+  });
+
+  it("cuts a repeat from the line in progress but leaves its source until the line ends", () => {
+    const words = REPEATED.split(" ");
+    const shown = words.map((_, index) => streamingTips(`- ${words.slice(0, index + 1).join(" ")} `)[0] ?? "");
+    // Once the repeat is long enough to spot (seven words in), it stays cut while the rest streams in.
+    const cut = shown.findIndex((tip) => tip.includes("Around")) + 7;
+    expect(shown.slice(cut).every((tip) => /23 October\.?$/.test(tip))).toBe(true);
+    expect(shown.at(-1)).toBe(REPEATED.slice(0, REPEATED.indexOf(" Around")) + ".");
+    expect(streamingTips("- The Circle and District lines shut this weekend, per the Circle, Elizabeth and ")).toEqual([
+      "The Circle and District lines shut this weekend, per the Circle, Elizabeth and",
+    ]);
   });
 });
 

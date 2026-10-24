@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, expect, it, onTestFinished } from "vitest";
 import { z } from "zod";
-import { isMetaTip } from "../src/core/luna";
+import { hasDoubleSource, hasGarbledSource, hasSourceSentence, isMetaTip, repeatsSentence } from "../src/core/luna";
 import { retrieve } from "../src/core/retrieve";
 import { loadSnippets } from "../src/main/notes";
 import { NO_FIXTURES, completeRecording, e2eModeSchema, fixtureFiles } from "./e2e/replay";
@@ -86,10 +86,16 @@ type RunLine = z.infer<typeof runLineSchema>;
 const prefixed = <T extends z.ZodType>(lines: string[], prefix: string, schema: T): z.infer<T>[] =>
   lines.filter((line) => line.startsWith(prefix)).map((line) => schema.parse(JSON.parse(line.slice(prefix.length))));
 
-/** The page's checks plus the test's own: no tip in the turn reads as reasoning about the rules. */
-function withMetaCheck(turn: Turn): Turn {
-  const checks = { ...turn.checks, noMetaTips: !turn.tips.some(looksMeta) };
-  return { ...turn, checks, pass: turn.pass && checks.noMetaTips };
+/**
+ * The page's checks plus the test's own: no tip in the turn reads as reasoning about the rules, and none repeats a sentence or
+ * follows "per" with content instead of a publisher, names its source twice or names it in a sentence of its own ("Per TfL.").
+ */
+function withTipChecks(turn: Turn): Turn {
+  const own = {
+    noMetaTips: !turn.tips.some(looksMeta),
+    cleanWording: !turn.tips.some((tip) => repeatsSentence(tip) || hasGarbledSource(tip) || hasDoubleSource(tip) || hasSourceSentence(tip)),
+  };
+  return { ...turn, checks: { ...turn.checks, ...own }, pass: turn.pass && own.noMetaTips && own.cleanWording };
 }
 
 const failed = (turn: Turn) => Object.keys(turn.checks).filter((name) => !turn.checks[name]);
@@ -186,7 +192,7 @@ describe.skipIf(mode !== "replay" && !process.env.BEE_AI_GATEWAY_API_KEY?.trim()
       ...(notes ? { BEE_E2E_NOTES_DIR: notes } : {}),
     };
     const { report: raw, lines } = await runHarnessWithOutput({ page: "conversation-page", env, report: reportSchema, timeoutMs: 240_000 });
-    const report = { ...raw, turns: raw.turns.map(withMetaCheck) };
+    const report = { ...raw, turns: raw.turns.map(withTipChecks) };
     const runs = prefixed(lines, "E2E_RUN ", runLineSchema);
     const file = reportPath();
     if (file) writeReport(file, { ok: report.ok, error: report.error, runsStarted: report.runs, runs, turns: report.turns });
@@ -202,6 +208,7 @@ describe.skipIf(mode !== "replay" && !process.env.BEE_AI_GATEWAY_API_KEY?.trim()
     expect(report.runs).toBeLessThanOrEqual(MAX_RUNS);
     for (const item of report.turns) {
       expect(item.tips.filter(looksMeta), `turn ${item.turn} shows reasoning about the rules, not a tip`).toEqual([]);
+      expect(item.checks.cleanWording, `turn ${item.turn} repeats a sentence, garbles its source, names it twice or in a sentence of its own: ${item.tips.join(" / ")}`).toBe(true);
     }
     expect(runs.length, "every run started returns to main").toBe(report.runs);
 
