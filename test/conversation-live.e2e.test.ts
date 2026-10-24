@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, expect, it, onTestFinished } from "vitest";
 import { z } from "zod";
-import { hasGarbledSource, hasSourceTag, isMetaTip, namesLabelInText, repeatsSentence, repeatsTips } from "../src/core/luna";
+import { hasSourceWording, isMetaTip, repeatsSentence, repeatsTips } from "../src/core/luna";
 import { retrieve } from "../src/core/retrieve";
 import { loadSnippets } from "../src/main/notes";
 import { NO_FIXTURES, completeRecording, e2eModeSchema, fixtureFiles } from "./e2e/replay";
@@ -45,19 +45,12 @@ const BEE_VOICE = /^~\s|\bI['’](?:ll|m|ve|d)\b|\b(?:me|my)\b/;
 // The search or its results described instead of the news: "Nothing newer appeared in the results.", "<Publisher> newsroom has the
 // most recent items".
 const SEARCH_NARRATION = /\b(?:in|from) (?:the |my )?(?:search )?results\b|\bthe results (?:show|include)\b|\bnothing (?:newer|more recent)\b|\bmy search\b|\bthe (?:web )?search (?:found|returned|shows?)\b|\bnewsroom has the\b/i;
-// isMetaTip also flags each sentence core/luna.ts dropBeeSentences would drop; BEE_VOICE and SEARCH_NARRATION are cruder second checks.
+// isMetaTip flags each part core/luna.ts rule c would drop; BEE_VOICE and SEARCH_NARRATION are cruder second checks.
 const looksMeta = (tip: string) =>
   isMetaTip(tip) || META_WORDS.test(tip) || META_HEADER.test(tip) || SEARCH_NARRATION.test(tip) || BEE_VOICE.test(tip.replace(/"[^"]*"|“[^”]*”/g, ""));
-// Source wording left in a tip's text: an index marker ("[2-2]"), a "(Publisher)" or dated tag, or "per <Publisher>". The source
-// belongs in its own field (core/luna.ts parseLunaTips).
-const SOURCE_WORDING = /\[\d+\s*[-–]\s*\d+\]|\b[Pp]er\s+(?:the\s+)?\p{Lu}/u;
-// A source described in the text: "The TfL-based list says", "another report", "one source says", "the newest BBC piece".
-const SOURCE_DESCRIPTION = /-based (?:list|page|report|piece|article|source)\b|\banother (?:report|source|outlet|article|piece|story)\b|\bone (?:report|source|outlet) (?:says|said|reports)\b|\bthe (?:newest|latest) (?:\S+ ){1,4}(?:piece|article|story)\b/i;
-// Or the label's publisher reporting it in the text: "Met Police also reported…", "The Met's latest releases include…", "TfL's planned
-// closures list…" with its label. hasSourceTag covers "Also reported by the Met:" and "The newest Paris sources agree on…", and
-// repeatsSentence a sentence restated later in the same tip.
-const hasSourceWording = (tip: string, source: string | null) =>
-  SOURCE_WORDING.test(tip) || SOURCE_DESCRIPTION.test(tip) || hasSourceTag(tip) || repeatsSentence(tip) || hasGarbledSource(tip) || namesLabelInText(tip, source);
+// Source wording left in a tip's text ("(TfL)", "per TfL", "[2-2]", "The latest BBC piece says", "Met Police reported" with its
+// label) or a sentence restated later in the same tip. The source belongs in its own field (core/luna.ts parseLunaTips).
+const hasSourceWordingOrRepeat = (tip: string, source: string | null) => hasSourceWording(tip, source) || repeatsSentence(tip);
 const mode = e2eModeSchema.optional().parse(process.env.BEE_E2E_MODE?.trim() || undefined);
 const FIXTURES_DIR = join(root, "test/fixtures/replay/conversation");
 // Shares no word with the lines said, so retrieval finds nothing.
@@ -114,7 +107,7 @@ const prefixed = <T extends z.ZodType>(lines: string[], prefix: string, schema: 
 function withTipChecks(turn: Turn): Turn {
   const own = {
     noMetaTips: !turn.tips.some(looksMeta),
-    cleanWording: !turn.tips.some((tip, index) => hasSourceWording(tip, turn.tipSources[index] ?? null)) && !repeatsTips(turn.tips).includes(true),
+    cleanWording: !turn.tips.some((tip, index) => hasSourceWordingOrRepeat(tip, turn.tipSources[index] ?? null)) && !repeatsTips(turn.tips).includes(true),
   };
   return { ...turn, checks: { ...turn.checks, ...own }, pass: turn.pass && own.noMetaTips && own.cleanWording };
 }

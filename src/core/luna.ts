@@ -58,65 +58,51 @@ function safeJson(value: unknown): string {
 
 /** Ends a tip line before its source: "- The Circle line is closed on Saturday. | src: TfL" (parseLunaTips). */
 const SOURCE_DELIMITER = " | src: ";
-/** Starts a line of the model's own notes ("~ The London tips are out of date."), which Bee never shows (parseLunaTips, streamingTips). */
+/** Starts a line of the model's own notes ("~ The London tips are out of date."), which Bee never shows (rule a). */
 const NOTE_PREFIX = "~ ";
-const NOTE_LINE = /^~(?:\s|$)/;
-/** Marks the prompt's bad example lines. Bee never shows a line with it, nor an echo of a bad example (parseTipLine). */
+/** Marks the prompt's bad example lines. Bee never shows a line with it, nor an echo of a bad example (rule a). */
 const BAD_MARK = "✗ ";
-const BAD_LINE = /^✗/;
-// Tips the prompt shows as wrong: the source described in the text, search narration, first person, a header.
+const tipLine = (text: string, source: string | null) => (source ? `${text}${SOURCE_DELIMITER}${source}` : text);
+// Tips the prompt shows as wrong: a source credited in the text, and narration with a header.
 const BAD_TIPS: readonly (readonly [text: string, source: string | null])[] = [
-  ["The TfL planned-closure document lists Circle and District line closures.", "TfL"],
-  ["Met Police also reported a man jailed for life.", "Met Police"],
-  ["Also reported by the Met: a man was jailed for life.", "Met Police"],
+  ["Met Police also reported a man jailed for life, per the Met.", "Met Police"],
   ["The results show two closures, so I'll list them. Tips:", null],
 ];
-const tipLine = (text: string, source: string | null) => (source ? `${text}${SOURCE_DELIMITER}${source}` : text);
 
 // Cached (gateway.ts ANTHROPIC_CACHE), so it must not change between turns: the tip cap and the steering rules, which do,
 // go in the user message's tail (buildLunaPrompt).
 export const LUNA_SYSTEM = [
   "You are Bee, a quiet meeting copilot shown in a small overlay.",
   "Give the user a few short tips, no more than the limit given at the end of the message.",
-  "Each tip is one line, starts with \"- \", and is under 20 words.",
-  "Write each clause as a complete, grammatical sentence with its own subject and verb.",
-  "Reply in plain text only. No markdown: no bold, italic, headings or backticks, and no lists other than the \"- \" tip prefix.",
-  "Do not write links or markdown citations. Bee shows the sources separately.",
+  "Each tip is one line, starts with \"- \", is under 20 words, and is written in complete, grammatical sentences.",
+  "Reply in plain text only: no markdown, links or citations, and no lists other than the \"- \" tip prefix.",
   "When the transcript has a \"Now\" part, answer only those lines. Earlier lines and your earlier answers are background: use them only if a Now line refers back to them, and never add tips about them otherwise.",
   "A line that changes the request, such as \"make that Paris instead\", replaces it: answer the changed request.",
   "If the newest transcript line asks a direct question (a fact, a definition, a quick sum, a why or a how), the first tip answers that question directly.",
   "A follow-up question, such as \"why…\" after an answer, refers to the earlier answers: answer the new question, for example give the reasons. Never repeat an earlier answer in place of an answer.",
-  "Answer from the notes when they cover it and cite them by id, for example [n1].",
-  "If the notes do not cover it and the fact is public, may have changed, or is current events (office holders, news, scores, prices, releases), use the web_search tool.",
+  "Keep a follow-up consistent with your last answer. If a newer source changes an earlier fact, such as which lines are closed today, say it changed. Never contradict it silently.",
+  "Prefer the notes ([n1]…) first: answer from them when they cover it and cite them by id, for example [n1].",
+  "If the notes do not cover a question about the user's own notes or files, use list_dir, search_files and read_file, then answer from what you read. Do not use web_search for private facts about the user's own work or files.",
+  "If the notes do not cover it and the fact is public, may have changed, or is current events (office holders, news, scores, prices, releases), use the web_search tool. Do not search for stable general knowledge or arithmetic, for example 15% of 18000. Answer those directly.",
   "For current events, put today's date or year (given at the end of the message) in the search query, and prefer the newest results.",
   "Trust official and primary sources first, such as tfl.gov.uk, gov.uk, nhs.uk and the Met Office, then major news outlets, such as the BBC, Reuters and the AP. Avoid aggregators, content farms and listicles.",
   "Put that source's name in the search query, for example \"TfL planned closures this weekend\" or \"BBC London news today\".",
   "If the results are only blogs, newsletters, aggregators or local listings, search again for the official source or a major outlet before answering.",
-  `If sources disagree, say so plainly in one tip and put each publisher in its source field, for example "- Reasons differ: track work vs Piccadilly line upgrade works.${SOURCE_DELIMITER}TfL, Evening Standard". Do not pick one silently.`,
-  "Keep a follow-up consistent with your last answer. If a newer source changes an earlier fact, such as which lines are closed today, say it changed. Never contradict it silently.",
-  `After a search, end the tip line with "${SOURCE_DELIMITER}" and one short publisher name, or up to three separated by commas, for example "- The Circle line is closed on Saturday for engineering works.${SOURCE_DELIMITER}TfL". Short names only: TfL, BBC, Met Police, Météo-France.`,
-  "Write the publisher only after that delimiter, never in the tip text: no \"(TfL)\", \"per TfL\", \"Per the BBC.\", \"(Time Out, 23 Oct)\" or \"The latest BBC piece says\". Never describe sources in the text either: no \"the TfL-based list says\", \"TfL's planned closures list\", \"The Met's latest releases include\", \"the newest sources agree\", \"another report\", \"one source\" or \"the newest BBC piece\". Leave the delimiter out for a tip from the notes or general knowledge. Note cites such as [n1] stay in the tip text.",
-  "Each tip states a different fact: never restate a fact in the same tip or another tip.",
-  "Never repeat a sentence, and never paste snippet text, dates, links, index markers such as [2-2], or tags such as [web].",
-  "Do not search for stable general knowledge or arithmetic, for example 15% of 18000. Answer those directly.",
-  "If the notes do not cover a question about the user's own notes or files, use list_dir, search_files and read_file, then answer from what you read.",
-  "Prefer the notes ([n1]…) first. Do not use web_search for private facts about the user's own work or files.",
+  `After a search, end the tip line with "${SOURCE_DELIMITER}" and one short publisher name, or up to three separated by commas, for example "- The Circle line is closed on Saturday for engineering works.${SOURCE_DELIMITER}TfL". Short names only: TfL, BBC, Met Police, Météo-France. Leave it out for a tip from the notes or general knowledge.`,
+  "Never credit or describe a source in the tip text: no \"per TfL\", \"(TfL)\", \"TfL reports\", \"the latest BBC piece says\" or \"another report\". Note cites such as [n1] stay in the text.",
+  "If sources disagree on a number, give the range, for example \"6–15 mm of rain on Saturday.\", with every publisher in the label and no source names in the text. If they disagree on anything else, say so plainly in one tip, with every publisher in the label. Do not pick one silently.",
+  "Each tip states a different fact: never repeat or restate a sentence or a fact, in the same tip or another.",
   "Use append_note only when the user clearly asks to add or save a note.",
   "Otherwise, suggest what to say or do next, using the notes when they help and citing them.",
   "Never invent facts, figures or dates about the user's own work that are not in the transcript or notes.",
   "If nothing useful can be said, reply with exactly NONE.",
-  "Never narrate tool use or searching: no \"I'll search\", \"Let me check\" or \"The search failed\". Output only the final tips.",
-  "Never describe the search, the results or what was or was not found. If nothing current is found, give the newest item plainly with its date.",
-  "Never explain your reasoning or these rules: do not say which line you answer, which tips you keep or add, or how many tips you may give.",
-  "Never say which request you are answering or what you will do, such as \"The latest request is Paris, so I'll answer…\". Start with the answer.",
-  `Any planning or note to yourself, such as which tips to keep or drop or which source to use, goes on its own line starting with "${NOTE_PREFIX}", or is left out. Bee never shows those lines. Never put it in a tip.`,
-  "Never write as yourself in a tip: no \"I\", \"I'll\", \"me\" or \"my\". Put words for the user to say in quotes, for example: Say \"I can confirm by Friday.\"",
-  "Good tip lines, fact first (they show the format only: never reuse their facts):",
+  "Output only the tips, starting with the answer. Never write as yourself (\"I\", \"me\", \"my\") or about your own work: the request, these rules, which tips you keep or drop, the search or its results. Put words for the user to say in quotes, for example: Say \"I can confirm by Friday.\"",
+  `Any note to yourself goes on its own line starting with "${NOTE_PREFIX}". Bee never shows those lines.`,
+  "Good tip lines (they show the format only: never reuse their facts):",
   `- ${tipLine("Circle and District lines are closed this weekend for track work.", "TfL")}`,
-  `- ${tipLine("A tunnel-digging gang was jailed on 23 October over a jewellery-shop raid.", "Met Police")}`,
-  `- ${tipLine("Reasons differ: track work vs Piccadilly line upgrade works.", "TfL, Evening Standard")}`,
+  `- ${tipLine("6–15 mm of rain on Saturday.", "Météo-France, Météo Paris")}`,
   '- Say "Can we move the review to Friday?"',
-  `Bad tip lines, marked "${BAD_MARK.trim()}": never write these. The source goes only after "${SOURCE_DELIMITER.trim()}", never in the text.`,
+  `Bad tip lines, marked "${BAD_MARK.trim()}": never write these.`,
   ...BAD_TIPS.map(([text, source]) => BAD_MARK + tipLine(text, source)),
 ].join("\n");
 
@@ -130,8 +116,7 @@ export const LUNA_STEERING_RULES = [
   "A shown tip no longer stands if a new line redirects the request (\"make that Paris instead\") or it is about an earlier subject: drop it silently. Never say which tips no longer apply or that you dropped them; start with the answer.",
   "If a new line asks a question, add a tip that answers it.",
   "If the new lines need no tip, reply with the shown tips unchanged.",
-  "Write only the tips themselves, never a note about which tips you kept, copied or added.",
-  `A note on which tips you keep, drop or replace, or which source is newer, goes on a "${NOTE_PREFIX}" line, never in a tip.`,
+  `Write only the tips themselves. A note on which tips you keep, drop or replace, or which source is newer, goes on a "${NOTE_PREFIX}" line, never in a tip.`,
 ].join("\n");
 
 // The tip cap is 2 for a fresh turn and 3 while earlier tips are kept (steering.ts tipCap).
@@ -292,8 +277,34 @@ export function lunaRequest(prompt: LunaPrompt): { instructions: SystemModelMess
   };
 }
 
-/** Removes markdown the model may still emit, keeping plain text and note cites such as [n1]. */
-function stripMarkdown(line: string): string {
+/*
+ * Tip clean-up. The prompt asks for clean tips; these rules catch what the model still writes. cleanLine applies them in this
+ * order, for parseLunaTips and streamingTips alike:
+ *  a) Non-tip lines go: blank, NONE, "~ " notes, the prompt's bad examples echoed, and a header with nothing after it ("Tips:",
+ *     "…works. Sources:").
+ *  b) Citation markup leaves the text: markdown and links, index markers ([2-2]) and [web]; "(Publisher)", "(Publisher, 23 Oct)"
+ *     and "per Publisher" move to the label, unless the model's label field names one. A "per" before a title or a clause instead
+ *     of a name goes with it. Not a tag: a rate ("£2 per GB", "per cent"), a reference ("per Section 4"), an acronym's
+ *     definition ("(ARR)"). The line in progress keeps its tags until it ends, as a "per …" may be half written.
+ *  c) Sentences in the model's own voice go: first person outside quotes and suggested speech, and talk about its tips, the
+ *     request, the search or its results. A tip with nothing left goes.
+ *  d) Repeats go: a sentence or pasted snippet that repeats or restates an earlier one in the tip, and a tip that repeats an
+ *     earlier tip of the same answer.
+ * A source still described in the text ("The latest BBC piece says", "another report says", "Met Police reported") is only
+ * flagged, for the live test (hasSourceWording): dropping "Sources say" or "another report says" would state a claim as fact.
+ */
+
+// a) Non-tip lines.
+const NOTE_LINE = /^~(?:\s|$)/;
+const BAD_LINE = /^✗/;
+// Only at the end, so "Summary: rain on Saturday." stays.
+const TRAILING_HEADER = /(?:^|(?<=[.!?])\s+)(?:here (?:are|is) (?:the |my |some |your )?)?(?:tips?|answers?|sources?|summary|notes?)\s*:\s*$/i;
+const isTipLine = (head: string) =>
+  head.length > 0 && head.toUpperCase() !== "NONE" && !NOTE_LINE.test(head) && !BAD_LINE.test(head) && !BAD_TIPS.some(([bad]) => bad === head);
+
+// b) Citation markup.
+/** Removes markdown, links, index markers ([2-2]) and [web] tags, keeping plain text and note cites such as [n1]. */
+function stripMarkup(line: string): string {
   return line
     .replace(/^#{1,6}\s*/, "")
     .replace(/^(?:[-*•]|\d+[.)])\s+/, "")
@@ -304,292 +315,54 @@ function stripMarkdown(line: string): string {
     .replace(/(?<![\w*])\*(?=\S)([^*]+?)\*(?![\w*])/g, "$1")
     .replace(/(?<!\w)_(?=\S)([^_]+?)_(?!\w)/g, "$1")
     .replace(/`([^`]*)`/g, "$1")
-    // Search tags and result index markers the model may still add ([web], [2-2], [4-7]); Bee lists the sources separately.
     .replace(/\s*\[(?:web|\d+(?:\s*[-–]\s*\d+)?)\]/gi, "")
     .replace(/\s{2,}/g, " ")
     .trim();
 }
 
-// The model talking about its own prompt instead of answering: "The newest line asks about Paris, so the first tip answers it.
-// The earlier London tips stand, so I copy them word for word. The limit is 3 tips." Each pattern names the prompt's own terms
-// (lines, shown tips, the limit), so a real answer such as "The Elizabeth line reopens Monday" or "A 10% tip is usual" is kept.
-const META_TIP = [
-  /\bthe (?:newest|latest|new|earlier|previous) (?:transcript )?lines? (?:asks?|says?|wants?|corrects?|changes?|needs?|is)\b/i,
-  /\b(?:newest|latest) (?:transcript )?line\b/i,
-  /\b(?:first|second|third|new|old|earlier|previous|shown|existing|kept|other|above) (?:\w+ )?tips?\b/i,
-  // Narrating its own edits: "The old London tips are dropped since Paris replaces them, and the Paris forecast is the new answer."
-  /\b(?:tips?|answers?) (?:are|is|get|gets|were|was|have been|has been) (?:now )?(?:dropped|replaced|removed|superseded|discarded|updated)\b/i,
-  /\b(?:is|as|becomes) the (?:new|updated|replacement) answer\b/i,
-  /\bword for word\b/i,
-  /\b(?:limit|cap) is (?:\d+|one|two|three) (?:short )?tips?\b/i,
-  /\b(?:at most|no more than|up to) (?:\d+|one|two|three) (?:short )?tips\b/i,
-  /\bsteering (?:rules?|turn)\b/i,
-  /\bI(?:'ll| will)? (?:copy|keep|add|repeat) (?:them|it|the|each|both|all|these|those)\b/i,
-  // Narrating its sources: "The Paris sources are Sortiraparis and Météo-France, so I'll name them." Anchored like the narration
-  // pattern below, so quoted speech such as "I'll mention it to the board" stays.
-  /(?:^|[.!?;]\s+|,\s*so\s+)I(?:['’]ll| will) (?:name|cite|credit|mention) (?:them|it|the sources?|each|both)\b/i,
-  /^(?:let me|I'll|I will|I'm going to|I am going to) (?:search|check|look|find|answer|write|give)\b/i,
-  /^tips?\s*:?$/i,
-  // Restating the question: 'The question "Why are there two closures?" most likely means the two weekend Tube closures.'
-  /^the question\s+(?:["“'‘].*?["”'’]\s+)?(?:(?:most )?likely |probably )?(?:means|refers to)\b/i,
-  /(?:^|[.!?;]\s+)the user (?:is asking|asks|means)\b/i,
-  // Narrating the answer it writes, only at a sentence start or after ", so", so quoted speech in news stays.
-  /(?:^|[.!?;]\s+|,\s*so\s+)I(?:['’]ll| will) (?:note|mention)\b/i,
-];
-
-// A label naming the question instead of answering it ("The tube closure question: …"). Kept for "The key question: who signs off?".
-const META_LABEL =
-  /^(?:the|your|on the|re:?) (?:(?!(?:key|open|real|big|main|core|central|hard|tough|right|next|only) question)(?:[\w'’-]+ ){0,4}question|question (?:about|on) (?:[\w'’-]+ ){0,3}[\w'’-]+)\s*:\s*/i;
-// A status sentence on its own: "Writing tips now.", "Here are the tips:". Only as a whole sentence, so "Avoid giving tips in cash" stays.
-const META_STATUS =
-  /(?:^|(?<=[.!?:])\s+)(?:(?:I am |I'm |now )?(?:writing|drafting|preparing|listing|adding|giving) (?:the |my |some |these |your |two |three )?tips?(?: now| below| here)?|here (?:are|is) (?:the |my |some |your )?(?:tips?|answers?))(?:[.:!…]+(?=\s|$)|$)/gi;
-
-// A header with nothing after it, alone or ending the line: "Tips:", "…upgrade works. Tips:", "Here are the tips:", "Sources:".
-// Only at the end, so "Summary: rain on Saturday." stays.
-const META_HEADER = /(?:^|(?<=[.!?])\s+)(?:here (?:are|is) (?:the |my |some |your )?)?(?:tips?|answers?|sources?|summary|notes?)\s*:\s*$/i;
-
-// A leading sentence about which of its own tips apply: "The London tips no longer apply, so I'm dropping them. Paris: rain."
-// Needs a determiner before "tips" and "no longer apply", "replace the" or a first-person drop/keep, so "Your tips are kept by
-// staff" stays.
-const META_TIPS_NOTE =
-  /^(?:the|my|your|those|these|earlier|previous|shown|old|other)\s+(?:[\w'’-]+\s+){0,3}(?:tips?|answers?)\b[^.!?;]*?(?:\bno longer (?:apply|applies|stand|stands|hold|holds|relevant)\b|\b(?:replace|replaces|supersede|supersedes) the\b|\b(?:do not|don't|does not|doesn't) apply (?:any ?more|now)\b|\bI(?:'m| am|'ll| will|'ve| have)? (?:dropping|drop|dropped|keeping|keep|kept|replacing|replace|replaced|removing|remove|removed)\b)[^.!?;]*(?:[.!?;]+(?=\s|$)|$)\s*/i;
-
-// Leading sentences on which request it answers or what it will do: "The latest request is Paris, so I'll answer with the Paris
-// forecast.", "The newest line asks about Paris.", "Since you asked about Paris, I'll…", "I'll answer with…". Each names the
-// prompt's own terms (the newest request, line or question) or a first-person "answer", so "The latest TfL update says…", "The new
-// line opens on Monday" and "Since you asked, rain is likely" stay.
-const META_ANSWER_NOTE =
-  /^(?:(?:the (?:latest|newest|new|last|current) (?:request (?:is|was|asks?|wants?|changes?|switches?|moves?)|(?:transcript )?line (?:asks?|wants?|changes?|switches?|moves?)|question (?:asks?|is about|changes?))\b|since (?:you|they|the user) [^.!?;:]*?,\s*I(?:['’]ll| will)\b|(?:I(?:['’]ll| will|['’]m going to| am going to)|let me) answer\b).*?(?:[.!?;:]+(?=\s|$)|$)\s*)+/i;
-
-// Bee speaking as itself: "I'll", "I'm", "me", "my", or "I" before a verb. Not "Option I", "Phase I trials" or "World War I" (a
-// capitalised word before it), "I-95" or "Grade-I".
-const FIRST_PERSON = /\bI['’](?:ll|m|ve|d)\b|(?<![-–/]|\p{Lu}[\p{L}\p{N}'’.-]*\s+)\bI\s+(?=\p{Ll})|\b(?:me|my|myself)\b|(?:^|[.!?]\s+)My\b/u;
-// A sentence about the tips, the answer or the sources as things Bee works on: "The most recent Paris source is a Sortiraparis
-// piece", "The London tips were about London", "…, so they're dropped", "the newer one is used". Real news about sources ("Sources
-// differ on details") and tips ("The tips in Paris are usually included") stays.
-const PROCESS_SENTENCE = [
-  /\bthe (?:most recent|newest|latest|newer|older|oldest|best|main|only) (?:[\w'’-]+ ){0,3}sources? (?:is|are|was|were)\b/i,
-  /\b(?:the|those|these|earlier|previous|shown|old|other)\s+(?:[\p{L}'’-]+\s+){0,3}(?:tips|answers)\s+(?:were|are|was|is)\s+(?:about|for|on)\s+(?:the\s+)?\p{Lu}/iu,
-  /\bso (?:they|it|these|those|both)(?:['’]re|['’]s| are| is| were| was| get| gets) (?:now )?(?:dropped|kept|removed|replaced|ignored|discarded|superseded|excluded|out)\b/i,
-  /\b(?:the (?:newer|older|newest|latest|other) one|that source|this source) (?:is|was|gets) (?:used|kept|preferred|dropped|ignored)\b/i,
-  // The search narrated instead of the news: "Nothing newer for today appeared in the results.", "The Met Police newsroom has the
-  // most recent London items". A police search ("The search found a car in Ealing") is news and stays.
-  /\b(?:appeared|appears|showed up|shows up|turned up|came up) in (?:the |my |these )?(?:search )?results\b/i,
-  /\b(?:the|my|these|those|search) results (?:show|shows|showed|include|included|list|listed|contain|contained|mention|mentioned)\b/i,
-  /\bnothing (?:newer|more recent|recent|new|current|later|else)\b[^.!?]*?\b(?:found|appeared|turned up|came up|showed up)\b/i,
-  /\b(?:my|the) (?:web )?search(?:es)? (?:found|finds|returned|returns|turned up|shows?|showed) (?:no|nothing|only|(?:\d+ )?(?:items?|results?|articles?|stories|pieces?|posts?)\b|the (?:most recent|newest|latest))/i,
-  /\b(?:has|had|lists?|listed|carries|shows?) the (?:most recent|newest|latest) (?:[\p{L}'’-]+ ){0,3}(?:items|results|articles|stories|pieces|posts)\b/iu,
-];
-// Quoted speech, and words for the user to say after "Say:" or "Ask:", are not Bee speaking: 'TfL said: "I'll mention it."'.
-const QUOTED = /"[^"]*"|“[^”]*”|‘[^’]*’(?!\p{L})/gu;
-const SPEECH = /\b(?:say|ask|tell them|reply|respond|try|suggest|propose|open with)\s*:[^.!?]*/gi;
-const SENTENCE_END = /[.!?]+(?:\s+|$)/g;
-
-/** True for a sentence in which Bee speaks as itself or about its own tips, sources or search, outside quotes. */
-const speaksAsBee = (sentence: string) => FIRST_PERSON.test(sentence) || PROCESS_SENTENCE.some((pattern) => pattern.test(sentence));
-
-/**
- * A tip without the sentences `drop` picks, given each sentence with quotes blanked (same length, so a full stop or an "I" inside
- * one never counts) and the sentences kept before it. The tip comes back unchanged when nothing is dropped.
- */
-function dropSentences(tip: string, drop: (sentence: string, kept: readonly string[]) => boolean): string {
-  const masked = tip.replace(QUOTED, (quote) => "x".repeat(quote.length)).replace(SPEECH, (speech) => "x".repeat(speech.length));
-  const ends = [...masked.matchAll(SENTENCE_END)].map((match) => match.index + match[0].length).filter((end) => end < tip.length);
-  const bounds = [0, ...ends, tip.length];
-  const spans = bounds.slice(1).map((end, index) => [bounds[index] ?? 0, end]);
-  const kept = spans.reduce<number[][]>((out, span) => (drop(masked.slice(span[0], span[1]), out.map(([start, end]) => masked.slice(start, end))) ? out : [...out, span]), []);
-  return kept.length === spans.length ? tip : kept.map(([start, end]) => tip.slice(start, end)).join("").trim();
-}
-
-/** A tip without its sentences in Bee's own voice: "The newest source is Sortiraparis, so I'll rely on it. Rain on Saturday." → "Rain on Saturday.". */
-const dropBeeSentences = (tip: string) => dropSentences(tip, speaksAsBee);
-
-/**
- * A tip without the model's label for the question, a note on which tips apply or which request it answers, a status sentence,
- * a trailing header or a sentence in its own voice: "The tube closure question: x. Writing tips now. Tips:" → "X."
- */
-function tidyTip(line: string): string {
-  const unlabelled = line.replace(META_LABEL, "").replace(META_TIPS_NOTE, "").replace(META_ANSWER_NOTE, "");
-  const tidy = dropBeeSentences(unlabelled.replace(META_STATUS, "").replace(META_HEADER, "").trim());
-  return unlabelled === line ? tidy : tidy.charAt(0).toUpperCase() + tidy.slice(1);
-}
-
-/** True for a line of the model's reasoning about its rules or status narration, not a tip. Exported for the live conversation test. */
-export function isMetaTip(line: string): boolean {
-  return META_TIP.some((pattern) => pattern.test(line)) || tidyTip(line) !== line;
-}
-
-/** A tip line worth showing: not blank, not NONE, not reasoning. */
-const isTip = (line: string) => line.length > 0 && line.toUpperCase() !== "NONE" && !isMetaTip(line);
-
-// Words too common to tell two sentences apart.
-const STOP_WORDS = new Set(
-  "a an the and or but of to in on at for from by with as is are was were be been being has have had it its this that these those about around over under per due than then so not no into out up also there their they we you will would can could may might do does did all both each just only more most some such near".split(" "),
-);
-const REPEAT_MIN_WORDS = 4;
-const REPEAT_SHARE = 0.8;
-const contentWords = (text: string) => new Set((text.toLowerCase().match(/[\p{L}\p{N}%°]+/gu) ?? []).filter((word) => !STOP_WORDS.has(word)));
-
-/**
- * A tip without a sentence that repeats its own earlier words, often a search snippet pasted after the source:
- * "…issues, per the London Buzz from 23 October Around 211 households have been evacuated…" → "…per the London Buzz from 23 October."
- * A repeat starts at a capitalised word (after a full stop or mid-sentence) and runs to the next full stop; at least 80% of its
- * content words are already earlier in the tip. Of several starts, the one most fully repeated wins, as words before the real
- * start are new.
- */
-function dropRepeat(tip: string): string {
-  let best: { start: number; end: number; share: number } | null = null;
-  for (const match of tip.matchAll(/\s+(?=\p{Lu})/gu)) {
-    const from = match.index + match[0].length;
-    const stop = tip.slice(from).search(/[.!?;](?=\s|$)/);
-    const end = stop < 0 ? tip.length : from + stop;
-    const words = contentWords(tip.slice(from, end));
-    const earlier = contentWords(tip.slice(0, match.index));
-    if (words.size < REPEAT_MIN_WORDS || earlier.size < REPEAT_MIN_WORDS) continue;
-    const share = [...words].filter((word) => earlier.has(word)).length / words.size;
-    if (share >= REPEAT_SHARE && (!best || share > best.share)) best = { start: match.index, end, share };
-  }
-  if (!best) return tip;
-  const head = tip.slice(0, best.start);
-  // Keep one full stop: the repeat's own, unless the sentence before it already ended.
-  const rest = /[.!?;:,]$/.test(head) ? tip.slice(best.end).replace(/^[.!?;]/, "") : tip.slice(best.end);
-  return dropRepeat(head + rest);
-}
-
-// A word's rough stem, so "rainy" and "rain", "winds" and "windy", "brighter" and "bright" count as one fact word.
-const stem = (word: string) => word.replace(/(?:ier|iest|ies|ied|ing|ed|er|est|es|s|y)$/, (suffix) => (word.length - suffix.length >= 3 ? "" : suffix));
-const factWords = (text: string) => new Set([...contentWords(text)].map(stem));
-const FACT_MIN_WORDS = 3;
-// A later sentence restates an earlier one in the tip when they share this share of the shorter one's fact words.
-const RESTATED_SENTENCE = 0.6;
-// A later tip repeats an earlier one when this share of its own fact words is in that tip.
-const REPEATED_TIP = 0.7;
-const shared = (a: ReadonlySet<string>, b: ReadonlySet<string>) => [...a].filter((word) => b.has(word)).length;
-
-/** True when a sentence restates one kept before it: most fact words of the shorter of the two are in both. */
-function restates(sentence: string, kept: readonly string[]): boolean {
-  const words = factWords(sentence);
-  return kept.some((earlier) => {
-    const before = factWords(earlier);
-    const fewer = Math.min(words.size, before.size);
-    return fewer >= FACT_MIN_WORDS && shared(words, before) / fewer >= RESTATED_SENTENCE;
-  });
-}
-
-/**
- * A tip without later sentences that restate an earlier one: "A rainy Saturday and a windy Sunday. Rain is forecast for Saturday
- * afternoon. Expect steady rain on Saturday, then a sunnier Sunday with brisk winds." → the first two sentences.
- */
-const dropRestatements = (tip: string) => dropSentences(tip, restates);
-
-/** True when most of a tip's fact words are already in an earlier tip of the same answer. */
-function repeatsEarlierTip(tip: string, earlier: readonly string[]): boolean {
-  const words = factWords(tip);
-  return words.size >= FACT_MIN_WORDS && earlier.some((other) => shared(words, factWords(other)) / words.size >= REPEATED_TIP);
-}
-
-/** The tips without any that repeat an earlier one, as "Paris turns wet Saturday…" after "A rainy Saturday…". */
-const dropRepeatedTips = (tips: readonly LunaTip[]) =>
-  tips.reduce<LunaTip[]>((out, tip) => (repeatsEarlierTip(tip.text, out.map((kept) => kept.text)) ? out : [...out, tip]), []);
-
 // A publisher name: capitalised or camel-case words or a domain, such as "TfL", "the BBC", "Time Out London", "ianVisits",
-// "sortiraparis.com", optionally "citing" or "via" others: "Sortiraparis citing Météo-France and Météo Paris", "Météo-France via
-// Sortiraparis".
+// "sortiraparis.com", optionally "citing" or "via" others: "Sortiraparis citing Météo-France and Météo Paris".
 const SOURCE_WORD = String.raw`(?:\p{Lu}[\p{L}\p{N}'’&.-]*|\p{Ll}+\p{Lu}[\p{L}\p{N}'’&.-]*|[\p{Ll}\p{N}-]+\.\p{Ll}{2,}(?:\.\p{Ll}{2,})?)`;
 const SOURCE_NAME = String.raw`(?:the\s+)?${SOURCE_WORD}(?:\s+(?:(?:of|and|&|de|du|des|la|le|for)\s+)?${SOURCE_WORD}){0,4}`;
 const SOURCE_FULL = String.raw`${SOURCE_NAME}(?:\s+(?:citing|via)\s+${SOURCE_NAME})?`;
-const SOURCE = new RegExp(String.raw`^${SOURCE_FULL}$`, "u");
-// A name and a few lowercase words about it, such as "TfL planned closures" or "the Met Police news page": the name is kept.
-const SOURCE_DESCRIBED = new RegExp(String.raw`^(${SOURCE_FULL})((?:\s+\p{Ll}[\p{Ll}'’-]*){1,3})$`, "u");
-// A list of names after "per", such as "per the Circle, Elizabeth and Mildmay lines…": the tip's content, not a publisher.
-const SOURCE_LIST = new RegExp(String.raw`^${SOURCE_NAME}(?:\s*,\s*${SOURCE_NAME})+,?\s+and\s`, "u");
-const SOURCE_DATE = /\s+(?:from|on|dated)\s+(?:\d{1,2}\s+\p{Lu}\p{Ll}+|\p{Lu}\p{Ll}+\s+\d{1,2})(?:,?\s+\d{4})?$/u;
-const SOURCE_VERB = /\b(?:is|are|was|were|be|been|has|have|had|will|would|can|could|says?|said|shows?|faces?|runs?|closes?|opens?)\b/i;
-// "per" or "Per" before a capital or a domain; "per cent", "per line" and "per day" never match.
-const PER = /(?:\s*,)?\s*\b[Pp]er\s+(?=(?:the\s+)?\p{Lu}|[\p{Ll}\p{N}-]+\.\p{Ll}{2,})/gu;
-
-/**
- * The text after "per" as it should read: unchanged, without a trailing date or the words about the name ("TfL planned closures"
- * → "TfL"), or null when it is not a publisher name.
- */
-function sourceName(rest: string): string | null {
-  const undated = rest.replace(SOURCE_DATE, "");
-  if (SOURCE.test(undated)) return undated;
-  const [, name, about = ""] = undated.match(SOURCE_DESCRIBED) ?? [];
-  if (name !== undefined && !SOURCE_VERB.test(about)) return name;
-  if (rest.includes(",")) return SOURCE_LIST.test(rest) ? null : rest;
-  return rest.split(/\s+/).length > 5 || SOURCE_VERB.test(rest) ? null : rest;
-}
-
-/**
- * A tip whose "per …" source is a publisher name: a date after it is dropped ("per the London Buzz from 23 October" → "per the
- * London Buzz"), and a "per" followed by content instead of a name is dropped with it ("…, per the Circle, Elizabeth and Mildmay
- * lines all face disruption." → "…."). sourceTags then moves the name to the source field.
- */
-function cleanSource(tip: string): string {
-  // Last first, so earlier indices stay valid.
-  return [...tip.matchAll(PER)].reverse().reduce((out, match) => {
-    const from = match.index + match[0].length;
-    const stop = out.slice(from).search(/[.!?;]+(?=\s|$)/);
-    const end = stop < 0 ? out.length : from + stop;
-    const rest = out.slice(from, end);
-    // "Per TfL, the Circle line…" leads its sentence with the name: sourceTags takes it as a tag.
-    if (match[0].trimStart().startsWith("P") && rest.includes(",")) return out;
-    const name = sourceName(rest);
-    if (name === rest) return out;
-    return name === null ? out.slice(0, match.index) + out.slice(end) : out.slice(0, from) + name + out.slice(end);
-  }, tip);
-}
-
-// Source tags in the tip text, each with the name in group 1. A tag ends a clause: it is followed by punctuation, another
-// bracket ("(ONS) (ONS)") or the end.
+// A tag ends a clause: punctuation, another bracket ("(ONS) (ONS)") or the end follows it.
 const CLAUSE_END = String.raw`(?=\s*(?:[,.;:!?(]|$))`;
-// "…, per TfL." or a sentence of its own, "Per the Met Police.". The name never ends in a full stop: that is the sentence's.
-const PER_TAG = new RegExp(String.raw`(?:\s*,)?\s*\b[Pp]er\s+(${SOURCE_FULL})(?<!\.)${CLAUSE_END}`, "gu");
-// "… disruption (TfL)." or "… from Greenwich (Met Police), and …".
+const SOURCE_DATE = String.raw`\s+(?:from|on|dated)\s+(?:\d{1,2}\s+\p{Lu}\p{Ll}+|\p{Lu}\p{Ll}+\s+\d{1,2})(?:,?\s+\d{4})?`;
+const SOURCE_VERB = /\b(?:is|are|was|were|be|been|has|have|had|will|would|can|could|says?|said|shows?|faces?|runs?|closes?|opens?)\b/i;
+// "per" before a capital or a domain, not after an amount ("£2 per GB", "30 per Hour") nor before a reference ("per Section 4").
+const PER = new RegExp(
+  String.raw`(?:\s*,)?\s*(?<!\p{N}(?:[\p{L}\p{N}%]|[.,]\p{N})*\s+|[£$€]\S*\s+)\b[Pp]er\s+(?!(?:the\s+)?(?:Section|Clause|Schedule|Article|Paragraph|Appendix|Annex|Table|Figure|Page|Part)\b)(?=(?:the\s+)?\p{Lu}|[\p{Ll}\p{N}-]+\.\p{Ll}{2,})`,
+  "gu",
+);
+// After "per": a name ending its clause ("per TfL,"), or ending its sentence with a date or a few words about it ("per the
+// London Buzz from 23 October", "per the Met Police news page"). Group 1 is the name.
+const PER_NAME = new RegExp(String.raw`^(${SOURCE_FULL})(?<!\.)(?:${CLAUSE_END}|(?:${SOURCE_DATE}|(?:\s+\p{Ll}[\p{Ll}'’-]*){1,3})$)`, "u");
+// A list after "per" ("per the Circle, Elizabeth and Mildmay lines…") is the tip's content, not a publisher.
+const NAME_LIST = new RegExp(String.raw`^${SOURCE_NAME}(?:\s*,\s*${SOURCE_NAME})+,?\s+and\s`, "u");
+// "… disruption (TfL)." and a dated tag "(ianVisits, 23 Oct)".
 const BRACKET_TAG = new RegExp(String.raw`\s*\((${SOURCE_FULL})\)${CLAUSE_END}`, "gu");
-// A dated source in brackets: "(ianVisits, 23 Oct)", "(the BBC, October 23, 2026)".
 const MONTH = String.raw`(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)\p{Ll}*\.?`;
 const DATED_TAG = new RegExp(String.raw`\s*\(\s*(${SOURCE_NAME})\s*,\s*(?:\d{1,2}\s+${MONTH}|${MONTH}\s+\d{1,2})(?:,?\s+\d{4})?\s*\)`, "gu");
-
-// A sentence that opens on its source, with the publisher in group 3: "The newest Sortiraparis piece says Saturday is wet." or
-// "The TfL-based list says the work is track work." → "Saturday is wet.". Group 4 is the answer's first letter, capitalised again.
-// Only "piece", "list", "updates" and such, after "newest" or before "-based" (sourceTags): "The latest Paris forecast says" names a place and
-// "The Q3 report says" a document, not a publisher.
-const PREAMBLE_TAG = new RegExp(
-  String.raw`(^|[.!?;]\s+)[Tt]he\s+(?:(newest|latest|new|recent|most\s+recent)\s+)?(${SOURCE_FULL})\s+(?:piece|article|report|story|post|update|bulletin|list|page|release)s?\s+(?:(?:say|report|show|note|state|list|include)s?|said)(?:\s+that)?\s+(\p{L})`,
-  "gu",
-);
-// A source described but not named, with the verb in group 2: "another report ties", "One source says that", "other outlets say".
-// A reporting verb goes with it ("…, while another report says the line is shut." → "…, while the line is shut."); any other verb
-// keeps its claim, credited to "others" ("another report ties A to B" → "others tie A to B").
-const UNNAMED_SOURCE = new RegExp(
-  String.raw`(^|[.!?;]\s+|\b)(?:[Aa]nother|[Oo]ne|[Ss]ome|[Oo]ther|[Aa]\s+(?:second|different|separate))\s+(?:(?:news|media|local)\s+)?(?:report|source|outlet|article|piece|story|site)s?\s+(says?|said|reports?|reported|notes?|states?|claims?|suggests?|adds?|ties?|links?|attributes?|blames?|puts?|gives?|cites?|lists?)(\s+that)?\s+(\p{L})`,
-  "gu",
-);
-const REPORTING_VERB = /^(?:says?|said|reports?|reported|notes?|states?|claims?|suggests?|adds?)$/;
-// A sentence that opens on its sources, with the answer's first letter in group 2: "The sources say the line is shut." → "The line
-// is shut.", "The newest Paris sources agree on a rainy Saturday." → "A rainy Saturday.". "Sources differ on details" and "Météo-France
-// and Météo Paris differ on…" are claims and stay.
-// Case is spelt out, as /i would let \p{Lu} match a lowercase word: a place before "sources" ("Paris") only after "the" or "newest",
-// so "Water sources show…" stays.
-const SOURCES_FRESH = String.raw`(?:[Nn]ewest|[Ll]atest|[Rr]ecent|[Mm]ost\s+recent|[Mm]ain|[Oo]fficial)\s+`;
-const SOURCES_SAY = new RegExp(
-  String.raw`(^|[.!?;]\s+)(?:(?:[Tt]he|[Bb]oth|[Aa]ll)\s+(?:${SOURCES_FRESH})?(?:\p{Lu}[\p{L}'’-]*\s+)?|${SOURCES_FRESH}(?:\p{Lu}[\p{L}'’-]*\s+)?)?[Ss]ources?\s+(?:says?|said|shows?|reports?|agreed?|agrees)(?:\s+(?:that|on))?\s+(\p{L})`,
-  "gu",
-);
-// A sentence that opens on who also reported it, with the publisher in group 2 and a date in group 3: "Also reported by the Met on
-// 23 October: a man was jailed." → "On 23 October, a man was jailed.".
-const ALSO_REPORTED = new RegExp(
-  String.raw`(^|[.!?;]\s+)(?:[Aa]lso\s+)?(?:reported|announced|confirmed|published)\s+by\s+(${SOURCE_NAME})(?:\s+on\s+(\d{1,2}\s+\p{Lu}\p{Ll}+|\p{Lu}\p{Ll}+\s+\d{1,2}))?\s*:\s+(\p{L})`,
-  "gu",
-);
 
 /** True when "(ARR)" spells the words before it ("annual recurring revenue (ARR)"): a definition, not a source. */
 function definesAcronym(before: string, name: string): boolean {
   if (!/^\p{Lu}{2,6}$/u.test(name)) return false;
   const words = before.match(/[\p{L}\p{N}]+/gu) ?? [];
   return words.slice(-name.length).map((word) => word.charAt(0).toUpperCase()).join("") === name;
+}
+
+/**
+ * What to do with the text after "per", up to its sentence's end: take the name it starts with (`cut` is how much of the text
+ * goes with it), drop it all (null: a list, a title or a clause), or leave it (undefined: a sentence led by "Per Priya's email,
+ * …", or a few words with no verb).
+ */
+function perTag(rest: string, leads: boolean): { name: string; cut: number } | null | undefined {
+  // "Per TfL, the Circle and District lines…" leads its sentence with the name, so it is not read as a list.
+  if (!leads && NAME_LIST.test(rest)) return null;
+  const named = rest.match(PER_NAME);
+  if (named?.[1] !== undefined) return { name: named[1], cut: named[0].length };
+  if (leads && rest.includes(",")) return undefined;
+  return rest.split(/\s+/).length > 5 || SOURCE_VERB.test(rest) ? null : undefined;
 }
 
 /** The punctuation a removed tag leaves behind: "heist.." → "heist.", "Greenwich , and" → "Greenwich, and", a leading ", the". */
@@ -604,111 +377,195 @@ const tidyPunctuation = (text: string) =>
     .replace(/\s{2,}/g, " ")
     .trim();
 
-/**
- * A tip's text without its source tags or source descriptions, and the publishers they named, in order: "Rain (BBC). Per the BBC."
- * → "Rain..", ["BBC"].
- */
-function sourceTags(tip: string): { text: string; names: string[] } {
+/** A tip's text without its citation tags, and the publishers they named, in order: "Rain (BBC), per the Met." → "Rain", ["Met", "BBC"]. */
+function takeCitations(tip: string): { text: string; names: string[] } {
   const names: string[] = [];
   const take = (name: string) => {
     names.push(name.replace(/^the\s+/i, ""));
     return "";
   };
-  const text = tip
-    .replace(SOURCES_SAY, (_, start: string, letter: string) => start + letter.toUpperCase())
-    .replace(ALSO_REPORTED, (_, start: string, name: string, date: string | undefined, letter: string) => {
-      take(name);
-      return start + (date ? `On ${date}, ${letter}` : letter.toUpperCase());
-    })
-    .replace(PREAMBLE_TAG, (match: string, start: string, fresh = "", name: string, letter: string) => {
-      // The name takes "-based" with it, as hyphens are part of a name ("Météo-France").
-      const based = name.match(/^(.+)-based$/);
-      // "The TfL list says" without "newest" or "-based" may be a document: kept.
-      if (!based && !fresh) return match;
-      return start + take(based?.[1] ?? name) + letter.toUpperCase();
-    })
-    .replace(UNNAMED_SOURCE, (_, start: string, verb: string, that = "", letter: string, at: number) => {
-      const opens = at === 0 || /[.!?]/.test(start);
-      if (REPORTING_VERB.test(verb)) return start + (opens ? letter.toUpperCase() : letter);
-      return `${start}${opens ? "Others" : "others"} ${verb.replace(/s$/, "")}${that} ${letter}`;
-    })
-    .replace(PER_TAG, (_, name: string) => take(name))
+  // Last "per" first, so earlier indices stay valid; each name goes to the front, so names keep the text's order.
+  const unPer = [...tip.matchAll(PER)].reverse().reduce((out, match) => {
+    const from = match.index + match[0].length;
+    const stop = out.slice(from).search(/[.!?;]+(?=\s|$)/);
+    const rest = out.slice(from, stop < 0 ? out.length : from + stop);
+    const tag = perTag(rest, match[0].trimStart().startsWith("P"));
+    if (tag === undefined) return out;
+    if (tag) names.unshift(tag.name.replace(/^the\s+/i, ""));
+    return out.slice(0, match.index) + out.slice(from + (tag ? tag.cut : rest.length));
+  }, tip);
+  const text = unPer
     .replace(BRACKET_TAG, (tag, name: string, at: number, whole: string) => (definesAcronym(whole.slice(0, at), name) ? tag : take(name)))
     .replace(DATED_TAG, (_, name: string) => take(name));
-  return { text, names };
+  return { text: text === tip ? tip : tidyPunctuation(text), names };
 }
 
-// A label's publisher as the subject of a reporting verb, at a clause start: "Met Police also reported…", "The TfL planned-closure
-// document for this weekend lists…", "Met Police news from 23 October 2026 includes…". Group 1 is the clause start, group 2 the
-// words after the document ("from 23 October 2026"). A publisher doing the news ("The Met Police arrested 42 people") stays.
-// "The Met's latest releases include…" counts too: documents may be plural, and verbs plain.
+// c) The model's own voice.
+// First person: "I'll", "I'm", "me", "my", "My" before a lowercase word, or "I" before a lowercase word. Not "Option I", "Phase I
+// trials" or "World War I" (a capitalised word before it), "I-95", "Grade-I", "My Fair Lady" or "Despicable Me".
+const FIRST_PERSON = /\bI['’](?:ll|m|ve|d)\b|(?<![-–/]|\p{Lu}[\p{L}\p{N}'’.-]*\s+)\bI\s+(?=\p{Ll})|\b(?:me|my|myself)\b|(?:^|[.!?;]\s+)My\s+(?=\p{Ll})/u;
+// Talk about its own work rather than the answer. Each names the prompt's own things (its tips or answers as items it keeps,
+// drops or replaces, the newest line or request, the search or its results), so "Your tips are kept by staff", "The new line
+// opens on Monday", "The search found a car in Ealing" and "Election results are due on Friday" stay.
+const OWN_WORK = [
+  // "The earlier London tips stand", "The old tips are dropped since…", "The Paris tips replace the London ones", "the first
+  // tip answers it", "Keeping the shown tips", "The limit is 3 tips", "Per the steering rules".
+  /\b(?:the|my|those|these|earlier|previous|shown|old|other|first|second|third|new|existing)\s+(?:[\p{L}'’-]+\s+){0,3}(?:tips?|answers?)\b.*?\b(?:stands?|(?:no longer|do not|don['’]t|does not|doesn['’]t) (?:apply|applies|stand|hold)|no longer relevant|word for word|(?:['’]re|are|is|were|was|get|gets|have been|has been) (?:now )?(?:dropped|replaced|removed|superseded|discarded|updated)|(?:replaces?|supersedes?) (?:the|them)|answers? it)\b/iu,
+  /\b(?:shown|kept) tips?\b|\b(?:limit|cap) is (?:\d+|one|two|three) (?:short )?tips?\b|\b(?:at most|no more than|up to) (?:\d+|one|two|three) (?:short )?tips\b|\bsteering (?:rules?|turn)\b/i,
+  // "Writing tips now.", "Here are the tips:", "Tips:" as a sentence or label of their own.
+  /^(?:(?:(?:I am |I'm |now )?(?:writing|drafting|preparing|listing|adding|giving) (?:the |my |some |these |your |two |three )?|here (?:are|is) (?:the |my |some |your )?)(?:tips?|answers?)|tips?)(?: now| below| here)?[.:!…]*\s*$/i,
+  // The request: "The newest line asks about Paris", "The latest request is Paris", "The user is asking why", 'The question
+  // "Why…?" most likely means', "the Paris forecast is the new answer", and a label for it: "The tube closure question:".
+  /\bthe (?:newest|latest|new|last|current|earlier|previous) (?:transcript )?(?:lines? (?:asks?|says?|wants?|corrects?|changes?|needs?|redirects?|switches?|moves?)|request (?:is|was|asks?|wants?|changes?|switches?|moves?)|question (?:asks?|is about|changes?))\b/i,
+  /\bthe user (?:is asking|asks|means|wants)\b|^the question\b.*\b(?:means|refers to)\b|\b(?:is|as|becomes) the (?:new|updated|replacement) answer\b/i,
+  /^(?:the|your)\s+(?:(?:[\p{L}'’-]+\s+){2,4}question|question (?:about|on)\b.*?)\s*:\s*$/iu,
+  // Its sources as things it picks: "The most recent Paris source is a Sortiraparis piece", "The newer one is used".
+  /\bthe (?:most recent|newest|latest|newer|older|oldest) (?:[\p{L}'’-]+ ){0,3}sources? (?:is|are|was|were)\b|\bthe (?:newer|older|other) one (?:is|was|gets) (?:used|kept|preferred|dropped|ignored)\b/iu,
+  // The search: "Nothing newer appeared in the results.", "The search results include…", "My search found only…", "BBC London
+  // lists the latest stories from 22 October."
+  /\b(?:appeared|appears|showed up|shows up|turned up|came up) in (?:the |my |these )?(?:search )?results\b|\b(?:the|my|these|those|search) results (?:show|shows|showed|include|included|list|listed|contain|contained|mention|mentioned)\b/i,
+  /\bnothing (?:newer|more recent|recent|new|current|later|else)\b.*?\b(?:found|appeared|turned up|came up|showed up)\b/i,
+  /\b(?:my|the) (?:web )?search(?:es)? (?:found|finds|returned|returns|turned up|shows?|showed) (?:no|nothing|only|(?:\d+ )?(?:items?|results?|articles?|stories|pieces?|posts?)\b|the (?:most recent|newest|latest))/i,
+  /\b(?:has|had|lists?|listed|carries|shows?) the (?:most recent|newest|latest) (?:[\p{L}'’-]+ ){0,3}(?:items|results|articles|stories|pieces|posts)\b/iu,
+];
+// Quoted speech, and words for the user to say after "Say:" or "Ask:", are not the model speaking: 'TfL said: "I'll mention it."'.
+const QUOTED = /"[^"]*"|“[^”]*”|‘[^’]*’(?!\p{L})/gu;
+const SPEECH = /\b(?:say|ask|tell them|reply|respond|try|suggest|propose|open with)\s*:[^.!?]*/gi;
+// Sentence ends. The voice check also splits after ": ", so "I'll answer with the forecast: rain on Saturday" keeps "rain on
+// Saturday".
+const SENTENCE_END = /[.!?]+(?:\s+|$)/g;
+const CLAUSE_BREAK = /[.!?]+(?:\s+|$)|:\s+/g;
+
+/**
+ * A tip without the parts `drop` picks, given each part with quotes and suggested speech blanked (same length, so a full stop or
+ * an "I" inside one never counts) and the parts kept before it. Unchanged when nothing is dropped; a new first letter is
+ * capitalised ("The tube closure question: the latest…" → "The latest…").
+ */
+function dropParts(tip: string, breaks: RegExp, drop: (part: string, kept: readonly string[]) => boolean): string {
+  const masked = tip.replace(QUOTED, (quote) => "x".repeat(quote.length)).replace(SPEECH, (speech) => "x".repeat(speech.length));
+  const ends = [...masked.matchAll(breaks)].map((match) => match.index + match[0].length).filter((end) => end < tip.length);
+  const bounds = [0, ...ends, tip.length];
+  const spans = bounds.slice(1).map((end, index) => [bounds[index] ?? 0, end]);
+  const kept = spans.reduce<number[][]>((out, span) => (drop(masked.slice(span[0], span[1]), out.map(([start, end]) => masked.slice(start, end))) ? out : [...out, span]), []);
+  if (kept.length === spans.length) return tip;
+  const text = kept.map(([start, end]) => tip.slice(start, end)).join("").trim();
+  return kept[0]?.[0] === 0 ? text : text.replace(/^\p{Ll}(?!\p{Lu})/u, (letter) => letter.toUpperCase());
+}
+
+const ownVoice = (part: string) => FIRST_PERSON.test(part) || OWN_WORK.some((pattern) => pattern.test(part.trim()));
+/** A line without a trailing header and its parts in the model's own voice (rules a and c). */
+const dropOwnVoice = (line: string) => dropParts(line.replace(TRAILING_HEADER, "").trim(), CLAUSE_BREAK, ownVoice);
+
+// d) Repeats.
+// Words too common to tell two sentences apart.
+const STOP_WORDS = new Set(
+  "a an the and or but of to in on at for from by with as is are was were be been being has have had it its this that these those about around over under per due than then so not no into out up also there their they we you will would can could may might do does did all both each just only more most some such near".split(" "),
+);
+const contentWords = (text: string) => new Set((text.toLowerCase().match(/[\p{L}\p{N}%°]+/gu) ?? []).filter((word) => !STOP_WORDS.has(word)));
+// A word's rough stem, so "rainy" and "rain", "winds" and "windy", "brighter" and "bright" count as one fact word.
+const stem = (word: string) => word.replace(/(?:ier|iest|ies|ied|ing|ed|er|est|es|s|y)$/, (suffix) => (word.length - suffix.length >= 3 ? "" : suffix));
+const factWords = (text: string) => new Set([...contentWords(text)].map(stem));
+const shared = (a: ReadonlySet<string>, b: ReadonlySet<string>) => [...a].filter((word) => b.has(word)).length;
+// A pasted snippet repeats the text before it when this share of its words (and at least this many) are already there.
+const SNIPPET_SHARE = 0.8;
+const SNIPPET_MIN_WORDS = 4;
+// A later sentence restates an earlier one when it has this share of the earlier one's fact words; a later tip repeats an earlier
+// one when this share of its own fact words is in it. Both need at least MIN_SHARED words in common: fewer is two facts about one
+// thing, as "Ask Priya about the Q4 budget." and "Ask Sam about the Q4 budget.".
+const MIN_SHARED = 4;
+const RESTATED_SENTENCE = 0.8;
+const REPEATED_TIP = 0.7;
+
+/**
+ * A tip without a snippet that repeats its own earlier words, often pasted after a source with no full stop: "…issues, per the
+ * London Buzz from 23 October Around 211 households have been evacuated…" → "…per the London Buzz from 23 October.". A snippet
+ * starts at a capitalised word and runs to its sentence's end; of several starts, the one most fully repeated wins.
+ */
+function dropSnippet(tip: string): string {
+  let best: { start: number; end: number; share: number } | null = null;
+  for (const match of tip.matchAll(/\s+(?=\p{Lu})/gu)) {
+    const from = match.index + match[0].length;
+    const stop = tip.slice(from).search(/[.!?;](?=\s|$)/);
+    const end = stop < 0 ? tip.length : from + stop;
+    const words = contentWords(tip.slice(from, end));
+    const earlier = contentWords(tip.slice(0, match.index));
+    if (words.size < SNIPPET_MIN_WORDS || earlier.size < SNIPPET_MIN_WORDS) continue;
+    const share = shared(words, earlier) / words.size;
+    if (share >= SNIPPET_SHARE && (!best || share > best.share)) best = { start: match.index, end, share };
+  }
+  if (!best) return tip;
+  const head = tip.slice(0, best.start);
+  // Keep one full stop: the snippet's own, unless the sentence before it already ended.
+  const rest = /[.!?;:,]$/.test(head) ? tip.slice(best.end).replace(/^[.!?;]/, "") : tip.slice(best.end);
+  return dropSnippet(head + rest);
+}
+
+/** True when a sentence restates one kept before it. */
+function restates(sentence: string, kept: readonly string[]): boolean {
+  const words = factWords(sentence);
+  return kept.some((earlier) => {
+    const before = factWords(earlier);
+    const both = shared(words, before);
+    return both >= MIN_SHARED && both / before.size >= RESTATED_SENTENCE;
+  });
+}
+
+/** A tip without repeated snippets and restated sentences (rule d within a tip). */
+const dropRepeats = (tip: string) => dropParts(dropSnippet(tip), SENTENCE_END, restates);
+
+/** True when most of a tip's fact words are already in an earlier tip of the same answer. */
+function repeatsEarlierTip(tip: string, earlier: readonly string[]): boolean {
+  const words = factWords(tip);
+  return earlier.some((other) => {
+    const both = shared(words, factWords(other));
+    return both >= MIN_SHARED && both / words.size >= REPEATED_TIP;
+  });
+}
+
+/** The tips without any that repeat an earlier one (rule d across tips). */
+const dropRepeatedTips = (tips: readonly LunaTip[]) =>
+  tips.reduce<LunaTip[]>((out, tip) => (repeatsEarlierTip(tip.text, out.map((kept) => kept.text)) ? out : [...out, tip]), []);
+
+// Checks for the live conversation test: what the rules above still let through, or would have changed.
+// A source described in the text: "The TfL-based list says", "The latest BBC piece says", "another report says", "The sources
+// say", "Also reported by the Met:". "Sources differ on details", "The Q3 report says" and "Water sources show" are claims.
+const SOURCE_DESCRIPTION =
+  /-based (?:list|page|report|piece|article|source)\b|\b(?:another|one|some|other|a (?:second|different|separate))\s+(?:(?:news|media|local)\s+)?(?:report|source|outlet|article|piece|story|site)s?\s+(?:says?|said|reports?|notes?|states?|claims?|suggests?|adds?|ties?|links?|attributes?|blames?|puts?|gives?|cites?|lists?)\b|\bthe\s+(?:newest|latest|new|recent|most\s+recent)\s+(?:\S+\s+){0,3}(?:piece|article|report|story|post|update|bulletin|list|page|release|source)s?\s+(?:says?|said|reports?|shows?|notes?|states?|lists?|includes?|agree)\b|(?:^|[.!?;]\s+)(?:(?:the|both|all)\s+)?sources?\s+(?:says?|said|shows?|reports?|agreed?|agrees)\b|\b(?:reported|announced|confirmed|published)\s+by\s+(?:the\s+)?\p{Lu}/iu;
+// The label's publisher reporting in the text: "Met Police also reported…", "The TfL planned-closure document for this weekend
+// lists…", "The Met's latest releases include…", "TfL's planned closures list…". A publisher doing the news ("The Met Police
+// arrested 42 people", "TfL's new trains include air conditioning") is not flagged.
 const LABEL_DOCUMENT = "(?:document|list|listing|page|site|website|newsroom|news|update|statement|report|schedule|bulletin|notice|release|feed)s?";
 const LABEL_REPORTS = "(?:list|say|report|show|include|note|state|confirm)s?|listed|said|reported|showed|included|noted|stated|confirmed";
 const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-const CLAUSE_START = String.raw`(^|[.!?;]\s+|,\s+(?:and|while|but)\s+)`;
-const labelSubject = (name: string) =>
+const CLAUSE_START = String.raw`(?:^|[.!?;]\s+|,\s+(?:and|while|but)\s+)`;
+const labelReports = (name: string) =>
   new RegExp(
-    String.raw`${CLAUSE_START}(?:[Tt]he\s+)?${escapeRegExp(name)}(?:['’]s)?(?:(?:\s+\p{Ll}[\p{Ll}'’-]*){0,3}\s+${LABEL_DOCUMENT}((?:\s+(?:for|from|on|of|dated)(?:\s+[^\s.!?;,]+){1,4})?))?\s+(?:also\s+)?(?:${LABEL_REPORTS})(?:\s+that)?\s+(?=[\p{L}\p{N}])`,
-    "gu",
+    String.raw`${CLAUSE_START}(?:[Tt]he\s+)?${escapeRegExp(name)}(?:(?:['’]s)?(?:(?:\s+\p{Ll}[\p{Ll}'’-]*){0,3}\s+${LABEL_DOCUMENT}(?:\s+(?:for|from|on|of|dated)(?:\s+[^\s.!?;,]+){1,4})?)?\s+(?:also\s+)?(?:${LABEL_REPORTS})|['’]s(?:\s+\p{Ll}[\p{Ll}'’-]*){1,4}\s+(?:lists?|listed|shows?|showed))\s`,
+    "u",
   );
-// A label's publisher owning what the tip lists: "TfL's planned track closures list works on…". Only flagged, as the noun phrase
-// is part of the content.
-const labelListing = (name: string) =>
-  new RegExp(String.raw`${CLAUSE_START}(?:[Tt]he\s+)?${escapeRegExp(name)}['’]s(?:\s+\p{Ll}[\p{Ll}'’-]*){1,4}\s+(?:lists?|listed|shows?|showed)\s+(?=[\p{L}\p{N}])`, "u");
 // Each name in a label, and the first word of a longer one, as the text often shortens it: "the Met" for Met Police.
 const labelNames = (label: string | null) =>
   (label ? label.split(/\s*,\s*/) : []).flatMap((name) => {
     const first = name.split(/\s+/)[0] ?? "";
     return first !== name && first.length >= 3 ? [name, first] : [name];
   });
-// What is left must still read as a clause: a few words, not opening on a pronoun for the publisher ("TfL said it will…").
-const MIN_CLAUSE_WORDS = 3;
-const PRONOUN_START = /^(?:it|its|they|them|their|he|she|his|her|we|us|our)\b/i;
 
-/**
- * A tip without its label's publisher as the subject of a reporting verb, keeping what was reported: "Met Police also reported a
- * man jailed for life." → "A man jailed for life.". A date on the document moves to the end of the clause ("Met Police news from
- * 23 October includes a gang jailed." → "A gang jailed on 23 October."). Kept as it was when the rest would not read as a clause.
- */
-function dropLabelSubject(tip: string, label: string | null): string {
-  return labelNames(label).reduce(
-    (text, name) =>
-      // Last first, so earlier indices stay valid.
-      [...text.matchAll(labelSubject(name))].reverse().reduce((out, match) => {
-        const [subject, start = "", about = ""] = match;
-        const from = match.index + subject.length;
-        const stop = out.slice(from).search(/[.!?;](?=\s|$)/);
-        const end = stop < 0 ? out.length : from + stop;
-        const clause = out.slice(from, end);
-        if (clause.split(/\s+/).length < MIN_CLAUSE_WORDS || PRONOUN_START.test(clause)) return out;
-        const date = SOURCE_DATE.test(about) ? about.replace(/^\s+(?:from|on|dated)\s+/, "") : "";
-        const dated = date && !clause.includes(date) ? `${clause} on ${date}` : clause;
-        const opens = start === "" || /[.!?;]/.test(start);
-        return out.slice(0, match.index) + start + (opens ? dated.charAt(0).toUpperCase() + dated.slice(1) : dated) + out.slice(end);
-      }, text),
-    tip,
-  );
-}
-
-/**
- * True when a tip's text has its label's publisher as the subject of a reporting verb ("Met Police also reported…" with the label
- * Met Police) or owning a list ("TfL's planned closures list…"), whether or not parseTipLine could rewrite it. Exported for the
- * live conversation test.
- */
-export const namesLabelInText = (tip: string, label: string | null) =>
-  labelNames(label).some((name) => labelSubject(name).test(tip) || labelListing(name).test(tip));
-
-/** True when a tip repeats or restates one of its own sentences. Exported for the live conversation test. */
-export const repeatsSentence = (tip: string) => dropRepeat(tip) !== tip || dropRestatements(tip) !== tip;
-/** True for each tip that repeats an earlier one in the same answer. Exported for the live conversation test. */
+/** True for a line that rules a or c would change: a header, a "~ " note, or a part in the model's own voice. */
+export const isMetaTip = (line: string) => NOTE_LINE.test(line) || dropOwnVoice(line) !== line;
+/** True when a tip repeats or restates one of its own sentences (rule d would change it). */
+export const repeatsSentence = (tip: string) => dropRepeats(tip) !== tip;
+/** True for each tip that repeats an earlier one in the same answer. */
 export const repeatsTips = (tips: readonly string[]) => tips.map((tip, index) => repeatsEarlierTip(tip, tips.slice(0, index)));
-/** True when a tip's "per …" is followed by a date or content rather than a publisher name. Exported for the live conversation test. */
-export const hasGarbledSource = (tip: string) => cleanSource(tip) !== tip;
 /**
- * True when a tip's text still names or describes its source: "(TfL)", "per TfL", "Per the BBC.", "(ianVisits, 23 Oct)", "The latest
- * BBC piece says", "The TfL-based list says" or "another report says". Exported for the live conversation test.
+ * True when a tip's text still credits a source: citation markup rule b would change ("(TfL)", "per TfL", "[2-2]", a garbled
+ * "per"), a description ("The latest BBC piece says"), or its label's publisher reporting it ("Met Police also reported…").
  */
-export const hasSourceTag = (tip: string) => sourceTags(tip).text !== tip;
+export const hasSourceWording = (tip: string, label: string | null = null) =>
+  stripMarkup(tip) !== tip ||
+  takeCitations(tip).text !== tip ||
+  /\b[Pp]er\s+(?:the\s+)?\p{Lu}/u.test(tip) ||
+  SOURCE_DESCRIPTION.test(tip) ||
+  labelNames(label).some((name) => labelReports(name).test(tip));
 
 /** A tip and the publisher behind it ("TfL"), or null for a tip from the notes or general knowledge. */
 export type LunaTip = { text: string; source: string | null };
@@ -720,7 +577,6 @@ export const tipFields = (tips: readonly LunaTip[]): TipFields => ({ tips: tips.
 // "src: TfL" after the delimiter. "none", "-" or a blank means no source.
 const NO_SOURCE = /^(?:none|n\/?a|null|-+|–|—)?$/i;
 const NOTE_CITE = /^n\d+$/i;
-
 const MAX_SOURCE_NAMES = 3;
 
 /** Publisher names as one label, at most three and each once: ["TfL", "the BBC", "TfL"] → "TfL, BBC". Null for none. */
@@ -738,27 +594,25 @@ function sourceField(field: string): { label: string | null; cite: string | null
 }
 
 /**
- * One tip line as text and source. The source comes from the field after "|" ("… | src: TfL" or "… | src: TfL, BBC"); the text loses
- * any source tag or description the model still wrote in it, a repeated or restated sentence and a garbled "per", and the first publisher it
- * named becomes the source when the field is empty. So a tip has a label exactly when the model gave one or the text named one.
- * Null for a line that is not a tip (blank, NONE, reasoning).
+ * One line as a tip, after rules a–d, or null when nothing is left. A finished line reads its source from the field after "|"
+ * ("… | src: TfL, BBC"), else from the first citation tag in its text. The line in progress (`final` false) gets no source and
+ * keeps its tags, and only loses a snippet, so text never vanishes and comes back while a restatement is still too short to spot.
  */
-function parseTipLine(line: string): LunaTip | null {
-  const [head = "", ...field] = stripMarkdown(line.trim()).split("|");
-  const echoesBad = BAD_TIPS.some(([bad]) => bad === head.trim());
-  const text = NOTE_LINE.test(head) || BAD_LINE.test(head) || echoesBad ? "" : tidyTip(head.trim());
-  if (!isTip(text)) return null;
+function cleanLine(line: string, final: boolean): LunaTip | null {
+  const [head = "", ...field] = stripMarkup(line.trim()).split("|");
+  if (!isTipLine(head.trim())) return null;
+  const voiced = dropSnippet(dropOwnVoice(head.trim()));
+  if (!isTipLine(voiced)) return null;
+  if (!final) return { text: clampTip(voiced), source: null };
   const { label, cite } = sourceField(field.join("|"));
-  const whole = cite ? `${text} ${cite}` : text;
-  const clean = sourceTags(cleanSource(dropRepeat(whole)));
-  const source = label ?? sourceLabel(clean.names.slice(0, 1));
-  // Only text that lost something is tidied, so a normal tip stays byte for byte.
-  return { text: clampTip(dropRestatements(dropLabelSubject(clean.text === whole ? whole : tidyPunctuation(clean.text), source))), source };
+  const clean = takeCitations(cite ? `${voiced} ${cite}` : voiced);
+  const text = dropRepeats(clean.text);
+  return text ? { text: clampTip(text), source: label ?? sourceLabel(clean.names.slice(0, 1)) } : null;
 }
 
 export function parseLunaTips(text: string, maxTips = MAX_TIPS): LunaTip[] {
   if (text.trim().toUpperCase() === "NONE") return [];
-  return dropRepeatedTips(text.split("\n").flatMap((line) => parseTipLine(line) ?? [])).slice(0, maxTips);
+  return dropRepeatedTips(text.split("\n").flatMap((line) => cleanLine(line, true) ?? [])).slice(0, maxTips);
 }
 
 /** One step's stream in order: its text parts and its tool calls (local or provider-run, such as web_search). */
@@ -798,16 +652,13 @@ const MIN_LIVE_WORDS = 4;
  */
 export function streamingTips(text: string, maxTips = MAX_TIPS): LunaTip[] {
   const parts = text.split("\n");
-  // The line in progress stops at the source delimiter and at an unclosed bracket, so neither a half-written source nor the
-  // delimiter shows. Its source and any tags are read once the line ends: until then a "per …" may still be half written.
-  const open = (parts.pop() ?? "").replace(/\S*$/, "").split("|")[0] ?? "";
+  // The line in progress stops before its last, maybe cut-off word, at the source delimiter and at an unclosed bracket, so
+  // neither a half-written source nor the delimiter shows.
+  const open = ((parts.pop() ?? "").replace(/\S*$/, "").split("|")[0] ?? "").replace(/\s*\([^)]*$/, "");
   // Only finished lines are checked for a tip they repeat, so the line in progress never vanishes and comes back.
-  const tips = dropRepeatedTips(parts.flatMap((line) => parseTipLine(line) ?? []));
-  const stripped = stripMarkdown(open.replace(/\s*\([^)]*$/, "").trim());
-  // A note line ("~ …") never shows, even before its first word ends.
-  const live = NOTE_LINE.test(stripped) ? "" : tidyTip(stripped);
-  // It only loses a repeat, so text never vanishes and comes back while a repeat after it is still too short to spot.
-  if (live.split(/\s+/).length >= MIN_LIVE_WORDS && isTip(live)) tips.push({ text: clampTip(dropRepeat(live)), source: null });
+  const tips = dropRepeatedTips(parts.flatMap((line) => cleanLine(line, true) ?? []));
+  const live = cleanLine(open, false);
+  if (live && live.text.split(/\s+/).length >= MIN_LIVE_WORDS) tips.push(live);
   return tips.slice(0, maxTips);
 }
 
