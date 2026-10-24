@@ -7,8 +7,9 @@
 import { createSegmenter } from "../../src/renderer/src/speech";
 import { actions, getBeeState, runsStarted, startTestMicCapture } from "../../src/renderer/src/store";
 
-// The file is 12.12 s with speech from 0.6 s, so this is 11.8 s into the file.
-const STOP_AFTER_ONSET_S = 11.2;
+// The file is 13.71 s with speech from 0.6 s, so this is 13.4 s into the file: after the second phrase is detected (its speech
+// ends at 8.22 s), before the loop. The test checks it against the file's samples.
+const STOP_AFTER_ONSET_S = 12.8;
 // After mic off and the store settles, a late run would start within this.
 const QUIET_MS = 3_000;
 // Inside the test's harness timeout (150 s), so a stuck run still reports what it has.
@@ -44,7 +45,7 @@ function report(result: object): void {
   if (reported) return;
   reported = true;
   const state = getBeeState();
-  const data = { sampleRate, onsetLevel: ONSET_LEVEL, onsetAudioS, firstFrameMs, micOffMs, maxPollGapMs, segments, stt, runs, seenTips: [...seenTips] };
+  const data = { sampleRate, onsetLevel: ONSET_LEVEL, stopAfterOnsetS: STOP_AFTER_ONSET_S, onsetAudioS, firstFrameMs, micOffMs, maxPollGapMs, segments, stt, runs, seenTips: [...seenTips] };
   console.log(`E2E_RESULT ${JSON.stringify({ ...result, ...data, finalTips: state.result?.tips ?? [], storeError: state.error, micError: state.mic.error })}`);
 }
 

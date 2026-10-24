@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { retrieve } from "../src/core/retrieve";
 import { tipKey } from "../src/core/steering";
+import { END_SILENCE_MS } from "../src/renderer/src/speech";
 import { loadSnippets } from "../src/main/notes";
 import { root, runHarnessWithOutput } from "./e2e/run";
 import { readWav, speechSpans } from "./helpers/wav";
@@ -20,7 +21,7 @@ import { readWav, speechSpans } from "./helpers/wav";
 
 const AUDIO = `${root}test/fixtures/london-tube-question.wav`;
 // Each line's transcript must match every pattern in `expect`, so a garbled line fails. Where its speech ends is measured from
-// the file (FILE_SPEECH): espeak-ng's audio ends about 0.35 s before the fixture's script says (2.85 s and 7.12 s).
+// the file (FILE_SPEECH), as espeak-ng ends each phrase with about 0.5 s of near-silence.
 const LINES = [
   { label: "news", expect: [/london|news/i], notExpect: /tube|closure/i },
   { label: "follow-up", expect: [/tube/i, /closure/i], notExpect: /london|news/i },
@@ -40,6 +41,7 @@ const reportSchema = z.object({
   error: z.string().optional(),
   sampleRate: z.number(),
   onsetLevel: z.number(),
+  stopAfterOnsetS: z.number(),
   onsetAudioS: z.number().nullable(),
   firstFrameMs: z.number().nullable(),
   micOffMs: z.number().nullable(),
@@ -178,6 +180,10 @@ describe.skipIf(!live)("live mic latency: fake mic → segmenter → Grok STT �
     if (file) console.log(`Report: ${file}`);
     if (!report.ok) throw new Error(`E2E failed: ${report.error ?? "unknown"}`);
 
+    // The page's mic-off point, in seconds into the file: after the last line is detected, before the fake device loops.
+    const micOffS = onsetS + report.stopAfterOnsetS;
+    expect(micOffS, "mic off after the last line is detected").toBeGreaterThan((speechEndsS.at(-1) ?? Infinity) + END_SILENCE_MS / 1000);
+    expect(micOffS, "mic off before the fake device loops the file").toBeLessThan(wav.samples.length / wav.rate);
     expect(report.micError).toBeNull();
     expect(report.segments.length, "one segment per line: none dropped, none merged or split").toBe(LINES.length);
     expect(report.stt.map((call) => call.error)).toEqual(LINES.map(() => null));

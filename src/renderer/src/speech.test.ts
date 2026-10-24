@@ -92,11 +92,11 @@ describe("createSegmenter on the live mic fixture", () => {
   const wav = readWav(FIXTURE);
   const spans = speechSpans(wav, SAMPLE_LEVEL, GAP_S);
 
-  // espeak-ng's audio ends before the times in the fixture's script (2.85 s and 7.12 s).
+  // espeak-ng ends each phrase with about 0.5 s of near-silence, so speech ends before the script's silences start.
   it("has two phrases, measured from its samples", () => {
     expect(spans.map(({ start, end }) => [Number(start.toFixed(2)), Number(end.toFixed(2))])).toEqual([
-      [0.6, 2.5],
-      [5.35, 6.77],
+      [0.6, 3.2],
+      [6.19, 8.22],
     ]);
   });
 
