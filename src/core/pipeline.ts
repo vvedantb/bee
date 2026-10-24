@@ -92,15 +92,16 @@ export async function runPipeline(args: {
     searched: args.searched,
   });
   console.debug(`perf web-search ${webSearch ? "on" : "off"}`);
+  const gateway = args.gateway;
   const mcpRun = timed(loadMcp(args.loadMcpTools));
   const jevRun = timed(
-    rankWithJev({ model: args.gateway.evaluationModel(JEV_MODEL), transcript: args.transcript, candidates, signal: args.signal }),
+    rankWithJev({ model: gateway.evaluationModel(JEV_MODEL), transcript: args.transcript, candidates, signal: args.signal }),
   );
   const lunaRun = (async () => {
     const { value: mcp, ms: mcpMs } = await mcpRun;
     const started = performance.now();
     const guide = await guideWithLuna({
-      model: args.gateway!(GUIDE_MODEL),
+      model: gateway.languageModel(GUIDE_MODEL),
       transcript: args.transcript,
       shown: args.shown,
       earlier: args.earlier,

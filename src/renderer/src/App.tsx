@@ -29,7 +29,8 @@ import { tipKey } from "../../core/steering";
 import type { PipelineResult, SettingsView } from "../../shared/ipc";
 import { bodyFollowsNewest, islandClick, mcpErrorNote, timingsLabel, timingsTitle } from "./island";
 import { NOTCH_LOGO_PX } from "./logo";
-import { NOTCH_BUTTON, NOTCH_UPDATE_BUTTON, logoState, notchStatus, workingLabel } from "./notch";
+import { statusClick, type StatusClick } from "./island-click";
+import { NOTCH_BUTTON, NOTCH_UPDATE_BUTTON, logoState, notchLine, workingLabel, type NotchLine } from "./notch";
 import { actions, answerFolded, displayResult, islandOpen, useBee, type BeeState, type SummaryState, type UpdateState } from "./store";
 import { SyncCard, SyncSection, TeamSection, syncedWith } from "./Teams";
 import { updateButton } from "./update";
@@ -150,6 +151,12 @@ function UpdateButton({ update }: { update: UpdateState }) {
   );
 }
 
+function openStatus(click: StatusClick): void {
+  if (click === "full-text") actions.openFullText();
+  else if (click === "panel") void actions.setExpanded(true);
+  else if (click) void actions.openTab(click);
+}
+
 // The pill, and under it the response body: one dark surface that grows downward when an answer arrives.
 function Island({ state }: { state: BeeState }) {
   const { isSignedIn } = useAuth();
@@ -157,11 +164,12 @@ function Island({ state }: { state: BeeState }) {
   const result = displayResult(state);
   const chips = visibleChips(state.chips, state.dismissedChipIds);
   const showBody = islandOpen(state);
-  // An answer folded to one line: clicking it opens it in full in the island itself. Only the chevron opens the panel.
-  const canOpenFullText = islandClick("status", { panelOpen: state.expanded, bodyShown: showBody, hasResponse: answerFolded(state) }) === "full-text";
   // While Luna thinks, chips may open the body but the pill keeps its thinking text.
   const cardOnly = (state.meetingCard?.lines.length ?? 0) > 0 && (result?.tips.length ?? 0) === 0;
-  const status = showBody && !state.busy && !state.heard && !state.mic.error ? (cardOnly ? "Last time" : "Tips") : notchStatus(state, isSignedIn);
+  const line: NotchLine = showBody && !state.busy && !state.heard && !state.mic.error ? { kind: "answer", text: cardOnly ? "Last time" : "Tips" } : notchLine(state, isSignedIn);
+  const status = line.text;
+  // A folded answer opens in full in the island; status that asks for action opens its place in the panel (island-click.ts).
+  const click = statusClick({ kind: line.kind, panelOpen: state.expanded, bodyShown: showBody, answerFolded: answerFolded(state) });
   const newVersion = state.update.check?.available ? state.update.check.latestVersion : null;
   const statusClass = state.mic.error ? "notch-status error-text" : "notch-status";
   return (
@@ -172,7 +180,7 @@ function Island({ state }: { state: BeeState }) {
     >
       <header className="notch">
         <BeeLogo size={NOTCH_LOGO_PX} state={logoState(state)} level={state.mic.level} />
-        {canOpenFullText ? (
+        {click ? (
           // Keyed so each new status fades in.
           <Button
             key={status}
@@ -180,7 +188,7 @@ function Island({ state }: { state: BeeState }) {
             variant="ghost"
             title={status}
             className={`${statusClass} h-auto justify-start rounded-none p-0 text-[13px] font-normal text-foreground hover:bg-transparent hover:text-foreground hover:underline`}
-            onClick={() => actions.openFullText()}
+            onClick={() => openStatus(click)}
           >
             {status}
           </Button>

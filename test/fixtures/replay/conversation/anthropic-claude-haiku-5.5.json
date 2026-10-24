@@ -1,0 +1,3332 @@
+{
+  "model": "anthropic/claude-haiku-5.5",
+  "calls": [
+    {
+      "index": 0,
+      "kind": "stream",
+      "promptHash": "bfdc4fc6c033",
+      "end": "finish",
+      "parts": [
+        {
+          "at": 1305,
+          "part": {
+            "type": "stream-start",
+            "warnings": []
+          }
+        },
+        {
+          "at": 1307,
+          "part": {
+            "type": "response-metadata",
+            "modelId": "claude-haiku-5-5"
+          }
+        },
+        {
+          "at": 1310,
+          "part": {
+            "type": "custom",
+            "kind": "anthropic.message_start",
+            "providerMetadata": {
+              "anthropic": {
+                "id": "msg_011CgLCj5q5jWVtr5itLKdM5",
+                "model": "claude-haiku-5-5",
+                "usage": {
+                  "input_tokens": 61,
+                  "cache_creation_input_tokens": 4330,
+                  "cache_read_input_tokens": 0,
+                  "cache_creation": {
+                    "ephemeral_5m_input_tokens": 4330,
+                    "ephemeral_1h_input_tokens": 0
+                  },
+                  "output_tokens": 4,
+                  "service_tier": "standard",
+                  "inference_geo": "global",
+                  "speed": "standard"
+                }
+              }
+            }
+          }
+        },
+        {
+          "at": 1310,
+          "part": {
+            "type": "text-start",
+            "id": "0"
+          }
+        },
+        {
+          "at": 1310,
+          "part": {
+            "type": "text-delta",
+            "id": "0",
+            "delta": "I'll look"
+          }
+        },
+        {
+          "at": 1311,
+          "part": {
+            "type": "text-delta",
+            "id": "0",
+            "delta": " up today"
+          }
+        },
+        {
+          "at": 1311,
+          "part": {
+            "type": "text-delta",
+            "id": "0",
+            "delta": "'s London news."
+          }
+        },
+        {
+          "at": 1312,
+          "part": {
+            "type": "text-end",
+            "id": "0"
+          }
+        },
+        {
+          "at": 1312,
+          "part": {
+            "type": "tool-input-start",
+            "id": "srvtoolu_01XFcA35cNDbZbjvzfQiJQP8",
+            "toolName": "web_search",
+            "providerExecuted": true
+          }
+        },
+        {
+          "at": 1313,
+          "part": {
+            "type": "tool-input-delta",
+            "id": "srvtoolu_01XFcA35cNDbZbjvzfQiJQP8",
+            "delta": "{\"query"
+          }
+        },
+        {
+          "at": 1313,
+          "part": {
+            "type": "tool-input-delta",
+            "id": "srvtoolu_01XFcA35cNDbZbjvzfQiJQP8",
+            "delta": "\": \"Lon"
+          }
+        },
+        {
+          "at": 1314,
+          "part": {
+            "type": "tool-input-delta",
+            "id": "srvtoolu_01XFcA35cNDbZbjvzfQiJQP8",
+            "delta": "don new"
+          }
+        },
+        {
+          "at": 1314,
+          "part": {
+            "type": "tool-input-delta",
+            "id": "srvtoolu_01XFcA35cNDbZbjvzfQiJQP8",
+            "delta": "s today"
+          }
+        },
+        {
+          "at": 1314,
+          "part": {
+            "type": "tool-input-delta",
+            "id": "srvtoolu_01XFcA35cNDbZbjvzfQiJQP8",
+            "delta": " Octobe"
+          }
+        },
+        {
+          "at": 1314,
+          "part": {
+            "type": "tool-input-delta",
+            "id": "srvtoolu_01XFcA35cNDbZbjvzfQiJQP8",
+            "delta": "r 24 20"
+          }
+        },
+        {
+          "at": 1314,
+          "part": {
+            "type": "tool-input-delta",
+            "id": "srvtoolu_01XFcA35cNDbZbjvzfQiJQP8",
+            "delta": "26\"}"
+          }
+        },
+        {
+          "at": 1314,
+          "part": {
+            "type": "tool-input-end",
+            "id": "srvtoolu_01XFcA35cNDbZbjvzfQiJQP8"
+          }
+        },
+        {
+          "at": 1314,
+          "part": {
+            "type": "tool-call",
+            "toolCallId": "srvtoolu_01XFcA35cNDbZbjvzfQiJQP8",
+            "toolName": "web_search",
+            "input": "{\"query\": \"London news today October 24 2026\"}",
+            "providerExecuted": true
+          }
+        },
+        {
+          "at": 2696,
+          "part": {
+            "type": "tool-result",
+            "toolCallId": "srvtoolu_01XFcA35cNDbZbjvzfQiJQP8",
+            "toolName": "web_search",
+            "result": [
+              {
+                "url": "https://www.ianvisits.co.uk/calendar/date/2026/10/24/",
+                "title": "What’s on in London on Saturday 24th October 2026",
+                "pageAge": "0 days ago",
+                "type": "web_search_result"
+              },
+              {
+                "url": "https://www.timeout.com/london/news",
+                "title": "Time Out London news",
+                "pageAge": "1736 days ago",
+                "type": "web_search_result"
+              },
+              {
+                "url": "https://londonminute.substack.com/p/london-minute-23-october-2026",
+                "title": "The London Minute ⏰ Friday 23 October 2026",
+                "pageAge": "0 days ago",
+                "type": "web_search_result"
+              },
+              {
+                "url": "https://www.visitlondon.com/things-to-do/whats-on/things-to-do-this-weekend",
+                "title": "The best things to do in London this weekend (24-25 October 2026)",
+                "pageAge": "5 days ago",
+                "type": "web_search_result"
+              },
+              {
+                "url": "https://en.wikipedia.org/wiki/2026_London,_Ontario,_municipal_election",
+                "title": "2026 London, Ontario, municipal election",
+                "pageAge": null,
+                "type": "web_search_result"
+              },
+              {
+                "url": "https://londondrum.com/events/?m=24-october",
+                "title": "London Events 24 October 2026 · 140 Shows, Concerts & More",
+                "pageAge": "5 days ago",
+                "type": "web_search_result"
+              },
+              {
+                "url": "https://www.timeout.com/london/news/best-free-halloween-events-2026-102326",
+                "title": "The 10 best free Halloween events in London 2026",
+                "pageAge": "0 days ago",
+                "type": "web_search_result"
+              },
+              {
+                "url": "https://www.wincalendar.com/Calendar-UK/date/24-October-2026",
+                "title": "24 Oct 2026: Holidays, Top Events, Sports & Countdown - UK",
+                "pageAge": "0 days ago",
+                "type": "web_search_result"
+              },
+              {
+                "url": "https://en.wikipedia.org/wiki/Dateline_London",
+                "title": "Dateline London",
+                "pageAge": null,
+                "type": "web_search_result"
+              }
+            ],
+            "providerMetadata": {
+              "anthropic": {
+                "caller": {
+                  "type": "direct"
+                }
+              }
+            }
+          }
+        },
+        {
+          "at": 2702,
+          "part": {
+            "type": "source",
+            "sourceType": "url",
+            "id": "wxQlx9dmIWfyXRbW",
+            "url": "https://www.ianvisits.co.uk/calendar/date/2026/10/24/",
+            "title": "What’s on in London on Saturday 24th October 2026",
+            "providerMetadata": {
+              "anthropic": {
+                "pageAge": "0 days ago"
+              }
+            }
+          }
+        },
+        {
+          "at": 2702,
+          "part": {
+            "type": "source",
+            "sourceType": "url",
+            "id": "5pIYX8NS9uAVKPhP",
+            "url": "https://www.timeout.com/london/news",
+            "title": "Time Out London news",
+            "providerMetadata": {
+              "anthropic": {
+                "pageAge": "1736 days ago"
+              }
+            }
+          }
+        },
+        {
+          "at": 2702,
+          "part": {
+            "type": "source",
+            "sourceType": "url",
+            "id": "MVfp6CRtkHIHCPgZ",
+            "url": "https://londonminute.substack.com/p/london-minute-23-october-2026",
+            "title": "The London Minute ⏰ Friday 23 October 2026",
+            "providerMetadata": {
+              "anthropic": {
+                "pageAge": "0 days ago"
+              }
+            }
+          }
+        },
+        {
+          "at": 2702,
+          "part": {
+            "type": "source",
+            "sourceType": "url",
+            "id": "Cesn5DuyFE1w0N2l",
+            "url": "https://www.visitlondon.com/things-to-do/whats-on/things-to-do-this-weekend",
+            "title": "The best things to do in London this weekend (24-25 October 2026)",
+            "providerMetadata": {
+              "anthropic": {
+                "pageAge": "5 days ago"
+              }
+            }
+          }
+        },
+        {
+          "at": 2702,
+          "part": {
+            "type": "source",
+            "sourceType": "url",
+            "id": "muOY5J0RF1Ovipyb",
+            "url": "https://en.wikipedia.org/wiki/2026_London,_Ontario,_municipal_election",
+            "title": "2026 London, Ontario, municipal election",
+            "providerMetadata": {
+              "anthropic": {
+                "pageAge": null
+              }
+            }
+          }
+        },
+        {
+          "at": 2702,
+          "part": {
+            "type": "source",
+            "sourceType": "url",
+            "id": "pbdkobH6f7RUDyKy",
+            "url": "https://londondrum.com/events/?m=24-october",
+            "title": "London Events 24 October 2026 · 140 Shows, Concerts & More",
+            "providerMetadata": {
+              "anthropic": {
+                "pageAge": "5 days ago"
+              }
+            }
+          }
+        },
+        {
+          "at": 2703,
+          "part": {
+            "type": "source",
+            "sourceType": "url",
+            "id": "WYxW72amIYkD5exZ",
+            "url": "https://www.timeout.com/london/news/best-free-halloween-events-2026-102326",
+            "title": "The 10 best free Halloween events in London 2026",
+            "providerMetadata": {
+              "anthropic": {
+                "pageAge": "0 days ago"
+              }
+            }
+          }
+        },
+        {
+          "at": 2703,
+          "part": {
+            "type": "source",
+            "sourceType": "url",
+            "id": "kOx6slxI1DukbtJW",
+            "url": "https://www.wincalendar.com/Calendar-UK/date/24-October-2026",
+            "title": "24 Oct 2026: Holidays, Top Events, Sports & Countdown - UK",
+            "providerMetadata": {
+              "anthropic": {
+                "pageAge": "0 days ago"
+              }
+            }
+          }
+        },
+        {
+          "at": 2703,
+          "part": {
+            "type": "source",
+            "sourceType": "url",
+            "id": "DgDDCLc6G2n8r1zY",
+            "url": "https://en.wikipedia.org/wiki/Dateline_London",
+            "title": "Dateline London",
+            "providerMetadata": {
+              "anthropic": {
+                "pageAge": null
+              }
+            }
+          }
+        },
+        {
+          "at": 2703,
+          "part": {
+            "type": "text-start",
+            "id": "3"
+          }
+        },
+        {
+          "at": 2703,
+          "part": {
+            "type": "text-delta",
+            "id": "3",
+            "delta": "- Tube"
+          }
+        },
+        {
+          "at": 2703,
+          "part": {
+            "type": "text-delta",
+            "id": "3",
+            "delta": " dis"
+          }
+        },
+        {
+          "at": 2826,
+          "part": {
+            "type": "text-delta",
+            "id": "3",
+            "delta": "ruption this weekend: District"
+          }
+        },
+        {
+          "at": 2840,
+          "part": {
+            "type": "text-delta",
+            "id": "3",
+            "delta": " line closures and"
+          }
+        },
+        {
+          "at": 2841,
+          "part": {
+            "type": "text-delta",
+            "id": "3",
+            "delta": " Circle line cancellations"
+          }
+        },
+        {
+          "at": 2841,
+          "part": {
+            "type": "text-delta",
+            "id": "3",
+            "delta": " for October"
+          }
+        },
+        {
+          "at": 2841,
+          "part": {
+            "type": "text-delta",
+            "id": "3",
+            "delta": " 24-25, per"
+          }
+        },
+        {
+          "at": 2841,
+          "part": {
+            "type": "text-delta",
+            "id": "3",
+            "delta": " "
+          }
+        },
+        {
+          "at": 2860,
+          "part": {
+            "type": "text-end",
+            "id": "3"
+          }
+        },
+        {
+          "at": 2870,
+          "part": {
+            "type": "text-start",
+            "id": "4"
+          }
+        },
+        {
+          "at": 2870,
+          "part": {
+            "type": "text-delta",
+            "id": "4",
+            "delta": "London"
+          }
+        },
+        {
+          "at": 2880,
+          "part": {
+            "type": "text-delta",
+            "id": "4",
+            "delta": " tube and train disruption this"
+          }
+        },
+        {
+          "at": 2893,
+          "part": {
+            "type": "text-delta",
+            "id": "4",
+            "delta": " weekend: full list of clos"
+          }
+        },
+        {
+          "at": 2914,
+          "part": {
+            "type": "text-delta",
+            "id": "4",
+            "delta": "ures for October 24-25 "
+          }
+        },
+        {
+          "at": 2934,
+          "part": {
+            "type": "text-delta",
+            "id": "4",
+            "delta": "2026."
+          }
+        },
+        {
+          "at": 2986,
+          "part": {
+            "type": "text-end",
+            "id": "4",
+            "citations": [
+              {
+                "source": {
+                  "type": "source",
+                  "sourceType": "url",
+                  "id": "https://www.timeout.com/london/news",
+                  "url": "https://www.timeout.com/london/news",
+                  "title": "Time Out London news",
+                  "providerMetadata": {
+                    "anthropic": {
+                      "type": "web_search_result_location",
+                      "cited_text": "London tube and train disruption this weekend: full list of closures for October 24-25 2026. ",
+                      "url": "https://www.timeout.com/london/news",
+                      "title": "Time Out London news",
+                      "encrypted_index": "Eo8BCioIFRgCIiQ1YTM5M2YwYi1hOWUxLTQ1MTUtODZiZC1hODMxNjcwMWMwODcSDPwNi6TgrjCQDu2+/BoMwf/GWNZ+jLvxvetWIjBwdV/q4bKj6EfJNBToc14fVRIXygGgHnsN9ikA54wa806+QRyotOI5qAIpjzJbFOIqE1tzt0pGH/Dj3t+iVTrNZ2NS4EUYBA=="
+                    }
+                  }
+                },
+                "citedText": "London tube and train disruption this weekend: full list of closures for October 24-25 2026. "
+              }
+            ],
+            "providerMetadata": {
+              "anthropic": {
+                "citations": [
+                  {
+                    "type": "web_search_result_location",
+                    "cited_text": "London tube and train disruption this weekend: full list of closures for October 24-25 2026. ",
+                    "url": "https://www.timeout.com/london/news",
+                    "title": "Time Out London news",
+                    "encrypted_index": "Eo8BCioIFRgCIiQ1YTM5M2YwYi1hOWUxLTQ1MTUtODZiZC1hODMxNjcwMWMwODcSDPwNi6TgrjCQDu2+/BoMwf/GWNZ+jLvxvetWIjBwdV/q4bKj6EfJNBToc14fVRIXygGgHnsN9ikA54wa806+QRyotOI5qAIpjzJbFOIqE1tzt0pGH/Dj3t+iVTrNZ2NS4EUYBA=="
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "at": 2994,
+          "part": {
+            "type": "text-start",
+            "id": "5"
+          }
+        },
+        {
+          "at": 2994,
+          "part": {
+            "type": "text-delta",
+            "id": "5",
+            "delta": " ("
+          }
+        },
+        {
+          "at": 2994,
+          "part": {
+            "type": "text-delta",
+            "id": "5",
+            "delta": "timeout.com)\n-"
+          }
+        },
+        {
+          "at": 3014,
+          "part": {
+            "type": "text-delta",
+            "id": "5",
+            "delta": " Weather loo"
+          }
+        },
+        {
+          "at": 3014,
+          "part": {
+            "type": "text-delta",
+            "id": "5",
+            "delta": "ks w"
+          }
+        },
+        {
+          "at": 3036,
+          "part": {
+            "type": "text-delta",
+            "id": "5",
+            "delta": "et: "
+          }
+        },
+        {
+          "at": 3059,
+          "part": {
+            "type": "text-end",
+            "id": "5"
+          }
+        },
+        {
+          "at": 3068,
+          "part": {
+            "type": "text-start",
+            "id": "6"
+          }
+        },
+        {
+          "at": 3068,
+          "part": {
+            "type": "text-delta",
+            "id": "6",
+            "delta": "Light"
+          }
+        },
+        {
+          "at": 3077,
+          "part": {
+            "type": "text-delta",
+            "id": "6",
+            "delta": " rain for much of today and he"
+          }
+        },
+        {
+          "at": 3106,
+          "part": {
+            "type": "text-delta",
+            "id": "6",
+            "delta": "avier rain on Satur"
+          }
+        },
+        {
+          "at": 3119,
+          "part": {
+            "type": "text-delta",
+            "id": "6",
+            "delta": "day."
+          }
+        },
+        {
+          "at": 3141,
+          "part": {
+            "type": "text-end",
+            "id": "6",
+            "citations": [
+              {
+                "source": {
+                  "type": "source",
+                  "sourceType": "url",
+                  "id": "https://londonminute.substack.com/p/london-minute-23-october-2026",
+                  "url": "https://londonminute.substack.com/p/london-minute-23-october-2026",
+                  "title": "The London Minute ⏰ Friday 23 October 2026",
+                  "providerMetadata": {
+                    "anthropic": {
+                      "type": "web_search_result_location",
+                      "cited_text": "… ️ Weekend weather forecast: Light rain for much of today and heavier rain on Saturday.\n\n",
+                      "url": "https://londonminute.substack.com/p/london-minute-23-october-2026",
+                      "title": "The London Minute ⏰ Friday 23 October 2026",
+                      "encrypted_index": "Eo8BCioIFRgCIiQ1YTM5M2YwYi1hOWUxLTQ1MTUtODZiZC1hODMxNjcwMWMwODcSDPPUtc2F8HAkP2xNiRoMvNL45Ry2IMjA9TtzIjAzj+YL1VMtpxFZAFhnSJHfZcMNb28ViPtxcOaLRrXg96x8RIgxyt27GCoE6EhMyt8qE2Dmi5DgBxZAelT6DnWztIJvxkEYBA=="
+                    }
+                  }
+                },
+                "citedText": "… ️ Weekend weather forecast: Light rain for much of today and heavier rain on Saturday.\n\n"
+              }
+            ],
+            "providerMetadata": {
+              "anthropic": {
+                "citations": [
+                  {
+                    "type": "web_search_result_location",
+                    "cited_text": "… ️ Weekend weather forecast: Light rain for much of today and heavier rain on Saturday.\n\n",
+                    "url": "https://londonminute.substack.com/p/london-minute-23-october-2026",
+                    "title": "The London Minute ⏰ Friday 23 October 2026",
+                    "encrypted_index": "Eo8BCioIFRgCIiQ1YTM5M2YwYi1hOWUxLTQ1MTUtODZiZC1hODMxNjcwMWMwODcSDPPUtc2F8HAkP2xNiRoMvNL45Ry2IMjA9TtzIjAzj+YL1VMtpxFZAFhnSJHfZcMNb28ViPtxcOaLRrXg96x8RIgxyt27GCoE6EhMyt8qE2Dmi5DgBxZAelT6DnWztIJvxkEYBA=="
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "at": 3152,
+          "part": {
+            "type": "text-start",
+            "id": "7"
+          }
+        },
+        {
+          "at": 3152,
+          "part": {
+            "type": "text-delta",
+            "id": "7",
+            "delta": " (lond"
+          }
+        },
+        {
+          "at": 3160,
+          "part": {
+            "type": "text-delta",
+            "id": "7",
+            "delta": "onminute.substack.com"
+          }
+        },
+        {
+          "at": 3184,
+          "part": {
+            "type": "text-delta",
+            "id": "7",
+            "delta": ")"
+          }
+        },
+        {
+          "at": 3193,
+          "part": {
+            "type": "text-end",
+            "id": "7"
+          }
+        },
+        {
+          "at": 3195,
+          "part": {
+            "type": "finish",
+            "finishReason": {
+              "unified": "stop",
+              "raw": "end_turn"
+            },
+            "usage": {
+              "inputTokens": {
+                "total": 15767,
+                "noCache": 63,
+                "cacheRead": 4330,
+                "cacheWrite": 11374
+              },
+              "outputTokens": {
+                "total": 215,
+                "text": 215,
+                "reasoning": 0
+              }
+            },
+            "providerMetadata": {
+              "anthropic": {
+                "usage": {
+                  "input_tokens": 63,
+                  "cache_creation_input_tokens": 11374,
+                  "cache_read_input_tokens": 4330,
+                  "cache_creation": {
+                    "ephemeral_5m_input_tokens": 4330,
+                    "ephemeral_1h_input_tokens": 0
+                  },
+                  "output_tokens": 215,
+                  "service_tier": "standard",
+                  "inference_geo": "global",
+                  "speed": "standard",
+                  "output_tokens_details": {
+                    "thinking_tokens": 0
+                  },
+                  "server_tool_use": {
+                    "web_search_requests": 1,
+                    "web_fetch_requests": 0
+                  }
+                },
+                "stopSequence": null,
+                "iterations": null,
+                "container": null,
+                "contextManagement": null
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "index": 1,
+      "kind": "stream",
+      "promptHash": "63ad2258d883",
+      "end": "finish",
+      "parts": [
+        {
+          "at": 609,
+          "part": {
+            "type": "stream-start",
+            "warnings": []
+          }
+        },
+        {
+          "at": 609,
+          "part": {
+            "type": "response-metadata",
+            "modelId": "claude-haiku-5-5"
+          }
+        },
+        {
+          "at": 609,
+          "part": {
+            "type": "custom",
+            "kind": "anthropic.message_start",
+            "providerMetadata": {
+              "anthropic": {
+                "id": "msg_011CgLCjHTa4yessrdCHs6Pp",
+                "model": "claude-haiku-5-5",
+                "usage": {
+                  "input_tokens": 247,
+                  "cache_creation_input_tokens": 0,
+                  "cache_read_input_tokens": 4330,
+                  "cache_creation": {
+                    "ephemeral_5m_input_tokens": 0,
+                    "ephemeral_1h_input_tokens": 0
+                  },
+                  "output_tokens": 2,
+                  "service_tier": "standard",
+                  "inference_geo": "global",
+                  "speed": "standard"
+                }
+              }
+            }
+          }
+        },
+        {
+          "at": 609,
+          "part": {
+            "type": "text-start",
+            "id": "0"
+          }
+        },
+        {
+          "at": 609,
+          "part": {
+            "type": "text-delta",
+            "id": "0",
+            "delta": "I'"
+          }
+        },
+        {
+          "at": 858,
+          "part": {
+            "type": "text-delta",
+            "id": "0",
+            "delta": "ll look"
+          }
+        },
+        {
+          "at": 868,
+          "part": {
+            "type": "text-delta",
+            "id": "0",
+            "delta": " up the reasons for the current"
+          }
+        },
+        {
+          "at": 868,
+          "part": {
+            "type": "text-delta",
+            "id": "0",
+            "delta": " tube closures."
+          }
+        },
+        {
+          "at": 868,
+          "part": {
+            "type": "text-end",
+            "id": "0"
+          }
+        },
+        {
+          "at": 868,
+          "part": {
+            "type": "tool-input-start",
+            "id": "srvtoolu_01DDn3sprMJRZLR97tAcQAXJ",
+            "toolName": "web_search",
+            "providerExecuted": true
+          }
+        },
+        {
+          "at": 878,
+          "part": {
+            "type": "tool-input-delta",
+            "id": "srvtoolu_01DDn3sprMJRZLR97tAcQAXJ",
+            "delta": "{\"query"
+          }
+        },
+        {
+          "at": 879,
+          "part": {
+            "type": "tool-input-delta",
+            "id": "srvtoolu_01DDn3sprMJRZLR97tAcQAXJ",
+            "delta": "\": \"Lon"
+          }
+        },
+        {
+          "at": 879,
+          "part": {
+            "type": "tool-input-delta",
+            "id": "srvtoolu_01DDn3sprMJRZLR97tAcQAXJ",
+            "delta": "don tub"
+          }
+        },
+        {
+          "at": 879,
+          "part": {
+            "type": "tool-input-delta",
+            "id": "srvtoolu_01DDn3sprMJRZLR97tAcQAXJ",
+            "delta": "e closu"
+          }
+        },
+        {
+          "at": 879,
+          "part": {
+            "type": "tool-input-delta",
+            "id": "srvtoolu_01DDn3sprMJRZLR97tAcQAXJ",
+            "delta": "res rea"
+          }
+        },
+        {
+          "at": 879,
+          "part": {
+            "type": "tool-input-delta",
+            "id": "srvtoolu_01DDn3sprMJRZLR97tAcQAXJ",
+            "delta": "son Oct"
+          }
+        },
+        {
+          "at": 879,
+          "part": {
+            "type": "tool-input-delta",
+            "id": "srvtoolu_01DDn3sprMJRZLR97tAcQAXJ",
+            "delta": "ober 24"
+          }
+        },
+        {
+          "at": 879,
+          "part": {
+            "type": "tool-input-delta",
+            "id": "srvtoolu_01DDn3sprMJRZLR97tAcQAXJ",
+            "delta": " 2026\"}"
+          }
+        },
+        {
+          "at": 879,
+          "part": {
+            "type": "tool-input-end",
+            "id": "srvtoolu_01DDn3sprMJRZLR97tAcQAXJ"
+          }
+        },
+        {
+          "at": 879,
+          "part": {
+            "type": "tool-call",
+            "toolCallId": "srvtoolu_01DDn3sprMJRZLR97tAcQAXJ",
+            "toolName": "web_search",
+            "input": "{\"query\": \"London tube closures reason October 24 2026\"}",
+            "providerExecuted": true
+          }
+        },
+        {
+          "at": 2202,
+          "part": {
+            "type": "tool-result",
+            "toolCallId": "srvtoolu_01DDn3sprMJRZLR97tAcQAXJ",
+            "toolName": "web_search",
+            "result": [
+              {
+                "url": "https://www.london-now.co.uk/news/26661776.london-tube-closures---full-list-october-24-25/",
+                "title": "London Tube closures - Full list for October 24 and 25",
+                "pageAge": "0 days ago",
+                "type": "web_search_result"
+              },
+              {
+                "url": "https://londondrum.com/transport/strikes-and-station-closures.php",
+                "title": "London Underground",
+                "pageAge": "32 days ago",
+                "type": "web_search_result"
+              },
+              {
+                "url": "https://westminsterpimliconews.co.uk/london-tube-closures-october-2026-full-list/",
+                "title": "London Tube closures October 2026: full list",
+                "pageAge": "20 days ago",
+                "type": "web_search_result"
+              },
+              {
+                "url": "https://www.travelandtourworld.com/news/article/b7ezpokaaqfn/",
+                "title": "UK Travel Disruption Looms as Chelsea and Tottenham Fans Now Must Plan a Better for London Tube Closures UK Travel Disruption Looms as Chelsea and Tottenham Fans Now Must Plan a Better for London Tube Closures",
+                "pageAge": "0 days ago",
+                "type": "web_search_result"
+              },
+              {
+                "url": "https://www.world-today-news.com/london-transport-networks-face-widespread-engineering-work/",
+                "title": "London transport networks face widespread engineering work - World Today News",
+                "pageAge": "0 days ago",
+                "type": "web_search_result"
+              },
+              {
+                "url": "https://www.timeout.com/london/news/london-tube-and-train-service-closures-disruption-tfl-january-24-25-2026-012326",
+                "title": "london tube and train service closures disruption tfl january 24 25 2026 012326",
+                "pageAge": null,
+                "type": "web_search_result"
+              },
+              {
+                "url": "https://www.timeout.com/london/news/london-tube-closures-this-weekend-the-full-list-of-travel-disruption-for-oct-25-27-102424",
+                "title": "london tube closures this weekend the full list of travel disruption for oct 25 27 102424",
+                "pageAge": null,
+                "type": "web_search_result"
+              },
+              {
+                "url": "https://www.timeout.com/london/news/london-travel-disruption-this-weekend-full-list-of-tube-and-train-closures-for-october-24-26-102325",
+                "title": "london travel disruption this weekend full list of tube and train closures for october 24 26 102325",
+                "pageAge": null,
+                "type": "web_search_result"
+              },
+              {
+                "url": "https://www.timeout.com/london/news/london-tube-closures-this-weekend-heres-the-full-list-of-travel-disruption-for-oct-18-20-101724",
+                "title": "london tube closures this weekend heres the full list of travel disruption for oct 18 20 101724",
+                "pageAge": null,
+                "type": "web_search_result"
+              }
+            ],
+            "providerMetadata": {
+              "anthropic": {
+                "caller": {
+                  "type": "direct"
+                }
+              }
+            }
+          }
+        },
+        {
+          "at": 2211,
+          "part": {
+            "type": "source",
+            "sourceType": "url",
+            "id": "y1PT3FOODCnz0bPV",
+            "url": "https://www.london-now.co.uk/news/26661776.london-tube-closures---full-list-october-24-25/",
+            "title": "London Tube closures - Full list for October 24 and 25",
+            "providerMetadata": {
+              "anthropic": {
+                "pageAge": "0 days ago"
+              }
+            }
+          }
+        },
+        {
+          "at": 2211,
+          "part": {
+            "type": "source",
+            "sourceType": "url",
+            "id": "rWnbXtah9VW1t13W",
+            "url": "https://londondrum.com/transport/strikes-and-station-closures.php",
+            "title": "London Underground",
+            "providerMetadata": {
+              "anthropic": {
+                "pageAge": "32 days ago"
+              }
+            }
+          }
+        },
+        {
+          "at": 2212,
+          "part": {
+            "type": "source",
+            "sourceType": "url",
+            "id": "8TPuUCmHj43PxNnU",
+            "url": "https://westminsterpimliconews.co.uk/london-tube-closures-october-2026-full-list/",
+            "title": "London Tube closures October 2026: full list",
+            "providerMetadata": {
+              "anthropic": {
+                "pageAge": "20 days ago"
+              }
+            }
+          }
+        },
+        {
+          "at": 2212,
+          "part": {
+            "type": "source",
+            "sourceType": "url",
+            "id": "lZ56rNwtbmrT79SH",
+            "url": "https://www.travelandtourworld.com/news/article/b7ezpokaaqfn/",
+            "title": "UK Travel Disruption Looms as Chelsea and Tottenham Fans Now Must Plan a Better for London Tube Closures UK Travel Disruption Looms as Chelsea and Tottenham Fans Now Must Plan a Better for London Tube Closures",
+            "providerMetadata": {
+              "anthropic": {
+                "pageAge": "0 days ago"
+              }
+            }
+          }
+        },
+        {
+          "at": 2212,
+          "part": {
+            "type": "source",
+            "sourceType": "url",
+            "id": "EZ1j8aSE5uINSrbZ",
+            "url": "https://www.world-today-news.com/london-transport-networks-face-widespread-engineering-work/",
+            "title": "London transport networks face widespread engineering work - World Today News",
+            "providerMetadata": {
+              "anthropic": {
+                "pageAge": "0 days ago"
+              }
+            }
+          }
+        },
+        {
+          "at": 2212,
+          "part": {
+            "type": "source",
+            "sourceType": "url",
+            "id": "UTWfDxRTMS6oGaet",
+            "url": "https://www.timeout.com/london/news/london-tube-and-train-service-closures-disruption-tfl-january-24-25-2026-012326",
+            "title": "london tube and train service closures disruption tfl january 24 25 2026 012326",
+            "providerMetadata": {
+              "anthropic": {
+                "pageAge": null
+              }
+            }
+          }
+        },
+        {
+          "at": 2212,
+          "part": {
+            "type": "source",
+            "sourceType": "url",
+            "id": "fXBltYDs9UoawJIl",
+            "url": "https://www.timeout.com/london/news/london-tube-closures-this-weekend-the-full-list-of-travel-disruption-for-oct-25-27-102424",
+            "title": "london tube closures this weekend the full list of travel disruption for oct 25 27 102424",
+            "providerMetadata": {
+              "anthropic": {
+                "pageAge": null
+              }
+            }
+          }
+        },
+        {
+          "at": 2212,
+          "part": {
+            "type": "source",
+            "sourceType": "url",
+            "id": "WotO4qjiDFVVyHmG",
+            "url": "https://www.timeout.com/london/news/london-travel-disruption-this-weekend-full-list-of-tube-and-train-closures-for-october-24-26-102325",
+            "title": "london travel disruption this weekend full list of tube and train closures for october 24 26 102325",
+            "providerMetadata": {
+              "anthropic": {
+                "pageAge": null
+              }
+            }
+          }
+        },
+        {
+          "at": 2212,
+          "part": {
+            "type": "source",
+            "sourceType": "url",
+            "id": "wijtObSKOwIcIs3t",
+            "url": "https://www.timeout.com/london/news/london-tube-closures-this-weekend-heres-the-full-list-of-travel-disruption-for-oct-18-20-101724",
+            "title": "london tube closures this weekend heres the full list of travel disruption for oct 18 20 101724",
+            "providerMetadata": {
+              "anthropic": {
+                "pageAge": null
+              }
+            }
+          }
+        },
+        {
+          "at": 2212,
+          "part": {
+            "type": "text-start",
+            "id": "3"
+          }
+        },
+        {
+          "at": 2212,
+          "part": {
+            "type": "text-delta",
+            "id": "3",
+            "delta": "-"
+          }
+        },
+        {
+          "at": 2297,
+          "part": {
+            "type": "text-delta",
+            "id": "3",
+            "delta": " The weekend closures are plan"
+          }
+        },
+        {
+          "at": 2307,
+          "part": {
+            "type": "text-delta",
+            "id": "3",
+            "delta": "ned engineering works, which T"
+          }
+        },
+        {
+          "at": 2307,
+          "part": {
+            "type": "text-delta",
+            "id": "3",
+            "delta": "fL has"
+          }
+        },
+        {
+          "at": 2308,
+          "part": {
+            "type": "text-delta",
+            "id": "3",
+            "delta": " confirmed for October"
+          }
+        },
+        {
+          "at": 2308,
+          "part": {
+            "type": "text-delta",
+            "id": "3",
+            "delta": " 24 "
+          }
+        },
+        {
+          "at": 2319,
+          "part": {
+            "type": "text-delta",
+            "id": "3",
+            "delta": "and 25 on"
+          }
+        },
+        {
+          "at": 2335,
+          "part": {
+            "type": "text-delta",
+            "id": "3",
+            "delta": " the Circle, District and"
+          }
+        },
+        {
+          "at": 2358,
+          "part": {
+            "type": "text-delta",
+            "id": "3",
+            "delta": " Piccadilly lines."
+          }
+        },
+        {
+          "at": 2390,
+          "part": {
+            "type": "text-delta",
+            "id": "3",
+            "delta": " "
+          }
+        },
+        {
+          "at": 2405,
+          "part": {
+            "type": "text-end",
+            "id": "3"
+          }
+        },
+        {
+          "at": 2415,
+          "part": {
+            "type": "text-start",
+            "id": "4"
+          }
+        },
+        {
+          "at": 2424,
+          "part": {
+            "type": "text-delta",
+            "id": "4",
+            "delta": "Commuters face major Tube"
+          }
+        },
+        {
+          "at": 2438,
+          "part": {
+            "type": "text-delta",
+            "id": "4",
+            "delta": " closures on multiple lines"
+          }
+        },
+        {
+          "at": 2478,
+          "part": {
+            "type": "text-delta",
+            "id": "4",
+            "delta": " due to planned engineering works"
+          }
+        },
+        {
+          "at": 2479,
+          "part": {
+            "type": "text-delta",
+            "id": "4",
+            "delta": "."
+          }
+        },
+        {
+          "at": 2503,
+          "part": {
+            "type": "text-end",
+            "id": "4",
+            "citations": [
+              {
+                "source": {
+                  "type": "source",
+                  "sourceType": "url",
+                  "id": "https://www.london-now.co.uk/news/26661776.london-tube-closures---full-list-october-24-25/",
+                  "url": "https://www.london-now.co.uk/news/26661776.london-tube-closures---full-list-october-24-25/",
+                  "title": "London Tube closures - Full list for October 24 and 25",
+                  "providerMetadata": {
+                    "anthropic": {
+                      "type": "web_search_result_location",
+                      "cited_text": "Commuters face major Tube closures on multiple lines due to planned engineering works. ",
+                      "url": "https://www.london-now.co.uk/news/26661776.london-tube-closures---full-list-october-24-25/",
+                      "title": "London Tube closures - Full list for October 24 and 25",
+                      "encrypted_index": "Eo8BCioIFRgCIiQ1YTM5M2YwYi1hOWUxLTQ1MTUtODZiZC1hODMxNjcwMWMwODcSDO54mApmLJ9veR3PQhoMBHSS61B0XxxU64ftIjABA5J78FoUq3QhZKvFi0iw/6dujY7lZDBlu3bsyVh3RL9euMO0KrU51znxB2s/JdwqE7xxOgdDcvMg6KKYfiLD8SCY3wgYBA=="
+                    }
+                  }
+                },
+                "citedText": "Commuters face major Tube closures on multiple lines due to planned engineering works. "
+              }
+            ],
+            "providerMetadata": {
+              "anthropic": {
+                "citations": [
+                  {
+                    "type": "web_search_result_location",
+                    "cited_text": "Commuters face major Tube closures on multiple lines due to planned engineering works. ",
+                    "url": "https://www.london-now.co.uk/news/26661776.london-tube-closures---full-list-october-24-25/",
+                    "title": "London Tube closures - Full list for October 24 and 25",
+                    "encrypted_index": "Eo8BCioIFRgCIiQ1YTM5M2YwYi1hOWUxLTQ1MTUtODZiZC1hODMxNjcwMWMwODcSDO54mApmLJ9veR3PQhoMBHSS61B0XxxU64ftIjABA5J78FoUq3QhZKvFi0iw/6dujY7lZDBlu3bsyVh3RL9euMO0KrU51znxB2s/JdwqE7xxOgdDcvMg6KKYfiLD8SCY3wgYBA=="
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "at": 2512,
+          "part": {
+            "type": "text-start",
+            "id": "5"
+          }
+        },
+        {
+          "at": 2512,
+          "part": {
+            "type": "text-delta",
+            "id": "5",
+            "delta": "\n- Exp"
+          }
+        },
+        {
+          "at": 2522,
+          "part": {
+            "type": "text-delta",
+            "id": "5",
+            "delta": "ect repl"
+          }
+        },
+        {
+          "at": 2540,
+          "part": {
+            "type": "text-delta",
+            "id": "5",
+            "delta": "acement buses and alternative"
+          }
+        },
+        {
+          "at": 2567,
+          "part": {
+            "type": "text-delta",
+            "id": "5",
+            "delta": " routes,"
+          }
+        },
+        {
+          "at": 2593,
+          "part": {
+            "type": "text-delta",
+            "id": "5",
+            "delta": " and check T"
+          }
+        },
+        {
+          "at": 2603,
+          "part": {
+            "type": "text-delta",
+            "id": "5",
+            "delta": "fL before trav"
+          }
+        },
+        {
+          "at": 2626,
+          "part": {
+            "type": "text-delta",
+            "id": "5",
+            "delta": "elling today"
+          }
+        },
+        {
+          "at": 2648,
+          "part": {
+            "type": "text-delta",
+            "id": "5",
+            "delta": ". (london-now.co."
+          }
+        },
+        {
+          "at": 2658,
+          "part": {
+            "type": "text-delta",
+            "id": "5",
+            "delta": "uk)"
+          }
+        },
+        {
+          "at": 2671,
+          "part": {
+            "type": "text-end",
+            "id": "5"
+          }
+        },
+        {
+          "at": 2672,
+          "part": {
+            "type": "finish",
+            "finishReason": {
+              "unified": "stop",
+              "raw": "end_turn"
+            },
+            "usage": {
+              "inputTokens": {
+                "total": 16466,
+                "noCache": 249,
+                "cacheRead": 8660,
+                "cacheWrite": 7557
+              },
+              "outputTokens": {
+                "total": 212,
+                "text": 212,
+                "reasoning": 0
+              }
+            },
+            "providerMetadata": {
+              "anthropic": {
+                "usage": {
+                  "input_tokens": 249,
+                  "cache_creation_input_tokens": 7557,
+                  "cache_read_input_tokens": 8660,
+                  "cache_creation": {
+                    "ephemeral_5m_input_tokens": 0,
+                    "ephemeral_1h_input_tokens": 0
+                  },
+                  "output_tokens": 212,
+                  "service_tier": "standard",
+                  "inference_geo": "global",
+                  "speed": "standard",
+                  "output_tokens_details": {
+                    "thinking_tokens": 0
+                  },
+                  "server_tool_use": {
+                    "web_search_requests": 1,
+                    "web_fetch_requests": 0
+                  }
+                },
+                "stopSequence": null,
+                "iterations": null,
+                "container": null,
+                "contextManagement": null
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "index": 2,
+      "kind": "stream",
+      "promptHash": "532d0379ebb7",
+      "end": "finish",
+      "parts": [
+        {
+          "at": 740,
+          "part": {
+            "type": "stream-start",
+            "warnings": []
+          }
+        },
+        {
+          "at": 740,
+          "part": {
+            "type": "response-metadata",
+            "modelId": "claude-haiku-5-5"
+          }
+        },
+        {
+          "at": 740,
+          "part": {
+            "type": "custom",
+            "kind": "anthropic.message_start",
+            "providerMetadata": {
+              "anthropic": {
+                "id": "msg_011CgLCjfA3L5TWuVUwHBSK6",
+                "model": "claude-haiku-5-5",
+                "usage": {
+                  "input_tokens": 270,
+                  "cache_creation_input_tokens": 0,
+                  "cache_read_input_tokens": 4330,
+                  "cache_creation": {
+                    "ephemeral_5m_input_tokens": 0,
+                    "ephemeral_1h_input_tokens": 0
+                  },
+                  "output_tokens": 2,
+                  "service_tier": "standard",
+                  "inference_geo": "global",
+                  "speed": "standard"
+                }
+              }
+            }
+          }
+        },
+        {
+          "at": 741,
+          "part": {
+            "type": "text-start",
+            "id": "0"
+          }
+        },
+        {
+          "at": 741,
+          "part": {
+            "type": "text-delta",
+            "id": "0",
+            "delta": "-"
+          }
+        },
+        {
+          "at": 862,
+          "part": {
+            "type": "text-delta",
+            "id": "0",
+            "delta": " Fifteen percent of e"
+          }
+        },
+        {
+          "at": 872,
+          "part": {
+            "type": "text-delta",
+            "id": "0",
+            "delta": "ighteen thousand is "
+          }
+        },
+        {
+          "at": 873,
+          "part": {
+            "type": "text-delta",
+            "id": "0",
+            "delta": "2,700."
+          }
+        },
+        {
+          "at": 873,
+          "part": {
+            "type": "text-end",
+            "id": "0"
+          }
+        },
+        {
+          "at": 873,
+          "part": {
+            "type": "finish",
+            "finishReason": {
+              "unified": "stop",
+              "raw": "end_turn"
+            },
+            "usage": {
+              "inputTokens": {
+                "total": 4600,
+                "noCache": 270,
+                "cacheRead": 4330,
+                "cacheWrite": 0
+              },
+              "outputTokens": {
+                "total": 24,
+                "text": 24,
+                "reasoning": 0
+              }
+            },
+            "providerMetadata": {
+              "anthropic": {
+                "usage": {
+                  "input_tokens": 270,
+                  "cache_creation_input_tokens": 0,
+                  "cache_read_input_tokens": 4330,
+                  "cache_creation": {
+                    "ephemeral_5m_input_tokens": 0,
+                    "ephemeral_1h_input_tokens": 0
+                  },
+                  "output_tokens": 24,
+                  "service_tier": "standard",
+                  "inference_geo": "global",
+                  "speed": "standard",
+                  "output_tokens_details": {
+                    "thinking_tokens": 0
+                  }
+                },
+                "stopSequence": null,
+                "iterations": null,
+                "container": null,
+                "contextManagement": null
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "index": 3,
+      "kind": "stream",
+      "promptHash": "23cf04e4662f",
+      "end": "finish",
+      "parts": [
+        {
+          "at": 687,
+          "part": {
+            "type": "stream-start",
+            "warnings": []
+          }
+        },
+        {
+          "at": 687,
+          "part": {
+            "type": "response-metadata",
+            "modelId": "claude-haiku-5-5"
+          }
+        },
+        {
+          "at": 687,
+          "part": {
+            "type": "custom",
+            "kind": "anthropic.message_start",
+            "providerMetadata": {
+              "anthropic": {
+                "id": "msg_011CgLCjiXSqymxeuuP9qSRk",
+                "model": "claude-haiku-5-5",
+                "usage": {
+                  "input_tokens": 194,
+                  "cache_creation_input_tokens": 0,
+                  "cache_read_input_tokens": 4330,
+                  "cache_creation": {
+                    "ephemeral_5m_input_tokens": 0,
+                    "ephemeral_1h_input_tokens": 0
+                  },
+                  "output_tokens": 2,
+                  "service_tier": "standard",
+                  "inference_geo": "global",
+                  "speed": "standard"
+                }
+              }
+            }
+          }
+        },
+        {
+          "at": 687,
+          "part": {
+            "type": "text-start",
+            "id": "0"
+          }
+        },
+        {
+          "at": 687,
+          "part": {
+            "type": "text-delta",
+            "id": "0",
+            "delta": "I'"
+          }
+        },
+        {
+          "at": 812,
+          "part": {
+            "type": "text-delta",
+            "id": "0",
+            "delta": "ll look"
+          }
+        },
+        {
+          "at": 818,
+          "part": {
+            "type": "text-delta",
+            "id": "0",
+            "delta": " up the current"
+          }
+        },
+        {
+          "at": 818,
+          "part": {
+            "type": "text-delta",
+            "id": "0",
+            "delta": " London for"
+          }
+        },
+        {
+          "at": 818,
+          "part": {
+            "type": "text-delta",
+            "id": "0",
+            "delta": "ecast for this weekend."
+          }
+        },
+        {
+          "at": 818,
+          "part": {
+            "type": "text-end",
+            "id": "0"
+          }
+        },
+        {
+          "at": 818,
+          "part": {
+            "type": "tool-input-start",
+            "id": "srvtoolu_019je2xGW89kx9S3VfEmJxWS",
+            "toolName": "web_search",
+            "providerExecuted": true
+          }
+        },
+        {
+          "at": 984,
+          "part": {
+            "type": "tool-input-delta",
+            "id": "srvtoolu_019je2xGW89kx9S3VfEmJxWS",
+            "delta": "{\"query"
+          }
+        },
+        {
+          "at": 984,
+          "part": {
+            "type": "tool-input-delta",
+            "id": "srvtoolu_019je2xGW89kx9S3VfEmJxWS",
+            "delta": "\": \"Lon"
+          }
+        },
+        {
+          "at": 984,
+          "part": {
+            "type": "tool-input-delta",
+            "id": "srvtoolu_019je2xGW89kx9S3VfEmJxWS",
+            "delta": "don wea"
+          }
+        },
+        {
+          "at": 984,
+          "part": {
+            "type": "tool-input-delta",
+            "id": "srvtoolu_019je2xGW89kx9S3VfEmJxWS",
+            "delta": "ther fo"
+          }
+        },
+        {
+          "at": 984,
+          "part": {
+            "type": "tool-input-delta",
+            "id": "srvtoolu_019je2xGW89kx9S3VfEmJxWS",
+            "delta": "recast "
+          }
+        },
+        {
+          "at": 984,
+          "part": {
+            "type": "tool-input-delta",
+            "id": "srvtoolu_019je2xGW89kx9S3VfEmJxWS",
+            "delta": "weekend"
+          }
+        },
+        {
+          "at": 984,
+          "part": {
+            "type": "tool-input-delta",
+            "id": "srvtoolu_019je2xGW89kx9S3VfEmJxWS",
+            "delta": " 24 25 "
+          }
+        },
+        {
+          "at": 984,
+          "part": {
+            "type": "tool-input-delta",
+            "id": "srvtoolu_019je2xGW89kx9S3VfEmJxWS",
+            "delta": "October"
+          }
+        },
+        {
+          "at": 984,
+          "part": {
+            "type": "tool-input-delta",
+            "id": "srvtoolu_019je2xGW89kx9S3VfEmJxWS",
+            "delta": " 2026\"}"
+          }
+        },
+        {
+          "at": 984,
+          "part": {
+            "type": "tool-input-end",
+            "id": "srvtoolu_019je2xGW89kx9S3VfEmJxWS"
+          }
+        },
+        {
+          "at": 984,
+          "part": {
+            "type": "tool-call",
+            "toolCallId": "srvtoolu_019je2xGW89kx9S3VfEmJxWS",
+            "toolName": "web_search",
+            "input": "{\"query\": \"London weather forecast weekend 24 25 October 2026\"}",
+            "providerExecuted": true
+          }
+        },
+        {
+          "at": 2338,
+          "part": {
+            "type": "tool-result",
+            "toolCallId": "srvtoolu_019je2xGW89kx9S3VfEmJxWS",
+            "toolName": "web_search",
+            "result": [
+              {
+                "url": "https://www.theweatheroutlook.com/forecast/uk/london",
+                "title": "London 16 day weather forecast",
+                "pageAge": "1 days ago",
+                "type": "web_search_result"
+              },
+              {
+                "url": "https://www.wunderground.com/forecast/gb/london",
+                "title": "London, GB 10-Day Weather Forecast",
+                "pageAge": "0 days ago",
+                "type": "web_search_result"
+              },
+              {
+                "url": "https://www.metcheck.com/WEATHER/dayforecast.asp?location=London&locationID=691044&lat=51.508530&lon=-0.125740&dateFor=25%2F10%2F2026",
+                "title": "What will the weather be like in London on 25 October 2026",
+                "pageAge": null,
+                "type": "web_search_result"
+              },
+              {
+                "url": "https://www.easeweather.com/europe/united-kingdom/london/october",
+                "title": "Weather in London in October 2026 - Detailed Forecast",
+                "pageAge": "294 days ago",
+                "type": "web_search_result"
+              },
+              {
+                "url": "https://www.timeanddate.com/weather/uk/london/ext",
+                "title": "London, England, United Kingdom 14 day weather forecast",
+                "pageAge": "40 days ago",
+                "type": "web_search_result"
+              },
+              {
+                "url": "https://www.theweather.com/london.htm",
+                "title": "London Weather 14 days - Meteored US",
+                "pageAge": "227 days ago",
+                "type": "web_search_result"
+              },
+              {
+                "url": "https://www.weather25.com/europe/united-kingdom/london?page=month&month=October",
+                "title": "London weather in October 2026",
+                "pageAge": "1823 days ago",
+                "type": "web_search_result"
+              },
+              {
+                "url": "https://www.metoffice.gov.uk/blog/2025/weather-forecast-for-this-weekends-football",
+                "title": "Met Office weekend football forecast",
+                "pageAge": null,
+                "type": "web_search_result"
+              },
+              {
+                "url": "https://www.timeout.com/london/news/london-will-be-blasted-by-snow-this-weekend-full-weather-forecast-including-when-and-how-much-snow-122925",
+                "title": "london will be blasted by snow this weekend full weather forecast including when and how much snow 122925",
+                "pageAge": null,
+                "type": "web_search_result"
+              }
+            ],
+            "providerMetadata": {
+              "anthropic": {
+                "caller": {
+                  "type": "direct"
+                }
+              }
+            }
+          }
+        },
+        {
+          "at": 2338,
+          "part": {
+            "type": "source",
+            "sourceType": "url",
+            "id": "TtxqLGFxzVYoorJO",
+            "url": "https://www.theweatheroutlook.com/forecast/uk/london",
+            "title": "London 16 day weather forecast",
+            "providerMetadata": {
+              "anthropic": {
+                "pageAge": "1 days ago"
+              }
+            }
+          }
+        },
+        {
+          "at": 2338,
+          "part": {
+            "type": "source",
+            "sourceType": "url",
+            "id": "4wxm4toedLphEwrg",
+            "url": "https://www.wunderground.com/forecast/gb/london",
+            "title": "London, GB 10-Day Weather Forecast",
+            "providerMetadata": {
+              "anthropic": {
+                "pageAge": "0 days ago"
+              }
+            }
+          }
+        },
+        {
+          "at": 2338,
+          "part": {
+            "type": "source",
+            "sourceType": "url",
+            "id": "jNjx1R5IyGkhUV26",
+            "url": "https://www.metcheck.com/WEATHER/dayforecast.asp?location=London&locationID=691044&lat=51.508530&lon=-0.125740&dateFor=25%2F10%2F2026",
+            "title": "What will the weather be like in London on 25 October 2026",
+            "providerMetadata": {
+              "anthropic": {
+                "pageAge": null
+              }
+            }
+          }
+        },
+        {
+          "at": 2339,
+          "part": {
+            "type": "source",
+            "sourceType": "url",
+            "id": "MV25RCLpoJmt12OI",
+            "url": "https://www.easeweather.com/europe/united-kingdom/london/october",
+            "title": "Weather in London in October 2026 - Detailed Forecast",
+            "providerMetadata": {
+              "anthropic": {
+                "pageAge": "294 days ago"
+              }
+            }
+          }
+        },
+        {
+          "at": 2339,
+          "part": {
+            "type": "source",
+            "sourceType": "url",
+            "id": "KhwicP146QkAAUo9",
+            "url": "https://www.timeanddate.com/weather/uk/london/ext",
+            "title": "London, England, United Kingdom 14 day weather forecast",
+            "providerMetadata": {
+              "anthropic": {
+                "pageAge": "40 days ago"
+              }
+            }
+          }
+        },
+        {
+          "at": 2339,
+          "part": {
+            "type": "source",
+            "sourceType": "url",
+            "id": "hMlnCvktjEbH69bF",
+            "url": "https://www.theweather.com/london.htm",
+            "title": "London Weather 14 days - Meteored US",
+            "providerMetadata": {
+              "anthropic": {
+                "pageAge": "227 days ago"
+              }
+            }
+          }
+        },
+        {
+          "at": 2339,
+          "part": {
+            "type": "source",
+            "sourceType": "url",
+            "id": "7wo4otYR7Jx8JItQ",
+            "url": "https://www.weather25.com/europe/united-kingdom/london?page=month&month=October",
+            "title": "London weather in October 2026",
+            "providerMetadata": {
+              "anthropic": {
+                "pageAge": "1823 days ago"
+              }
+            }
+          }
+        },
+        {
+          "at": 2339,
+          "part": {
+            "type": "source",
+            "sourceType": "url",
+            "id": "txbCuZCoQTZz20cg",
+            "url": "https://www.metoffice.gov.uk/blog/2025/weather-forecast-for-this-weekends-football",
+            "title": "Met Office weekend football forecast",
+            "providerMetadata": {
+              "anthropic": {
+                "pageAge": null
+              }
+            }
+          }
+        },
+        {
+          "at": 2339,
+          "part": {
+            "type": "source",
+            "sourceType": "url",
+            "id": "5K76BRitenqMocKL",
+            "url": "https://www.timeout.com/london/news/london-will-be-blasted-by-snow-this-weekend-full-weather-forecast-including-when-and-how-much-snow-122925",
+            "title": "london will be blasted by snow this weekend full weather forecast including when and how much snow 122925",
+            "providerMetadata": {
+              "anthropic": {
+                "pageAge": null
+              }
+            }
+          }
+        },
+        {
+          "at": 2339,
+          "part": {
+            "type": "text-start",
+            "id": "3"
+          }
+        },
+        {
+          "at": 2339,
+          "part": {
+            "type": "text-delta",
+            "id": "3",
+            "delta": "-"
+          }
+        },
+        {
+          "at": 2364,
+          "part": {
+            "type": "text-delta",
+            "id": "3",
+            "delta": " Exp"
+          }
+        },
+        {
+          "at": 2387,
+          "part": {
+            "type": "text-delta",
+            "id": "3",
+            "delta": "ect wet,"
+          }
+        },
+        {
+          "at": 2515,
+          "part": {
+            "type": "text-delta",
+            "id": "3",
+            "delta": " wind"
+          }
+        },
+        {
+          "at": 2515,
+          "part": {
+            "type": "text-delta",
+            "id": "3",
+            "delta": "y we"
+          }
+        },
+        {
+          "at": 2515,
+          "part": {
+            "type": "text-delta",
+            "id": "3",
+            "delta": "ather this weekend, with "
+          }
+        },
+        {
+          "at": 2515,
+          "part": {
+            "type": "text-end",
+            "id": "3"
+          }
+        },
+        {
+          "at": 2515,
+          "part": {
+            "type": "text-start",
+            "id": "4"
+          }
+        },
+        {
+          "at": 2515,
+          "part": {
+            "type": "text-delta",
+            "id": "4",
+            "delta": "the"
+          }
+        },
+        {
+          "at": 2515,
+          "part": {
+            "type": "text-delta",
+            "id": "4",
+            "delta": " wettest conditions an"
+          }
+        },
+        {
+          "at": 2533,
+          "part": {
+            "type": "text-delta",
+            "id": "4",
+            "delta": "ticipated on Saturday"
+          }
+        },
+        {
+          "at": 2553,
+          "part": {
+            "type": "text-delta",
+            "id": "4",
+            "delta": " 24 October"
+          }
+        },
+        {
+          "at": 2595,
+          "part": {
+            "type": "text-end",
+            "id": "4",
+            "citations": [
+              {
+                "source": {
+                  "type": "source",
+                  "sourceType": "url",
+                  "id": "https://www.theweatheroutlook.com/forecast/uk/london",
+                  "url": "https://www.theweatheroutlook.com/forecast/uk/london",
+                  "title": "London 16 day weather forecast",
+                  "providerMetadata": {
+                    "anthropic": {
+                      "type": "web_search_result_location",
+                      "cited_text": "The wettest conditions are anticipated on Saturday 24 October. ",
+                      "url": "https://www.theweatheroutlook.com/forecast/uk/london",
+                      "title": "London 16 day weather forecast",
+                      "encrypted_index": "Eo8BCioIFRgCIiQ1YTM5M2YwYi1hOWUxLTQ1MTUtODZiZC1hODMxNjcwMWMwODcSDCIZ4+ayST1pfn2EyBoMChhjdfFhSMt7eLLlIjBniwkKBssXfMHqNWBNh1hLrbMFB/rA5Z47NeBM2jqNHAQrY3uynx9lUPaijTsDh9UqE1+B6RCrym5qgpYEJZcXQi+rKSUYBA=="
+                    }
+                  }
+                },
+                "citedText": "The wettest conditions are anticipated on Saturday 24 October. "
+              }
+            ],
+            "providerMetadata": {
+              "anthropic": {
+                "citations": [
+                  {
+                    "type": "web_search_result_location",
+                    "cited_text": "The wettest conditions are anticipated on Saturday 24 October. ",
+                    "url": "https://www.theweatheroutlook.com/forecast/uk/london",
+                    "title": "London 16 day weather forecast",
+                    "encrypted_index": "Eo8BCioIFRgCIiQ1YTM5M2YwYi1hOWUxLTQ1MTUtODZiZC1hODMxNjcwMWMwODcSDCIZ4+ayST1pfn2EyBoMChhjdfFhSMt7eLLlIjBniwkKBssXfMHqNWBNh1hLrbMFB/rA5Z47NeBM2jqNHAQrY3uynx9lUPaijTsDh9UqE1+B6RCrym5qgpYEJZcXQi+rKSUYBA=="
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "at": 2595,
+          "part": {
+            "type": "text-start",
+            "id": "5"
+          }
+        },
+        {
+          "at": 2596,
+          "part": {
+            "type": "text-delta",
+            "id": "5",
+            "delta": ", per"
+          }
+        },
+        {
+          "at": 2615,
+          "part": {
+            "type": "text-delta",
+            "id": "5",
+            "delta": " the"
+          }
+        },
+        {
+          "at": 2642,
+          "part": {
+            "type": "text-delta",
+            "id": "5",
+            "delta": "weatheroutlook."
+          }
+        },
+        {
+          "at": 2706,
+          "part": {
+            "type": "text-delta",
+            "id": "5",
+            "delta": "com.\n- Sunday"
+          }
+        },
+        {
+          "at": 2706,
+          "part": {
+            "type": "text-delta",
+            "id": "5",
+            "delta": " loo"
+          }
+        },
+        {
+          "at": 2706,
+          "part": {
+            "type": "text-delta",
+            "id": "5",
+            "delta": "ks somewhat drier,"
+          }
+        },
+        {
+          "at": 2724,
+          "part": {
+            "type": "text-delta",
+            "id": "5",
+            "delta": " with "
+          }
+        },
+        {
+          "at": 2760,
+          "part": {
+            "type": "text-end",
+            "id": "5"
+          }
+        },
+        {
+          "at": 2760,
+          "part": {
+            "type": "text-start",
+            "id": "6"
+          }
+        },
+        {
+          "at": 2760,
+          "part": {
+            "type": "text-delta",
+            "id": "6",
+            "delta": "M"
+          }
+        },
+        {
+          "at": 2781,
+          "part": {
+            "type": "text-delta",
+            "id": "6",
+            "delta": "ostly Sunny/"
+          }
+        },
+        {
+          "at": 2804,
+          "part": {
+            "type": "text-delta",
+            "id": "6",
+            "delta": "Wind"
+          }
+        },
+        {
+          "at": 2822,
+          "part": {
+            "type": "text-end",
+            "id": "6",
+            "citations": [
+              {
+                "source": {
+                  "type": "source",
+                  "sourceType": "url",
+                  "id": "https://www.wunderground.com/forecast/gb/london",
+                  "url": "https://www.wunderground.com/forecast/gb/london",
+                  "title": "London, GB 10-Day Weather Forecast",
+                  "providerMetadata": {
+                    "anthropic": {
+                      "type": "web_search_result_location",
+                      "cited_text": "# London, GB\nSat 10/24\n\n58°\n\n50°\n\nRain/Wind\n\n0.83\n\nSun 10/25\n\n55°\n\n46°\n\nMostly Sunny/Wind\n\n0\n\n1. ",
+                      "url": "https://www.wunderground.com/forecast/gb/london",
+                      "title": "London, GB 10-Day Weather Forecast",
+                      "encrypted_index": "Eo8BCioIFRgCIiQ1YTM5M2YwYi1hOWUxLTQ1MTUtODZiZC1hODMxNjcwMWMwODcSDMmmfNb9mVpwz/13gBoMos1ocNaOyfDhqxdyIjAGNVbUXT/KIAboSpdRA8ZUm8oJYdg86laaSW+g2cBYXJaQZzAjtC0dzrIaREjf2xkqE/tWaGXf8chFAZFGQMPRRrBni28YBA=="
+                    }
+                  }
+                },
+                "citedText": "# London, GB\nSat 10/24\n\n58°\n\n50°\n\nRain/Wind\n\n0.83\n\nSun 10/25\n\n55°\n\n46°\n\nMostly Sunny/Wind\n\n0\n\n1. "
+              }
+            ],
+            "providerMetadata": {
+              "anthropic": {
+                "citations": [
+                  {
+                    "type": "web_search_result_location",
+                    "cited_text": "# London, GB\nSat 10/24\n\n58°\n\n50°\n\nRain/Wind\n\n0.83\n\nSun 10/25\n\n55°\n\n46°\n\nMostly Sunny/Wind\n\n0\n\n1. ",
+                    "url": "https://www.wunderground.com/forecast/gb/london",
+                    "title": "London, GB 10-Day Weather Forecast",
+                    "encrypted_index": "Eo8BCioIFRgCIiQ1YTM5M2YwYi1hOWUxLTQ1MTUtODZiZC1hODMxNjcwMWMwODcSDMmmfNb9mVpwz/13gBoMos1ocNaOyfDhqxdyIjAGNVbUXT/KIAboSpdRA8ZUm8oJYdg86laaSW+g2cBYXJaQZzAjtC0dzrIaREjf2xkqE/tWaGXf8chFAZFGQMPRRrBni28YBA=="
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "at": 2822,
+          "part": {
+            "type": "text-start",
+            "id": "7"
+          }
+        },
+        {
+          "at": 2822,
+          "part": {
+            "type": "text-delta",
+            "id": "7",
+            "delta": " and about"
+          }
+        },
+        {
+          "at": 2846,
+          "part": {
+            "type": "text-delta",
+            "id": "7",
+            "delta": " 55°"
+          }
+        },
+        {
+          "at": 2861,
+          "part": {
+            "type": "text-delta",
+            "id": "7",
+            "delta": "F, per"
+          }
+        },
+        {
+          "at": 2883,
+          "part": {
+            "type": "text-delta",
+            "id": "7",
+            "delta": " w"
+          }
+        },
+        {
+          "at": 2903,
+          "part": {
+            "type": "text-delta",
+            "id": "7",
+            "delta": "underground.com; check"
+          }
+        },
+        {
+          "at": 2923,
+          "part": {
+            "type": "text-delta",
+            "id": "7",
+            "delta": " again"
+          }
+        },
+        {
+          "at": 2941,
+          "part": {
+            "type": "text-delta",
+            "id": "7",
+            "delta": " before he"
+          }
+        },
+        {
+          "at": 2959,
+          "part": {
+            "type": "text-delta",
+            "id": "7",
+            "delta": "ading out."
+          }
+        },
+        {
+          "at": 2959,
+          "part": {
+            "type": "text-end",
+            "id": "7"
+          }
+        },
+        {
+          "at": 2962,
+          "part": {
+            "type": "finish",
+            "finishReason": {
+              "unified": "stop",
+              "raw": "end_turn"
+            },
+            "usage": {
+              "inputTokens": {
+                "total": 18421,
+                "noCache": 196,
+                "cacheRead": 8660,
+                "cacheWrite": 9565
+              },
+              "outputTokens": {
+                "total": 222,
+                "text": 222,
+                "reasoning": 0
+              }
+            },
+            "providerMetadata": {
+              "anthropic": {
+                "usage": {
+                  "input_tokens": 196,
+                  "cache_creation_input_tokens": 9565,
+                  "cache_read_input_tokens": 8660,
+                  "cache_creation": {
+                    "ephemeral_5m_input_tokens": 0,
+                    "ephemeral_1h_input_tokens": 0
+                  },
+                  "output_tokens": 222,
+                  "service_tier": "standard",
+                  "inference_geo": "global",
+                  "speed": "standard",
+                  "output_tokens_details": {
+                    "thinking_tokens": 0
+                  },
+                  "server_tool_use": {
+                    "web_search_requests": 1,
+                    "web_fetch_requests": 0
+                  }
+                },
+                "stopSequence": null,
+                "iterations": null,
+                "container": null,
+                "contextManagement": null
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "index": 4,
+      "kind": "stream",
+      "promptHash": "323ba9a109c8",
+      "end": "finish",
+      "parts": [
+        {
+          "at": 628,
+          "part": {
+            "type": "stream-start",
+            "warnings": []
+          }
+        },
+        {
+          "at": 628,
+          "part": {
+            "type": "response-metadata",
+            "modelId": "claude-haiku-5-5"
+          }
+        },
+        {
+          "at": 628,
+          "part": {
+            "type": "custom",
+            "kind": "anthropic.message_start",
+            "providerMetadata": {
+              "anthropic": {
+                "id": "msg_011CgLCjwBCzVjgaUuq535o5",
+                "model": "claude-haiku-5-5",
+                "usage": {
+                  "input_tokens": 446,
+                  "cache_creation_input_tokens": 0,
+                  "cache_read_input_tokens": 4330,
+                  "cache_creation": {
+                    "ephemeral_5m_input_tokens": 0,
+                    "ephemeral_1h_input_tokens": 0
+                  },
+                  "output_tokens": 8,
+                  "service_tier": "standard",
+                  "inference_geo": "global",
+                  "speed": "standard"
+                }
+              }
+            }
+          }
+        },
+        {
+          "at": 628,
+          "part": {
+            "type": "text-start",
+            "id": "0"
+          }
+        },
+        {
+          "at": 628,
+          "part": {
+            "type": "text-delta",
+            "id": "0",
+            "delta": "The newest line redirects the"
+          }
+        },
+        {
+          "at": 746,
+          "part": {
+            "type": "text-delta",
+            "id": "0",
+            "delta": " request to Paris, so the"
+          }
+        },
+        {
+          "at": 762,
+          "part": {
+            "type": "text-delta",
+            "id": "0",
+            "delta": " London"
+          }
+        },
+        {
+          "at": 762,
+          "part": {
+            "type": "text-delta",
+            "id": "0",
+            "delta": " weather tips no"
+          }
+        },
+        {
+          "at": 762,
+          "part": {
+            "type": "text-delta",
+            "id": "0",
+            "delta": " longer stand and"
+          }
+        },
+        {
+          "at": 762,
+          "part": {
+            "type": "text-delta",
+            "id": "0",
+            "delta": " I need"
+          }
+        },
+        {
+          "at": 762,
+          "part": {
+            "type": "text-delta",
+            "id": "0",
+            "delta": " a"
+          }
+        },
+        {
+          "at": 762,
+          "part": {
+            "type": "text-delta",
+            "id": "0",
+            "delta": " Paris for"
+          }
+        },
+        {
+          "at": 766,
+          "part": {
+            "type": "text-delta",
+            "id": "0",
+            "delta": "ecast for"
+          }
+        },
+        {
+          "at": 783,
+          "part": {
+            "type": "text-delta",
+            "id": "0",
+            "delta": " this weekend."
+          }
+        },
+        {
+          "at": 829,
+          "part": {
+            "type": "text-end",
+            "id": "0"
+          }
+        },
+        {
+          "at": 838,
+          "part": {
+            "type": "tool-input-start",
+            "id": "srvtoolu_01XE2HL8q8m4tyGSWayAokDi",
+            "toolName": "web_search",
+            "providerExecuted": true
+          }
+        },
+        {
+          "at": 961,
+          "part": {
+            "type": "tool-input-delta",
+            "id": "srvtoolu_01XE2HL8q8m4tyGSWayAokDi",
+            "delta": "{\"query"
+          }
+        },
+        {
+          "at": 970,
+          "part": {
+            "type": "tool-input-delta",
+            "id": "srvtoolu_01XE2HL8q8m4tyGSWayAokDi",
+            "delta": "\": \"Par"
+          }
+        },
+        {
+          "at": 970,
+          "part": {
+            "type": "tool-input-delta",
+            "id": "srvtoolu_01XE2HL8q8m4tyGSWayAokDi",
+            "delta": "is weat"
+          }
+        },
+        {
+          "at": 970,
+          "part": {
+            "type": "tool-input-delta",
+            "id": "srvtoolu_01XE2HL8q8m4tyGSWayAokDi",
+            "delta": "her for"
+          }
+        },
+        {
+          "at": 970,
+          "part": {
+            "type": "tool-input-delta",
+            "id": "srvtoolu_01XE2HL8q8m4tyGSWayAokDi",
+            "delta": "ecast t"
+          }
+        },
+        {
+          "at": 970,
+          "part": {
+            "type": "tool-input-delta",
+            "id": "srvtoolu_01XE2HL8q8m4tyGSWayAokDi",
+            "delta": "his wee"
+          }
+        },
+        {
+          "at": 970,
+          "part": {
+            "type": "tool-input-delta",
+            "id": "srvtoolu_01XE2HL8q8m4tyGSWayAokDi",
+            "delta": "kend Oc"
+          }
+        },
+        {
+          "at": 970,
+          "part": {
+            "type": "tool-input-delta",
+            "id": "srvtoolu_01XE2HL8q8m4tyGSWayAokDi",
+            "delta": "tober 2"
+          }
+        },
+        {
+          "at": 970,
+          "part": {
+            "type": "tool-input-delta",
+            "id": "srvtoolu_01XE2HL8q8m4tyGSWayAokDi",
+            "delta": "4 2026\"}"
+          }
+        },
+        {
+          "at": 971,
+          "part": {
+            "type": "tool-input-end",
+            "id": "srvtoolu_01XE2HL8q8m4tyGSWayAokDi"
+          }
+        },
+        {
+          "at": 971,
+          "part": {
+            "type": "tool-call",
+            "toolCallId": "srvtoolu_01XE2HL8q8m4tyGSWayAokDi",
+            "toolName": "web_search",
+            "input": "{\"query\": \"Paris weather forecast this weekend October 24 2026\"}",
+            "providerExecuted": true
+          }
+        },
+        {
+          "at": 2618,
+          "part": {
+            "type": "tool-result",
+            "toolCallId": "srvtoolu_01XE2HL8q8m4tyGSWayAokDi",
+            "toolName": "web_search",
+            "result": [
+              {
+                "url": "https://www.sortiraparis.com/en/news/in-paris/articles/334899-weather-in-paris-and-the-ile-de-france-region-what-to-expect-this-weekend-october-24-and-25-2026",
+                "title": "Weather in Paris and Île-de-France: What to expect this weekend, October 24 and 25, 2026? - Sortiraparis.com",
+                "pageAge": "0 days ago",
+                "type": "web_search_result"
+              },
+              {
+                "url": "https://www.sortiraparis.com/en/news/in-paris/articles/334899-weather-in-paris-and-ile-de-france-what-will-the-weather-be-like-this-weekend-of-october-24-25-2026",
+                "title": "Weather in Paris and Île-de-France: what's the forecast for this weekend of October 24–25, 2026? - Sortiraparis.com",
+                "pageAge": "1 days ago",
+                "type": "web_search_result"
+              },
+              {
+                "url": "https://www.sortiraparis.com/en/news/in-paris/articles/332748-weather-forecast-for-paris-and-ile-de-france-this-week-rain-and-wind-from-october-19-to-25",
+                "title": "Weather in Paris and Île-de-France this week: rain and wind from October 19 to 25 - Sortiraparis.com",
+                "pageAge": "4 days ago",
+                "type": "web_search_result"
+              },
+              {
+                "url": "https://www.yr.no/en/forecast/daily-table/2-2988507/France/%C3%8Ele-de-France%20Region/Paris%20Department/Paris",
+                "title": "Long term weather forecast for Paris",
+                "pageAge": "107 days ago",
+                "type": "web_search_result"
+              },
+              {
+                "url": "https://www.easeweather.com/europe/france/ile-de-france/paris/october",
+                "title": "Weather in Paris in October 2026 - Detailed Forecast",
+                "pageAge": "50 days ago",
+                "type": "web_search_result"
+              },
+              {
+                "url": "https://www.theweather.com/paris-in-france-c26048.htm",
+                "title": "Paris Weather 14 days - Meteored US",
+                "pageAge": "214 days ago",
+                "type": "web_search_result"
+              },
+              {
+                "url": "https://www.weather25.com/europe/france/ile-de-france/paris?page=month&month=October",
+                "title": "Paris weather in October 2026",
+                "pageAge": null,
+                "type": "web_search_result"
+              },
+              {
+                "url": "https://weather.metoffice.gov.uk/observations/u09tvnxyj",
+                "title": "Paris (France) last 24 hours weather",
+                "pageAge": null,
+                "type": "web_search_result"
+              },
+              {
+                "url": "https://weather.metoffice.gov.uk/forecast/u09tvw0f6",
+                "title": "Paris (France) weather",
+                "pageAge": null,
+                "type": "web_search_result"
+              }
+            ],
+            "providerMetadata": {
+              "anthropic": {
+                "caller": {
+                  "type": "direct"
+                }
+              }
+            }
+          }
+        },
+        {
+          "at": 2627,
+          "part": {
+            "type": "source",
+            "sourceType": "url",
+            "id": "nPbYhQsAyQ10ngrh",
+            "url": "https://www.sortiraparis.com/en/news/in-paris/articles/334899-weather-in-paris-and-the-ile-de-france-region-what-to-expect-this-weekend-october-24-and-25-2026",
+            "title": "Weather in Paris and Île-de-France: What to expect this weekend, October 24 and 25, 2026? - Sortiraparis.com",
+            "providerMetadata": {
+              "anthropic": {
+                "pageAge": "0 days ago"
+              }
+            }
+          }
+        },
+        {
+          "at": 2627,
+          "part": {
+            "type": "source",
+            "sourceType": "url",
+            "id": "mDs0faGuBVyiNTJd",
+            "url": "https://www.sortiraparis.com/en/news/in-paris/articles/334899-weather-in-paris-and-ile-de-france-what-will-the-weather-be-like-this-weekend-of-october-24-25-2026",
+            "title": "Weather in Paris and Île-de-France: what's the forecast for this weekend of October 24–25, 2026? - Sortiraparis.com",
+            "providerMetadata": {
+              "anthropic": {
+                "pageAge": "1 days ago"
+              }
+            }
+          }
+        },
+        {
+          "at": 2627,
+          "part": {
+            "type": "source",
+            "sourceType": "url",
+            "id": "bfLQHgjN5QRZMVIK",
+            "url": "https://www.sortiraparis.com/en/news/in-paris/articles/332748-weather-forecast-for-paris-and-ile-de-france-this-week-rain-and-wind-from-october-19-to-25",
+            "title": "Weather in Paris and Île-de-France this week: rain and wind from October 19 to 25 - Sortiraparis.com",
+            "providerMetadata": {
+              "anthropic": {
+                "pageAge": "4 days ago"
+              }
+            }
+          }
+        },
+        {
+          "at": 2628,
+          "part": {
+            "type": "source",
+            "sourceType": "url",
+            "id": "QMGM6Jg70v4KSilB",
+            "url": "https://www.yr.no/en/forecast/daily-table/2-2988507/France/%C3%8Ele-de-France%20Region/Paris%20Department/Paris",
+            "title": "Long term weather forecast for Paris",
+            "providerMetadata": {
+              "anthropic": {
+                "pageAge": "107 days ago"
+              }
+            }
+          }
+        },
+        {
+          "at": 2628,
+          "part": {
+            "type": "source",
+            "sourceType": "url",
+            "id": "w0Krr3npnfbmKEIa",
+            "url": "https://www.easeweather.com/europe/france/ile-de-france/paris/october",
+            "title": "Weather in Paris in October 2026 - Detailed Forecast",
+            "providerMetadata": {
+              "anthropic": {
+                "pageAge": "50 days ago"
+              }
+            }
+          }
+        },
+        {
+          "at": 2628,
+          "part": {
+            "type": "source",
+            "sourceType": "url",
+            "id": "dNBMXexBtUfLnyqO",
+            "url": "https://www.theweather.com/paris-in-france-c26048.htm",
+            "title": "Paris Weather 14 days - Meteored US",
+            "providerMetadata": {
+              "anthropic": {
+                "pageAge": "214 days ago"
+              }
+            }
+          }
+        },
+        {
+          "at": 2628,
+          "part": {
+            "type": "source",
+            "sourceType": "url",
+            "id": "EfjQhCF2UbZbROum",
+            "url": "https://www.weather25.com/europe/france/ile-de-france/paris?page=month&month=October",
+            "title": "Paris weather in October 2026",
+            "providerMetadata": {
+              "anthropic": {
+                "pageAge": null
+              }
+            }
+          }
+        },
+        {
+          "at": 2628,
+          "part": {
+            "type": "source",
+            "sourceType": "url",
+            "id": "MlkWx1QL1Uytld3M",
+            "url": "https://weather.metoffice.gov.uk/observations/u09tvnxyj",
+            "title": "Paris (France) last 24 hours weather",
+            "providerMetadata": {
+              "anthropic": {
+                "pageAge": null
+              }
+            }
+          }
+        },
+        {
+          "at": 2628,
+          "part": {
+            "type": "source",
+            "sourceType": "url",
+            "id": "xaPEPyJFoeV5tcDw",
+            "url": "https://weather.metoffice.gov.uk/forecast/u09tvw0f6",
+            "title": "Paris (France) weather",
+            "providerMetadata": {
+              "anthropic": {
+                "pageAge": null
+              }
+            }
+          }
+        },
+        {
+          "at": 2628,
+          "part": {
+            "type": "text-start",
+            "id": "3"
+          }
+        },
+        {
+          "at": 2628,
+          "part": {
+            "type": "text-delta",
+            "id": "3",
+            "delta": "The old"
+          }
+        },
+        {
+          "at": 2637,
+          "part": {
+            "type": "text-delta",
+            "id": "3",
+            "delta": " London t"
+          }
+        },
+        {
+          "at": 2650,
+          "part": {
+            "type": "text-delta",
+            "id": "3",
+            "delta": "ips are d"
+          }
+        },
+        {
+          "at": 2664,
+          "part": {
+            "type": "text-delta",
+            "id": "3",
+            "delta": "ropped since"
+          }
+        },
+        {
+          "at": 2704,
+          "part": {
+            "type": "text-delta",
+            "id": "3",
+            "delta": " Paris repl"
+          }
+        },
+        {
+          "at": 2728,
+          "part": {
+            "type": "text-delta",
+            "id": "3",
+            "delta": "aces them, and the Pa"
+          }
+        },
+        {
+          "at": 2752,
+          "part": {
+            "type": "text-delta",
+            "id": "3",
+            "delta": "ris forecast is the new"
+          }
+        },
+        {
+          "at": 2771,
+          "part": {
+            "type": "text-delta",
+            "id": "3",
+            "delta": " answer.\n\n- Paris"
+          }
+        },
+        {
+          "at": 2792,
+          "part": {
+            "type": "text-delta",
+            "id": "3",
+            "delta": " this weekend: r"
+          }
+        },
+        {
+          "at": 2811,
+          "part": {
+            "type": "text-delta",
+            "id": "3",
+            "delta": "ain"
+          }
+        },
+        {
+          "at": 2833,
+          "part": {
+            "type": "text-delta",
+            "id": "3",
+            "delta": " Saturday "
+          }
+        },
+        {
+          "at": 2852,
+          "part": {
+            "type": "text-delta",
+            "id": "3",
+            "delta": "24 October, with"
+          }
+        },
+        {
+          "at": 2880,
+          "part": {
+            "type": "text-delta",
+            "id": "3",
+            "delta": " about"
+          }
+        },
+        {
+          "at": 2893,
+          "part": {
+            "type": "text-delta",
+            "id": "3",
+            "delta": " 6 to"
+          }
+        },
+        {
+          "at": 2913,
+          "part": {
+            "type": "text-delta",
+            "id": "3",
+            "delta": " 15"
+          }
+        },
+        {
+          "at": 2939,
+          "part": {
+            "type": "text-delta",
+            "id": "3",
+            "delta": " mm exp"
+          }
+        },
+        {
+          "at": 2955,
+          "part": {
+            "type": "text-delta",
+            "id": "3",
+            "delta": "ected, then a"
+          }
+        },
+        {
+          "at": 2981,
+          "part": {
+            "type": "text-delta",
+            "id": "3",
+            "delta": " s"
+          }
+        },
+        {
+          "at": 2998,
+          "part": {
+            "type": "text-delta",
+            "id": "3",
+            "delta": "unnier, wind"
+          }
+        },
+        {
+          "at": 3026,
+          "part": {
+            "type": "text-delta",
+            "id": "3",
+            "delta": "y Sunday around"
+          }
+        },
+        {
+          "at": 3044,
+          "part": {
+            "type": "text-delta",
+            "id": "3",
+            "delta": " 15"
+          }
+        },
+        {
+          "at": 3061,
+          "part": {
+            "type": "text-delta",
+            "id": "3",
+            "delta": " "
+          }
+        },
+        {
+          "at": 3076,
+          "part": {
+            "type": "text-delta",
+            "id": "3",
+            "delta": "to 16°C,"
+          }
+        },
+        {
+          "at": 3098,
+          "part": {
+            "type": "text-delta",
+            "id": "3",
+            "delta": " per sortiraparis."
+          }
+        },
+        {
+          "at": 3117,
+          "part": {
+            "type": "text-delta",
+            "id": "3",
+            "delta": "com.\n- Saturday"
+          }
+        },
+        {
+          "at": 3138,
+          "part": {
+            "type": "text-delta",
+            "id": "3",
+            "delta": "'s"
+          }
+        },
+        {
+          "at": 3160,
+          "part": {
+            "type": "text-delta",
+            "id": "3",
+            "delta": " r"
+          }
+        },
+        {
+          "at": 3180,
+          "part": {
+            "type": "text-delta",
+            "id": "3",
+            "delta": "ain is he"
+          }
+        },
+        {
+          "at": 3199,
+          "part": {
+            "type": "text-delta",
+            "id": "3",
+            "delta": "aviest in the afterno"
+          }
+        },
+        {
+          "at": 3220,
+          "part": {
+            "type": "text-delta",
+            "id": "3",
+            "delta": "on, so pl"
+          }
+        },
+        {
+          "at": 3240,
+          "part": {
+            "type": "text-delta",
+            "id": "3",
+            "delta": "an ind"
+          }
+        },
+        {
+          "at": 3263,
+          "part": {
+            "type": "text-delta",
+            "id": "3",
+            "delta": "oor time then"
+          }
+        },
+        {
+          "at": 3286,
+          "part": {
+            "type": "text-delta",
+            "id": "3",
+            "delta": " and check"
+          }
+        },
+        {
+          "at": 3305,
+          "part": {
+            "type": "text-delta",
+            "id": "3",
+            "delta": " Sunday's w"
+          }
+        },
+        {
+          "at": 3323,
+          "part": {
+            "type": "text-delta",
+            "id": "3",
+            "delta": "ind before"
+          }
+        },
+        {
+          "at": 3343,
+          "part": {
+            "type": "text-delta",
+            "id": "3",
+            "delta": " heading out.\n- Cl"
+          }
+        },
+        {
+          "at": 3385,
+          "part": {
+            "type": "text-delta",
+            "id": "3",
+            "delta": "ocks go back this"
+          }
+        },
+        {
+          "at": 3401,
+          "part": {
+            "type": "text-delta",
+            "id": "3",
+            "delta": " weekend, so expect an"
+          }
+        },
+        {
+          "at": 3411,
+          "part": {
+            "type": "text-delta",
+            "id": "3",
+            "delta": " ear"
+          }
+        },
+        {
+          "at": 3432,
+          "part": {
+            "type": "text-delta",
+            "id": "3",
+            "delta": "lier ev"
+          }
+        },
+        {
+          "at": 3444,
+          "part": {
+            "type": "text-delta",
+            "id": "3",
+            "delta": "ening;"
+          }
+        },
+        {
+          "at": 3465,
+          "part": {
+            "type": "text-delta",
+            "id": "3",
+            "delta": " a"
+          }
+        },
+        {
+          "at": 3485,
+          "part": {
+            "type": "text-delta",
+            "id": "3",
+            "delta": " light"
+          }
+        },
+        {
+          "at": 3506,
+          "part": {
+            "type": "text-delta",
+            "id": "3",
+            "delta": " lay"
+          }
+        },
+        {
+          "at": 3541,
+          "part": {
+            "type": "text-delta",
+            "id": "3",
+            "delta": "er and um"
+          }
+        },
+        {
+          "at": 3564,
+          "part": {
+            "type": "text-delta",
+            "id": "3",
+            "delta": "brella should"
+          }
+        },
+        {
+          "at": 3573,
+          "part": {
+            "type": "text-delta",
+            "id": "3",
+            "delta": " c"
+          }
+        },
+        {
+          "at": 3585,
+          "part": {
+            "type": "text-delta",
+            "id": "3",
+            "delta": "over you"
+          }
+        },
+        {
+          "at": 3604,
+          "part": {
+            "type": "text-delta",
+            "id": "3",
+            "delta": "."
+          }
+        },
+        {
+          "at": 3610,
+          "part": {
+            "type": "text-end",
+            "id": "3"
+          }
+        },
+        {
+          "at": 3611,
+          "part": {
+            "type": "finish",
+            "finishReason": {
+              "unified": "stop",
+              "raw": "end_turn"
+            },
+            "usage": {
+              "inputTokens": {
+                "total": 18599,
+                "noCache": 448,
+                "cacheRead": 8660,
+                "cacheWrite": 9491
+              },
+              "outputTokens": {
+                "total": 289,
+                "text": 289,
+                "reasoning": 0
+              }
+            },
+            "providerMetadata": {
+              "anthropic": {
+                "usage": {
+                  "input_tokens": 448,
+                  "cache_creation_input_tokens": 9491,
+                  "cache_read_input_tokens": 8660,
+                  "cache_creation": {
+                    "ephemeral_5m_input_tokens": 0,
+                    "ephemeral_1h_input_tokens": 0
+                  },
+                  "output_tokens": 289,
+                  "service_tier": "standard",
+                  "inference_geo": "global",
+                  "speed": "standard",
+                  "output_tokens_details": {
+                    "thinking_tokens": 0
+                  },
+                  "server_tool_use": {
+                    "web_search_requests": 1,
+                    "web_fetch_requests": 0
+                  }
+                },
+                "stopSequence": null,
+                "iterations": null,
+                "container": null,
+                "contextManagement": null
+              }
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

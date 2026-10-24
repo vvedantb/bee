@@ -94,10 +94,63 @@ export function createSegmenter(args: { sampleRate: number; onPhrase: (samples: 
   };
 }
 
-/** Mono float samples → 16 kHz 16-bit PCM WAV. Downsampling averages each output sample's input span. */
+// Downsampling low-passes first, so sound above 8 kHz (sibilants, room noise) cannot fold back into the band STT hears.
+// Averaging each output sample's input span did not: it passed 10 kHz at −6 dB, dulled 6 kHz by 2 dB and, at 44.1 kHz, jittered.
+/** Each output sample weighs input this many output samples either side: flat to 6 kHz, ≥ 47 dB down from 9 kHz. */
+const RESAMPLE_ZEROS = 8;
+/** Where the low-pass is centred, as a share of the 8 kHz limit of a 16 kHz WAV. */
+const RESAMPLE_CUTOFF = 0.9;
+
+function gcd(a: number, b: number): number {
+  return b === 0 ? a : gcd(b, a % b);
+}
+
+/**
+ * Windowed-sinc resampling to WAV_SAMPLE_RATE. Output sample n sits at input position n·from/to; that position's fraction
+ * repeats every `to / gcd` samples, so each fraction's weights are worked out once.
+ */
+function resample(samples: Float32Array, sampleRate: number): Float32Array {
+  const rate = Math.round(sampleRate);
+  const divisor = gcd(rate, WAV_SAMPLE_RATE);
+  const step = rate / divisor;
+  const phases = WAV_SAMPLE_RATE / divisor;
+  // Cutoff and window width in input samples.
+  const cutoff = (RESAMPLE_CUTOFF * Math.min(rate, WAV_SAMPLE_RATE)) / (2 * rate);
+  const reach = RESAMPLE_ZEROS * Math.max(1, rate / WAV_SAMPLE_RATE);
+  const taps = 2 * Math.ceil(reach);
+  const weights = new Float64Array(phases * taps);
+  for (let phase = 0; phase < phases; phase += 1) {
+    const offset = phase / phases;
+    let total = 0;
+    for (let tap = 0; tap < taps; tap += 1) {
+      const x = tap - taps / 2 + 1 - offset;
+      const sinc = x === 0 ? 1 : Math.sin(2 * Math.PI * cutoff * x) / (2 * Math.PI * cutoff * x);
+      const window = Math.abs(x) >= reach ? 0 : 0.5 + 0.5 * Math.cos((Math.PI * x) / reach);
+      weights[phase * taps + tap] = sinc * window;
+      total += sinc * window;
+    }
+    // Unity gain at every fraction, so a steady level stays steady.
+    for (let tap = 0; tap < taps; tap += 1) weights[phase * taps + tap] = (weights[phase * taps + tap] ?? 0) / total;
+  }
+  const out = new Float32Array(Math.floor((samples.length * phases) / step));
+  for (let index = 0; index < out.length; index += 1) {
+    const position = index * step;
+    const phase = position % phases;
+    const first = (position - phase) / phases - taps / 2 + 1;
+    const row = phase * taps - first;
+    // Input before the start or past the end counts as silence.
+    const stop = Math.min(first + taps, samples.length);
+    let sum = 0;
+    for (let at = Math.max(first, 0); at < stop; at += 1) sum += (samples[at] ?? 0) * (weights[row + at] ?? 0);
+    out[index] = sum;
+  }
+  return out;
+}
+
+/** Mono float samples → 16 kHz 16-bit PCM WAV. */
 export function encodeWav(samples: Float32Array, sampleRate: number): Uint8Array<ArrayBuffer> {
-  const ratio = sampleRate / WAV_SAMPLE_RATE;
-  const length = Math.floor(samples.length / ratio);
+  const pcm = resample(samples, sampleRate);
+  const length = pcm.length;
   const bytes = new Uint8Array(44 + length * 2);
   const view = new DataView(bytes.buffer);
   const ascii = (offset: number, text: string): void => {
@@ -117,11 +170,7 @@ export function encodeWav(samples: Float32Array, sampleRate: number): Uint8Array
   ascii(36, "data");
   view.setUint32(40, length * 2, true);
   for (let index = 0; index < length; index += 1) {
-    const start = Math.floor(index * ratio);
-    const stop = Math.max(start + 1, Math.floor((index + 1) * ratio));
-    let sum = 0;
-    for (let at = start; at < stop; at += 1) sum += samples[at] ?? 0;
-    const sample = Math.max(-1, Math.min(1, sum / (stop - start)));
+    const sample = Math.max(-1, Math.min(1, pcm[index] ?? 0));
     view.setInt16(44 + index * 2, Math.round(sample < 0 ? sample * 0x8000 : sample * 0x7fff), true);
   }
   return bytes;

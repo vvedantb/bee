@@ -16,6 +16,8 @@
 // it is passed ?shots=1, and each "E2E_SHOT {"name"}" line it logs captures the window to <BEE_E2E_SHOTS_DIR>/<name>.png, reported
 // on stdout as "E2E_SHOT_FILE {"file"}". The store's window resizes are answered and ignored.
 // Every pipeline run that returns is reported on stdout as "E2E_RUN {...}": the notes it ranked and whether Jev was called.
+// BEE_E2E_MODE=record|replay (with BEE_E2E_FIXTURES_DIR) records the Gateway model calls to fixtures, or replays them with no
+// network and no key (replay.ts). Unset, the Gateway is live.
 import { BrowserWindow, app, ipcMain, session } from "electron";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -33,6 +35,7 @@ import { createStubDetector } from "../../src/main/teams-detector";
 import { registerTeamsIpc, relayUrlFromEnv } from "../../src/main/teams-sync";
 import { NO_GATEWAY_KEY } from "../../src/core/gateway";
 import { IPC, pipelineResultSchema, type CopyGatewayKeyResult } from "../../src/shared/ipc";
+import { REPLAY_KEY, e2eGateway, e2eModeSchema } from "./replay";
 
 // Obviously fake, so a screenshot can never show a real key.
 const FAKE_GATEWAY_KEY = "vck_test_1234567890_FAKE_KEY";
@@ -202,6 +205,10 @@ void app.whenReady().then(async () => {
     settings: () => ({ enabled: false, calendar: false, memory: false }),
   });
   const mcpFile = process.env.BEE_E2E_MCP_FILE;
+  const mode = e2eModeSchema.optional().parse(process.env.BEE_E2E_MODE || undefined);
+  const fixturesDir = process.env.BEE_E2E_FIXTURES_DIR;
+  if (mode && !fixturesDir) throw new Error("BEE_E2E_MODE needs BEE_E2E_FIXTURES_DIR");
+  const liveKey = () => process.env.BEE_AI_GATEWAY_API_KEY?.trim() || undefined;
   reportPipelineRuns();
   registerMeetingIpc({
     notesDir,
@@ -210,7 +217,8 @@ void app.whenReady().then(async () => {
     mcpSignedOut: () => [],
     mcpPool: mcpFile ? reportingPool(createMcpPool()) : createMcpPool(),
     meeting,
-    gatewayApiKey: () => process.env.BEE_AI_GATEWAY_API_KEY?.trim() || undefined,
+    gatewayApiKey: mode === "replay" ? () => REPLAY_KEY : liveKey,
+    gateway: mode && fixturesDir ? e2eGateway(mode, fixturesDir) : undefined,
   });
   // Short timings so the popup and the debounced leave happen within the test.
   registerTeamsIpc({ relayUrl: relayUrlFromEnv(process.env.BEE_RELAY_URL), detector: createStubDetector(), timing: { enterMs: 300, leaveMs: 1000 } });
@@ -232,4 +240,8 @@ void app.whenReady().then(async () => {
     app.exit(0);
   });
   void win.loadFile(page, { query: { token: process.env.BEE_E2E_TOKEN || fakeSessionToken(), invite: process.env.BEE_E2E_INVITE ?? "", questions: process.env.BEE_E2E_QUESTIONS ?? "", shots: shotsDir ? "1" : "" } });
+}).catch((error: unknown) => {
+  // A setup failure (e.g. replay with no fixtures) ends the run at once rather than at the test's timeout.
+  process.stderr.write(`Harness failed: ${error instanceof Error ? error.message : String(error)}\n`);
+  app.exit(1);
 });

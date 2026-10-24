@@ -274,6 +274,9 @@ describe("parseLunaTips", () => {
       "Per the steering rules, the new line corrects the city.",
       "I will copy them as they stand.",
       "At most 3 short tips allowed.",
+      "The old London tips are dropped since Paris replaces them, and the Paris forecast is the new answer.",
+      "The London answers were replaced by the Paris forecast.",
+      "Paris replaces London, so the Paris forecast is the new answer.",
     ]) expect(isMetaTip(line), line).toBe(true);
     for (const line of [
       "Paris this weekend: sunny Saturday, showers Sunday.",
@@ -284,6 +287,10 @@ describe("parseLunaTips", () => {
       "Raise it at Thursday's steering committee [n1].",
       "Copy Priya on the renewal email.",
       "Offer the first year at 10% off [n2].",
+      "Tips for the weekend: book the Louvre early and carry an umbrella.",
+      "Rail replacement buses replace trains between Stratford and Shenfield on Sunday.",
+      "The old town in Nice is easiest on foot.",
+      "The answer is yes: the rate includes FNC [n1].",
     ]) expect(isMetaTip(line), line).toBe(false);
   });
 
@@ -337,6 +344,34 @@ describe("parseLunaTips", () => {
     expect(parseLunaTips(text)).toEqual(["The latest source for this weekend lists planned works.", "15% of 18,000 is 2,700."]);
     expect(streamingTips(`${text}\n`)).toEqual(parseLunaTips(text));
     expect(parseLunaTips("- Here are the tips:\n- Rain on Saturday in London.")).toEqual(["Rain on Saturday in London."]);
+  });
+
+  it("catches restating the question and narrating the answer, keeping real tips and quoted speech", () => {
+    // Line 2 of the live mic latency test, where STT heard "tube" as "two".
+    const leaked =
+      'The question "Why are there two closures?" most likely means the two weekend Tube closures. The sources do not give a reason for two separate closures, so I\'ll note the works are planned maintenance.';
+    expect(isMetaTip(leaked)).toBe(true);
+    expect(parseLunaTips(`- ${leaked}\n- Check TfL before travelling.`)).toEqual(["Check TfL before travelling."]);
+    for (const line of [
+      'The question "Why are there two closures?" most likely means the two weekend Tube closures.',
+      "The question probably refers to the Circle line works.",
+      "The user is asking why there are two closures.",
+      "Two lines close this weekend. The user means the Tube.",
+      "The works are planned maintenance, so I'll note that.",
+      "I'll mention the planned works.",
+      "I will note the Circle line closure.",
+    ]) expect(isMetaTip(line), line).toBe(true);
+    for (const line of [
+      "Check TfL before travelling.",
+      "The sources I found list the works but don't give one shared reason, so check tfl.gov.uk",
+      '"I\'ll note the delays," the TfL spokesperson said of the District line works.',
+      'TfL said: "We know it is disruptive and I\'ll mention it to the board." bbc.co.uk',
+      "The question of who pays for the works is still open.",
+      "The user guide on tfl.gov.uk lists step-free stations.",
+    ]) {
+      expect(isMetaTip(line), line).toBe(false);
+      expect(parseLunaTips(`- ${line}`), line).toEqual([line]);
+    }
   });
 
   it("drops a [web] tag the model still adds, keeping note cites", () => {

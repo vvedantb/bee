@@ -91,7 +91,7 @@ export type IslandClick = "full-text" | "open-panel" | "close-panel" | null;
 
 /**
  * What a click on the pill does. The status text, when it shows an answer folded to one line, opens that answer in full in the
- * island itself, never the panel; otherwise it does nothing. Only the chevron opens or closes the panel.
+ * island itself, never the panel. Status that is not an answer is routed by island-click.ts statusClick. The chevron toggles the panel.
  */
 export function islandClick(target: "status" | "chevron", args: { panelOpen: boolean; bodyShown: boolean; hasResponse: boolean }): IslandClick {
   if (target === "chevron") return args.panelOpen ? "close-panel" : "open-panel";

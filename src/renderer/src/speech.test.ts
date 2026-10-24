@@ -1,4 +1,6 @@
+import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
+import { readWav, speechSpans } from "../../../test/helpers/wav";
 import { transcribeRequestSchema, type TranscribeResult } from "../../shared/ipc";
 import { END_SILENCE_MS, MAX_PHRASE_MS, MIN_SPEECH_MS, WAV_SAMPLE_RATE, createSegmenter, encodeWav, frameLevel, startMicSession } from "./speech";
 
@@ -67,6 +69,132 @@ describe("createSegmenter", () => {
     feed(segmenter.push, frames(600, tone));
     segmenter.flush();
     expect(onPhrase).toHaveBeenCalledTimes(1);
+  });
+});
+
+// The live mic E2E fixture (espeak-ng): "what's in the news in London today", 2.5 s of silence, "why are there tube closures".
+// Its samples go through the segmenter frame by frame, as the store's mic does, at the file's rate and resampled to 48 kHz.
+const FIXTURE = fileURLToPath(new URL("../../../test/fixtures/london-tube-question.wav", import.meta.url));
+// A sample at or above this is speech; a quieter gap this long separates phrases.
+const SAMPLE_LEVEL = 0.001;
+const GAP_S = 0.5;
+
+/** Linear interpolation to another rate. */
+function resample(samples: Float32Array, from: number, to: number): Float32Array {
+  return Float32Array.from({ length: Math.floor((samples.length * to) / from) }, (_, index) => {
+    const at = (index * from) / to;
+    const low = Math.floor(at);
+    return (samples[low] ?? 0) + ((samples[low + 1] ?? 0) - (samples[low] ?? 0)) * (at - low);
+  });
+}
+
+describe("createSegmenter on the live mic fixture", () => {
+  const wav = readWav(FIXTURE);
+  const spans = speechSpans(wav, SAMPLE_LEVEL, GAP_S);
+
+  // espeak-ng ends each phrase with about 0.5 s of near-silence, so speech ends before the script's silences start.
+  it("has two phrases, measured from its samples", () => {
+    expect(spans.map(({ start, end }) => [Number(start.toFixed(2)), Number(end.toFixed(2))])).toEqual([
+      [0.6, 3.2],
+      [6.19, 8.22],
+    ]);
+  });
+
+  it.each([wav.rate, RATE])("cuts one whole phrase per line, with pre-roll before the onset, at %i Hz", (rate) => {
+    const samples = rate === wav.rate ? wav.samples : resample(wav.samples, wav.rate, rate);
+    const phrases: Array<{ start: number; end: number; samples: Float32Array }> = [];
+    let pushed = 0;
+    const segmenter = createSegmenter({
+      sampleRate: rate,
+      // Fires inside push(), after the frame that ended the phrase was counted.
+      onPhrase: (phrase) => phrases.push({ start: (pushed - phrase.length) / rate, end: pushed / rate, samples: phrase }),
+    });
+    for (let at = 0; at < samples.length; at += FRAME) {
+      const frame = samples.slice(at, at + FRAME);
+      pushed += frame.length;
+      segmenter.push(frame);
+    }
+    segmenter.flush();
+
+    expect(phrases.length).toBe(spans.length);
+    for (const [index, phrase] of phrases.entries()) {
+      const span = spans[index] ?? { start: 0, end: 0 };
+      expect(phrase.start, `phrase ${index + 1} starts ≥ 150 ms before the onset`).toBeLessThanOrEqual(span.start - 0.15);
+      expect(phrase.end, `phrase ${index + 1} runs past the end of speech`).toBeGreaterThanOrEqual(span.end + END_SILENCE_MS / 1000);
+      // The phrase is the file's audio over that span with no frame dropped.
+      const from = Math.round(phrase.start * rate);
+      expect(phrase.samples).toEqual(samples.slice(from, from + phrase.samples.length));
+    }
+    // Neither phrase reaches into the other's speech.
+    expect(phrases[0]?.end ?? Infinity).toBeLessThan(spans[1]?.start ?? 0);
+  });
+});
+
+/** Samples and header rate of a 16-bit mono WAV from encodeWav. */
+function decode(wav: Uint8Array<ArrayBuffer>): { rate: number; samples: Float32Array } {
+  const view = new DataView(wav.buffer);
+  expect(view.getUint32(40, true)).toBe(wav.byteLength - 44);
+  return { rate: view.getUint32(24, true), samples: Float32Array.from({ length: (wav.byteLength - 44) / 2 }, (_, index) => view.getInt16(44 + index * 2, true) / 0x8000) };
+}
+
+/**
+ * A 16 kHz signal at a fractional sample position: windowed sinc over ±32 samples. sin(π(position − k)) is ±sin(π·fraction),
+ * so each value costs one sine. Stands in for Chromium's resampler, which feeds the mic the file at the capture rate.
+ */
+function sincAt(samples: Float32Array, position: number): number {
+  const base = Math.floor(position);
+  const fraction = position - base;
+  if (fraction === 0) return samples[base] ?? 0;
+  const sine = Math.sin(Math.PI * fraction);
+  let sum = 0;
+  for (let at = base - 31; at <= base + 32; at += 1) {
+    const distance = position - at;
+    const window = (1 - (distance / 32) ** 2) ** 2;
+    sum += (samples[at] ?? 0) * ((base - at) % 2 === 0 ? 1 : -1) * (sine / (Math.PI * distance)) * window;
+  }
+  return sum;
+}
+
+// The fixture is 16 kHz, so at the capture rate it holds nothing above 8 kHz: a clean encoder should give the file back.
+describe("encodeWav on the live mic fixture", () => {
+  const wav = readWav(FIXTURE);
+
+  it.each([44_100, 48_000])("gives back each phrase the segmenter cuts, in 4096-sample frames at %i Hz", (rate) => {
+    const scale = wav.rate / rate;
+    const samples = Float32Array.from({ length: Math.floor(wav.samples.length / scale) }, (_, index) => sincAt(wav.samples, index * scale));
+    const phrases: Array<{ from: number; samples: Float32Array }> = [];
+    let pushed = 0;
+    // As startMicSession does: each phrase the segmenter emits goes to encodeWav at the capture rate.
+    const segmenter = createSegmenter({ sampleRate: rate, onPhrase: (phrase) => phrases.push({ from: pushed - phrase.length, samples: phrase }) });
+    for (let at = 0; at < samples.length; at += FRAME) {
+      const frame = samples.slice(at, at + FRAME);
+      pushed += frame.length;
+      segmenter.push(frame);
+    }
+    segmenter.flush();
+    expect(phrases.length).toBe(2);
+
+    for (const [index, phrase] of phrases.entries()) {
+      const label = `phrase ${index + 1} at ${rate} Hz`;
+      const encoded = decode(encodeWav(phrase.samples, rate));
+      expect(encoded.rate, label).toBe(WAV_SAMPLE_RATE);
+      // Within one 16 kHz sample of the captured audio's duration.
+      expect(Math.abs(encoded.samples.length / WAV_SAMPLE_RATE - phrase.samples.length / rate), label).toBeLessThan(1 / WAV_SAMPLE_RATE);
+      // Output sample n is the file at the phrase's start plus n, a fractional position when the rate is not a multiple of 16 kHz.
+      const start = (phrase.from * WAV_SAMPLE_RATE) / rate;
+      const original = Float32Array.from(encoded.samples, (_, at) => sincAt(wav.samples, start + at));
+      const residual = Float32Array.from(encoded.samples, (sample, at) => sample - (original[at] ?? 0));
+      // No lag or gain to fit: a dropped, repeated or shifted sample would wreck this.
+      const snr = 20 * Math.log10(frameLevel(original) / frameLevel(residual));
+      expect(snr, `${label}: SNR against the file, dB`).toBeGreaterThan(30);
+      // Each capture frame joins the next without a click: the residual there is no worse than over the whole phrase.
+      for (let boundary = FRAME; boundary < phrase.samples.length; boundary += FRAME) {
+        const at = Math.round((boundary * WAV_SAMPLE_RATE) / rate);
+        expect(frameLevel(residual.slice(at - 16, at + 16)), `${label}: frame boundary at input ${boundary}`).toBeLessThan(
+          4 * frameLevel(residual) + 1e-4,
+        );
+      }
+    }
   });
 });
 
@@ -182,7 +310,21 @@ describe("encodeWav", () => {
     expect(view.getUint16(34, true)).toBe(16);
     expect(view.getUint32(40, true)).toBe(WAV_SAMPLE_RATE * 2);
     expect(wav.byteLength).toBe(44 + WAV_SAMPLE_RATE * 2);
-    expect(view.getInt16(44, true)).toBe(Math.round(0.5 * 0x7fff));
+    // Away from the edges, where the filter reaches past the samples.
+    expect(view.getInt16(44 + 2 * (WAV_SAMPLE_RATE / 2), true)).toBe(Math.round(0.5 * 0x7fff));
+  });
+
+  // A tone at the capture rate, encoded, as dB relative to the input level, measured clear of the edges.
+  function toneGain(hz: number, rate: number): number {
+    const wav = encodeWav(Float32Array.from({ length: rate }, (_, index) => 0.5 * Math.sin((2 * Math.PI * hz * index) / rate)), rate);
+    const out = decode(wav).samples.slice(2000, -2000);
+    return 20 * Math.log10(frameLevel(out) / (0.5 / Math.SQRT2));
+  }
+
+  it.each([44_100, 48_000])("keeps 0–6 kHz and rejects 9–15 kHz before downsampling from %i Hz", (rate) => {
+    for (const hz of [300, 1000, 3000, 6000]) expect(Math.abs(toneGain(hz, rate)), `${hz} Hz passes`).toBeLessThan(1);
+    // Above 8 kHz a 16 kHz WAV cannot hold the tone, so anything left is aliasing.
+    for (const hz of [9000, 10_000, 12_000, 15_000]) expect(toneGain(hz, rate), `${hz} Hz is rejected`).toBeLessThan(-40);
   });
 
   it("clips out-of-range samples", () => {
