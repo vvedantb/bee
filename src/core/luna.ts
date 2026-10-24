@@ -58,6 +58,9 @@ function safeJson(value: unknown): string {
 
 /** Ends a tip line before its source: "- The Circle line is closed on Saturday. | src: TfL" (parseLunaTips). */
 const SOURCE_DELIMITER = " | src: ";
+/** Starts a line of the model's own notes ("~ The London tips are out of date."), which Bee never shows (parseLunaTips, streamingTips). */
+const NOTE_PREFIX = "~ ";
+const NOTE_LINE = /^~(?:\s|$)/;
 
 // Cached (gateway.ts ANTHROPIC_CACHE), so it must not change between turns: the tip cap and the steering rules, which do,
 // go in the user message's tail (buildLunaPrompt).
@@ -92,6 +95,8 @@ export const LUNA_SYSTEM = [
   "Never narrate tool use or searching: no \"I'll search\", \"Let me check\" or \"The search failed\". Output only the final tips.",
   "Never explain your reasoning or these rules: do not say which line you answer, which tips you keep or add, or how many tips you may give.",
   "Never say which request you are answering or what you will do, such as \"The latest request is Paris, so I'll answer…\". Start with the answer.",
+  `Any planning or note to yourself, such as which tips to keep or drop or which source to use, goes on its own line starting with "${NOTE_PREFIX}", or is left out. Bee never shows those lines. Never put it in a tip.`,
+  "Never write as yourself in a tip: no \"I\", \"I'll\", \"me\" or \"my\". Put words for the user to say in quotes, for example: Say \"I can confirm by Friday.\"",
 ].join("\n");
 
 /** Added to the message tail when the turn gets no web_search tool (web-search.ts needsWebSearch, or a provider that rejects it). */
@@ -105,6 +110,7 @@ export const LUNA_STEERING_RULES = [
   "If a new line asks a question, add a tip that answers it.",
   "If the new lines need no tip, reply with the shown tips unchanged.",
   "Write only the tips themselves, never a note about which tips you kept, copied or added.",
+  `A note on which tips you keep, drop or replace, or which source is newer, goes on a "${NOTE_PREFIX}" line, never in a tip.`,
 ].join("\n");
 
 // The tip cap is 2 for a fresh turn and 3 while earlier tips are kept (steering.ts tipCap).
@@ -334,13 +340,46 @@ const META_TIPS_NOTE =
 const META_ANSWER_NOTE =
   /^(?:(?:the (?:latest|newest|new|last|current) (?:request (?:is|was|asks?|wants?|changes?|switches?|moves?)|(?:transcript )?line (?:asks?|wants?|changes?|switches?|moves?)|question (?:asks?|is about|changes?))\b|since (?:you|they|the user) [^.!?;:]*?,\s*I(?:['’]ll| will)\b|(?:I(?:['’]ll| will|['’]m going to| am going to)|let me) answer\b).*?(?:[.!?;:]+(?=\s|$)|$)\s*)+/i;
 
+// Bee speaking as itself: "I'll", "I'm", "me", "my", or "I" before a verb. Not "Option I", "Phase I trials" or "World War I" (a
+// capitalised word before it), "I-95" or "Grade-I".
+const FIRST_PERSON = /\bI['’](?:ll|m|ve|d)\b|(?<![-–/]|\p{Lu}[\p{L}\p{N}'’.-]*\s+)\bI\s+(?=\p{Ll})|\b(?:me|my|myself)\b|(?:^|[.!?]\s+)My\b/u;
+// A sentence about the tips, the answer or the sources as things Bee works on: "The most recent Paris source is a Sortiraparis
+// piece", "The London tips were about London", "…, so they're dropped", "the newer one is used". Real news about sources ("Sources
+// differ on details") and tips ("The tips in Paris are usually included") stays.
+const PROCESS_SENTENCE = [
+  /\bthe (?:most recent|newest|latest|newer|older|oldest|best|main|only) (?:[\w'’-]+ ){0,3}sources? (?:is|are|was|were)\b/i,
+  /\b(?:the|those|these|earlier|previous|shown|old|other)\s+(?:[\p{L}'’-]+\s+){0,3}(?:tips|answers)\s+(?:were|are|was|is)\s+(?:about|for|on)\s+(?:the\s+)?\p{Lu}/iu,
+  /\bso (?:they|it|these|those|both)(?:['’]re|['’]s| are| is| were| was| get| gets) (?:now )?(?:dropped|kept|removed|replaced|ignored|discarded|superseded|excluded|out)\b/i,
+  /\b(?:the (?:newer|older|newest|latest|other) one|that source|this source) (?:is|was|gets) (?:used|kept|preferred|dropped|ignored)\b/i,
+];
+// Quoted speech, and words for the user to say after "Say:" or "Ask:", are not Bee speaking: 'TfL said: "I'll mention it."'.
+const QUOTED = /"[^"]*"|“[^”]*”|‘[^’]*’(?!\p{L})/gu;
+const SPEECH = /\b(?:say|ask|tell them|reply|respond|try|suggest|propose|open with)\s*:[^.!?]*/gi;
+const SENTENCE_END = /[.!?]+(?:\s+|$)/g;
+
+/** True for a sentence in which Bee speaks as itself or about its own tips and sources, outside quotes. */
+const speaksAsBee = (sentence: string) => FIRST_PERSON.test(sentence) || PROCESS_SENTENCE.some((pattern) => pattern.test(sentence));
+
 /**
- * A tip without the model's label for the question, a note on which tips apply or which request it answers, a status sentence or
- * a trailing header: "The tube closure question: x. Writing tips now. Tips:" → "X."
+ * A tip without its sentences in Bee's own voice: "The newest source is Sortiraparis, so I'll rely on it. Rain on Saturday." →
+ * "Rain on Saturday.". Quotes are blanked first (same length), so a full stop or an "I" inside one never counts.
+ */
+function dropBeeSentences(tip: string): string {
+  const masked = tip.replace(QUOTED, (quote) => "x".repeat(quote.length)).replace(SPEECH, (speech) => "x".repeat(speech.length));
+  const ends = [...masked.matchAll(SENTENCE_END)].map((match) => match.index + match[0].length).filter((end) => end < tip.length);
+  const bounds = [0, ...ends, tip.length];
+  const spans = ends.length === 0 ? [[0, tip.length]] : bounds.slice(1).map((end, index) => [bounds[index] ?? 0, end]);
+  const kept = spans.filter(([start, end]) => !speaksAsBee(masked.slice(start, end)));
+  return kept.length === spans.length ? tip : kept.map(([start, end]) => tip.slice(start, end)).join("").trim();
+}
+
+/**
+ * A tip without the model's label for the question, a note on which tips apply or which request it answers, a status sentence,
+ * a trailing header or a sentence in its own voice: "The tube closure question: x. Writing tips now. Tips:" → "X."
  */
 function tidyTip(line: string): string {
   const unlabelled = line.replace(META_LABEL, "").replace(META_TIPS_NOTE, "").replace(META_ANSWER_NOTE, "");
-  const tidy = unlabelled.replace(META_STATUS, "").replace(META_HEADER, "").trim();
+  const tidy = dropBeeSentences(unlabelled.replace(META_STATUS, "").replace(META_HEADER, "").trim());
   return unlabelled === line ? tidy : tidy.charAt(0).toUpperCase() + tidy.slice(1);
 }
 
@@ -462,6 +501,9 @@ const UNNAMED_SOURCE = new RegExp(
   "gu",
 );
 const REPORTING_VERB = /^(?:says?|said|reports?|reported|notes?|states?|claims?|suggests?|adds?)$/;
+// A tip that opens on its sources, with the answer's first letter in group 1: "The sources say the line is shut." → "The line is
+// shut.". "Sources differ on details" is a claim and stays.
+const SOURCES_SAY = /^(?:the\s+)?sources?\s+(?:says?|said|shows?|reports?|agree)(?:\s+that)?\s+(\p{L})/iu;
 
 /** True when "(ARR)" spells the words before it ("annual recurring revenue (ARR)"): a definition, not a source. */
 function definesAcronym(before: string, name: string): boolean {
@@ -493,6 +535,7 @@ function sourceTags(tip: string): { text: string; names: string[] } {
     return "";
   };
   const text = tip
+    .replace(SOURCES_SAY, (_, letter: string) => letter.toUpperCase())
     .replace(PREAMBLE_TAG, (match: string, start: string, fresh = "", name: string, letter: string) => {
       // The name takes "-based" with it, as hyphens are part of a name ("Météo-France").
       const based = name.match(/^(.+)-based$/);
@@ -556,7 +599,7 @@ function sourceField(field: string): { label: string | null; cite: string | null
  */
 function parseTipLine(line: string): LunaTip | null {
   const [head = "", ...field] = stripMarkdown(line.trim()).split("|");
-  const text = tidyTip(head.trim());
+  const text = NOTE_LINE.test(head) ? "" : tidyTip(head.trim());
   if (!isTip(text)) return null;
   const { label, cite } = sourceField(field.join("|"));
   const whole = cite ? `${text} ${cite}` : text;
@@ -576,7 +619,8 @@ export function parseLunaTips(text: string, maxTips = MAX_TIPS): LunaTip[] {
 /** One step's stream in order: its text parts and its tool calls (local or provider-run, such as web_search). */
 export type AnswerSegment = { type: "text"; text: string } | { type: "tool" };
 
-const TIP_START = /^(?:[-*•]|\d+[.)])\s/;
+// A note line ("~ …") starts a line too, so it never joins the tip before it.
+const TIP_START = /^(?:[-*•~]|\d+[.)])\s/;
 const NO_SPACE_BEFORE = /^[.,;:!?)\]'’]/;
 
 /** Two text parts as one: the whitespace between becomes one newline (if it had one, or a tip starts) or one space. */
@@ -613,7 +657,9 @@ export function streamingTips(text: string, maxTips = MAX_TIPS): LunaTip[] {
   // delimiter shows. Its source and any tags are read once the line ends: until then a "per …" may still be half written.
   const open = (parts.pop() ?? "").replace(/\S*$/, "").split("|")[0] ?? "";
   const tips = parts.flatMap((line) => parseTipLine(line) ?? []);
-  const live = tidyTip(stripMarkdown(open.replace(/\s*\([^)]*$/, "").trim()));
+  const stripped = stripMarkdown(open.replace(/\s*\([^)]*$/, "").trim());
+  // A note line ("~ …") never shows, even before its first word ends.
+  const live = NOTE_LINE.test(stripped) ? "" : tidyTip(stripped);
   // It only loses a repeat, so text never vanishes and comes back while a repeat after it is still too short to spot.
   if (live.split(/\s+/).length >= MIN_LIVE_WORDS && isTip(live)) tips.push({ text: clampTip(dropRepeat(live)), source: null });
   return tips.slice(0, maxTips);

@@ -40,7 +40,10 @@ const STATE_SHOT = "conversation-searching";
 const META_WORDS = /\b(?:tips?|newest line|word for word|limit is)\b/i;
 // A header left at the end of a tip or alone: "…upgrade works. Tips:", "Sources:".
 const META_HEADER = /(?:^|[.!?]\s+)(?:here (?:are|is) (?:the |my |some |your )?)?(?:tips?|answers?|sources?|summary)\s*:\s*$/i;
-const looksMeta = (tip: string) => isMetaTip(tip) || META_WORDS.test(tip) || META_HEADER.test(tip);
+// Bee in its own voice outside quotes ("I'll rely on it", "so they're dropped") or a "~ " note line.
+const BEE_VOICE = /^~\s|\bI['’](?:ll|m|ve|d)\b|\b(?:me|my)\b/;
+// isMetaTip also flags each sentence core/luna.ts dropBeeSentences would drop; BEE_VOICE is a cruder second check.
+const looksMeta = (tip: string) => isMetaTip(tip) || META_WORDS.test(tip) || META_HEADER.test(tip) || BEE_VOICE.test(tip.replace(/"[^"]*"|“[^”]*”/g, ""));
 // Source wording left in a tip's text: an index marker ("[2-2]"), a "(Publisher)" or dated tag, or "per <Publisher>". The source
 // belongs in its own field (core/luna.ts parseLunaTips).
 const SOURCE_WORDING = /\[\d+\s*[-–]\s*\d+\]|\b[Pp]er\s+(?:the\s+)?\p{Lu}/u;
