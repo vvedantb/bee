@@ -29,7 +29,7 @@ import { tipKey } from "../../core/steering";
 import type { PipelineResult, SettingsView } from "../../shared/ipc";
 import { bodyFollowsNewest, islandClick, mcpErrorNote, timingsLabel, timingsTitle } from "./island";
 import { NOTCH_LOGO_PX } from "./logo";
-import { statusClick, type StatusClick } from "./island-click";
+import { focusKeyFieldWhenReady, GATEWAY_KEY_FIELD_ID, statusClick, type StatusClick } from "./island-click";
 import { NOTCH_BUTTON, NOTCH_UPDATE_BUTTON, logoState, notchLine, workingLabel, type NotchLine } from "./notch";
 import { actions, answerFolded, displayResult, islandOpen, useBee, type BeeState, type SummaryState, type UpdateState } from "./store";
 import { SyncCard, SyncSection, TeamSection, syncedWith } from "./Teams";
@@ -153,8 +153,14 @@ function UpdateButton({ update }: { update: UpdateState }) {
   );
 }
 
+async function openKeyField(): Promise<void> {
+  await actions.openTab("settings");
+  await focusKeyFieldWhenReady({ find: () => document.getElementById(GATEWAY_KEY_FIELD_ID), nextFrame: (run) => requestAnimationFrame(run) });
+}
+
 function openStatus(click: StatusClick): void {
   if (click === "full-text") actions.openFullText();
+  else if (click === "gateway-key") void openKeyField();
   else if (click === "panel") void actions.setExpanded(true);
   else if (click) void actions.openTab(click);
 }
@@ -460,6 +466,7 @@ function SettingsTab({ state, settings }: { state: BeeState; settings: SettingsV
       <form key={formKey} className="settings" onSubmit={(event) => void onSubmit(event)}>
         <SecretField
           name="gatewayApiKey"
+          id={GATEWAY_KEY_FIELD_ID}
           label="AI Gateway API key"
           placeholder="vck_…"
           saved={settings.gatewayKeySource === "saved"}

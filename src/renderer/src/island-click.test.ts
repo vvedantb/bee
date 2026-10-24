@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { PipelineResult } from "../../shared/ipc";
-import { statusClick } from "./island-click";
+import { focusKeyField, focusKeyFieldWhenReady, KEY_FIELD_FRAMES, statusClick } from "./island-click";
 import { notchLine, type NotchStatusKind } from "./notch";
 
 const answered: PipelineResult = {
@@ -43,11 +43,11 @@ describe("statusClick", () => {
     expect(statusClick({ kind: "answer", panelOpen: true, bodyShown: false, answerFolded: true })).toBeNull();
   });
 
-  it("sends the missing AI Gateway key status to Settings, where the key field is first, even with the panel open", () => {
+  it("sends the missing AI Gateway key status to the key field in Settings, even with the panel open", () => {
     const noKey: Parameters<typeof notchLine>[0] = { ...ready, settings: { gatewayKeySource: "none", meetingMode: false } };
     expect(notchLine(noKey, true)).toEqual({ kind: "gateway-key", text: "Add your AI Gateway key in Settings" });
-    expect(clickFor(noKey)).toBe("settings");
-    expect(statusClick({ kind: "gateway-key", panelOpen: true, bodyShown: false, answerFolded: false })).toBe("settings");
+    expect(clickFor(noKey)).toBe("gateway-key");
+    expect(statusClick({ kind: "gateway-key", panelOpen: true, bodyShown: false, answerFolded: false })).toBe("gateway-key");
   });
 
   it("sends a mic error to the Live tab, not the full text of a stale answer", () => {
@@ -76,5 +76,74 @@ describe("statusClick", () => {
     expect(statusClick({ ...closed, kind: "loading" })).toBeNull();
     const info: NotchStatusKind[] = ["sign-in", "working", "idle"];
     for (const kind of info) expect(statusClick({ kind, panelOpen: true, bodyShown: false, answerFolded: false })).toBeNull();
+  });
+});
+
+describe("focusKeyField", () => {
+  it("scrolls the key field into view, then focuses it without a second scroll", () => {
+    const calls: string[] = [];
+    const scrollIntoView = vi.fn(() => void calls.push("scroll"));
+    const focus = vi.fn(() => void calls.push("focus"));
+    expect(focusKeyField({ scrollIntoView, focus })).toBe(true);
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: "nearest" });
+    expect(focus).toHaveBeenCalledWith({ preventScroll: true });
+    expect(calls).toEqual(["scroll", "focus"]);
+  });
+
+  it("does nothing when the key field is not on screen", () => {
+    expect(focusKeyField(null)).toBe(false);
+  });
+});
+
+describe("focusKeyFieldWhenReady", () => {
+  /** A key field that turns up on frame `at` (0 = already there), a frame queue run by hand, and how many frames were asked for. */
+  function setup(at: number) {
+    const field = { scrollIntoView: vi.fn(), focus: vi.fn() };
+    const queue: (() => void)[] = [];
+    let frame = 0;
+    const find = vi.fn(() => (frame >= at ? field : null));
+    const nextFrame = (run: () => void) => void queue.push(run);
+    const runFrames = () => {
+      for (let run = queue.shift(); run; run = queue.shift()) {
+        frame += 1;
+        run();
+      }
+    };
+    return { field, find, nextFrame, runFrames, frames: () => frame };
+  }
+
+  it("focuses the field at once when it is already on screen", async () => {
+    const { field, find, nextFrame, frames } = setup(0);
+    await expect(focusKeyFieldWhenReady({ find, nextFrame })).resolves.toBe(true);
+    expect(field.focus).toHaveBeenCalledOnce();
+    expect(frames()).toBe(0);
+  });
+
+  it("keeps looking each frame until the field renders, then focuses it once", async () => {
+    const { field, find, nextFrame, runFrames, frames } = setup(4);
+    const done = focusKeyFieldWhenReady({ find, nextFrame });
+    runFrames();
+    await expect(done).resolves.toBe(true);
+    expect(frames()).toBe(4);
+    expect(find).toHaveBeenCalledTimes(5);
+    expect(field.focus).toHaveBeenCalledOnce();
+  });
+
+  it("gives up after the frame limit when the field never renders", async () => {
+    const { field, find, nextFrame, runFrames, frames } = setup(Infinity);
+    const done = focusKeyFieldWhenReady({ find, nextFrame });
+    runFrames();
+    await expect(done).resolves.toBe(false);
+    expect(frames()).toBe(KEY_FIELD_FRAMES);
+    expect(find).toHaveBeenCalledTimes(KEY_FIELD_FRAMES + 1);
+    expect(field.focus).not.toHaveBeenCalled();
+  });
+
+  it("honours a custom frame limit", async () => {
+    const { find, nextFrame, runFrames, frames } = setup(Infinity);
+    const done = focusKeyFieldWhenReady({ find, nextFrame, frames: 3 });
+    runFrames();
+    await expect(done).resolves.toBe(false);
+    expect(frames()).toBe(3);
   });
 });
