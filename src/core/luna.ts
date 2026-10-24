@@ -68,6 +68,7 @@ export const LUNA_SYSTEM = [
   "You are Bee, a quiet meeting copilot shown in a small overlay.",
   "Give the user a few short tips, no more than the limit given at the end of the message.",
   "Each tip is one line, starts with \"- \", and is under 20 words.",
+  "Write each clause as a complete, grammatical sentence with its own subject and verb.",
   "Reply in plain text only. No markdown: no bold, italic, headings or backticks, and no lists other than the \"- \" tip prefix.",
   "Do not write links or markdown citations. Bee shows the sources separately.",
   "When the transcript has a \"Now\" part, answer only those lines. Earlier lines and your earlier answers are background: use them only if a Now line refers back to them, and never add tips about them otherwise.",
@@ -93,6 +94,7 @@ export const LUNA_SYSTEM = [
   "Never invent facts, figures or dates about the user's own work that are not in the transcript or notes.",
   "If nothing useful can be said, reply with exactly NONE.",
   "Never narrate tool use or searching: no \"I'll search\", \"Let me check\" or \"The search failed\". Output only the final tips.",
+  "Never describe the search, the results or what was or was not found. If nothing current is found, give the newest item plainly with its date.",
   "Never explain your reasoning or these rules: do not say which line you answer, which tips you keep or add, or how many tips you may give.",
   "Never say which request you are answering or what you will do, such as \"The latest request is Paris, so I'll answer…\". Start with the answer.",
   `Any planning or note to yourself, such as which tips to keep or drop or which source to use, goes on its own line starting with "${NOTE_PREFIX}", or is left out. Bee never shows those lines. Never put it in a tip.`,
@@ -351,13 +353,20 @@ const PROCESS_SENTENCE = [
   /\b(?:the|those|these|earlier|previous|shown|old|other)\s+(?:[\p{L}'’-]+\s+){0,3}(?:tips|answers)\s+(?:were|are|was|is)\s+(?:about|for|on)\s+(?:the\s+)?\p{Lu}/iu,
   /\bso (?:they|it|these|those|both)(?:['’]re|['’]s| are| is| were| was| get| gets) (?:now )?(?:dropped|kept|removed|replaced|ignored|discarded|superseded|excluded|out)\b/i,
   /\b(?:the (?:newer|older|newest|latest|other) one|that source|this source) (?:is|was|gets) (?:used|kept|preferred|dropped|ignored)\b/i,
+  // The search narrated instead of the news: "Nothing newer for today appeared in the results.", "The Met Police newsroom has the
+  // most recent London items". A police search ("The search found a car in Ealing") is news and stays.
+  /\b(?:appeared|appears|showed up|shows up|turned up|came up) in (?:the |my |these )?(?:search )?results\b/i,
+  /\b(?:the|my|these|those|search) results (?:show|shows|showed|include|included|list|listed|contain|contained|mention|mentioned)\b/i,
+  /\bnothing (?:newer|more recent|recent|new|current|later|else)\b[^.!?]*?\b(?:found|appeared|turned up|came up|showed up)\b/i,
+  /\b(?:my|the) (?:web )?search(?:es)? (?:found|finds|returned|returns|turned up|shows?|showed) (?:no|nothing|only|(?:\d+ )?(?:items?|results?|articles?|stories|pieces?|posts?)\b|the (?:most recent|newest|latest))/i,
+  /\b(?:has|had|lists?|listed|carries|shows?) the (?:most recent|newest|latest) (?:[\p{L}'’-]+ ){0,3}(?:items|results|articles|stories|pieces|posts)\b/iu,
 ];
 // Quoted speech, and words for the user to say after "Say:" or "Ask:", are not Bee speaking: 'TfL said: "I'll mention it."'.
 const QUOTED = /"[^"]*"|“[^”]*”|‘[^’]*’(?!\p{L})/gu;
 const SPEECH = /\b(?:say|ask|tell them|reply|respond|try|suggest|propose|open with)\s*:[^.!?]*/gi;
 const SENTENCE_END = /[.!?]+(?:\s+|$)/g;
 
-/** True for a sentence in which Bee speaks as itself or about its own tips and sources, outside quotes. */
+/** True for a sentence in which Bee speaks as itself or about its own tips, sources or search, outside quotes. */
 const speaksAsBee = (sentence: string) => FIRST_PERSON.test(sentence) || PROCESS_SENTENCE.some((pattern) => pattern.test(sentence));
 
 /**

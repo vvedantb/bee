@@ -777,6 +777,49 @@ describe("Bee's own voice and note lines", () => {
     expect(parseTexts("- ~15°C on Saturday afternoon.")).toEqual(["~15°C on Saturday afternoon."]);
   });
 
+  it("asks for whole sentences and no narration of the search or its results", () => {
+    expect(LUNA_SYSTEM).toContain("Write each clause as a complete, grammatical sentence with its own subject and verb.");
+    expect(LUNA_SYSTEM).toContain("Never describe the search, the results or what was or was not found. If nothing current is found, give the newest item plainly with its date.");
+  });
+
+  it("drops sentences that narrate the search or its results, and the tip when nothing remains", () => {
+    // Live run 3: the whole tip describes the results, not the news.
+    const live = "The Met Police newsroom has the most recent London items, dated 22–23 October. Nothing newer for today appeared in the results.";
+    expect(isMetaTip(live)).toBe(true);
+    expect(parseLunaTips(`- ${live}`)).toEqual([]);
+    expect(parseLunaTips(`- ${live} | src: Met Police`)).toEqual([]);
+    expect(streamingTips(`- ${live}\n`)).toEqual([]);
+    const cases: [string, string][] = [
+      ["A man was jailed for murder in Ealing on 23 October. Nothing newer was found.", "A man was jailed for murder in Ealing on 23 October."],
+      ["The results show a Circle line closure on Saturday.", ""],
+      ["The search results include two TfL closures. The Circle line shuts on Saturday.", "The Circle line shuts on Saturday."],
+      ["The search found no items for today. The Circle line shuts on Saturday.", "The Circle line shuts on Saturday."],
+      ["My search turned up only older pieces.", ""],
+      ["BBC London lists the latest stories from 22 October.", ""],
+    ];
+    for (const [line, kept] of cases) {
+      expect(isMetaTip(line), line).toBe(true);
+      expect(parseTexts(`- ${line}`), line).toEqual(kept ? [kept] : []);
+      expect(streamTexts(`- ${line}\n`), line).toEqual(kept ? [kept] : []);
+    }
+  });
+
+  it("keeps news tips that mention a search, results or a newsroom", () => {
+    for (const line of [
+      "Met Police: a man was jailed for life for murder in Ealing, sentenced 23 October.",
+      "The search found a car abandoned in Ealing on 22 October.",
+      "Police widened the search for a missing teenager in Croydon.",
+      "Election results are due on Friday morning.",
+      "Nothing changed on the Elizabeth line this weekend.",
+      "The Met Police newsroom is open to press enquiries.",
+      "Piccadilly line trains skip Turnham Green on Sunday.",
+    ]) {
+      expect(isMetaTip(line), line).toBe(false);
+      expect(parseLunaTips(`- ${line}`), line).toEqual([{ text: line, source: null }]);
+      expect(streamingTips(`- ${line}\n`), line).toEqual([{ text: line, source: null }]);
+    }
+  });
+
   it("drops a leading \"The sources say\" and keeps the clause", () => {
     const cases: [string, string][] = [
       ["The sources say the Circle line shuts on Saturday.", "The Circle line shuts on Saturday."],
