@@ -684,6 +684,46 @@ async function mcpChange(change: () => Promise<McpServerView[]>, staleTestId?: s
   }
 }
 
+/** What speech-to-text calls for each spoken phrase, in this order. Shared by the mic and the E2E mic (startTestMic). */
+const phraseCallbacks = {
+  // The phrase is over: show "Got it…" now, before speech-to-text. A cough never gets here.
+  onSpeechEnd: () => {
+    heardPending += 1;
+    // Spoken over a run: the line steers it even if the run settles before speech-to-text is done.
+    if (state.busy) spokenDuringRun = true;
+    set({ heard: true });
+  },
+  // Same path as a typed line; latestRun drops results from superseded runs.
+  onLine: (line: string) => void actions.simulateLine(line, "mic"),
+  // After onLine, so busy is already set when the ack ends and the pill never falls back to "Listening…".
+  onSettled: () => {
+    heardPending = Math.max(0, heardPending - 1);
+    if (heardPending === 0) spokenDuringRun = false;
+    if (heardPending === 0 && state.heard) set({ heard: false });
+  },
+};
+
+/**
+ * E2E only (test/e2e/conversation-page.ts): the mic is on with no capture, and phrase() hands a phrase's text to the same
+ * callbacks speech-to-text calls, so no audio or STT call is made. actions.stopMic turns it off.
+ */
+export function startTestMic(): { phrase: (text: string) => void } {
+  stopMic = () => undefined;
+  set({ mic: { on: true, level: 0, error: null } });
+  return {
+    phrase: (text) => {
+      phraseCallbacks.onSpeechEnd();
+      phraseCallbacks.onLine(text);
+      phraseCallbacks.onSettled();
+    },
+  };
+}
+
+/** E2E only: pipeline runs started since load, superseded ones included. */
+export function runsStarted(): number {
+  return latestRun;
+}
+
 export const actions = {
   async refreshSettings(): Promise<void> {
     set({ settings: await window.bee.getSettings() });
@@ -915,22 +955,8 @@ export const actions = {
       const mic = startMicSession({
         sampleRate: capture.sampleRate,
         transcribe: transcribePhrase,
-        // The phrase is over: show "Got it…" now, before speech-to-text. A cough never gets here.
-        onSpeechEnd: () => {
-          heardPending += 1;
-          // Spoken over a run: the line steers it even if the run settles before speech-to-text is done.
-          if (state.busy) spokenDuringRun = true;
-          set({ heard: true });
-        },
-        // Same path as a typed line; latestRun drops results from superseded runs.
-        onLine: (line) => void actions.simulateLine(line, "mic"),
+        ...phraseCallbacks,
         onError: (error) => setMic({ error }),
-        // After onLine, so busy is already set when the ack ends and the pill never falls back to "Listening…".
-        onSettled: () => {
-          heardPending = Math.max(0, heardPending - 1);
-          if (heardPending === 0) spokenDuringRun = false;
-          if (heardPending === 0 && state.heard) set({ heard: false });
-        },
       });
       capture.start((frame) => setMic({ level: Math.min(1, mic.push(frame) * 4) }));
       let micOn = true;

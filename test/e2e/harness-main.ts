@@ -12,6 +12,9 @@
 // With BEE_E2E_MCP_FILE (the live MCP test), Luna gets the MCP servers in that JSON file, re-read on every run so tokens can
 // rotate while the test runs, and every MCP tool call is reported on stdout as "E2E_MCP_CALL {...}". Tokens are never printed.
 // BEE_E2E_QUESTIONS is passed to the page as ?questions=. Page lines starting "E2E_MARK " are copied to stdout.
+// The conversation page renders the real store and App, so it gets the island's 480 × 360 response window. With BEE_E2E_SHOTS_DIR
+// it is passed ?shots=1, and each "E2E_SHOT {"name"}" line it logs captures the window to <BEE_E2E_SHOTS_DIR>/<name>.png, reported
+// on stdout as "E2E_SHOT_FILE {"file"}". The store's window resizes are answered and ignored.
 import { BrowserWindow, app, ipcMain, session } from "electron";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -91,6 +94,16 @@ async function captureShots(dir: string, names: string[]): Promise<{ files: stri
     files.push(file);
   }
   return { files, pages };
+}
+
+const shotRequest = z.object({ name: z.string().regex(/^[a-z0-9-]+$/) });
+
+/** A page asked for a capture of its window mid-run (the conversation page). */
+async function captureNamed(win: BrowserWindow, dir: string, name: string): Promise<void> {
+  mkdirSync(dir, { recursive: true });
+  const file = join(dir, `${name}.png`);
+  writeFileSync(file, (await win.webContents.capturePage()).toPNG());
+  process.stdout.write(`E2E_SHOT_FILE ${JSON.stringify({ file })}\n`);
 }
 
 const mcpFileSchema = z.object({
@@ -179,17 +192,21 @@ void app.whenReady().then(async () => {
   // Short timings so the popup and the debounced leave happen within the test.
   registerTeamsIpc({ relayUrl: relayUrlFromEnv(process.env.BEE_RELAY_URL), detector: createStubDetector(), timing: { enterMs: 300, leaveMs: 1000 } });
   session.defaultSession.setPermissionRequestHandler((_contents, permission, callback) => callback(permission === "media"));
+  ipcMain.handle(IPC.setWindowSize, () => undefined);
 
+  const island = /conversation-page/.test(page);
   const win = new BrowserWindow({
     show: false,
+    ...(island ? { width: 480, height: 360, frame: false, transparent: true, backgroundColor: "#00000000" } : {}),
     webPreferences: { preload, sandbox: true, contextIsolation: true, nodeIntegration: false },
   });
   win.webContents.on("console-message", ({ message }) => {
+    if (message.startsWith("E2E_SHOT ") && shotsDir) void captureNamed(win, shotsDir, shotRequest.parse(JSON.parse(message.slice("E2E_SHOT ".length))).name);
     // The live MCP page marks each run, so the test can tell which E2E_MCP_CALL lines belong to it.
     if (message.startsWith("E2E_MARK ")) process.stdout.write(`${message}\n`);
     if (!message.startsWith("E2E_RESULT ")) return;
     process.stdout.write(`${message}\n`);
     app.exit(0);
   });
-  void win.loadFile(page, { query: { token: process.env.BEE_E2E_TOKEN || fakeSessionToken(), invite: process.env.BEE_E2E_INVITE ?? "", questions: process.env.BEE_E2E_QUESTIONS ?? "" } });
+  void win.loadFile(page, { query: { token: process.env.BEE_E2E_TOKEN || fakeSessionToken(), invite: process.env.BEE_E2E_INVITE ?? "", questions: process.env.BEE_E2E_QUESTIONS ?? "", shots: shotsDir ? "1" : "" } });
 });

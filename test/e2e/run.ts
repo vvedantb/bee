@@ -21,6 +21,14 @@ const stubStyles: Plugin = {
   },
 };
 
+// Pages that render the real store and App get a signed-in Clerk stand-in (clerk-stub.ts) instead of Clerk's hosted sign-in.
+const stubClerk: Plugin = {
+  name: "stub-clerk",
+  setup(b) {
+    b.onResolve({ filter: /^@clerk\/electron\/react$/ }, () => ({ path: `${root}test/e2e/clerk-stub.ts` }));
+  },
+};
+
 function builtStyles(): string | null {
   const dir = `${root}out/renderer/assets`;
   const file = existsSync(dir) ? readdirSync(dir).find((name) => /^index-.*\.css$/.test(name)) : undefined;
@@ -51,7 +59,7 @@ async function bundle(page: string): Promise<{ main: string; html: string }> {
     // Components from @vvedantb/ui ship as TSX without a tsconfig of their own, so esbuild would default to classic JSX.
     jsx: "automatic",
     define,
-    plugins: [stubStyles],
+    plugins: [stubStyles, stubClerk],
     logLevel: "error",
   });
   const html = `${outDir}/${page}.html`;
