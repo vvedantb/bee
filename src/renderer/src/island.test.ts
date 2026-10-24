@@ -40,7 +40,7 @@ describe("mcpErrorNote", () => {
 
 describe("activityLabel", () => {
   it("names web search", () => {
-    expect(activityLabel("web_search")).toBe("Searching the web");
+    expect(activityLabel("web_search")).toBe("The AI is searching the web…");
   });
 
   it("calls every file tool Reading notes", () => {
@@ -72,7 +72,7 @@ describe("activityLabel", () => {
 
   it("maps the tool names Luna's step callback reports", () => {
     const calls = [{ toolName: "web_search" }, { toolName: "read_file" }, { toolName: "append_note" }];
-    expect(calls.map((call) => activityLabel(call.toolName))).toEqual(["Searching the web", "Reading notes", "Writing a note"]);
+    expect(calls.map((call) => activityLabel(call.toolName))).toEqual(["The AI is searching the web…", "Reading notes", "Writing a note"]);
   });
 });
 

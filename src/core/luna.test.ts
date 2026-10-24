@@ -158,7 +158,7 @@ describe("buildLunaPrompt", () => {
     expect(LUNA_SYSTEM).toContain("never add tips about them otherwise");
     expect(LUNA_SYSTEM).toContain("A line that changes the request, such as \"make that Paris instead\", replaces it");
     expect(LUNA_STEERING_RULES).toContain("redirects the request");
-    expect(LUNA_STEERING_RULES).toContain("about an earlier subject: drop it");
+    expect(LUNA_STEERING_RULES).toContain("about an earlier subject: drop it silently. Never say which tips no longer apply");
   });
 
   it("ignores blank shown tips", () => {
@@ -285,6 +285,32 @@ describe("parseLunaTips", () => {
       "Copy Priya on the renewal email.",
       "Offer the first year at 10% off [n2].",
     ]) expect(isMetaTip(line), line).toBe(false);
+  });
+
+  it("strips a leading note on which tips apply, keeping the answer after it", () => {
+    // Turn 4 of the live conversation test, after "make that Paris instead".
+    const leaked = "The London tips no longer apply, so I'm dropping them. Sortiraparis forecasts Paris rain on Saturday.";
+    expect(isMetaTip(leaked)).toBe(true);
+    expect(parseLunaTips(`- ${leaked}`)).toEqual(["Sortiraparis forecasts Paris rain on Saturday."]);
+    expect(streamingTips(`- ${leaked}\n`)).toEqual(["Sortiraparis forecasts Paris rain on Saturday."]);
+    const cases: [string, string][] = [
+      ["The earlier tips no longer apply. Paris: showers Sunday.", "Paris: showers Sunday."],
+      ["My London tips don't apply now; Paris is dry on Saturday.", "Paris is dry on Saturday."],
+      ["Those tips no longer stand, so I'm replacing them. Météo-France expects rain.", "Météo-France expects rain."],
+      ["The London tips no longer apply, so I'm dropping them.", ""],
+    ];
+    for (const [line, kept] of cases) expect(parseLunaTips(`- ${line}`), line).toEqual(kept ? [kept] : []);
+    for (const line of [
+      "Your tips are kept by staff in most Paris restaurants.",
+      "The tips in Paris are usually included in the bill.",
+      "Tips no longer need to be in cash at most London cafés.",
+      "The Northern line no longer runs to Bank this weekend.",
+      "The old answer from TfL was Saturday; the BBC now says Sunday.",
+      "Avoid giving tips in cash in Paris cafés.",
+    ]) {
+      expect(isMetaTip(line), line).toBe(false);
+      expect(parseLunaTips(`- ${line}`), line).toEqual([line]);
+    }
   });
 
   it("catches status narration and labels for the question, keeping the answer and real tips", () => {

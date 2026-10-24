@@ -28,11 +28,24 @@ export function logoState(state: LogoInputs): LogoState {
   return "idle";
 }
 
+export const ANSWERING_LABEL = "The AI is answering…";
+
+/**
+ * The pill while a run is busy, shown from the moment a line lands (before anything streams). A tool call in flight wins (web
+ * search over the others), then "Updating…" while kept tips are revised, then answering a question, then thinking.
+ */
+export function workingLabel(state: Pick<BeeState, "tools" | "revising" | "question">): string {
+  const tool = state.tools.includes("web_search") ? "web_search" : state.tools.at(-1);
+  if (tool) return activityLabel(tool);
+  if (state.revising) return "Updating…";
+  return state.question ? ANSWERING_LABEL : activityLabel(null);
+}
+
 export function notchStatus(state: BeeState, signedIn: boolean | undefined): string {
   if (signedIn === undefined) return "Loading…";
   if (!signedIn) return "Sign in to use Bee";
   // Tips stay on screen while a newer line updates them.
-  if (state.busy) return state.revising ? "Updating…" : activityLabel(state.activity);
+  if (state.busy) return workingLabel(state);
   // The phrase ended and speech-to-text is running. No words are shown.
   if (state.heard) return "Got it…";
   if (state.mic.error) return state.mic.error;

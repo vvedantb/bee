@@ -113,7 +113,7 @@ const longTip = `<div class="island open">${pill("Tips", false)}${islandBody(`${
 const shot = new URLSearchParams(location.search).get("shot") ?? "collapsed";
 const states: Record<string, string> = {
   collapsed: `<div class="island">${pill("Bee is ready", false)}</div>`,
-  thinking: `<div class="island thinking">${pill("Searching the web", true)}</div>`,
+  thinking: `<div class="island thinking">${pill("The AI is searching the web…", true)}</div>`,
   expanded: `<div class="island open">${pill("Tips", false)}${islandBody(tipsContent())}</div>`,
   "meeting-card": `<div class="island open">${pill("Last time", false)}${islandBody(card())}</div>`,
   "long-tip-bottom": longTip,

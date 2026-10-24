@@ -107,6 +107,8 @@ export const pipelineRequestSchema = z.object({
   earlier: z.array(tipSchema).max(3).optional(),
   // How many of the newest transcript lines belong to the current turn (the request to answer). The rest are background.
   turnLines: z.number().int().min(1).max(50).optional(),
+  // The last answer (earlier or shown) came from a web search, so a follow-up keeps the search tool (core/web-search.ts).
+  searched: z.boolean().optional(),
   // Clerk session token; main refuses to run the pipeline without a live one (main/auth.ts).
   sessionToken: z.string().max(8000),
 });

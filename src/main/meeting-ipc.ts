@@ -1,9 +1,10 @@
-import { ipcMain, shell } from "electron";
+import { app, ipcMain, shell } from "electron";
 import { z } from "zod";
 import { loadMcpTools, type McpPool, type McpServerConfig } from "../core/mcp";
 import type { MeetingContext } from "../core/meeting-context";
 import { GUIDE_MODEL, NO_GATEWAY_KEY, STT_MODEL, createBeeGateway } from "../core/gateway";
 import { runPipeline } from "../core/pipeline";
+import { searchLocation } from "../core/web-search";
 import { buildLocalSummary, generateMeetingSummary } from "../core/summary";
 import { transcribeSpeech } from "../core/transcribe";
 import {
@@ -76,6 +77,9 @@ export function registerMeetingIpc(args: { notesDir: string; fsRoots: () => stri
         shown: request.shown,
         earlier: request.earlier,
         turnLines: request.turnLines,
+        searched: request.searched,
+        // Read per run, so a time zone change while travelling applies at once.
+        searchLocation: searchLocation({ timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone, locale: app.getSystemLocale() }),
         meetingBrief: args.meeting.brief(),
         snippets,
         gateway: apiKey ? createBeeGateway(apiKey) : null,

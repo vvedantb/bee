@@ -10,7 +10,9 @@ import { runHarnessWithOutput } from "./e2e/run";
 // Live multi-turn Electron E2E (test/e2e/conversation-page.ts): the real store and island App, lines injected where speech-to-text
 // hands them over with the mic on, then preload → main (meeting-ipc.ts) → live Gateway (Jev, and Luna on GUIDE_MODEL). No STT.
 // One Electron launch, about five pipeline runs. Needs BEE_AI_GATEWAY_API_KEY; skipped otherwise. With BEE_E2E_SHOTS_DIR, the full
-// text after turns 2 and 4 is written there as conversation-turn2-fulltext.png and conversation-turn4-fulltext.png.
+// text after turns 2 and 4 is written there as conversation-turn2-fulltext.png and conversation-turn4-fulltext.png, and the island
+// in its searching (or working) state in turn 1 or 2 as conversation-searching.png. Each turn reports the ms to the working state,
+// to web search and to the first tip on screen, and whether web search ran; turn 3 (a sum) must not search.
 // Run it with BEE_E2E_NOTES_DIR set to a folder holding one note unrelated to the questions (no London, Paris, news, weather,
 // tube or percent): retrieval then finds nothing, so Jev is never called, and the test asserts that. Without it the harness
 // seeds the sample notes and Jev may run.
@@ -22,6 +24,7 @@ const MAX_RUNS = 6;
 const FOLLOW_UP_MS = 15_000;
 const PNG_MAGIC = "89504e470d0a1a0a";
 const SHOTS = ["conversation-turn2-fulltext", "conversation-turn4-fulltext"];
+const STATE_SHOT = "conversation-searching";
 // The model talking about its rules instead of answering ("The newest line asks…", "copy them word for word", "The limit is 3 tips").
 const META_WORDS = /\b(?:tips?|newest line|word for word|limit is)\b/i;
 const looksMeta = (tip: string) => isMetaTip(tip) || META_WORDS.test(tip);
@@ -34,6 +37,11 @@ const turnSchema = z.object({
   tips: z.array(z.string()),
   sources: z.number(),
   latencyMs: z.number().nullable(),
+  workingMs: z.number().nullable(),
+  searchingMs: z.number().nullable(),
+  firstTextMs: z.number().nullable(),
+  webSearch: z.boolean(),
+  stateShot: z.enum(["searching", "working"]).nullable(),
   webTag: z.boolean(),
   runs: z.number(),
   keptMax: z.number(),
@@ -70,6 +78,12 @@ function reportPath(): string | null {
   return dir ? join(dir, "conversation-report.md") : null;
 }
 
+/** Which turn's working state was captured as conversation-searching.png, if any. */
+function shotNote(turns: Turn[]): string[] {
+  const shot = turns.find((turn) => turn.stateShot !== null);
+  return shot ? ["", `${STATE_SHOT}.png: turn ${shot.turn}, ${shot.stateShot} state.`] : [];
+}
+
 function writeReport(file: string, args: { ok: boolean; error?: string; runsStarted: number; runs: RunLine[]; turns: Turn[] }): void {
   const jevRuns = args.runs.filter((run) => run.jevCalled).length;
   const markdown = [
@@ -77,19 +91,26 @@ function writeReport(file: string, args: { ok: boolean; error?: string; runsStar
     "",
     `Written ${new Date().toISOString()}. Harness ${args.ok ? "finished" : `failed: ${cell(args.error ?? "unknown")}`}.`,
     "",
-    "| Turn | Said | Came back | Latency ms | Sources | [web]? | Pass/Fail |",
-    "| --- | --- | --- | --- | --- | --- | --- |",
+    "| Turn | Said | Came back | Latency ms | Working ms | First text ms | Search ms | Web search | Sources | [web]? | Pass/Fail |",
+    "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ...args.turns.map((turn) =>
       [
         `${turn.turn} ${turn.label}`,
         cell(turn.injected.join(" → ") || "(mic off)"),
         cell(turn.tips.join(" / ") || "(no tips)") + (turn.error ? ` (error: ${cell(turn.error)})` : ""),
         turn.latencyMs ?? "–",
+        turn.workingMs ?? "–",
+        turn.firstTextMs ?? "–",
+        turn.searchingMs ?? "–",
+        turn.webSearch ? "yes" : "no",
         turn.sources,
         turn.webTag ? "yes" : "no",
         (turn.pass ? "PASS" : `FAIL: ${failed(turn).join(", ")}`) + (turn.shotError ? ` (full text: ${cell(turn.shotError)})` : ""),
       ].join(" | "),
     ).map((row) => `| ${row} |`),
+    "",
+    "Working, first text and search ms run from the line's injection, sampled every 20 ms. Web search: a web_search call started, or the result has sources.",
+    ...shotNote(args.turns),
     "",
     `Total pipeline runs started: ${args.runsStarted} (max ${MAX_RUNS}). Runs returned to main: ${args.runs.length}.`,
     "",
@@ -110,6 +131,10 @@ function printTurns(turns: Turn[]): void {
       turn: `${turn.turn} ${turn.label}`,
       injected: turn.injected.join(" → ") || "(mic off)",
       "latency ms": turn.latencyMs ?? "–",
+      "working ms": turn.workingMs ?? "–",
+      "first text ms": turn.firstTextMs ?? "–",
+      "search ms": turn.searchingMs ?? "–",
+      "web search": turn.webSearch,
       tips: turn.tips.length,
       sources: turn.sources,
       "[web]": turn.webTag,
@@ -159,6 +184,8 @@ describe.skipIf(!process.env.BEE_AI_GATEWAY_API_KEY?.trim())("live multi-turn co
     expect(followUp.checks).toMatchObject({ answered: true, givesReason: true, micOn: true });
 
     expect(turn(3).checks).toMatchObject({ answered: true, notRevising: true, noStaleTips: true });
+    // On by default: a sum gets no web_search tool (core/web-search.ts). BEE_E2E_ALLOW_MATHS_SEARCH=1 skips the check.
+    if (process.env.BEE_E2E_ALLOW_MATHS_SEARCH !== "1") expect(turn(3).webSearch, "turn 3 (a sum) searched the web").toBe(false);
     expect(turn(4).checks).toMatchObject({ answered: true, steerWhileBusy: true, steered: true, redirected: true, noEarlierTips: true, noMetaTips: true });
     expect(turn(5).checks).toMatchObject({ micOff: true, noLateRun: true, noLateAnswer: true });
 
@@ -166,7 +193,8 @@ describe.skipIf(!process.env.BEE_AI_GATEWAY_API_KEY?.trim())("live multi-turn co
     if (!process.env.BEE_E2E_SHOTS_DIR) return;
     console.log(`Screenshots:\n${files.join("\n")}`);
     for (const n of [2, 4]) expect(turn(n).shotError, `turn ${n} full-text shot`).toBeNull();
-    expect(files.map((file) => file.split(/[\\/]/).pop())).toEqual(SHOTS.map((name) => `${name}.png`));
+    expect(files.map((file) => file.split(/[\\/]/).pop()).sort()).toEqual([...SHOTS, STATE_SHOT].map((name) => `${name}.png`).sort());
+    expect(report.turns.filter((item) => item.stateShot !== null).map((item) => item.turn), "working-state shot in turn 1 or 2").toHaveLength(1);
     for (const file of files) expect(readFileSync(file).subarray(0, 8).toString("hex")).toBe(PNG_MAGIC);
     for (const n of [2, 4]) expect(turn(n).checks.fullTextAtTop, `turn ${n} full text opens and stays at the top`).toBe(true);
   });

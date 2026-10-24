@@ -74,9 +74,9 @@ export type BeeState = {
   // list and shown dimmed; revising turns the pill to "Updating…". Both clear when the run settles. State only, never words beyond the tips.
   keptTips: string[];
   revising: boolean;
-  // The tool Luna last used in this run (a raw tool name; island.ts activityLabel turns it into text). Null otherwise.
-  activity: string | null;
-  // Raw names of the run's tool calls in flight, one entry per call. Empty when no run is busy.
+  // The current turn asks a direct question (steering.ts isQuestion): while busy, the pill says the AI is answering.
+  question: boolean;
+  // Raw names of the run's tool calls in flight, one entry per call (notch.ts workingLabel). Empty when no run is busy.
   tools: string[];
   // True for LOGO_DONE_MS after a run settles with tips, so the logo plays its done loop once.
   done: boolean;
@@ -141,7 +141,7 @@ let state: BeeState = {
   partialTips: null,
   keptTips: [],
   revising: false,
-  activity: null,
+  question: false,
   tools: [],
   done: false,
   dismissed: false,
@@ -202,6 +202,10 @@ let lastAnswer: string[] = [];
 let turnEarlier: string[] = [];
 // A direct question came since the run in flight started (steering.ts isQuestion, waitsForRun).
 let asked = false;
+// Some line of the current turn is a direct question (BeeState.question).
+let turnAsked = false;
+// The latest answer, settled or streaming, came from a web search: a follow-up keeps the search tool (core/web-search.ts).
+let answerSearched = false;
 // A run is waiting out its debounce (runTimer), or waiting for a run in its commit window to finish (deferred).
 let runTimer: ReturnType<typeof setTimeout> | undefined;
 let doneTimer: ReturnType<typeof setTimeout> | undefined;
@@ -371,7 +375,9 @@ async function enrichChips(sent: LinkChip[], text: string, seq: number): Promise
  */
 function startTurn(lines: SessionLine[]): void {
   const fresh = isNewTurn({ open: turnOpen, busy: state.busy, spokenDuringRun });
-  if (lines.some((line) => isQuestion(line.text))) asked = true;
+  const question = lines.some((line) => isQuestion(line.text));
+  if (question) asked = true;
+  turnAsked = (!fresh && turnAsked) || question;
   spokenDuringRun = false;
   turnOpen = true;
   lastLineAt = Date.now();
@@ -422,8 +428,8 @@ function scheduleRun(): void {
   deferred = false;
   clearTimeout(runTimer);
   const keep = keepList();
-  // Busy from now, so the pill never falls back to "Listening…" while the run waits.
-  set({ busy: true, heard: false, keptTips: keep, revising: keep.length > 0 });
+  // Busy from now, so the pill shows the working state at once (notch.ts workingLabel), before the run streams anything.
+  set({ busy: true, heard: false, question: turnAsked, keptTips: keep, revising: keep.length > 0 });
   const steering = keep.length > 0 || inFlight !== null;
   runTimer = setTimeout(fireRun, runDelayMs(restarts, Date.now(), steering));
 }
@@ -481,11 +487,12 @@ async function runPipeline(): Promise<void> {
   asked = false;
   runKept = keep;
   runTips = [];
+  const searched = answerSearched;
+  let searchedRun = false;
   // The kept tips stay on screen (dimmed, pill "Updating…"). A new turn drops the old answer.
   set({
     busy: true,
     heard: false,
-    activity: null,
     tools: [],
     done: false,
     error: null,
@@ -498,7 +505,8 @@ async function runPipeline(): Promise<void> {
   // The latest run owns tool events (and the run id, when sent, must match). Finishing clears the label and the calls.
   const stopActivity = window.bee.onLunaActivity(({ runId, tool, phase }) => {
     if (run !== latestRun || (runId !== undefined && runId !== run)) return;
-    if (phase === "start") set({ activity: tool, tools: [...state.tools, tool] });
+    if (phase === "start" && tool === "web_search") searchedRun = answerSearched = true;
+    if (phase === "start") set({ tools: [...state.tools, tool] });
     else set({ tools: withoutOne(state.tools, tool) });
   });
   // Streamed tips show at once, over the kept ones, without waiting for the whole run.
@@ -516,6 +524,7 @@ async function runPipeline(): Promise<void> {
       ...(keep.length > 0 ? { shown: keep.map(clampTip) } : {}),
       ...(earlier.length > 0 ? { earlier } : {}),
       turnLines,
+      ...(searched ? { searched } : {}),
       sessionToken: await sessionToken(),
     });
     if (run !== latestRun) return;
@@ -535,12 +544,14 @@ async function runPipeline(): Promise<void> {
       busy: waiting,
       keptTips: waiting ? tips : [],
       revising: waiting && tips.length > 0,
-      activity: null,
       tools: [],
       dismissed: false,
       islandClosing: false,
     });
-    if (!waiting) addToSession(shown);
+    if (!waiting) {
+      addToSession(shown);
+      answerSearched = searchedRun || result.sources.length > 0;
+    }
     if (!waiting && tips.length > 0) {
       lastAnswer = tips;
       celebrate();
@@ -553,7 +564,6 @@ async function runPipeline(): Promise<void> {
         keptTips: [],
         revising: false,
         partialTips: null,
-        activity: null,
         tools: [],
         error: error instanceof Error ? error.message : "Pipeline failed",
       });
