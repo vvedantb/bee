@@ -130,7 +130,7 @@ describe("latency path, scripted", () => {
     vi.restoreAllMocks();
   });
 
-  it("shows Got it… at the end of speech, before speech-to-text finishes, and hands over to Thinking…", async () => {
+  it("shows Got it… at the end of speech, before speech-to-text finishes, and hands over to the working state", async () => {
     const t = await setup();
     expect(t.store.getBeeState().heard).toBe(false);
     t.speak();
@@ -143,9 +143,9 @@ describe("latency path, scripted", () => {
 
     t.stts[0]?.resolve({ text: "When does SSO ship?", error: null });
     await t.waitRuns(1);
-    // Busy and heard never leave the pill without a label in between.
+    // Busy and heard never leave the pill without a label in between. The line is a question, so the AI is answering.
     expect(t.store.getBeeState()).toMatchObject({ busy: true, heard: false });
-    expect(t.status()).toBe("Thinking…");
+    expect(t.status()).toBe("The AI is answering…");
   });
 
   it("does not show Got it… for a cough or click, and no speech-to-text call is made", async () => {
@@ -204,7 +204,7 @@ describe("latency path, scripted", () => {
 
     t.emitActivity({ runId: run, tool: "web_search", phase: "start" });
     expect(t.logo()).toBe("searching");
-    expect(t.status()).toBe("Searching the web");
+    expect(t.status()).toBe("The AI is searching the web…");
     t.emitActivity({ runId: run, tool: "vmem__search", phase: "start" });
     // Web search wins while both are in flight.
     expect(t.logo()).toBe("searching");

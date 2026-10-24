@@ -2,6 +2,7 @@ import { anthropic } from "@ai-sdk/anthropic";
 import type { ToolSet } from "ai";
 import { z } from "zod";
 import { fsTools } from "./fs-tools";
+import type { SearchLocation } from "./web-search";
 import { MAX_URL_LENGTH, stripTrackingParams } from "./url-safety";
 
 const MAX_SOURCES = 5;
@@ -11,12 +12,25 @@ const MAX_WEB_SEARCHES = 3;
 export type BeeSource = { title: string; url: string };
 
 /** Tools Luna may call. Add new tools here; guideWithLuna passes the whole set. */
-/** `web: false` leaves out web_search (a provider that rejects it, see guideWithLuna). */
-export function lunaTools(options: { notesDir?: string; extraRoots?: readonly string[]; extra?: ToolSet; web?: boolean } = {}): ToolSet {
+/** `web: false` leaves out web_search (a turn that needs no search, or a provider that rejects it, see guideWithLuna). */
+/** `location` is the user's approximate place, so search results are local. Search is never limited to a domain list. */
+export function lunaTools(
+  options: {
+    notesDir?: string;
+    extraRoots?: readonly string[];
+    extra?: ToolSet;
+    web?: boolean;
+    location?: SearchLocation;
+  } = {},
+): ToolSet {
   // Anthropic runs this search itself, so the Gateway must route the call to Anthropic (gateway.ts guideProviderOptions).
   // The basic version: 20260209/20260318 add dynamic filtering, which searches from a code execution sandbox, and Haiku
   // via the Gateway only called code_execution there and never searched.
-  const web: ToolSet = options.web === false ? {} : { web_search: anthropic.tools.webSearch_20250305({ maxUses: MAX_WEB_SEARCHES }) };
+  const search = anthropic.tools.webSearch_20250305({
+    maxUses: MAX_WEB_SEARCHES,
+    ...(options.location ? { userLocation: options.location } : {}),
+  });
+  const web: ToolSet = options.web === false ? {} : { web_search: search };
   const local = options.notesDir ? { ...web, ...fsTools({ notesDir: options.notesDir, extraRoots: options.extraRoots }) } : web;
   // MCP tools (core/mcp.ts) are namespaced; spreading them first also means they can never replace a built-in.
   return { ...options.extra, ...local };

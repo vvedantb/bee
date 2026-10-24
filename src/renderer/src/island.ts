@@ -9,7 +9,7 @@ export const ISLAND_MIN_OPEN_MS = 30_000;
 export const READ_WORDS_PER_SECOND = 3.3;
 
 const ACTIVITY_LABELS = new Map([
-  ["web_search", "Searching the web"],
+  ["web_search", "The AI is searching the web…"],
   ["read_file", "Reading notes"],
   ["list_dir", "Reading notes"],
   ["search_files", "Reading notes"],

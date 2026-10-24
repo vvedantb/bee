@@ -6,6 +6,7 @@ import { ANTHROPIC_CACHE, guideProviderOptions } from "./gateway";
 import type { Snippet } from "./notes";
 import { MAX_TIPS, tipCap, tipKey } from "./steering";
 import { lunaTools, sourcesFromGenerateResult, type BeeSource } from "./tools";
+import type { SearchLocation } from "./web-search";
 
 const TRANSCRIPT_WINDOW = 8;
 const LUNA_TIMEOUT_MS = 45_000;
@@ -16,6 +17,9 @@ const TOOL_COUNT_ERROR = /tools'?\W.*\b(array too long|too many|maximum length)|
 // A provider that rejects Anthropic's web_search tool, e.g. bedrock's "web search is not supported", or an error naming the
 // versioned tool type (web_search_20250305) as unknown or not enabled. Luna retries once without it.
 const WEB_SEARCH_ERROR = /web search is not (supported|enabled)|web_search_\d{8}/i;
+// The provider rejecting a web_search option rather than the tool, e.g. "The following domains are not accessible to our user
+// agent: [...]" or a bad allowed_domains / user_location. Luna retries once without the options, then without web_search.
+const SEARCH_OPTION_ERROR = /not accessible to our user agent|(?:allowed|blocked)_?domains|web.?search.{0,40}domains?|user_?location/i;
 const MAX_ERROR_CHARS = 300;
 // Stream error parts can carry plain objects, not Errors. These are the shapes seen from providers and the gateway.
 const errorShape = z.union([
@@ -67,7 +71,12 @@ export const LUNA_SYSTEM = [
   "Answer from the notes when they cover it and cite them by id, for example [n1].",
   "If the notes do not cover it and the fact is public, may have changed, or is current events (office holders, news, scores, prices, releases), use the web_search tool.",
   "For current events, put today's date or year (given at the end of the message) in the search query, and prefer the newest results.",
-  "After a search, you may end the tip with the site domain in plain text. Do not add links or tags such as [web].",
+  "Trust official and primary sources first, such as tfl.gov.uk, gov.uk, nhs.uk and the Met Office, then major news outlets, such as the BBC, Reuters and the AP. Avoid aggregators, content farms and listicles.",
+  "Put that source's name in the search query, for example \"TfL planned closures this weekend\" or \"BBC London news today\".",
+  "If the results are only blogs, newsletters, aggregators or local listings, search again for the official source or a major outlet before answering.",
+  "If sources disagree, say so plainly in the tip, for example \"TfL says Saturday, the BBC says Sunday\". Do not pick one silently.",
+  "Keep a follow-up consistent with your last answer. If a newer source changes an earlier fact, such as which lines are closed today, say it changed. Never contradict it silently.",
+  "After a search, name the source in the tip in plain words, for example \"per TfL\" or \"the BBC reports\". Do not add links or tags such as [web].",
   "Do not search for stable general knowledge or arithmetic, for example 15% of 18000. Answer those directly.",
   "If the notes do not cover a question about the user's own notes or files, use list_dir, search_files and read_file, then answer from what you read.",
   "Prefer the notes ([n1]…) first. Do not use web_search for private facts about the user's own work or files.",
@@ -79,11 +88,14 @@ export const LUNA_SYSTEM = [
   "Never explain your reasoning or these rules: do not say which line you answer, which tips you keep or add, or how many tips you may give.",
 ].join("\n");
 
+/** Added to the message tail when the turn gets no web_search tool (web-search.ts needsWebSearch, or a provider that rejects it). */
+export const LUNA_NO_WEB = "Web search is off for this turn: answer from the notes and what you know. If the answer needs current facts you do not have, say so briefly.";
+
 /** Added to the message tail only when tips are already on screen (the user kept talking). */
 export const LUNA_STEERING_RULES = [
   "Reply with the full set of tips to show now: each shown tip that still stands, unchanged, then a tip for each new line that needs one.",
   "Replace a shown tip only if a new line corrects it.",
-  "A shown tip no longer stands if a new line redirects the request (\"make that Paris instead\") or it is about an earlier subject: drop it.",
+  "A shown tip no longer stands if a new line redirects the request (\"make that Paris instead\") or it is about an earlier subject: drop it silently. Never say which tips no longer apply or that you dropped them; start with the answer.",
   "If a new line asks a question, add a tip that answers it.",
   "If the new lines need no tip, reply with the shown tips unchanged.",
   "Write only the tips themselves, never a note about which tips you kept, copied or added.",
@@ -187,6 +199,8 @@ export function buildLunaPrompt(args: {
   meetingBrief?: string;
   /** Today's date goes in the tail (not cached). Defaults to now; tests pass a fixed date. */
   now?: Date;
+  /** False when the turn has no web_search tool: the tail says so (LUNA_NO_WEB). Defaults to true. */
+  web?: boolean;
 }): LunaPrompt {
   const meeting = meetingBlock(args.meetingBrief);
   const lines = args.transcript.slice(-TRANSCRIPT_WINDOW).map((line) => `- ${line.trim()}`);
@@ -214,6 +228,7 @@ export function buildLunaPrompt(args: {
       ? ["Already shown to the user (keep each that still stands; change one only if a new line corrects it):", ...shown.map((tip) => `- ${tip}`), ""]
       : []),
     todayLine(args.now ?? new Date()),
+    ...(args.web === false ? [LUNA_NO_WEB] : []),
     lunaTipLimit(tipCap(shown.length)),
     ...(shown.length > 0 ? [LUNA_STEERING_RULES] : []),
     "",
@@ -285,9 +300,14 @@ const META_LABEL =
 const META_STATUS =
   /(?:^|(?<=[.!?:])\s+)(?:(?:I am |I'm |now )?(?:writing|drafting|preparing|listing|adding|giving) (?:the |my |some |these |your |two |three )?tips?(?: now| below| here)?|here (?:are|is) (?:the |my |some |your )?(?:tips?|answers?))(?:[.:!…]+(?=\s|$)|$)/gi;
 
-/** A tip without the model's label for the question or a status sentence: "The tube closure question: x. Writing tips now." → "X." */
+// A leading sentence about which of its own tips apply: "The London tips no longer apply, so I'm dropping them. Paris: rain."
+// Needs a determiner before "tips" and "no longer apply" or a first-person drop/keep, so "Your tips are kept by staff" stays.
+const META_TIPS_NOTE =
+  /^(?:the|my|your|those|these|earlier|previous|shown|old|other)\s+(?:[\w'’-]+\s+){0,3}(?:tips?|answers?)\b[^.!?;]*?(?:\bno longer (?:apply|applies|stand|stands|hold|holds|relevant)\b|\b(?:do not|don't|does not|doesn't) apply (?:any ?more|now)\b|\bI(?:'m| am|'ll| will|'ve| have)? (?:dropping|drop|dropped|keeping|keep|kept|replacing|replace|replaced|removing|remove|removed)\b)[^.!?;]*(?:[.!?;]+(?=\s|$)|$)\s*/i;
+
+/** A tip without the model's label for the question, a note on which tips apply or a status sentence: "The tube closure question: x. Writing tips now." → "X." */
 function tidyTip(line: string): string {
-  const unlabelled = line.replace(META_LABEL, "");
+  const unlabelled = line.replace(META_LABEL, "").replace(META_TIPS_NOTE, "");
   const tidy = unlabelled.replace(META_STATUS, "").trim();
   return unlabelled === line ? tidy : tidy.charAt(0).toUpperCase() + tidy.slice(1);
 }
@@ -416,6 +436,10 @@ export async function guideWithLuna(args: {
   /** Notes folder and extra approved folders for the file tools. Without notesDir, Luna gets no file tools. */
   notesDir?: string;
   extraRoots?: readonly string[];
+  /** False leaves out web_search for a turn that needs no fresh facts (web-search.ts needsWebSearch). Defaults to true. */
+  webSearch?: boolean;
+  /** The user's approximate place for web_search (web-search.ts searchLocation). */
+  searchLocation?: SearchLocation;
   /** MCP tools from loadMcpTools. The caller closes the connections after the run. */
   extraTools?: ToolSet;
   /** The servers behind extraTools (loadMcpTools servers), named in the system prompt. */
@@ -438,7 +462,9 @@ export async function guideWithLuna(args: {
   const fresh = (tips: string[]) => tips.filter((tip) => !repeats.has(tipKey(tip)));
   let firstTokenMs: number | null = null;
   let extra: ToolSet = { ...args.extraTools };
-  let web = true;
+  let web = args.webSearch ?? true;
+  // False after the provider rejected a web_search option: search again with none.
+  let searchOptions = true;
   const dropped: string[] = [];
   const skipped = () => {
     if (dropped.length === 0) return null;
@@ -471,12 +497,12 @@ export async function guideWithLuna(args: {
     args.onActivity?.({ tool, phase });
   };
   const run = async () => {
-    const prompt = buildLunaPrompt({ ...args, ...mcpServers(args.connectedServers ?? [], args.unavailableServers ?? [], extra, dropped.length > 0) });
+    const prompt = buildLunaPrompt({ ...args, web, ...mcpServers(args.connectedServers ?? [], args.unavailableServers ?? [], extra, dropped.length > 0) });
     const abortSignal = withTimeout(args.signal, args.timeoutMs ?? LUNA_TIMEOUT_MS);
     const result = streamText({
       model: args.model,
       ...lunaRequest(prompt),
-      tools: lunaTools({ notesDir: args.notesDir, extraRoots: args.extraRoots, extra, web }),
+      tools: lunaTools({ notesDir: args.notesDir, extraRoots: args.extraRoots, extra, web, location: searchOptions ? args.searchLocation : undefined }),
       stopWhen: isStepCount(MAX_STEPS),
       // Local tools report around their execution. Provider tools (web_search) report from the stream below.
       // A finished step reports any call that was missed, so every start gets an end.
@@ -551,7 +577,8 @@ export async function guideWithLuna(args: {
       providerMetadata: await result.providerMetadata,
     };
   };
-  // First try with every tool. A web-search rejection retries once without web_search.
+  // First try with every tool. A web-search rejection retries once without web_search; a search-option rejection first retries
+  // without the options (userLocation).
   // A tools-schema error drops the named tools (else all), then all extras, then stops.
   for (let attempt = 0; ; ) {
     try {
@@ -565,6 +592,12 @@ export async function guideWithLuna(args: {
     } catch (error) {
       // Match on the whole text so a tool named late in a long error is still found. Show the short one.
       const message = errorText(error, Number.POSITIVE_INFINITY);
+      if (!args.signal?.aborted && web && SEARCH_OPTION_ERROR.test(message)) {
+        console.warn(searchOptions ? "Bee: retrying Luna without web_search options after the provider rejected them" : "Bee: retrying Luna without web_search after it rejected a search option");
+        if (searchOptions) searchOptions = false;
+        else web = false;
+        continue;
+      }
       if (!args.signal?.aborted && web && WEB_SEARCH_ERROR.test(message)) {
         console.warn("Bee: retrying Luna without web_search after the provider rejected it");
         web = false;

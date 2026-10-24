@@ -5,6 +5,7 @@ import type { McpTools } from "./mcp";
 import { guideWithLuna, noteCitation, type LunaToolActivity } from "./luna";
 import type { Snippet } from "./notes";
 import { retrieve, transcriptQuery } from "./retrieve";
+import { needsWebSearch, type SearchLocation } from "./web-search";
 
 const RETRIEVE_LIMIT = 5;
 const GUIDE_NOTE_LIMIT = 3;
@@ -43,6 +44,10 @@ export async function runPipeline(args: {
   earlier?: string[];
   /** How many of the newest transcript lines are the current turn; Luna answers those. */
   turnLines?: number;
+  /** The last answer (earlier or shown) came from a web search, so a follow-up keeps web_search. */
+  searched?: boolean;
+  /** The user's approximate place for web_search (web-search.ts searchLocation). */
+  searchLocation?: SearchLocation;
   /** The brief for the meeting in progress (title, people, agenda, earlier decisions). Sent to Luna with every turn. */
   meetingBrief?: string;
   snippets: Snippet[];
@@ -78,6 +83,15 @@ export async function runPipeline(args: {
 
   // Luna reads the top BM25 notes, in retrieval order. Jev does not gate them.
   const guideNotes = candidates.slice(0, GUIDE_NOTE_LIMIT);
+  // web_search only when the turn may need fresh facts: a sum or a definition skips the tool and its latency.
+  const turnStart = Math.max(0, args.transcript.length - (args.turnLines ?? args.transcript.length));
+  const turn = args.transcript.slice(turnStart);
+  const webSearch = needsWebSearch({
+    lines: turn,
+    context: [...args.transcript.slice(0, turnStart), ...(args.earlier ?? []), ...(args.shown ?? [])],
+    searched: args.searched,
+  });
+  console.debug(`perf web-search ${webSearch ? "on" : "off"}`);
   const mcpRun = timed(loadMcp(args.loadMcpTools));
   const jevRun = timed(
     rankWithJev({ model: args.gateway.evaluationModel(JEV_MODEL), transcript: args.transcript, candidates, signal: args.signal }),
@@ -92,6 +106,8 @@ export async function runPipeline(args: {
       earlier: args.earlier,
       turnLines: args.turnLines,
       meetingBrief: args.meetingBrief,
+      webSearch,
+      searchLocation: args.searchLocation,
       notes: guideNotes,
       notesDir: args.notesDir,
       extraRoots: args.extraRoots,

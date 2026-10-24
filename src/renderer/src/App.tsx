@@ -29,7 +29,7 @@ import { tipKey } from "../../core/steering";
 import type { PipelineResult, SettingsView } from "../../shared/ipc";
 import { bodyFollowsNewest, islandClick, mcpErrorNote, timingsLabel, timingsTitle } from "./island";
 import { NOTCH_LOGO_PX } from "./logo";
-import { NOTCH_BUTTON, NOTCH_UPDATE_BUTTON, logoState, notchStatus } from "./notch";
+import { NOTCH_BUTTON, NOTCH_UPDATE_BUTTON, logoState, notchStatus, workingLabel } from "./notch";
 import { actions, answerFolded, displayResult, islandOpen, useBee, type BeeState, type SummaryState, type UpdateState } from "./store";
 import { SyncCard, SyncSection, TeamSection, syncedWith } from "./Teams";
 import { updateButton } from "./update";
@@ -291,7 +291,7 @@ function LiveTab({ state }: { state: BeeState }) {
             ))}
           </ul>
         ) : (
-          <p className="muted">{state.busy ? "Thinking…" : state.heard ? "Got it…" : state.mic.on ? "Listening…" : "No tips yet. Turn on the mic to start."}</p>
+          <p className="muted">{state.busy ? workingLabel(state) : state.heard ? "Got it…" : state.mic.on ? "Listening…" : "No tips yet. Turn on the mic to start."}</p>
         )}
         <LinkChips chips={chips} />
         {result && result.sources.length > 0 ? (
