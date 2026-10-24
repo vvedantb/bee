@@ -4,8 +4,11 @@
 // Times are ms of performance.now() since load, plus the audio clock (samples captured / sample rate). The store's segmenter is
 // internal, so a second createSegmenter fed the same frames marks each end of speech: same code, same frames, same cuts.
 // The fake device loops the file, so the mic goes off STOP_AFTER_ONSET_S after the first speech, before the loop replays it.
+// Runs are timed from the store's own state changes, so a run's start and result are seen as they happen and never confused:
+// a run that waited for the one before it starts in the same tick as that run's result lands.
+import { tipKey } from "../../src/core/steering";
 import { createSegmenter } from "../../src/renderer/src/speech";
-import { actions, getBeeState, runsStarted, startTestMicCapture } from "../../src/renderer/src/store";
+import { actions, getBeeState, runsStarted, startTestMicCapture, subscribe } from "../../src/renderer/src/store";
 
 // The file is 13.71 s with speech from 0.6 s, so this is 13.4 s into the file: after the second phrase is detected (its speech
 // ends at 8.22 s), before the loop. The test checks it against the file's samples.
@@ -14,13 +17,13 @@ const STOP_AFTER_ONSET_S = 12.8;
 const QUIET_MS = 3_000;
 // Inside the test's harness timeout (150 s), so a stuck run still reports what it has.
 const DEADLINE_MS = 120_000;
-const POLL_MS = 5;
 // A sample at or above this is the first speech. The test finds the file's onset with the threshold reported, to align the clocks.
 const ONSET_LEVEL = 0.02;
 
 type Segment = { ms: number; audioS: number; phraseS: number };
 type Stt = { startMs: number; endMs: number | null; audioS: number; text: string | null; error: string | null };
-type Run = { run: number; startMs: number; firstTextMs: number | null; firstText: string[]; finalTips: string[] | null };
+// kept: the tips on screen when the run started (steering), sent back to Luna. They are not its answer.
+type Run = { run: number; startMs: number; kept: string[]; firstTextMs: number | null; firstText: string[]; finalTips: string[] | null };
 
 const token = new URLSearchParams(location.search).get("token") ?? "";
 const started = performance.now();
@@ -33,7 +36,6 @@ let samples = 0;
 let onsetAudioS: number | null = null;
 let firstFrameMs: number | null = null;
 let micOffMs: number | null = null;
-let maxPollGapMs = 0;
 const segments: Segment[] = [];
 const stt: Stt[] = [];
 const runs: Run[] = [];
@@ -45,22 +47,29 @@ function report(result: object): void {
   if (reported) return;
   reported = true;
   const state = getBeeState();
-  const data = { sampleRate, onsetLevel: ONSET_LEVEL, stopAfterOnsetS: STOP_AFTER_ONSET_S, onsetAudioS, firstFrameMs, micOffMs, maxPollGapMs, segments, stt, runs, seenTips: [...seenTips] };
+  const data = { sampleRate, onsetLevel: ONSET_LEVEL, stopAfterOnsetS: STOP_AFTER_ONSET_S, onsetAudioS, firstFrameMs, micOffMs, segments, stt, runs, seenTips: [...seenTips] };
   console.log(`E2E_RESULT ${JSON.stringify({ ...result, ...data, finalTips: state.result?.tips ?? [], storeError: state.error, micError: state.mic.error })}`);
 }
 
 const audioS = () => (sampleRate > 0 ? samples / sampleRate : 0);
 const runOf = (id: number) => runs.find((item) => item.run === id);
 
+// A run starts with one state change that sets its kept tips (store.ts runPipeline), so they are read here.
 function trackRuns(): void {
-  for (let id = runs.length + 1; id <= runsStarted(); id += 1) runs.push({ run: id, startMs: now(), firstTextMs: null, firstText: [], finalTips: null });
+  for (let id = runs.length + 1; id <= runsStarted(); id += 1) {
+    runs.push({ run: id, startMs: now(), kept: getBeeState().keptTips, firstTextMs: null, firstText: [], finalTips: null });
+  }
 }
 
+/** The run's first text is the first of its tips that it did not keep from the screen. */
 function sawTips(run: Run | undefined, tips: string[]): void {
   for (const tip of tips) seenTips.add(tip);
-  if (!run || run.firstTextMs !== null || tips.length === 0) return;
+  if (!run || run.firstTextMs !== null) return;
+  const kept = new Set(run.kept.map(tipKey));
+  const own = tips.filter((tip) => !kept.has(tipKey(tip)));
+  if (own.length === 0) return;
   run.firstTextMs = now();
-  run.firstText = tips;
+  run.firstText = own;
 }
 
 async function until(done: () => boolean, what: string): Promise<void> {
@@ -120,22 +129,17 @@ async function run(): Promise<void> {
     sawTips(runOf(runId === undefined ? runsStarted() : Number(runId)), tips);
   });
   let lastResult = getBeeState().result;
-  let lastPoll = performance.now();
-  // Runs start on the store's timers and results land in its state, so both are polled. The worst gap shows a throttled page.
-  const poll = setInterval(() => {
-    const at = performance.now();
-    maxPollGapMs = Math.max(maxPollGapMs, Math.round(at - lastPoll));
-    lastPoll = at;
+  const stopWatching = subscribe(() => {
     trackRuns();
     const result = getBeeState().result;
     if (result === lastResult) return;
     lastResult = result;
     if (!result) return;
-    // The store keeps only the latest run's result.
+    // Only the latest run sets a result, before a run that waited for it starts (store.ts runPipeline), so this is its run.
     const latest = runOf(runsStarted());
     if (latest) latest.finalTips = result.tips;
     sawTips(latest, result.tips);
-  }, POLL_MS);
+  });
 
   await startTestMicCapture({ transcribe, onFrame });
   const micError = getBeeState().mic.error;
@@ -145,7 +149,7 @@ async function run(): Promise<void> {
   await until(settled, "The store did not settle after mic off");
   await sleep(QUIET_MS);
   await until(settled, "The store did not settle after the quiet wait");
-  clearInterval(poll);
+  stopWatching();
   trackRuns();
   report({ ok: true });
 }

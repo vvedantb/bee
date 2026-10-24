@@ -165,6 +165,46 @@ describe("store: a follow-up question while the mic stays on", () => {
     expect(steered?.earlier).toBeUndefined();
   });
 
+  // The live mic latency run where STT heard "why are there tube closures" as "Y R F two closures.": that line waited ~1.7 s.
+  it("lets a question's answer finish before a follow-up that is not a question, then starts it at once with the answer kept", async () => {
+    const runMs = 4000;
+    const { store, say, requests, cancelled } = await loadStore(runMs);
+    // Each state change, in order: runs started, and the result's tips.
+    const changes: Array<{ runs: number; tips: string[] | null; kept: string[] }> = [];
+    store.subscribe(() => {
+      const state = store.getBeeState();
+      changes.push({ runs: store.runsStarted(), tips: state.result?.tips ?? null, kept: state.keptTips });
+    });
+    await say("what's in the news in London");
+    await vi.advanceTimersByTimeAsync(1000);
+    await say("Y R F two closures.");
+    // Well past the debounce: the follow-up waits for the answer instead of cancelling it.
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(store.runsStarted()).toBe(1);
+    expect(cancelled).toEqual([]);
+
+    await vi.advanceTimersByTimeAsync(runMs - 2000 - STT_MS);
+    expect(store.runsStarted()).toBe(2);
+    expect(requests.at(-1)?.shown).toEqual(CLOSURES);
+    // The answer lands while it is still the latest run; the follow-up's run starts after, with that answer kept.
+    const landed = changes.findIndex((change) => change.tips !== null);
+    const next = changes.findIndex((change) => change.runs === 2);
+    expect(changes[landed]?.runs).toBe(1);
+    expect(next).toBeGreaterThan(landed);
+    expect(changes[next]?.kept).toEqual(CLOSURES);
+  });
+
+  it("does not wait for the answer when the follow-up is a question", async () => {
+    const runMs = 4000;
+    const { store, say, cancelled } = await loadStore(runMs);
+    await say("what's in the news in London");
+    await vi.advanceTimersByTimeAsync(1000);
+    await say("why are there tube closures");
+    await vi.advanceTimersByTimeAsync(500);
+    expect(store.runsStarted()).toBe(2);
+    expect(cancelled).toEqual([1]);
+  });
+
   it("sends a long earlier answer as follow-up context without failing validation", async () => {
     const runMs = 1000;
     const { store, say, requests } = await loadStore(runMs, [LONG]);

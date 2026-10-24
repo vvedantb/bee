@@ -35,7 +35,7 @@ const UNRELATED_NOTE = "# Garden\n\nWater the tomato plants every morning and fe
 
 const segmentSchema = z.object({ ms: z.number(), audioS: z.number(), phraseS: z.number() });
 const sttSchema = z.object({ startMs: z.number(), endMs: z.number().nullable(), audioS: z.number(), text: z.string().nullable(), error: z.string().nullable() });
-const runSchema = z.object({ run: z.number(), startMs: z.number(), firstTextMs: z.number().nullable(), firstText: z.array(z.string()), finalTips: z.array(z.string()).nullable() });
+const runSchema = z.object({ run: z.number(), startMs: z.number(), kept: z.array(z.string()), firstTextMs: z.number().nullable(), firstText: z.array(z.string()), finalTips: z.array(z.string()).nullable() });
 const reportSchema = z.object({
   ok: z.boolean(),
   error: z.string().optional(),
@@ -45,7 +45,6 @@ const reportSchema = z.object({
   onsetAudioS: z.number().nullable(),
   firstFrameMs: z.number().nullable(),
   micOffMs: z.number().nullable(),
-  maxPollGapMs: z.number(),
   segments: z.array(segmentSchema),
   stt: z.array(sttSchema),
   runs: z.array(runSchema),
@@ -130,7 +129,7 @@ function markdown(args: { report: Report; onsetS: number; analysis: ReturnType<t
     "",
     `Capture ${report.sampleRate} Hz. Clocks aligned on the first sample ≥ ${report.onsetLevel}: ${onsetS.toFixed(3)} s into the file, ${report.onsetAudioS?.toFixed(3) ?? "–"} s on the audio clock (offset ${analysis.offsetS?.toFixed(3) ?? "–"} s). ` +
       `Speech ends are measured from the file: the last sample ≥ ${FILE_SPEECH.level} before ${FILE_SPEECH.gapS} s of quiet. Detection is the end of the frame that ended the phrase, so it includes up to one frame. ` +
-      `Run starts and results are polled every 5 ms (worst gap ${report.maxPollGapMs} ms).`,
+      "Run starts and results are timed from the store's state changes. A run's first answer is its first tip not kept from the screen.",
     "",
     "| Line | Speech end s | Detected s | Detection delay ms | Detected → STT start ms | STT ms | Detected → transcript ms | Speech end → transcript ms | Transcript → run start ms | Transcript → first answer ms |",
     "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",

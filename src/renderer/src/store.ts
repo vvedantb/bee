@@ -166,7 +166,8 @@ function set(patch: Partial<BeeState>): void {
   for (const listener of listeners) listener();
 }
 
-function subscribe(listener: () => void): () => void {
+/** Calls `listener` after every state change, in order (useBee; the E2E mic latency page times runs with it). */
+export function subscribe(listener: () => void): () => void {
   listeners.add(listener);
   return () => listeners.delete(listener);
 }
