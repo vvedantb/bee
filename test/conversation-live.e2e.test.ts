@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, expect, it, onTestFinished } from "vitest";
 import { z } from "zod";
-import { hasGarbledSource, hasSourceTag, isMetaTip, namesLabelInText, repeatsSentence } from "../src/core/luna";
+import { hasGarbledSource, hasSourceTag, isMetaTip, namesLabelInText, repeatsSentence, repeatsTips } from "../src/core/luna";
 import { retrieve } from "../src/core/retrieve";
 import { loadSnippets } from "../src/main/notes";
 import { NO_FIXTURES, completeRecording, e2eModeSchema, fixtureFiles } from "./e2e/replay";
@@ -53,7 +53,9 @@ const looksMeta = (tip: string) =>
 const SOURCE_WORDING = /\[\d+\s*[-–]\s*\d+\]|\b[Pp]er\s+(?:the\s+)?\p{Lu}/u;
 // A source described in the text: "The TfL-based list says", "another report", "one source says", "the newest BBC piece".
 const SOURCE_DESCRIPTION = /-based (?:list|page|report|piece|article|source)\b|\banother (?:report|source|outlet|article|piece|story)\b|\bone (?:report|source|outlet) (?:says|said|reports)\b|\bthe (?:newest|latest) (?:\S+ ){1,4}(?:piece|article|story)\b/i;
-// Or the label's publisher reporting it in the text: "Met Police also reported…" with the label Met Police.
+// Or the label's publisher reporting it in the text: "Met Police also reported…", "The Met's latest releases include…", "TfL's planned
+// closures list…" with its label. hasSourceTag covers "Also reported by the Met:" and "The newest Paris sources agree on…", and
+// repeatsSentence a sentence restated later in the same tip.
 const hasSourceWording = (tip: string, source: string | null) =>
   SOURCE_WORDING.test(tip) || SOURCE_DESCRIPTION.test(tip) || hasSourceTag(tip) || repeatsSentence(tip) || hasGarbledSource(tip) || namesLabelInText(tip, source);
 const mode = e2eModeSchema.optional().parse(process.env.BEE_E2E_MODE?.trim() || undefined);
@@ -105,13 +107,14 @@ const prefixed = <T extends z.ZodType>(lines: string[], prefix: string, schema: 
   lines.filter((line) => line.startsWith(prefix)).map((line) => schema.parse(JSON.parse(line.slice(prefix.length))));
 
 /**
- * The page's checks plus the test's own: no tip in the turn reads as reasoning about the rules, and no tip's text repeats a
- * sentence, garbles a "per", or still names its source ("(TfL)", "per TfL", "[2-2]", "Met Police reported"): that goes in the tip's source field.
+ * The page's checks plus the test's own: no tip in the turn reads as reasoning about the rules, and no tip's text repeats
+ * or restates a sentence or an earlier tip, garbles a "per", or still names its source ("(TfL)", "per TfL", "[2-2]", "Met Police reported"):
+ * that goes in the tip's source field.
  */
 function withTipChecks(turn: Turn): Turn {
   const own = {
     noMetaTips: !turn.tips.some(looksMeta),
-    cleanWording: !turn.tips.some((tip, index) => hasSourceWording(tip, turn.tipSources[index] ?? null)),
+    cleanWording: !turn.tips.some((tip, index) => hasSourceWording(tip, turn.tipSources[index] ?? null)) && !repeatsTips(turn.tips).includes(true),
   };
   return { ...turn, checks: { ...turn.checks, ...own }, pass: turn.pass && own.noMetaTips && own.cleanWording };
 }
@@ -228,7 +231,7 @@ describe.skipIf(mode !== "replay" && !process.env.BEE_AI_GATEWAY_API_KEY?.trim()
     expect(report.runs).toBeLessThanOrEqual(MAX_RUNS);
     for (const item of report.turns) {
       expect(item.tips.filter(looksMeta), `turn ${item.turn} shows reasoning about the rules, not a tip`).toEqual([]);
-      expect(item.checks.cleanWording, `turn ${item.turn} repeats a sentence, garbles a "per" or names or describes its source in a tip's text: ${item.tips.join(" / ")}`).toBe(true);
+      expect(item.checks.cleanWording, `turn ${item.turn} repeats a sentence or a tip, garbles a "per" or names or describes its source in a tip's text: ${item.tips.join(" / ")}`).toBe(true);
     }
     expect(runs.length, "every run started returns to main").toBe(report.runs);
 

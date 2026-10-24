@@ -21,12 +21,14 @@ import {
   lunaRequest,
   parseLunaTips,
   repeatsSentence,
+  repeatsTips,
   streamingTips,
   tipFields,
   type AnswerSegment,
   type LunaTip,
 } from "./luna";
 import { loadMcpTools } from "./mcp";
+import { mergeTips } from "./steering";
 
 const VMEM = { name: "vmem", prefix: "vmem", toolCount: 77 };
 const EVA = { name: "Eva", prefix: "eva", toolCount: 84 };
@@ -216,7 +218,7 @@ describe("LUNA_SYSTEM", () => {
     expect(LUNA_SYSTEM).toContain('end the tip line with " | src: " and one short publisher name, or up to three separated by commas');
     expect(LUNA_SYSTEM).toContain("Short names only: TfL, BBC, Met Police, Météo-France.");
     expect(LUNA_SYSTEM).toContain('never in the tip text: no "(TfL)", "per TfL", "Per the BBC.", "(Time Out, 23 Oct)" or "The latest BBC piece says"');
-    expect(LUNA_SYSTEM).toContain('Never describe sources in the text either: no "the TfL-based list says", "another report", "one source" or "the newest BBC piece".');
+    expect(LUNA_SYSTEM).toContain('Never describe sources in the text either: no "the TfL-based list says", "TfL\'s planned closures list", "The Met\'s latest releases include", "the newest sources agree", "another report", "one source" or "the newest BBC piece".');
     expect(LUNA_SYSTEM).toContain("Note cites such as [n1] stay in the tip text.");
     expect(LUNA_SYSTEM).toContain("Never repeat a sentence");
     // The example line parses to the text and the source the prompt describes.
@@ -473,7 +475,7 @@ const SOURCE_JUNK: [string, LunaTip][] = [
   ],
   [
     "The Circle, District and Hammersmith & City lines are affected this weekend. [2-2] Sources say the closures are for track works. [4-7] Check TfL's live status before travelling (TfL)",
-    { text: "The Circle, District and Hammersmith & City lines are affected this weekend. Sources say the closures are for track works. Check TfL's live status before travelling", source: "TfL" },
+    { text: "The Circle, District and Hammersmith & City lines are affected this weekend. The closures are for track works. Check TfL's live status before travelling", source: "TfL" },
   ],
   [
     "Met Police news: a teenager was charged over a stabbing from Greenwich (Met Police), and a man jailed for life for murder in Ealing (Met Police).",
@@ -906,6 +908,98 @@ describe("the label's publisher in the tip text", () => {
       expect(parsed(`- ${line.slice(2)}`), line).toEqual([]);
       expect(streamingTips(`- ${line.slice(2)}\n`, 10), line).toEqual([]);
     }
+  });
+});
+
+// Live run on fix/source-wording (24 October 2026): the source in other forms, and one fact said three ways and again in the next tip.
+const LIVE_T1A = "The Met's latest releases include a tunnel-digging gang jailed for ten years after a foiled jewellery heist in south London. | src: Met Police";
+const LIVE_T1B = "Also reported by the Met on 23 October: a man was jailed for life for murdering his partner in Ealing. | src: Met Police";
+const LIVE_T2B = "TfL's planned track closures list works on the Circle, District, Mildmay and Piccadilly lines for 24 to 25 October. | src: TfL";
+const LIVE_T4A =
+  "The newest Paris sources agree on a rainy Saturday and a brighter but windy Sunday. Rain is forecast for Saturday afternoon with highs near 15°C. Expect showers followed by steady rain on Saturday, then a sunnier Sunday with brisk westerly winds and highs of around 16°C. | src: Sortiraparis";
+const LIVE_T4B = "Paris turns wet Saturday afternoon, then brighter but windy on Sunday, with highs near 15°C. | src: Sortiraparis";
+const LIVE_T4C = "Météo-France and Météo Paris differ on Saturday rainfall: about 6 mm vs 10–15 mm. | src: Sortiraparis";
+const T4A_TIP: LunaTip = { text: "A rainy Saturday and a brighter but windy Sunday. Rain is forecast for Saturday afternoon with highs near 15°C.", source: "Sortiraparis" };
+const T4C_TIP: LunaTip = { text: "Météo-France and Météo Paris differ on Saturday rainfall: about 6 mm vs 10–15 mm.", source: "Sortiraparis" };
+const textOf = (line: string) => line.split(" | src: ")[0] ?? "";
+const labelOf = (line: string) => line.split(" | src: ")[1] ?? null;
+const tipLine = (text: string, source: string | null) => (source ? `${text} | src: ${source}` : text);
+
+describe("the source in other forms", () => {
+  it("rewrites a publisher's releases, an 'Also reported by' and agreeing sources to the content", () => {
+    const cases: [string, LunaTip][] = [
+      [LIVE_T1A, { text: "A tunnel-digging gang jailed for ten years after a foiled jewellery heist in south London.", source: "Met Police" }],
+      [LIVE_T1B, { text: "On 23 October, a man was jailed for life for murdering his partner in Ealing.", source: "Met Police" }],
+      ["Also reported by the BBC: the strike is off.", { text: "The strike is off.", source: "BBC" }],
+      ["The latest TfL updates say the Circle line reopens on Monday. | src: TfL", { text: "The Circle line reopens on Monday.", source: "TfL" }],
+      ["The newest Paris sources agree that Sunday is dry. | src: Météo-France", { text: "Sunday is dry.", source: "Météo-France" }],
+      ["Rain on Saturday. Both sources agree on a dry Sunday. | src: BBC", { text: "Rain on Saturday. A dry Sunday.", source: "BBC" }],
+    ];
+    for (const [line, tip] of cases) {
+      expect(hasSourceTag(textOf(line)) || namesLabelInText(textOf(line), labelOf(line)), line).toBe(true);
+      expect(parsed(`- ${line}`), line).toEqual([tip]);
+      expect(streamingTips(`- ${line}\n`, 10), line).toEqual([tip]);
+      expect(hasSourceTag(tip.text) || namesLabelInText(tip.text, tip.source), line).toBe(false);
+    }
+  });
+
+  it("flags a publisher's list it cannot rewrite, as its noun phrase is the content", () => {
+    expect(namesLabelInText(textOf(LIVE_T2B), "TfL")).toBe(true);
+    expect(parsed(`- ${LIVE_T2B}`)).toEqual([{ text: textOf(LIVE_T2B), source: "TfL" }]);
+  });
+
+  it("keeps a publisher as the actor, a disagreement, and sources as the subject of a claim", () => {
+    const kept: [string, string | null][] = [
+      ["TfL is cutting fares from Monday.", "TfL"],
+      ["The Met Police arrested 42 people in a retail crime crackdown.", "Met Police"],
+      ["The Met charged two men over the heist.", "Met Police"],
+      ["TfL's new trains include air conditioning.", "TfL"],
+      [textOf(LIVE_T4C), "Sortiraparis"],
+      ["Reasons differ: track work vs Piccadilly line upgrade works.", "TfL, Evening Standard"],
+      ["Sources differ on details, so check TfL.", null],
+      ["Water sources show high nitrate levels.", null],
+    ];
+    for (const [text, source] of kept) {
+      expect(parsed(`- ${tipLine(text, source)}`), text).toEqual([{ text, source }]);
+      expect(namesLabelInText(text, source) || hasSourceTag(text), text).toBe(false);
+    }
+  });
+});
+
+describe("restated facts", () => {
+  it("drops later sentences that restate an earlier one in the tip", () => {
+    expect(parsed(`- ${LIVE_T4A}`)).toEqual([T4A_TIP]);
+    // The live check sees parsed tips, so the source preamble is already gone.
+    expect(repeatsSentence(textOf(LIVE_T4A).replace("The newest Paris sources agree on a", "A"))).toBe(true);
+    expect(repeatsSentence(T4A_TIP.text)).toBe(false);
+  });
+
+  it("keeps sentences with distinct facts", () => {
+    for (const text of [
+      "The Circle line is closed on Saturday. The District line is closed on Sunday.",
+      "Rain is forecast for Saturday afternoon. Sunday is dry with highs near 16°C.",
+      "A gang was jailed for ten years over a jewellery heist. A man was jailed for life for murder in Ealing.",
+      "The Q3 target is £2m [n1]. Sales closed £1.6m so far, so £400k remains.",
+    ]) {
+      expect(parsed(`- ${text}`), text).toEqual([{ text, source: null }]);
+      expect(repeatsSentence(text), text).toBe(false);
+    }
+  });
+
+  it("drops a later tip that repeats an earlier one, keeping a distinct tip and the cap for it", () => {
+    const answer = [LIVE_T4A, LIVE_T4B, LIVE_T4C].map((line) => `- ${line}`).join("\n");
+    expect(parseLunaTips(answer, 2)).toEqual([T4A_TIP, T4C_TIP]);
+    expect(streamingTips(`${answer}\n`, 2)).toEqual([T4A_TIP, T4C_TIP]);
+    expect(repeatsTips([LIVE_T4A, LIVE_T4B, LIVE_T4C].map(textOf))).toEqual([false, true, false]);
+    // The line in progress is only checked once it ends.
+    expect(streamingTips(`- ${LIVE_T4A}\n- ${textOf(LIVE_T4B)}`, 3).map((tip) => tip.text)).toHaveLength(2);
+  });
+
+  it("keeps a kept tip on a steering turn when the model re-sends it with a new tip", () => {
+    const [kept] = parseLunaTips(`- ${LIVE_T4A}`);
+    const tips = parseLunaTips([LIVE_T4A, LIVE_T4B, "Take an umbrella to the Saturday market."].map((line) => `- ${line}`).join("\n"), 3).map((tip) => tip.text);
+    expect(tips).toEqual([T4A_TIP.text, "Take an umbrella to the Saturday market."]);
+    expect(mergeTips([kept?.text ?? ""], tips)).toEqual(tips);
   });
 });
 
