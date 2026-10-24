@@ -297,8 +297,9 @@ const META_TIP = [
   /\b(?:at most|no more than|up to) (?:\d+|one|two|three) (?:short )?tips\b/i,
   /\bsteering (?:rules?|turn)\b/i,
   /\bI(?:'ll| will)? (?:copy|keep|add|repeat) (?:them|it|the|each|both|all|these|those)\b/i,
-  // Narrating its sources: "The Paris sources are Sortiraparis and Météo-France, so I'll name them."
-  /\bI(?:'ll| will) (?:name|cite|credit|mention) (?:them|it|the sources?|each|both)\b/i,
+  // Narrating its sources: "The Paris sources are Sortiraparis and Météo-France, so I'll name them." Anchored like the narration
+  // pattern below, so quoted speech such as "I'll mention it to the board" stays.
+  /(?:^|[.!?;]\s+|,\s*so\s+)I(?:['’]ll| will) (?:name|cite|credit|mention) (?:them|it|the sources?|each|both)\b/i,
   /^(?:let me|I'll|I will|I'm going to|I am going to) (?:search|check|look|find|answer|write|give)\b/i,
   /^tips?\s*:?$/i,
   // Restating the question: 'The question "Why are there two closures?" most likely means the two weekend Tube closures.'

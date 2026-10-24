@@ -371,7 +371,7 @@ describe("parseLunaTips", () => {
     const leaked =
       'The question "Why are there two closures?" most likely means the two weekend Tube closures. The sources do not give a reason for two separate closures, so I\'ll note the works are planned maintenance.';
     expect(isMetaTip(leaked)).toBe(true);
-    expect(parseLunaTips(`- ${leaked}\n- Check TfL before travelling.`)).toEqual(["Check TfL before travelling."]);
+    expect(parseTexts(`- ${leaked}\n- Check TfL before travelling.`)).toEqual(["Check TfL before travelling."]);
     for (const line of [
       'The question "Why are there two closures?" most likely means the two weekend Tube closures.',
       "The question probably refers to the Circle line works.",
@@ -390,7 +390,7 @@ describe("parseLunaTips", () => {
       "The user guide on tfl.gov.uk lists step-free stations.",
     ]) {
       expect(isMetaTip(line), line).toBe(false);
-      expect(parseLunaTips(`- ${line}`), line).toEqual([line]);
+      expect(parseTexts(`- ${line}`), line).toEqual([line]);
     }
   });
 
