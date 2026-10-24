@@ -290,9 +290,11 @@ export function lunaRequest(prompt: LunaPrompt): { instructions: SystemModelMess
  *  c) Sentences in the model's own voice go: first person outside quotes and suggested speech, and sentences about its own
  *     material rather than the world: its tips, the request, the search or its results, the sources themselves ("The source is
  *     a round-up…"), what it picked ("The most useful headline is…") and where a reason is given. "Sources agree on X" keeps X;
- *     "Sources differ" stays only with what differs. A tip with nothing left goes. isMetaTip is this same check, for the live test.
+ *     "Sources differ" stays only with what differs. Its tips by place count too: "The first tip covers…", "The second covers…"
+ *     at a tip's start. A tip with nothing left goes. isMetaTip is this same check, for the live test.
  *  d) Repeats go: a sentence or pasted snippet that repeats or restates an earlier one in the tip, and a tip that repeats an
- *     earlier tip of the same answer.
+ *     earlier tip of the same answer, a suggested-speech tip by its quoted words. Numbers compare as digits ("eighteen
+ *     thousand" ≈ "18,000"). repeatsTips is this same check, for the live test.
  * A source still described in the text ("The latest BBC piece says", "another report says", "Met Police reported") is only
  * flagged, for the live test (hasSourceWording): dropping "Sources say" or "another report says" would state a claim as fact.
  */
@@ -445,6 +447,14 @@ const AGREEMENT = new RegExp(String.raw`(^|[.!?]\s+)${REPORTERS_SUBJECT}\s+(?:al
 const dropAgreement = (tip: string) => tip.replace(AGREEMENT, (_, start: string, letter: string) => start + letter.toUpperCase());
 // A disagreement stays when it states what differs: a figure, two versions ("or", "vs", "while") or a list after ":".
 const STATES_DIFFERENCE = /\p{N}|\b(?:or|while|but|whereas|versus|vs)\b|:\s*$/u;
+// Its tips by place, and the verbs that describe one, so "The first tip jar appeared…" and "Tip the driver 10%." stay.
+// Not "one", "next" or "other": "The last one is at 11pm" and "The next covers zone 2" can be the world's.
+const ORDINAL = "first|second|third|fourth|fifth|last|final";
+const OWN_TIP = String.raw`(?:(?:[Tt]he|[Ee]ach)\s+(?:${ORDINAL})\s+tips?|(?:[Tt]his|[Tt]hat|[Bb]oth)\s+tips?)`;
+const TIP_VERB = String.raw`(?:also\s+|now\s+|still\s+)?(?:covers?|covered|answers?|address(?:es)?|gives?|lists?|focus(?:es)?\s+on|deals?\s+with|explains?|(?:is|are)\s+(?:about|for)|repeats?|restates?|adds?|updates?|replaces?|summari[sz]es?|mentions?|says?|stands?)\b`;
+// An ordinal alone as the subject at a tip's start: "The second covers the rail disruption.". After other words it is the
+// world's ("Two passes are sold: the first covers zones 1–2.").
+const BARE_ORDINAL = new RegExp(String.raw`^[Tt]he\s+(?:${ORDINAL})\s+${TIP_VERB}`, "u");
 const ABOUT_SOURCES = [
   // "The source is a round-up from ianVisits", "The Paris sources are Sortiraparis and Météo-France", "The sources do not give a
   // reason". "The sources say…" is a reported claim (hasSourceWording); "The main source of delays is…" is about the world.
@@ -453,6 +463,8 @@ const ABOUT_SOURCES = [
   new RegExp(String.raw`^${REPORTERS_SUBJECT}\s+(?:all\s+|both\s+|broadly\s+|mostly\s+|also\s+)?agrees?\b`, "u"),
   // "The London tips drop because…", "These tips stand". Not "Your tips are kept by staff" nor "The tips in Paris are included".
   new RegExp(String.raw`^${DETERMINER}\s+(?:${MODIFIER}\s+){0,3}tips\s+(?!(?:in|for|on|at|about|of|to|from|with|below|above)\b)\p{Ll}`, "u"),
+  // One of its tips by place: "The first tip covers the newest stories", "This tip is about Paris", "The last tip adds…".
+  new RegExp(String.raw`^${OWN_TIP}\s+(?:${TIP_VERB}|(?:also\s+|still\s+)?(?:is|are|was|were)\b)`, "u"),
   // What it picked: "The most useful headline from today's coverage is…", "The top story is…".
   /^[Tt]he\s+(?:most\s+(?:useful|relevant|important|interesting|notable|newsworthy)\s+(?:[\p{L}'’-]+\s+){0,2}?(?:headlines?|items?|news|stories|story)|(?:main|top|key|best|biggest|lead)\s+(?:headline|story|news)s?)\b/u,
   // Where something is said: "The reason is given in the TfL planned closures document and in the coverage of it."
@@ -484,7 +496,8 @@ function dropParts(tip: string, breaks: RegExp, drop: (part: string, kept: reado
   return kept[0]?.[0] === 0 ? text : text.replace(/^\p{Ll}(?!\p{Lu})/u, (letter) => letter.toUpperCase());
 }
 
-const ownVoice = (part: string) => FIRST_PERSON.test(part) || OWN_WORK.some((pattern) => pattern.test(part.trim())) || aboutSources(part.trim());
+const ownVoice = (part: string, kept: readonly string[]) =>
+  FIRST_PERSON.test(part) || OWN_WORK.some((pattern) => pattern.test(part.trim())) || aboutSources(part.trim()) || (kept.length === 0 && BARE_ORDINAL.test(part.trim()));
 /** A line without a trailing header, an agreement preamble and its parts in the model's own voice (rules a and c). */
 const dropOwnVoice = (line: string) => dropParts(dropAgreement(line.replace(TRAILING_HEADER, "").trim()), CLAUSE_BREAK, ownVoice);
 
@@ -496,7 +509,39 @@ const STOP_WORDS = new Set(
 const contentWords = (text: string) => new Set((text.toLowerCase().match(/[\p{L}\p{N}%°]+/gu) ?? []).filter((word) => !STOP_WORDS.has(word)));
 // A word's rough stem, so "rainy" and "rain", "winds" and "windy", "brighter" and "bright" count as one fact word.
 const stem = (word: string) => word.replace(/(?:ier|iest|ies|ied|ing|ed|er|est|es|s|y)$/, (suffix) => (word.length - suffix.length >= 3 ? "" : suffix));
-const factWords = (text: string) => new Set([...contentWords(text)].map(stem));
+// Numbers as digits, so "fifteen percent of eighteen thousand" and "15% of 18,000" share their fact words.
+const SMALL_NUMBERS = "zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen".split(" ");
+const TENS = "twenty thirty forty fifty sixty seventy eighty ninety".split(" ");
+const SCALES: Record<string, number> = { hundred: 100, thousand: 1e3, million: 1e6, billion: 1e9 };
+const NUMBER_WORD = String.raw`(?:${[...SMALL_NUMBERS, ...TENS, ...Object.keys(SCALES)].join("|")})`;
+const NUMBER_RUN = new RegExp(String.raw`\b${NUMBER_WORD}(?:[\s-]+${NUMBER_WORD})*\b`, "gi");
+/** "two hundred fifty" → 250, "eighteen thousand" → 18000. */
+function numberValue(run: string): number {
+  const { total, part } = run
+    .toLowerCase()
+    .split(/[\s-]+/)
+    .reduce(
+      (sum, word) => {
+        const scale = SCALES[word];
+        if (scale === 100) return { ...sum, part: (sum.part || 1) * 100 };
+        if (scale !== undefined) return { total: sum.total + (sum.part || 1) * scale, part: 0 };
+        const small = SMALL_NUMBERS.indexOf(word);
+        return { ...sum, part: sum.part + (small >= 0 ? small : (TENS.indexOf(word) + 2) * 10) };
+      },
+      { total: 0, part: 0 },
+    );
+  return total + part;
+}
+const digitsFor = (text: string) =>
+  text
+    .replace(NUMBER_RUN, (run) => String(numberValue(run)))
+    .replace(/(?<=\p{N}),(?=\p{N}{3}\b)/gu, "")
+    .replace(/%/g, " percent")
+    .replace(/\bper\s+cent\b/gi, "percent");
+const factWords = (text: string) => new Set([...contentWords(digitsFor(text))].map(stem));
+// A suggested-speech tip is compared by what it says: 'Say "Fifteen percent of 18,000 is 2,700."'.
+const SPEECH_LEAD = /^(?:say|ask|tell them|reply|respond|try|suggest|propose|open with)\b/i;
+const spokenWords = (tip: string) => factWords(SPEECH_LEAD.test(tip) ? (tip.match(QUOTED) ?? [tip]).join(" ") : tip);
 const shared = (a: ReadonlySet<string>, b: ReadonlySet<string>) => [...a].filter((word) => b.has(word)).length;
 // A pasted snippet repeats the text before it when this share of its words (and at least this many) are already there.
 const SNIPPET_SHARE = 0.8;
@@ -545,11 +590,11 @@ function restates(sentence: string, kept: readonly string[]): boolean {
 /** A tip without repeated snippets and restated sentences (rule d within a tip). */
 const dropRepeats = (tip: string) => dropParts(dropSnippet(tip), SENTENCE_END, restates);
 
-/** True when most of a tip's fact words are already in an earlier tip of the same answer. */
+/** True when most of a tip's fact words (a suggested-speech tip's quoted words) are already in an earlier tip of the same answer. */
 function repeatsEarlierTip(tip: string, earlier: readonly string[]): boolean {
-  const words = factWords(tip);
+  const words = spokenWords(tip);
   return earlier.some((other) => {
-    const both = shared(words, factWords(other));
+    const both = shared(words, spokenWords(other));
     return both >= MIN_SHARED && both / words.size >= REPEATED_TIP;
   });
 }

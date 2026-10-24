@@ -432,6 +432,33 @@ describe("parseLunaTips", () => {
     }
   });
 
+  it("drops sentences about its own tips by place, keeping tips that only share the words", () => {
+    // Live run on fix/source-wording: the whole tip was about the other tips.
+    const live = "The first tip covers the newest stories, and the second covers the rail disruption.";
+    expect(isMetaTip(live)).toBe(true);
+    expect(parseTexts(`- ${live}\n- Check TfL before travelling.`)).toEqual(["Check TfL before travelling."]);
+    expect(streamTexts(`- ${live}\n`)).toEqual([]);
+    const cases: [string, string][] = [
+      ["The second covers the rail disruption.", ""],
+      ["The last tip is about Paris. Rain on Saturday.", "Rain on Saturday."],
+      ["These tips cover the weekend. Rain on Saturday.", "Rain on Saturday."],
+      ["This tip adds the Sunday forecast: showers after 3pm.", "Showers after 3pm."],
+      ["The first covers London. The second covers Paris.", ""],
+    ];
+    for (const [line, kept] of cases) expect(parseTexts(`- ${line}`), line).toEqual(kept ? [kept] : []);
+    for (const line of [
+      "Two passes are sold: the first covers zones 1–2.",
+      "The last train is at 11:40pm.",
+      "The last one leaves at 11:40pm.",
+      "The next covers zone 2 from Monday.",
+      "The tip is usually 10% in Paris.",
+      "Tip the driver 10%.",
+    ]) {
+      expect(isMetaTip(line), line).toBe(false);
+      expect(parseTexts(`- ${line}`), line).toEqual([line]);
+    }
+  });
+
   it("drops a [web] tag the model still adds, keeping note cites", () => {
     expect(parseTexts("- Weekend closures are planned engineering works, near Tower Hill. [web]")).toEqual([
       "Weekend closures are planned engineering works, near Tower Hill.",
@@ -501,7 +528,7 @@ const CLEAN_TIPS = [
   "Quick method: 10% is 1,800, and half of that, 900, gives 2,700.",
   "Rents rose 9 per cent in London last year.",
   "Charge £30 per hour, and two trains per hour run on Sunday.",
-  "15% of 18,000 is 2,700.",
+  "15% of 24,000 is 3,600.", // Not "15% of 18,000 is 2,700.", which restates the first tip (rule d).
   "Sources differ on details, so check TfL before travelling: Lasttrip says the Circle line shuts Saturday, while TfL's own document lists specific dates per line.",
   "TfL says Saturday, the BBC says Sunday.",
   "Offer 10% off if they sign this week [n1].",
@@ -1007,6 +1034,19 @@ describe("restated facts", () => {
     expect(repeatsTips([LIVE_T4A, LIVE_T4B, LIVE_T4C].map(textOf))).toEqual([false, true, false]);
     // The line in progress is only checked once it ends.
     expect(streamingTips(`- ${LIVE_T4A}\n- ${textOf(LIVE_T4B)}`, 3).map((tip) => tip.text)).toHaveLength(2);
+  });
+
+  it("drops a suggested-speech tip that restates an earlier tip, comparing numbers as digits", () => {
+    // Live run on fix/source-wording.
+    const tips = ["Fifteen percent of eighteen thousand is 2,700.", 'Say "Fifteen percent of 18,000 is 2,700."'];
+    expect(repeatsTips(tips)).toEqual([false, true]);
+    expect(parseTexts(tips.map((tip) => `- ${tip}`).join("\n"))).toEqual([tips[0]]);
+    expect(streamTexts(`${tips.map((tip) => `- ${tip}`).join("\n")}\n`)).toEqual([tips[0]]);
+    expect(repeatsTips(['Say "15% of 18,000 is 2,700."', "Fifteen per cent of eighteen thousand is two thousand seven hundred."])).toEqual([false, true]);
+    // A Say line with its own point stays.
+    const weather = ["6–15 mm of rain on Saturday in Paris.", "Sunday in Paris is brighter with highs near 16°C.", 'Say "Can we plan outdoor items for Sunday in Paris?"'];
+    expect(repeatsTips(weather)).toEqual([false, false, false]);
+    expect(parseTexts(weather.map((tip) => `- ${tip}`).join("\n"), 3)).toEqual(weather);
   });
 
   it("keeps a kept tip on a steering turn when the model re-sends it with a new tip", () => {
