@@ -10,7 +10,7 @@ vi.mock("./luna", async (importOriginal) => ({ ...(await importOriginal<typeof i
 
 const rank = vi.mocked(rankWithJev);
 const guide = vi.mocked(guideWithLuna);
-const gateway = Object.assign(() => ({}), { evaluationModel: () => ({}) }) as unknown as BeeGateway;
+const gateway = { languageModel: () => ({}), evaluationModel: () => ({}) } as unknown as BeeGateway;
 const NEWS = "what's in the news in London today";
 const WHY = "why are there tube closures";
 const SUM = "what is fifteen percent of eighteen thousand";
