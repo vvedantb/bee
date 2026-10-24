@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { PipelineRequest, PipelineResult } from "../../shared/ipc";
+import { pipelineRequestSchema, type PipelineRequest, type PipelineResult } from "../../shared/ipc";
 import type { startMicSession } from "./speech";
 
 // The store with the mic on, driven by fake timers: preload (window.bee), Clerk, the mic and speech-to-text are stubbed.
@@ -21,6 +21,8 @@ vi.mock("./speech", () => ({
 const STT_MS = 700;
 const CLOSURES = ["District line closed this weekend", "No DLR trains at Tower Hill"];
 const WHY = "Weekend closures are planned engineering works on the District line";
+// A full-text answer longer than the old 500-character IPC limit, which failed the follow-up turn.
+const LONG = "The District line is closed for planned engineering works between Earl's Court and Tower Hill. ".repeat(8);
 
 function result(tips: string[]): PipelineResult {
   return {
@@ -37,7 +39,7 @@ function result(tips: string[]): PipelineResult {
 }
 
 /** Each run answers from its newest question after runMs, like a Luna turn with a web search. */
-function fakeBee(runMs: number) {
+function fakeBee(runMs: number, answer: string[] = CLOSURES) {
   const requests: PipelineRequest[] = [];
   const cancelled: Array<string | number> = [];
   const bee = {
@@ -51,17 +53,18 @@ function fakeBee(runMs: number) {
       cancelled.push(runId);
     },
     runPipeline: async (request: PipelineRequest) => {
-      requests.push(request);
+      // Main validates every request (main/meeting-ipc.ts); a real conversation must always pass.
+      requests.push(pipelineRequestSchema.parse(request));
       await new Promise((resolve) => setTimeout(resolve, runMs));
       const asked = request.transcript.findLast((line) => line.includes("?") || line.startsWith("why") || line.startsWith("what"));
-      return result(asked?.startsWith("why") ? [WHY] : CLOSURES);
+      return result(asked?.startsWith("why") ? [WHY] : answer);
     },
   };
   return { bee, requests, cancelled };
 }
 
-async function loadStore(runMs: number) {
-  const fake = fakeBee(runMs);
+async function loadStore(runMs: number, answer?: string[]) {
+  const fake = fakeBee(runMs, answer);
   vi.stubGlobal("window", { bee: fake.bee });
   const store = await import("./store");
   await store.actions.toggleMic();
@@ -132,5 +135,48 @@ describe("store: a follow-up question while the mic stays on", () => {
     expect(latest?.shown).toBeUndefined();
     await vi.advanceTimersByTimeAsync(runMs);
     expect(store.getBeeState().result?.tips).toEqual([WHY]);
+  });
+
+  it("gives a new subject only the last answer as context and its own line to answer; a steer answers both of its lines", async () => {
+    const runMs = 4000;
+    const { store, say, requests } = await loadStore(runMs);
+    await say("what's in the news in London");
+    expect(requests.at(-1)?.turnLines).toBe(1);
+    await vi.advanceTimersByTimeAsync(runMs);
+    await say("why are there tube closures");
+    await vi.advanceTimersByTimeAsync(runMs);
+    expect(store.getBeeState().result?.tips).toEqual([WHY]);
+
+    await say("what is fifteen percent of eighteen thousand");
+    // Only the answer just before (WHY), not the first turn's closures, and only the new line is the turn.
+    expect(requests.at(-1)?.earlier).toEqual([WHY]);
+    expect(requests.at(-1)?.turnLines).toBe(1);
+    await vi.advanceTimersByTimeAsync(runMs);
+
+    await say("what's the weather forecast for London this weekend");
+    const asked = requests.length;
+    await vi.advanceTimersByTimeAsync(1000);
+    await say("actually make that for Paris instead");
+    await vi.advanceTimersByTimeAsync(2 * runMs);
+    const steered = requests.at(-1);
+    expect(requests.length).toBeGreaterThan(asked);
+    expect(steered?.transcript.slice(-2)).toEqual(["what's the weather forecast for London this weekend", "actually make that for Paris instead"]);
+    expect(steered?.turnLines).toBe(2);
+    expect(steered?.earlier).toBeUndefined();
+  });
+
+  it("sends a long earlier answer as follow-up context without failing validation", async () => {
+    const runMs = 1000;
+    const { store, say, requests } = await loadStore(runMs, [LONG]);
+    expect(LONG.length).toBeGreaterThan(500);
+    await say("what's in the news in London");
+    await vi.advanceTimersByTimeAsync(runMs);
+    expect(store.getBeeState().result?.tips).toEqual([LONG]);
+
+    await say("why are there tube closures");
+    expect(requests.at(-1)?.earlier).toEqual([LONG]);
+    await vi.advanceTimersByTimeAsync(runMs);
+    expect(store.getBeeState().result?.tips).toEqual([WHY]);
+    expect(store.getBeeState().result?.guideError ?? null).toBeNull();
   });
 });

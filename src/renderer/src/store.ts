@@ -5,6 +5,7 @@ import { MAX_STEERING_TIPS, isFiller, isNewTurn, isQuestion, mergeTips, recentRe
 import { mergeLines, pipelineText, summaryTranscript, type SessionLine } from "../../core/sync-lines";
 import {
   SESSION_TRANSCRIPT_MAX,
+  clampTip,
   type McpSave,
   type McpServerView,
   type McpSetEnabled,
@@ -194,6 +195,11 @@ let lastLineAt = 0;
 let spokenDuringRun = false;
 // The line that opened this turn has not started a run yet: nothing is kept.
 let pendingFresh = false;
+// The line that opened this turn, so Luna answers only the turn's lines. lastAnswer: the latest settled tips; a new turn takes
+// them as turnEarlier, context for a follow-up ("why…"). Only that one answer: older ones kept the model on an old subject.
+let turnFirstId: string | null = null;
+let lastAnswer: string[] = [];
+let turnEarlier: string[] = [];
 // A direct question came since the run in flight started (steering.ts isQuestion, waitsForRun).
 let asked = false;
 // A run is waiting out its debounce (runTimer), or waiting for a run in its commit window to finish (deferred).
@@ -373,6 +379,8 @@ function startTurn(lines: SessionLine[]): void {
   const found = mergeChips([], lines.flatMap((line) => detectLinks(line.text)));
   if (fresh) {
     pendingFresh = true;
+    turnFirstId = lines[0]?.id ?? null;
+    turnEarlier = lastAnswer.slice(-MAX_STEERING_TIPS).map(clampTip);
     const seq = ++turnSeq;
     turnText = text;
     void enrichChips(found, turnText, seq);
@@ -448,12 +456,16 @@ function celebrate(): void {
 }
 
 async function runPipeline(): Promise<void> {
-  const transcript = state.session.lines.slice(-PIPELINE_WINDOW).map(pipelineText);
+  const recent = state.session.lines.slice(-PIPELINE_WINDOW);
+  const transcript = recent.map(pipelineText);
   if (transcript.length === 0) return;
+  // The turn's lines, newest last. Its first line out of the window: the whole window is the turn.
+  const turnStart = recent.findIndex((line) => line.id === turnFirstId);
+  const turnLines = recent.length - Math.max(0, turnStart);
   const fresh = pendingFresh;
   const keep = keepList();
-  // A new turn drops the last answer from the screen, but Luna still gets the latest settled tips, so a follow-up ("why…") has its context.
-  const earlier = keep.length > 0 ? [] : state.session.tips.slice(-MAX_STEERING_TIPS);
+  // A new turn drops the last answer from the screen, but Luna still gets it, so a follow-up ("why…") has its context.
+  const earlier = keep.length > 0 ? [] : turnEarlier;
   const cap = tipCap(keep.length);
   const now = Date.now();
   // A run still in flight is cancelled below: that is a restart.
@@ -501,8 +513,9 @@ async function runPipeline(): Promise<void> {
     const result = await window.bee.runPipeline({
       transcript,
       runId: run,
-      ...(keep.length > 0 ? { shown: keep } : {}),
+      ...(keep.length > 0 ? { shown: keep.map(clampTip) } : {}),
       ...(earlier.length > 0 ? { earlier } : {}),
+      turnLines,
       sessionToken: await sessionToken(),
     });
     if (run !== latestRun) return;
@@ -528,7 +541,10 @@ async function runPipeline(): Promise<void> {
       islandClosing: false,
     });
     if (!waiting) addToSession(shown);
-    if (!waiting && tips.length > 0) celebrate();
+    if (!waiting && tips.length > 0) {
+      lastAnswer = tips;
+      celebrate();
+    }
     touchIsland();
   } catch (error) {
     if (run === latestRun) {
@@ -902,12 +918,13 @@ export const actions = {
     runTimer = undefined;
     deferred = false;
     turnOpen = false;
+    lastAnswer = [];
     set({ keptTips: [], revising: false, session: EMPTY_SESSION, chips: [], dismissedChipIds: [], summary: { saving: true, result: null, error: null } });
     try {
       const result = await window.bee.writeMeetingSummary({
         transcript: summaryTranscript(ended.lines, selfName()),
         notesCited: ended.notesCited,
-        tips: ended.tips,
+        tips: ended.tips.map(clampTip),
         ...(meetingId !== null ? { meetingId } : {}),
         sessionToken: await sessionToken(),
       });

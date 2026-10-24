@@ -1,7 +1,9 @@
 // Runs in the harness renderer for the live conversation test: the real store (src/renderer/src/store.ts) and island App. The mic
 // is on as startTestMic, so each line goes in where speech-to-text hands it over, then preload → main (meeting-ipc.ts) → live
-// Gateway. No STT call is made. Five turns, with an E2E_MARK line at each injection and settle. Reports once.
-// With ?shots=1 the full text is opened after turns 2 and 4 and the harness captures the window (E2E_SHOT).
+// Gateway. No STT call is made. Five turns, with an E2E_MARK line at each injection and settle. Reports once. A turn that errors
+// or never settles is recorded as failed and the run goes on, so one bad turn still leaves a full report.
+// With ?shots=1 the full text is opened after turns 2 and 4 and the harness captures the window (E2E_SHOT). A turn with no tips
+// has no full text: its shot is skipped and recorded as a failure (shotError).
 import { StrictMode, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { tipKey } from "../../src/core/steering";
@@ -47,6 +49,8 @@ type Turn = {
   revising: boolean;
   error: string | null;
   scroll: Scroll | null;
+  // Why the full-text shot was not taken (no tips, or the full text did not open). Null when taken or not asked for.
+  shotError: string | null;
   checks: Record<string, boolean>;
   pass: boolean;
 };
@@ -112,7 +116,10 @@ async function converse(turn: number, label: string, say: (text: string) => void
     await sleep(steer.afterMs);
     inject(steer.text);
   }
-  await until(() => !getBeeState().busy && !getBeeState().heard, SETTLE_MS, `Turn ${turn} did not settle`);
+  const settleError = await until(() => !getBeeState().busy && !getBeeState().heard, SETTLE_MS, `Turn ${turn} did not settle`).then(
+    () => null,
+    (error: unknown) => String(error),
+  );
   const latencyMs = Math.round(performance.now() - from);
   const seen = watching.stop();
   const state = getBeeState();
@@ -130,8 +137,9 @@ async function converse(turn: number, label: string, say: (text: string) => void
     runs,
     keptMax: seen.keptMax,
     revising: seen.revising,
-    error: state.result?.guideError ?? state.error,
+    error: settleError ?? state.result?.guideError ?? state.error,
     scroll: null,
+    shotError: null,
     checks: {},
     pass: false,
   };
@@ -146,12 +154,26 @@ function finish(record: Turn, checks: Record<string, boolean>): Turn {
 
 const answered = (record: Turn) => ({ answered: record.tips.length > 0 && record.error === null, noWebTag: !record.webTag });
 
+type Shot = { scroll: Scroll | null; shotError: string | null };
+
 /**
  * Folds the body to the pill's one line (as when the user reads on), opens the answer in full with the store action, and has the
- * harness capture the window. The full text must open at the top and stay there.
+ * harness capture the window. The full text must open at the top and stay there. Without tips there is nothing to open, so the
+ * shot is skipped; that, or a full text that does not open, comes back as shotError instead of ending the run.
  */
-async function fullTextShot(name: string): Promise<Scroll | null> {
-  if (!shots) return null;
+async function fullTextShot(name: string): Promise<Shot> {
+  if (!shots) return { scroll: null, shotError: null };
+  if ((getBeeState().result?.tips.length ?? 0) === 0) {
+    mark({ event: "shot-skipped", name, reason: "no tips" });
+    return { scroll: null, shotError: "skipped: no tips to open" };
+  }
+  return openFullText(name).then(
+    (scroll) => ({ scroll, shotError: null }),
+    (error: unknown) => ({ scroll: null, shotError: String(error) }),
+  );
+}
+
+async function openFullText(name: string): Promise<Scroll> {
   await actions.dismissIsland();
   await until(() => document.querySelector(".island-scroll") === null, 2_000, "The island body did not fold");
   actions.openFullText();
@@ -165,8 +187,9 @@ async function fullTextShot(name: string): Promise<Scroll | null> {
   return { scrollTop, scrollTopAfter2s: scroller.scrollTop, scrollHeight: scroller.scrollHeight, clientHeight: scroller.clientHeight };
 }
 
-const atTop = (scroll: Scroll | null): Record<string, boolean> =>
-  scroll ? { fullTextAtTop: scroll.scrollTop === 0 && scroll.scrollTopAfter2s === 0 } : {};
+/** With shots on: the shot was taken, and the full text opened at the top and stayed there. */
+const shotChecks = ({ scroll, shotError }: Shot): Record<string, boolean> =>
+  shots ? { fullTextShot: shotError === null, fullTextAtTop: scroll !== null && scroll.scrollTop === 0 && scroll.scrollTopAfter2s === 0 } : {};
 
 async function run(): Promise<void> {
   const say = startTestMic().phrase;
@@ -178,20 +201,20 @@ async function run(): Promise<void> {
   const t2 = await converse(2, "follow-up", say, LINES.why);
   const shot2 = await fullTextShot("conversation-turn2-fulltext");
   const turn2 = finish(
-    { ...t2.record, scroll: shot2 },
+    { ...t2.record, ...shot2 },
     {
       ...answered(t2.record),
       under15s: (t2.record.latencyMs ?? Infinity) < FOLLOW_UP_MS,
       givesReason: REASON.test(t2.record.tips.join(" ")),
       micOn: getBeeState().mic.on,
-      ...atTop(shot2),
+      ...shotChecks(shot2),
     },
   );
 
   // A new subject after the answer settled: a fresh turn, so the last answer is neither kept nor shown.
   const t3 = await converse(3, "unrelated", say, LINES.unrelated);
   const before = new Set(turn2.tips.map(tipKey));
-  finish(t3.record, {
+  const turn3 = finish(t3.record, {
     ...answered(t3.record),
     notRevising: !t3.record.revising && t3.record.keptMax === 0,
     noStaleTips: !t3.seen.some((tip) => before.has(tipKey(tip))),
@@ -201,13 +224,15 @@ async function run(): Promise<void> {
   const t4 = await converse(4, "steer", say, LINES.ask, { text: LINES.steer, afterMs: STEER_AFTER_MS });
   const shot4 = await fullTextShot("conversation-turn4-fulltext");
   finish(
-    { ...t4.record, scroll: shot4 },
+    { ...t4.record, ...shot4 },
     {
       ...answered(t4.record),
       steerWhileBusy: t4.busyAtLine[1] === true,
       steered: t4.record.revising && t4.record.keptMax > 0,
       redirected: /paris/i.test(t4.record.tips.join(" ")),
-      ...atTop(shot4),
+      // The steered set answers the new request only: no tip from the last turn (or the one before) is carried in.
+      noEarlierTips: !t4.record.tips.some((tip) => [...turn2.tips, ...turn3.tips].some((old) => tipKey(old) === tipKey(tip))),
+      ...shotChecks(shot4),
     },
   );
 
@@ -236,6 +261,7 @@ async function run(): Promise<void> {
       revising: after.revising,
       error: state.error,
       scroll: null,
+      shotError: null,
       checks: {},
       pass: false,
     },

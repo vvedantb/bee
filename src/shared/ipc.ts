@@ -92,13 +92,21 @@ export type CopyGatewayKeyResult = z.infer<typeof copyGatewayKeyResultSchema>;
 // Names one pipeline run, so the renderer can cancel it when a newer line supersedes it.
 const runIdSchema = z.union([z.string().max(100), z.number()]);
 
+// One tip line. Full-text answers run to several hundred characters, and Luna's 800 output tokens fit well under this cap.
+// Tips are clamped to it where they are parsed (core/luna.ts) and before the renderer sends them back, so a real tip never fails IPC.
+export const TIP_MAX_CHARS = 4000;
+export const clampTip = (tip: string): string => tip.slice(0, TIP_MAX_CHARS);
+const tipSchema = z.string().max(TIP_MAX_CHARS);
+
 export const pipelineRequestSchema = z.object({
   transcript: z.array(z.string().max(2000)).min(1).max(50),
   runId: runIdSchema.optional(),
   // Tips already on screen when a newer line restarts the run (live steering). Complete lines only.
-  shown: z.array(z.string().max(500)).max(3).optional(),
+  shown: z.array(tipSchema).max(3).optional(),
   // On a new turn: the latest settled tips, gone from the screen but sent as context so a follow-up question can use them.
-  earlier: z.array(z.string().max(500)).max(3).optional(),
+  earlier: z.array(tipSchema).max(3).optional(),
+  // How many of the newest transcript lines belong to the current turn (the request to answer). The rest are background.
+  turnLines: z.number().int().min(1).max(50).optional(),
   // Clerk session token; main refuses to run the pipeline without a live one (main/auth.ts).
   sessionToken: z.string().max(8000),
 });
@@ -117,7 +125,7 @@ export const meetingSummaryRequestSchema = z.object({
   transcript: z.array(transcriptLineSchema).min(1).max(SESSION_TRANSCRIPT_MAX),
   // Titles of notes cited in tips during the meeting.
   notesCited: z.array(z.string().max(500)).max(100),
-  tips: z.array(z.string().max(500)).max(100),
+  tips: z.array(tipSchema).max(100),
   // The detected meeting (MeetingContextView.id) the lines belong to, so a summary written after the next meeting began still
   // saves to the right meeting memory.
   meetingId: z.number().int().nonnegative().optional(),
@@ -182,7 +190,7 @@ export const pipelineResultSchema = z.object({
   notes: z.array(rankedNoteSchema),
   rankSource: z.enum(["jev", "fallback"]),
   rankError: z.string().nullable(),
-  tips: z.array(z.string()),
+  tips: z.array(tipSchema),
   sources: z.array(z.object({ title: z.string().max(300), url: z.string().url().max(2000) })).max(5),
   guideError: z.string().nullable(),
   /** Muted note when connected tools were skipped. */
@@ -208,7 +216,7 @@ export const lunaActivitySchema = z.object({ runId: runIdSchema.optional(), tool
 export type LunaActivity = z.infer<typeof lunaActivitySchema>;
 
 // Main → renderer while Luna streams: the tips so far (finished lines, plus a line with a few words). Never the transcript.
-export const lunaPartialSchema = z.object({ runId: runIdSchema.optional(), tips: z.array(z.string().max(500)).max(5) });
+export const lunaPartialSchema = z.object({ runId: runIdSchema.optional(), tips: z.array(tipSchema).max(5) });
 export type LunaPartial = z.infer<typeof lunaPartialSchema>;
 
 export const updateCheckSchema = z.object({

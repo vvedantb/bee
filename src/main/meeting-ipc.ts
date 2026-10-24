@@ -75,6 +75,7 @@ export function registerMeetingIpc(args: { notesDir: string; fsRoots: () => stri
         transcript: request.transcript,
         shown: request.shown,
         earlier: request.earlier,
+        turnLines: request.turnLines,
         meetingBrief: args.meeting.brief(),
         snippets,
         gateway: apiKey ? createBeeGateway(apiKey) : null,

@@ -15,6 +15,7 @@
 // The conversation page renders the real store and App, so it gets the island's 480 × 360 response window. With BEE_E2E_SHOTS_DIR
 // it is passed ?shots=1, and each "E2E_SHOT {"name"}" line it logs captures the window to <BEE_E2E_SHOTS_DIR>/<name>.png, reported
 // on stdout as "E2E_SHOT_FILE {"file"}". The store's window resizes are answered and ignored.
+// Every pipeline run that returns is reported on stdout as "E2E_RUN {...}": the notes it ranked and whether Jev was called.
 import { BrowserWindow, app, ipcMain, session } from "electron";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -30,7 +31,8 @@ import { registerMeetingIpc } from "../../src/main/meeting-ipc";
 import { ensureNotesDir } from "../../src/main/notes";
 import { createStubDetector } from "../../src/main/teams-detector";
 import { registerTeamsIpc, relayUrlFromEnv } from "../../src/main/teams-sync";
-import { IPC, type CopyGatewayKeyResult } from "../../src/shared/ipc";
+import { NO_GATEWAY_KEY } from "../../src/core/gateway";
+import { IPC, pipelineResultSchema, type CopyGatewayKeyResult } from "../../src/shared/ipc";
 
 // Obviously fake, so a screenshot can never show a real key.
 const FAKE_GATEWAY_KEY = "vck_test_1234567890_FAKE_KEY";
@@ -158,6 +160,26 @@ function reportingPool(pool: McpPool): McpPool {
   };
 }
 
+/**
+ * Wraps the runPipeline handler that registerMeetingIpc adds, so each run's result is reported as one "E2E_RUN {...}" line.
+ * Superseded runs return too (fail open), so every run started is reported. With a key, runPipeline calls Jev only when
+ * retrieval found notes (rankWithJev returns early without candidates), so `jevCalled` is "a key and at least one note".
+ */
+function reportPipelineRuns(): void {
+  const handle = ipcMain.handle.bind(ipcMain);
+  ipcMain.handle = (channel, listener) =>
+    handle(channel, channel !== IPC.runPipeline ? listener : async (event, ...args) => {
+      const value = await listener(event, ...args);
+      const result = pipelineResultSchema.safeParse(value);
+      if (result.success) {
+        const { notes, rankSource, rankError, timingsMs } = result.data;
+        const jevCalled = notes.length > 0 && rankError !== NO_GATEWAY_KEY;
+        process.stdout.write(`E2E_RUN ${JSON.stringify({ notes: notes.length, rankSource, rankMs: Math.round(timingsMs.rank), jevCalled })}\n`);
+      }
+      return value;
+    });
+}
+
 void app.whenReady().then(async () => {
   if (shotNames) {
     const dir = shotsDir || mkdtempSync(join(tmpdir(), "bee-island-shots-"));
@@ -180,6 +202,7 @@ void app.whenReady().then(async () => {
     settings: () => ({ enabled: false, calendar: false, memory: false }),
   });
   const mcpFile = process.env.BEE_E2E_MCP_FILE;
+  reportPipelineRuns();
   registerMeetingIpc({
     notesDir,
     fsRoots: () => [],
