@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, expect, it, onTestFinished } from "vitest";
 import { z } from "zod";
-import { isMetaTip } from "../src/core/luna";
+import { hasSourceWording, isMetaTip, repeatsSentence, repeatsTips } from "../src/core/luna";
 import { retrieve } from "../src/core/retrieve";
 import { loadSnippets } from "../src/main/notes";
 import { NO_FIXTURES, completeRecording, e2eModeSchema, fixtureFiles } from "./e2e/replay";
@@ -36,9 +36,9 @@ const FOLLOW_UP_MS = 15_000;
 const PNG_MAGIC = "89504e470d0a1a0a";
 const SHOTS = ["conversation-turn2-fulltext", "conversation-turn4-fulltext"];
 const STATE_SHOT = "conversation-searching";
-// The model talking about its rules instead of answering ("The newest line asks…", "copy them word for word", "The limit is 3 tips").
-const META_WORDS = /\b(?:tips?|newest line|word for word|limit is)\b/i;
-const looksMeta = (tip: string) => isMetaTip(tip) || META_WORDS.test(tip);
+// Source wording left in a tip's text ("(TfL)", "per TfL", "[2-2]", "The latest BBC piece says", "Met Police reported" with its
+// label) or a sentence restated later in the same tip. The source belongs in its own field (core/luna.ts parseLunaTips).
+const hasSourceWordingOrRepeat = (tip: string, source: string | null) => hasSourceWording(tip, source) || repeatsSentence(tip);
 const mode = e2eModeSchema.optional().parse(process.env.BEE_E2E_MODE?.trim() || undefined);
 const FIXTURES_DIR = join(root, "test/fixtures/replay/conversation");
 // Shares no word with the lines said, so retrieval finds nothing.
@@ -59,6 +59,7 @@ const turnSchema = z.object({
   label: z.string(),
   injected: z.array(z.string()),
   tips: z.array(z.string()),
+  tipSources: z.array(z.string().nullable()).default([]),
   sources: z.number(),
   latencyMs: z.number().nullable(),
   workingMs: z.number().nullable(),
@@ -86,13 +87,23 @@ type RunLine = z.infer<typeof runLineSchema>;
 const prefixed = <T extends z.ZodType>(lines: string[], prefix: string, schema: T): z.infer<T>[] =>
   lines.filter((line) => line.startsWith(prefix)).map((line) => schema.parse(JSON.parse(line.slice(prefix.length))));
 
-/** The page's checks plus the test's own: no tip in the turn reads as reasoning about the rules. */
-function withMetaCheck(turn: Turn): Turn {
-  const checks = { ...turn.checks, noMetaTips: !turn.tips.some(looksMeta) };
-  return { ...turn, checks, pass: turn.pass && checks.noMetaTips };
+/**
+ * The page's checks plus the test's own: no tip in the turn reads as reasoning about the rules, and no tip's text repeats
+ * or restates a sentence or an earlier tip, garbles a "per", or still names its source ("(TfL)", "per TfL", "[2-2]", "Met Police reported"):
+ * that goes in the tip's source field.
+ */
+function withTipChecks(turn: Turn): Turn {
+  const own = {
+    // The parser's own rule c check (core/luna.ts), so a tip flagged here is one parseLunaTips failed to clean.
+    noMetaTips: !turn.tips.some(isMetaTip),
+    cleanWording: !turn.tips.some((tip, index) => hasSourceWordingOrRepeat(tip, turn.tipSources[index] ?? null)) && !repeatsTips(turn.tips).includes(true),
+  };
+  return { ...turn, checks: { ...turn.checks, ...own }, pass: turn.pass && own.noMetaTips && own.cleanWording };
 }
 
 const failed = (turn: Turn) => Object.keys(turn.checks).filter((name) => !turn.checks[name]);
+/** The turn's tips with their source labels: "tip text — src: TfL". */
+const tipsWithSources = (turn: Turn) => turn.tips.map((tip, index) => (turn.tipSources[index] ? `${tip} — src: ${turn.tipSources[index]}` : tip));
 const cell = (text: string) => text.replace(/\|/g, "\\|").replace(/\s+/g, " ").trim() || "–";
 
 function reportPath(): string | null {
@@ -121,7 +132,7 @@ function writeReport(file: string, args: { ok: boolean; error?: string; runsStar
       [
         `${turn.turn} ${turn.label}`,
         cell(turn.injected.join(" → ") || "(mic off)"),
-        cell(turn.tips.join(" / ") || "(no tips)") + (turn.error ? ` (error: ${cell(turn.error)})` : ""),
+        cell(tipsWithSources(turn).join(" / ") || "(no tips)") + (turn.error ? ` (error: ${cell(turn.error)})` : ""),
         turn.latencyMs ?? "–",
         turn.workingMs ?? "–",
         turn.firstTextMs ?? "–",
@@ -170,7 +181,7 @@ function printTurns(turns: Turn[]): void {
     })),
   );
   for (const turn of turns) {
-    console.log(`Turn ${turn.turn} (${turn.label})${turn.error ? ` error: ${turn.error}` : ""}${turn.shotError ? ` full text: ${turn.shotError}` : ""}\n${turn.tips.map((tip) => `  - ${tip}`).join("\n") || "  (no tips)"}`);
+    console.log(`Turn ${turn.turn} (${turn.label})${turn.error ? ` error: ${turn.error}` : ""}${turn.shotError ? ` full text: ${turn.shotError}` : ""}\n${tipsWithSources(turn).map((tip) => `  - ${tip}`).join("\n") || "  (no tips)"}`);
   }
 }
 
@@ -186,7 +197,7 @@ describe.skipIf(mode !== "replay" && !process.env.BEE_AI_GATEWAY_API_KEY?.trim()
       ...(notes ? { BEE_E2E_NOTES_DIR: notes } : {}),
     };
     const { report: raw, lines } = await runHarnessWithOutput({ page: "conversation-page", env, report: reportSchema, timeoutMs: 240_000 });
-    const report = { ...raw, turns: raw.turns.map(withMetaCheck) };
+    const report = { ...raw, turns: raw.turns.map(withTipChecks) };
     const runs = prefixed(lines, "E2E_RUN ", runLineSchema);
     const file = reportPath();
     if (file) writeReport(file, { ok: report.ok, error: report.error, runsStarted: report.runs, runs, turns: report.turns });
@@ -201,7 +212,8 @@ describe.skipIf(mode !== "replay" && !process.env.BEE_AI_GATEWAY_API_KEY?.trim()
     for (const item of report.turns) expect(item.webTag, `turn ${item.turn} shows [web]`).toBe(false);
     expect(report.runs).toBeLessThanOrEqual(MAX_RUNS);
     for (const item of report.turns) {
-      expect(item.tips.filter(looksMeta), `turn ${item.turn} shows reasoning about the rules, not a tip`).toEqual([]);
+      expect(item.tips.filter(isMetaTip), `turn ${item.turn} shows reasoning about the rules, not a tip`).toEqual([]);
+      expect(item.checks.cleanWording, `turn ${item.turn} repeats a sentence or a tip, garbles a "per" or names or describes its source in a tip's text: ${item.tips.join(" / ")}`).toBe(true);
     }
     expect(runs.length, "every run started returns to main").toBe(report.runs);
 

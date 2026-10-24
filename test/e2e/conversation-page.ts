@@ -46,6 +46,8 @@ type Turn = {
   label: string;
   injected: string[];
   tips: string[];
+  // Each tip's source label as the island shows it ("TfL"), by position.
+  tipSources: (string | null)[];
   sources: number;
   latencyMs: number | null;
   // From the (first) injection, in ms: the pill's working state, web search starting, the first tip on screen. Null: never.
@@ -180,6 +182,7 @@ async function converse(
     label,
     injected: steer ? [text, steer.text] : [text],
     tips,
+    tipSources: state.result?.tipSources ?? [],
     sources,
     latencyMs,
     workingMs: seen.workingMs,
@@ -312,6 +315,7 @@ async function run(): Promise<void> {
       label: "mic off",
       injected: [],
       tips: state.result?.tips ?? [],
+      tipSources: state.result?.tipSources ?? [],
       sources: state.result?.sources.length ?? 0,
       latencyMs: null,
       workingMs: null,

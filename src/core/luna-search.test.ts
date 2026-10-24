@@ -35,7 +35,8 @@ describe("Luna's search and consistency guidance", () => {
   it("keeps follow-ups consistent and says when sources disagree", () => {
     expect(LUNA_SYSTEM).toMatch(/consistent with your last answer/);
     expect(LUNA_SYSTEM).toMatch(/which lines are closed today, say it changed/);
-    expect(LUNA_SYSTEM).toMatch(/If sources disagree, say so plainly/);
+    expect(LUNA_SYSTEM).toMatch(/If sources disagree on a number, give the range/);
+    expect(LUNA_SYSTEM).toMatch(/If they disagree on anything else, state each version in one tip/);
   });
 
   it("says in the tail when web search is off, and only then", () => {
@@ -92,7 +93,7 @@ describe("guideWithLuna search option errors", () => {
           return { stream: simulateReadableStream<unknown>({ chunks: [{ type: "stream-start", warnings: [] }, { type: "error", error: new Error(message) }] }) as never };
         }
         const web = (tools ?? []).some((tool) => tool.name === "web_search");
-        return { stream: simulateReadableStream({ chunks: answer(web ? "- Planned works, per TfL\n" : "- No search this time\n") }) as never };
+        return { stream: simulateReadableStream({ chunks: answer(web ? "- Planned works | src: TfL\n" : "- No search this time\n") }) as never };
       },
     });
   }
@@ -105,7 +106,8 @@ describe("guideWithLuna search option errors", () => {
       const llm = failing(DOMAINS_ERROR, 1);
       const result = await guideWithLuna({ model: llm, transcript: ["why are there tube closures"], notes: [], searchLocation: location });
       expect(result.error).toBeNull();
-      expect(result.tips).toEqual(["Planned works, per TfL"]);
+      expect(result.tips).toEqual(["Planned works"]);
+      expect(result.tipSources).toEqual(["TfL"]);
       const [first, retry] = webTools(llm);
       expect(llm.doStreamCalls).toHaveLength(2);
       expect(first).toHaveProperty("args.userLocation");

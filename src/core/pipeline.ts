@@ -2,7 +2,7 @@ import type { PipelineResult } from "../shared/ipc";
 import { JEV_MODEL, GUIDE_MODEL, NO_GATEWAY_KEY, type BeeGateway } from "./gateway";
 import { rankWithJev } from "./jev";
 import type { McpTools } from "./mcp";
-import { guideWithLuna, noteCitation, type LunaToolActivity } from "./luna";
+import { guideWithLuna, noteCitation, type LunaToolActivity, type TipFields } from "./luna";
 import type { Snippet } from "./notes";
 import { retrieve, transcriptQuery } from "./retrieve";
 import { needsWebSearch, type SearchLocation } from "./web-search";
@@ -58,7 +58,7 @@ export async function runPipeline(args: {
   loadMcpTools?: () => Promise<McpTools>;
   onActivity?: (activity: LunaToolActivity) => void;
   /** Tips so far, as Luna streams them. Does not wait for Jev. */
-  onPartial?: (tips: string[]) => void;
+  onPartial?: (partial: TipFields) => void;
   /** Cancels Jev and Luna for a superseded run. */
   signal?: AbortSignal;
 }): Promise<PipelineResult> {
@@ -75,6 +75,7 @@ export async function runPipeline(args: {
       rankSource: "fallback",
       rankError: NO_GATEWAY_KEY,
       tips: [],
+      tipSources: [],
       sources: [],
       guideError: NO_GATEWAY_KEY,
       timingsMs: { retrieve: retrieveMs, rank: 0, guide: 0, mcp: 0, lunaFirstToken: null, lunaTotal: 0 },
@@ -140,6 +141,7 @@ export async function runPipeline(args: {
     rankSource: rank.source,
     rankError: rank.error,
     tips: guide.tips,
+    tipSources: guide.tipSources,
     sources: guide.sources,
     guideError: guide.error,
     guideNote: guide.skipped,

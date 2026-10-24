@@ -567,6 +567,15 @@ body {
   animation-delay: 70ms;
 }
 
+/* The tip's publisher ("TfL"), after its text. */
+.island-tips .tip-source {
+  margin-left: 6px;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
 .island-error {
   margin: 8px 0 0;
   font-size: 14px;

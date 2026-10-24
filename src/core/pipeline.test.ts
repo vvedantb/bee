@@ -17,7 +17,7 @@ const snippets = chunkNotes(SEED_NOTES);
 const transcript = ["When does SSO ship for enterprise customers?"];
 const gateway = { languageModel: () => ({}), evaluationModel: () => ({}) } as unknown as BeeGateway;
 
-const lunaOk = (extra: Partial<LunaResult> = {}): LunaResult => ({ tips: ["SSO ships in Q4 [n1]"], sources: [], error: null, skipped: null, firstTokenMs: 12, totalMs: 30, ...extra });
+const lunaOk = (extra: Partial<LunaResult> = {}): LunaResult => ({ tips: ["SSO ships in Q4 [n1]"], tipSources: [null], sources: [], error: null, skipped: null, firstTokenMs: 12, totalMs: 30, ...extra });
 
 // Jev scores every candidate it is given, in reverse order, so its order differs from BM25's.
 function jevAfter(ms: number, started?: (at: number) => void, finished?: (at: number) => void) {
@@ -160,11 +160,11 @@ describe("runPipeline", () => {
     const events: string[] = [];
     jevAfter(100, undefined, () => events.push("jev-done"));
     guide.mockImplementation(async (args) => {
-      args.onPartial?.(["First tip appears now"]);
+      args.onPartial?.({ tips: ["First tip appears now"], tipSources: [null] });
       await sleep(10);
       return lunaOk();
     });
-    const result = await runPipeline({ transcript, snippets, gateway, onPartial: (tips) => events.push(`partial:${tips.length}`) });
+    const result = await runPipeline({ transcript, snippets, gateway, onPartial: ({ tips }) => events.push(`partial:${tips.length}`) });
     expect(events).toEqual(["partial:1", "jev-done"]);
     expect(result.rankSource).toBe("jev");
   });

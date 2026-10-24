@@ -15,6 +15,7 @@ import {
   pipelineRequestSchema,
   transcribeRequestSchema,
   type LunaActivity,
+  type LunaPartial,
   type MeetingSummaryResult,
 } from "../shared/ipc";
 import { assertSignedIn } from "./auth";
@@ -98,8 +99,8 @@ export function registerMeetingIpc(args: { notesDir: string; fsRoots: () => stri
         onActivity: (activity) => {
           if (!event.sender.isDestroyed()) event.sender.send(IPC.lunaActivity, { runId: request.runId, ...activity } satisfies LunaActivity);
         },
-        onPartial: (tips) => {
-          if (!controller.signal.aborted && !event.sender.isDestroyed()) event.sender.send(IPC.lunaPartial, { runId: request.runId, tips });
+        onPartial: (partial) => {
+          if (!controller.signal.aborted && !event.sender.isDestroyed()) event.sender.send(IPC.lunaPartial, { runId: request.runId, ...partial } satisfies LunaPartial);
         },
       });
       return { ...result, timingsMs: { ...result.timingsMs, loadNotes } };

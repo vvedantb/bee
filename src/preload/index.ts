@@ -25,6 +25,7 @@ import {
   updateCheckSchema,
   type EnrichLinksRequest,
   type LunaActivity,
+  type LunaPartial,
   type McpSave,
   type McpSetEnabled,
   type MeetingSummaryRequest,
@@ -87,7 +88,7 @@ const api = {
     };
   },
   // Tips so far while Luna streams (finished lines). Returns the unsubscribe function.
-  onLunaPartial: (listener: (partial: { runId?: string | number; tips: string[] }) => void): (() => void) => {
+  onLunaPartial: (listener: (partial: LunaPartial) => void): (() => void) => {
     const handler = (_event: unknown, payload: unknown) => {
       const parsed = lunaPartialSchema.safeParse(payload);
       if (parsed.success) listener(parsed.data);

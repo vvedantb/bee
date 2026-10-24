@@ -97,6 +97,10 @@ const runIdSchema = z.union([z.string().max(100), z.number()]);
 export const TIP_MAX_CHARS = 4000;
 export const clampTip = (tip: string): string => tip.slice(0, TIP_MAX_CHARS);
 const tipSchema = z.string().max(TIP_MAX_CHARS);
+// A tip's publishers, such as "TfL" or "TfL, Evening Standard" (up to three), cut to this where it is parsed (core/luna.ts). Null for a tip with no web source.
+export const TIP_SOURCE_MAX_CHARS = 80;
+// Each tip's source, by position. Optional: a result without it shows no labels.
+const tipSourcesSchema = z.array(z.string().max(TIP_SOURCE_MAX_CHARS).nullable()).max(10).optional();
 
 export const pipelineRequestSchema = z.object({
   transcript: z.array(z.string().max(2000)).min(1).max(50),
@@ -193,6 +197,7 @@ export const pipelineResultSchema = z.object({
   rankSource: z.enum(["jev", "fallback"]),
   rankError: z.string().nullable(),
   tips: z.array(tipSchema),
+  tipSources: tipSourcesSchema,
   sources: z.array(z.object({ title: z.string().max(300), url: z.string().url().max(2000) })).max(5),
   guideError: z.string().nullable(),
   /** Muted note when connected tools were skipped. */
@@ -218,7 +223,7 @@ export const lunaActivitySchema = z.object({ runId: runIdSchema.optional(), tool
 export type LunaActivity = z.infer<typeof lunaActivitySchema>;
 
 // Main → renderer while Luna streams: the tips so far (finished lines, plus a line with a few words). Never the transcript.
-export const lunaPartialSchema = z.object({ runId: runIdSchema.optional(), tips: z.array(tipSchema).max(5) });
+export const lunaPartialSchema = z.object({ runId: runIdSchema.optional(), tips: z.array(tipSchema).max(5), tipSources: tipSourcesSchema });
 export type LunaPartial = z.infer<typeof lunaPartialSchema>;
 
 export const updateCheckSchema = z.object({

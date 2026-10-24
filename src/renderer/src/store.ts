@@ -74,6 +74,9 @@ export type BeeState = {
   // list and shown dimmed; revising turns the pill to "Updating…". Both clear when the run settles. State only, never words beyond the tips.
   keptTips: string[];
   revising: boolean;
+  // The publisher behind each of this turn's tips ("TfL"), by tipKey, from streamed and final results. Kept tips keep theirs while
+  // a run revises them; a new turn clears it.
+  tipSources: Record<string, string>;
   // The current turn asks a direct question (steering.ts isQuestion): while busy, the pill says the AI is answering.
   question: boolean;
   // Raw names of the run's tool calls in flight, one entry per call (notch.ts workingLabel). Empty when no run is busy.
@@ -141,6 +144,7 @@ let state: BeeState = {
   partialTips: null,
   keptTips: [],
   revising: false,
+  tipSources: {},
   question: false,
   tools: [],
   done: false,
@@ -235,12 +239,26 @@ const EMPTY_RESULT = { tips: [], sources: [], guideError: null };
  * What the island and panel show: the last result, with the streamed tips over it while a run is in flight.
  * Old tips stay visible while busy. An old error and notes do not, and streamed tips drop the old sources.
  */
-export function displayResult(current: Pick<BeeState, "result" | "partialTips" | "busy">): PipelineResult | null {
+export function displayResult(current: Pick<BeeState, "result" | "partialTips" | "busy" | "tipSources">): PipelineResult | null {
   const { result, partialTips, busy } = current;
-  if (partialTips) {
-    return { ...(result ?? { notes: [], rankSource: "fallback", rankError: null, timingsMs: ZERO_TIMINGS }), tips: partialTips, sources: [], guideError: null, guideNote: null, mcpErrors: [] };
-  }
-  return result && busy ? { ...result, guideError: null, guideNote: null, mcpErrors: [] } : result;
+  const shown: PipelineResult | null = partialTips
+    ? { ...(result ?? { notes: [], rankSource: "fallback", rankError: null, timingsMs: ZERO_TIMINGS }), tips: partialTips, sources: [], guideError: null, guideNote: null, mcpErrors: [] }
+    : result && busy
+      ? { ...result, guideError: null, guideNote: null, mcpErrors: [] }
+      : result;
+  return shown && { ...shown, tipSources: sourcesOf(current.tipSources, shown.tips) };
+}
+
+/** Each tip's source from the turn's map, by position (BeeState.tipSources). */
+const sourcesOf = (known: Record<string, string>, tips: readonly string[]) => tips.map((tip) => known[tipKey(tip)] ?? null);
+
+/** The turn's map with a result's or a partial's sources added, by tip text. A tip without one keeps any it had. */
+function withSources(known: Record<string, string>, update: { tips: string[]; tipSources?: (string | null)[] }): Record<string, string> {
+  const added = update.tips.flatMap((tip, index): [string, string][] => {
+    const source = update.tipSources?.[index];
+    return source ? [[tipKey(tip), source]] : [];
+  });
+  return added.length > 0 ? { ...known, ...Object.fromEntries(added) } : known;
 }
 
 const ZERO_TIMINGS = { retrieve: 0, rank: 0, guide: 0, mcp: 0, lunaFirstToken: null, lunaTotal: 0 };
@@ -391,7 +409,7 @@ function startTurn(lines: SessionLine[]): void {
     const seq = ++turnSeq;
     turnText = text;
     void enrichChips(found, turnText, seq);
-    const cleared = { result: null, partialTips: null, fullText: false, chips: found, dismissedChipIds: [] };
+    const cleared = { result: null, partialTips: null, tipSources: {}, fullText: false, chips: found, dismissedChipIds: [] };
     set(found.length > 0 ? { ...cleared, dismissed: false, islandClosing: false } : cleared);
     clearTimeout(islandTimer);
     if (found.length > 0) touchIsland();
@@ -511,10 +529,16 @@ async function runPipeline(): Promise<void> {
     else set({ tools: withoutOne(state.tools, tool) });
   });
   // Streamed tips show at once, over the kept ones, without waiting for the whole run.
-  const stopPartial = window.bee.onLunaPartial(({ runId, tips }) => {
-    if (run !== latestRun || (runId !== undefined && runId !== run)) return;
+  const stopPartial = window.bee.onLunaPartial((partial) => {
+    if (run !== latestRun || (partial.runId !== undefined && partial.runId !== run)) return;
+    const { tips } = partial;
     runTips = tips;
-    set({ partialTips: keep.length > 0 ? mergeTips(keep, tips, cap, false) : tips, dismissed: false, islandClosing: false });
+    set({
+      partialTips: keep.length > 0 ? mergeTips(keep, tips, cap, false) : tips,
+      tipSources: withSources(state.tipSources, partial),
+      dismissed: false,
+      islandClosing: false,
+    });
     touchIsland();
     void applyWindowSize();
   });
@@ -533,7 +557,8 @@ async function runPipeline(): Promise<void> {
     const waiting = runTimer !== undefined || deferred;
     // The run returns the full set. A tip it left out was replaced. No tips at all (NONE, an error) leaves the kept ones.
     const tips = keep.length > 0 ? mergeTips(keep, result.tips, cap, true) : result.tips;
-    const shown = { ...result, tips };
+    const tipSources = withSources(state.tipSources, result);
+    const shown = { ...result, tips, tipSources: sourcesOf(tipSources, tips) };
     // The tips' links join this turn's chips (deduped, capped).
     const chips = mergeChips(state.chips, tips.flatMap((tip) => detectLinks(tip)));
     const added = chips.filter((chip) => !state.chips.some((known) => known.id === chip.id));
@@ -541,6 +566,7 @@ async function runPipeline(): Promise<void> {
     set({
       result: shown,
       partialTips: null,
+      tipSources,
       chips,
       busy: waiting,
       keptTips: waiting ? tips : [],
