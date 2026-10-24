@@ -4,6 +4,7 @@ import {
   ISLAND_MIN_OPEN_MS,
   READ_WORDS_PER_SECOND,
   activityLabel,
+  bodyFollowsNewest,
   islandPhase,
   keepFollowing,
   mcpErrorNote,
@@ -277,6 +278,13 @@ describe("meeting card", () => {
 
 // A 300 px tall body over 1000 px of tips: the bottom is at scrollTop 700.
 const at = (scrollTop: number) => ({ scrollTop, scrollHeight: 1000, clientHeight: 300 });
+
+describe("bodyFollowsNewest", () => {
+  it("pins the newest line only in an answer that opened on its own, never in the full text the user opened", () => {
+    expect(bodyFollowsNewest(false)).toBe(true);
+    expect(bodyFollowsNewest(true)).toBe(false);
+  });
+});
 
 describe("nearBottom", () => {
   it("counts the last FOLLOW_SLACK_PX as the bottom", () => {

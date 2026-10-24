@@ -2,6 +2,7 @@ import { TypeValidationError, jsonSchema, simulateReadableStream, tool } from "a
 import { MockLanguageModelV4 } from "ai/test";
 import { describe, expect, it, vi } from "vitest";
 import { MOCK_TOKEN, startMockMcpServer } from "../../test/helpers/mock-mcp-server";
+import { TIP_MAX_CHARS } from "../shared/ipc";
 import { ANTHROPIC_CACHE } from "./gateway";
 import {
   LUNA_MEETING_SYSTEM,
@@ -12,6 +13,7 @@ import {
   buildLunaPrompt,
   errorText,
   guideWithLuna,
+  isMetaTip,
   lunaMcpSystem,
   lunaRequest,
   parseLunaTips,
@@ -81,7 +83,7 @@ describe("buildLunaPrompt", () => {
     const { tail } = buildLunaPrompt({ transcript: ["a", "b"], notes: [], shown: [" SSO ships in Q4 [n1] ", "Ask about\nowners"], now: NOW });
     expect(tail).toBe(
       [
-        "Already shown to the user (keep; do not repeat; refine only if the new line changes the answer):",
+        "Already shown to the user (keep each that still stands; change one only if a new line corrects it):",
         "- SSO ships in Q4 [n1]",
         "- Ask about owners",
         "",
@@ -92,8 +94,17 @@ describe("buildLunaPrompt", () => {
         "Tips:",
       ].join("\n"),
     );
-    expect(LUNA_STEERING_RULES).toContain("If tips are already shown, add tips for new lines.");
-    expect(LUNA_STEERING_RULES).toContain("Replace a shown tip only if the new line corrects it.");
+    expect(LUNA_STEERING_RULES).toContain("each shown tip that still stands, unchanged");
+    expect(LUNA_STEERING_RULES).toContain("Replace a shown tip only if a new line corrects it.");
+    expect(LUNA_STEERING_RULES).toContain("If a new line asks a question, add a tip that answers it.");
+  });
+
+  it("asks for tips only in a steering turn, with no wording the model would echo as reasoning", () => {
+    const { system, tail } = buildLunaPrompt({ transcript: ["weather in London this weekend", "make that Paris"], notes: [], shown: ["Rain on Saturday"], now: NOW });
+    expect(tail).toContain("Write only the tips themselves, never a note about which tips you kept, copied or added.");
+    expect(system).toContain("Never explain your reasoning or these rules");
+    // "word for word", "Never only copy" and "do not repeat" (beside "return the full set") came back as a visible tip.
+    for (const phrase of ["word for word", "Never only copy", "do not repeat", "one new tip answers it"]) expect(tail).not.toContain(phrase);
   });
 
   it("keeps the system and context identical between a fresh turn and a steering turn", () => {
@@ -111,6 +122,43 @@ describe("buildLunaPrompt", () => {
     expect(prompt.system).not.toContain("2026");
     expect(prompt.context).not.toContain("2026");
     expect(buildLunaPrompt({ transcript: ["a"], notes: [], meetingBrief: "Meeting: Sync", now: new Date(2027, 0, 1, 12) }).system).toBe(prompt.system);
+  });
+
+  it("sends the earlier answer as follow-up context on a new turn, outside the cached blocks", () => {
+    const earlier = ["District line closed Saturday", "No DLR at Tower Hill"];
+    const prompt = buildLunaPrompt({ transcript: ["what's in the news in London", "why are there tube closures"], notes: [], earlier, now: NOW });
+    expect(prompt.transcript).toContain(
+      "Your last answer, no longer on screen (use it only if a newest line refers back to it; never add tips about it otherwise; do not repeat it):",
+    );
+    expect(prompt.transcript).toContain("- District line closed Saturday\n- No DLR at Tower Hill");
+    expect(prompt.system).toBe(LUNA_SYSTEM);
+    expect(prompt.context).toBe("Relevant notes:\n(none)");
+    expect(prompt.tail).toContain("Give at most 2 short tips.");
+    // While tips are on screen they are the context: no second copy.
+    expect(buildLunaPrompt({ transcript: ["a"], notes: [], shown: ["x"], earlier }).transcript).not.toContain("last answer");
+    expect(buildLunaPrompt({ transcript: ["a"], notes: [], earlier: [" "] }).transcript).not.toContain("last answer");
+  });
+
+  it("puts the current turn's lines under Now, so an old question in the window is background only", () => {
+    const transcript = ["what's in the news in London today", "why are there tube closures", "what's the weather for London this weekend", "make that Paris instead"];
+    expect(buildLunaPrompt({ transcript, notes: [], turnLines: 2 }).transcript).toBe(
+      [
+        "Earlier in the conversation (oldest first; background only):",
+        "- what's in the news in London today",
+        "- why are there tube closures",
+        "",
+        "Now (the lines to answer, oldest first):",
+        "- what's the weather for London this weekend",
+        "- make that Paris instead",
+      ].join("\n"),
+    );
+    // The whole window is the turn, or no turn is given: one block, as before.
+    for (const turnLines of [4, 9, undefined]) expect(buildLunaPrompt({ transcript, notes: [], turnLines }).transcript).toMatch(/^Recent transcript \(oldest first\):\n/);
+    expect(LUNA_SYSTEM).toContain("answer only those lines");
+    expect(LUNA_SYSTEM).toContain("never add tips about them otherwise");
+    expect(LUNA_SYSTEM).toContain("A line that changes the request, such as \"make that Paris instead\", replaces it");
+    expect(LUNA_STEERING_RULES).toContain("redirects the request");
+    expect(LUNA_STEERING_RULES).toContain("about an earlier subject: drop it");
   });
 
   it("ignores blank shown tips", () => {
@@ -150,6 +198,17 @@ describe("LUNA_SYSTEM", () => {
     expect(LUNA_SYSTEM).not.toMatch(/\d short tips/);
   });
 
+  it("answers a follow-up question instead of repeating the earlier answer", () => {
+    expect(LUNA_SYSTEM).toContain("the first tip answers that question directly");
+    expect(LUNA_SYSTEM).toContain("A follow-up question");
+    expect(LUNA_SYSTEM).toContain("Never repeat an earlier answer in place of an answer.");
+  });
+
+  it("never asks for a [web] tag", () => {
+    expect(LUNA_SYSTEM).not.toContain("or [web]");
+    expect(LUNA_SYSTEM).toContain("Do not add links or tags such as [web].");
+  });
+
   it("asks for plain text without markdown or links", () => {
     expect(LUNA_SYSTEM).toContain("plain text only");
     expect(LUNA_SYSTEM).toContain("Do not write links");
@@ -170,6 +229,12 @@ describe("LUNA_SYSTEM", () => {
 });
 
 describe("parseLunaTips", () => {
+  it("clamps an overlong line to the IPC tip limit", () => {
+    const line = "word ".repeat(TIP_MAX_CHARS);
+    expect(parseLunaTips(`- ${line}`)[0]).toHaveLength(TIP_MAX_CHARS);
+    expect(streamingTips(`- ${line}\n- next`)[0]).toHaveLength(TIP_MAX_CHARS);
+  });
+
   it("strips bullets and numbering and caps at two tips", () => {
     expect(parseLunaTips("- Offer 10% [n1]\n* Ask about timing\n3. Third")).toEqual(["Offer 10% [n1]", "Ask about timing"]);
     expect(parseLunaTips("- One\n- Two\n- Three\n- Four", 3)).toEqual(["One", "Two", "Three"]);
@@ -183,6 +248,77 @@ describe("parseLunaTips", () => {
   it("strips bold, italic, backticks and headings", () => {
     expect(parseLunaTips("- **bold** and __also__ and *it* and _it2_")).toEqual(["bold and also and it and it2"]);
     expect(parseLunaTips("## Summary\n- Use `read_file` [n1]")).toEqual(["Summary", "Use read_file [n1]"]);
+  });
+
+  it("drops the model's reasoning about its rules, keeping the real tips", () => {
+    const text = [
+      "- The newest line asks about Paris this weekend, so the first tip answers it.",
+      "- Paris: sunny Saturday, showers Sunday, highs near 16°C. metoffice.gov.uk",
+      "- The earlier London tips stand, so I copy them word for word, then add the Paris tip.",
+      "- London: rain Saturday, clearing Sunday.",
+      "- The limit is 3 tips.",
+    ].join("\n");
+    expect(parseLunaTips(text, 3)).toEqual(["Paris: sunny Saturday, showers Sunday, highs near 16°C. metoffice.gov.uk", "London: rain Saturday, clearing Sunday."]);
+    expect(streamingTips(`${text}\n`, 3)).toEqual(parseLunaTips(text, 3));
+    // The line in progress is dropped too, once it has enough words to show.
+    expect(streamingTips("- London: rain Saturday, clearing Sunday.\n- The newest line asks about")).toEqual(["London: rain Saturday, clearing Sunday."]);
+    expect(parseLunaTips("- I'll keep the shown tips.\n- No more than two tips here.")).toEqual([]);
+  });
+
+  it("flags reasoning lines but not answers that share a word with them", () => {
+    for (const line of [
+      "The newest line asks about Paris this weekend, so the first tip answers it.",
+      "The earlier London tips stand, so I copy them word for word, then add the Paris tip.",
+      "The limit is 3 tips.",
+      "Keeping the shown tips and adding one.",
+      "Per the steering rules, the new line corrects the city.",
+      "I will copy them as they stand.",
+      "At most 3 short tips allowed.",
+    ]) expect(isMetaTip(line), line).toBe(true);
+    for (const line of [
+      "Paris this weekend: sunny Saturday, showers Sunday.",
+      "The Elizabeth line reopens on Monday after engineering works. tfl.gov.uk",
+      "The District line is part-closed for track upgrades.",
+      "A 10% tip is usual in London restaurants.",
+      "The speed limit is 30 km/h in central Paris.",
+      "Raise it at Thursday's steering committee [n1].",
+      "Copy Priya on the renewal email.",
+      "Offer the first year at 10% off [n2].",
+    ]) expect(isMetaTip(line), line).toBe(false);
+  });
+
+  it("catches status narration and labels for the question, keeping the answer and real tips", () => {
+    for (const line of [
+      "The tube closure question: the latest source for this weekend lists planned works. Writing tips now.",
+      "Writing tips now.",
+      "Here are the tips:",
+      "Here are the tips: rain on Saturday.",
+      "The tube closure question:",
+      "Your question about Paris: sunny Saturday.",
+      "Let me check the latest forecast.",
+      "Tips:",
+    ]) expect(isMetaTip(line), line).toBe(true);
+    for (const line of [
+      "15% of 18,000 is 2,700.",
+      "The key question: who signs off the renewal budget? [n1]",
+      "Ask the open question: does the rate include FNC?",
+      "Avoid giving tips in cash in Paris cafés.",
+      "Writing to the CQC first speeds up the review.",
+      "Here is the agenda for Thursday [n1].",
+      "Paris this weekend: sunny Saturday, showers Sunday. metoffice.gov.uk",
+    ]) expect(isMetaTip(line), line).toBe(false);
+    const text = ["- The tube closure question: the latest source for this weekend lists planned works. Writing tips now.", "- Writing tips now.", "- 15% of 18,000 is 2,700."].join("\n");
+    expect(parseLunaTips(text)).toEqual(["The latest source for this weekend lists planned works.", "15% of 18,000 is 2,700."]);
+    expect(streamingTips(`${text}\n`)).toEqual(parseLunaTips(text));
+    expect(parseLunaTips("- Here are the tips:\n- Rain on Saturday in London.")).toEqual(["Rain on Saturday in London."]);
+  });
+
+  it("drops a [web] tag the model still adds, keeping note cites", () => {
+    expect(parseLunaTips("- Weekend closures are planned engineering works, near Tower Hill. [web]")).toEqual([
+      "Weekend closures are planned engineering works, near Tower Hill.",
+    ]);
+    expect(parseLunaTips("- SSO ships in Q4 [n1] [WEB] tfl.gov.uk")).toEqual(["SSO ships in Q4 [n1] tfl.gov.uk"]);
+    expect(streamingTips("- Closures are for engineering works [web]\n")).toEqual(["Closures are for engineering works"]);
   });
 
   it("drops markdown links and citations but keeps the label and note cites", () => {
@@ -332,6 +468,17 @@ describe("guideWithLuna streaming", () => {
     expect(result.totalMs).toBeGreaterThanOrEqual(result.firstTokenMs ?? 0);
   });
 
+  it("never shows the last answer again on a new turn, but keeps a shown tip while steering", async () => {
+    const text = () => textChunks("- 15% of 18,000 is 2,700.\n", "- Paris: sunny Saturday, showers Sunday.\n");
+    const partials: string[][] = [];
+    const earlier = ["15% of 18,000 is 2,700. [n1]"];
+    const fresh = await guideWithLuna({ model: streamModel(text), transcript: ["weather in Paris"], notes: [], earlier, onPartial: (tips) => partials.push(tips) });
+    expect(fresh.tips).toEqual(["Paris: sunny Saturday, showers Sunday."]);
+    expect(partials.flat()).not.toContain("15% of 18,000 is 2,700.");
+    const steering = await guideWithLuna({ model: streamModel(text), transcript: ["weather in Paris"], notes: [], shown: ["15% of 18,000 is 2,700."], earlier });
+    expect(steering.tips).toEqual(["15% of 18,000 is 2,700.", "Paris: sunny Saturday, showers Sunday."]);
+  });
+
   it("holds back a short first line and never emits NONE", async () => {
     const partials: string[][] = [];
     const none = await guideWithLuna({ model: streamModel(() => textChunks("NO", "NE")), transcript: ["Hi"], notes: [], onPartial: (tips) => partials.push(tips) });
@@ -360,7 +507,8 @@ describe("guideWithLuna streaming", () => {
       { type: "tool-result", toolCallId: id, toolName: "web_search", result: [], providerExecuted: true },
     ];
     const model = streamModel(() => [
-      ...textChunks("I'll search for the latest score now.").slice(0, -1),
+      // isMetaTip drops "I'll search…" before it shows; this narration it lets through, so the take-back is still tested.
+      ...textChunks("Looking up the latest score now.").slice(0, -1),
       ...search("ws1"),
       { type: "text-start", id: "t2" },
       { type: "text-delta", id: "t2", delta: "The search call failed." },
@@ -377,7 +525,7 @@ describe("guideWithLuna streaming", () => {
     const result = await guideWithLuna({ model, transcript: ["Score?"], notes: [], onPartial: (tips) => partials.push(tips) });
     expect(result.tips).toEqual(["The match ended 2-1 today"]);
     // The narration streams before Bee can know a tool follows; the tool call takes it back.
-    expect(partials[0]).toEqual(["I'll search for the latest score"]);
+    expect(partials[0]).toEqual(["Looking up the latest score"]);
     expect(partials[1]).toEqual([]);
     expect(partials.at(-1)).toEqual(["The match ended 2-1 today"]);
     expect(partials.flat().join(" ")).not.toContain("failed");
@@ -495,6 +643,18 @@ describe("guideWithLuna streaming", () => {
     expect(JSON.stringify(parts[2])).toContain("Give at most 3 short tips.");
     // Thinking is off at the call level; the message-level cache markers above stay as they were.
     expect(model.doStreamCalls[0]?.providerOptions).toEqual({ gateway: { only: ["anthropic"] }, ...NO_THINKING });
+  });
+
+  it("keeps web_search for a follow-up question and sends the earlier answer", async () => {
+    let seen = { tools: [""], prompt: "" };
+    const model = streamModel((options) => {
+      seen = options;
+      return textChunks("- They are planned engineering works this weekend\n");
+    });
+    const result = await guideWithLuna({ model, transcript: ["what's in the news in London", "why are there tube closures"], notes: [], earlier: ["District line closed Saturday"] });
+    expect(result.tips).toEqual(["They are planned engineering works this weekend"]);
+    expect(seen.tools).toContain("web_search");
+    expect(seen.prompt).toContain("District line closed Saturday");
   });
 
   it("ignores a signal that never fires", async () => {

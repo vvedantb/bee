@@ -9,11 +9,13 @@ import {
   inCommitWindow,
   isFiller,
   isNewTurn,
+  isQuestion,
   mergeTips,
   recentRestarts,
   runDelayMs,
   tipCap,
   tipKey,
+  waitsForRun,
 } from "./steering";
 
 describe("isFiller", () => {
@@ -121,6 +123,41 @@ describe("inCommitWindow", () => {
     expect(inCommitWindow(1)).toBe(false);
     expect(inCommitWindow(2)).toBe(true);
     expect(inCommitWindow(3)).toBe(true);
+  });
+});
+
+describe("waitsForRun", () => {
+  const steer = { fresh: false, runTips: 0, answering: false, asked: false };
+
+  it("cancels a run that has just started for a line that steers it", () => {
+    expect(waitsForRun(steer)).toBe(false);
+  });
+
+  it("lets a run in its commit window finish", () => {
+    expect(waitsForRun({ ...steer, runTips: 2 })).toBe(true);
+  });
+
+  it("lets a run answering a question finish when the room keeps talking, but not when a newer question comes", () => {
+    expect(waitsForRun({ ...steer, answering: true })).toBe(true);
+    expect(waitsForRun({ ...steer, answering: true, asked: true })).toBe(false);
+  });
+
+  it("never waits for a new turn", () => {
+    expect(waitsForRun({ fresh: true, runTips: 2, answering: true, asked: false })).toBe(false);
+  });
+});
+
+describe("isQuestion", () => {
+  it("finds direct questions, with or without the question mark", () => {
+    for (const line of ["why are there tube closures", "Why are there tube closures?", "So what's in the news in London", "how does SSO work", "Is there a strike today", "tell me the score", "the budget is approved?"]) {
+      expect(isQuestion(line), line).toBe(true);
+    }
+  });
+
+  it("does not treat statements as questions", () => {
+    for (const line of ["Let's pick up the Acme renewal.", "There are tube closures today", "Will is joining later", "Do it now", "yeah"]) {
+      expect(isQuestion(line), line).toBe(false);
+    }
   });
 });
 

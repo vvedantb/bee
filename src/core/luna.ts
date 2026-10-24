@@ -1,9 +1,10 @@
 import { isStepCount, streamText, type FinishReason, type LanguageModel, type LanguageModelUsage, type ProviderMetadata, type SystemModelMessage, type ToolSet, type UserModelMessage } from "ai";
 import { z } from "zod";
+import { clampTip } from "../shared/ipc";
 import { withTimeout } from "./abort";
 import { ANTHROPIC_CACHE, guideProviderOptions } from "./gateway";
 import type { Snippet } from "./notes";
-import { MAX_TIPS, tipCap } from "./steering";
+import { MAX_TIPS, tipCap, tipKey } from "./steering";
 import { lunaTools, sourcesFromGenerateResult, type BeeSource } from "./tools";
 
 const TRANSCRIPT_WINDOW = 8;
@@ -59,11 +60,14 @@ export const LUNA_SYSTEM = [
   "Each tip is one line, starts with \"- \", and is under 20 words.",
   "Reply in plain text only. No markdown: no bold, italic, headings or backticks, and no lists other than the \"- \" tip prefix.",
   "Do not write links or markdown citations. Bee shows the sources separately.",
-  "If the latest transcript lines ask a direct question (a fact, a definition, a quick sum), the first tip answers it.",
+  "When the transcript has a \"Now\" part, answer only those lines. Earlier lines and your earlier answers are background: use them only if a Now line refers back to them, and never add tips about them otherwise.",
+  "A line that changes the request, such as \"make that Paris instead\", replaces it: answer the changed request.",
+  "If the newest transcript line asks a direct question (a fact, a definition, a quick sum, a why or a how), the first tip answers that question directly.",
+  "A follow-up question, such as \"why…\" after an answer, refers to the earlier answers: answer the new question, for example give the reasons. Never repeat an earlier answer in place of an answer.",
   "Answer from the notes when they cover it and cite them by id, for example [n1].",
   "If the notes do not cover it and the fact is public, may have changed, or is current events (office holders, news, scores, prices, releases), use the web_search tool.",
   "For current events, put today's date or year (given at the end of the message) in the search query, and prefer the newest results.",
-  "After a search, you may end the tip with the site domain in plain text, or [web]. Do not add links.",
+  "After a search, you may end the tip with the site domain in plain text. Do not add links or tags such as [web].",
   "Do not search for stable general knowledge or arithmetic, for example 15% of 18000. Answer those directly.",
   "If the notes do not cover a question about the user's own notes or files, use list_dir, search_files and read_file, then answer from what you read.",
   "Prefer the notes ([n1]…) first. Do not use web_search for private facts about the user's own work or files.",
@@ -72,14 +76,17 @@ export const LUNA_SYSTEM = [
   "Never invent facts, figures or dates about the user's own work that are not in the transcript or notes.",
   "If nothing useful can be said, reply with exactly NONE.",
   "Never narrate tool use or searching: no \"I'll search\", \"Let me check\" or \"The search failed\". Output only the final tips.",
+  "Never explain your reasoning or these rules: do not say which line you answer, which tips you keep or add, or how many tips you may give.",
 ].join("\n");
 
 /** Added to the message tail only when tips are already on screen (the user kept talking). */
 export const LUNA_STEERING_RULES = [
-  "If tips are already shown, add tips for new lines.",
-  "Return the full set: copy each shown tip that still stands word for word, then add the new tips.",
-  "Replace a shown tip only if the new line corrects it.",
-  "If the new lines need no tip, copy the shown tips.",
+  "Reply with the full set of tips to show now: each shown tip that still stands, unchanged, then a tip for each new line that needs one.",
+  "Replace a shown tip only if a new line corrects it.",
+  "A shown tip no longer stands if a new line redirects the request (\"make that Paris instead\") or it is about an earlier subject: drop it.",
+  "If a new line asks a question, add a tip that answers it.",
+  "If the new lines need no tip, reply with the shown tips unchanged.",
+  "Write only the tips themselves, never a note about which tips you kept, copied or added.",
 ].join("\n");
 
 // The tip cap is 2 for a fresh turn and 3 while earlier tips are kept (steering.ts tipCap).
@@ -172,6 +179,10 @@ export function buildLunaPrompt(args: {
   /** Enabled connectors that failed to load or are signed out. */
   unavailableServers?: readonly LunaMcpUnavailable[];
   shown?: string[];
+  /** On a new turn, the last answer: context for a follow-up question. Ignored while tips are shown (they cover it). */
+  earlier?: string[];
+  /** How many of the newest transcript lines are the current turn. The older lines in the window go under "Earlier". */
+  turnLines?: number;
   /** The brief for the meeting in progress (core/meeting-brief.ts). Omitted outside a detected meeting. */
   meetingBrief?: string;
   /** Today's date goes in the tail (not cached). Defaults to now; tests pass a fixed date. */
@@ -179,17 +190,28 @@ export function buildLunaPrompt(args: {
 }): LunaPrompt {
   const meeting = meetingBlock(args.meetingBrief);
   const lines = args.transcript.slice(-TRANSCRIPT_WINDOW).map((line) => `- ${line.trim()}`);
-  const shown = (args.shown ?? []).map((tip) => tip.replace(/\s+/g, " ").trim()).filter((tip) => tip.length > 0);
+  // The current turn's lines get their own heading, so an old question in the window is never read as the one to answer.
+  const before = args.turnLines === undefined ? 0 : Math.max(0, lines.length - args.turnLines);
+  const clean = (tips: string[] | undefined) => (tips ?? []).map((tip) => tip.replace(/\s+/g, " ").trim()).filter((tip) => tip.length > 0);
+  const shown = clean(args.shown);
+  const earlier = shown.length > 0 ? [] : clean(args.earlier);
   const notes = args.notes.map((note, index) => `[${noteCitation(index)}] ${note.title}\n${note.text}`);
   const context = [
     ...(meeting ? ["Meeting context:", meeting, ""] : []),
     "Relevant notes:",
     notes.length > 0 ? notes.join("\n\n") : "(none)",
   ].join("\n");
-  const transcript = ["Recent transcript (oldest first):", lines.join("\n")].join("\n");
+  const transcript = [
+    ...(before > 0
+      ? ["Earlier in the conversation (oldest first; background only):", ...lines.slice(0, before), "", "Now (the lines to answer, oldest first):", ...lines.slice(before)]
+      : ["Recent transcript (oldest first):", ...lines]),
+    ...(earlier.length > 0
+      ? ["", "Your last answer, no longer on screen (use it only if a newest line refers back to it; never add tips about it otherwise; do not repeat it):", ...earlier.map((tip) => `- ${tip}`)]
+      : []),
+  ].join("\n");
   const tail = [
     ...(shown.length > 0
-      ? ["Already shown to the user (keep; do not repeat; refine only if the new line changes the answer):", ...shown.map((tip) => `- ${tip}`), ""]
+      ? ["Already shown to the user (keep each that still stands; change one only if a new line corrects it):", ...shown.map((tip) => `- ${tip}`), ""]
       : []),
     todayLine(args.now ?? new Date()),
     lunaTipLimit(tipCap(shown.length)),
@@ -234,17 +256,58 @@ function stripMarkdown(line: string): string {
     .replace(/(?<![\w*])\*(?=\S)([^*]+?)\*(?![\w*])/g, "$1")
     .replace(/(?<!\w)_(?=\S)([^_]+?)_(?!\w)/g, "$1")
     .replace(/`([^`]*)`/g, "$1")
+    // A search tag the model may still add; Bee lists the sources separately.
+    .replace(/\s*\[web\]/gi, "")
     .replace(/\s{2,}/g, " ")
     .trim();
 }
+
+// The model talking about its own prompt instead of answering: "The newest line asks about Paris, so the first tip answers it.
+// The earlier London tips stand, so I copy them word for word. The limit is 3 tips." Each pattern names the prompt's own terms
+// (lines, shown tips, the limit), so a real answer such as "The Elizabeth line reopens Monday" or "A 10% tip is usual" is kept.
+const META_TIP = [
+  /\bthe (?:newest|latest|new|earlier|previous) (?:transcript )?lines? (?:asks?|says?|wants?|corrects?|changes?|needs?|is)\b/i,
+  /\b(?:newest|latest) (?:transcript )?line\b/i,
+  /\b(?:first|second|third|new|earlier|previous|shown|existing|kept|other|above) (?:\w+ )?tips?\b/i,
+  /\bword for word\b/i,
+  /\b(?:limit|cap) is (?:\d+|one|two|three) (?:short )?tips?\b/i,
+  /\b(?:at most|no more than|up to) (?:\d+|one|two|three) (?:short )?tips\b/i,
+  /\bsteering (?:rules?|turn)\b/i,
+  /\bI(?:'ll| will)? (?:copy|keep|add|repeat) (?:them|it|the|each|both|all|these|those)\b/i,
+  /^(?:let me|I'll|I will|I'm going to|I am going to) (?:search|check|look|find|answer|write|give)\b/i,
+  /^tips?\s*:?$/i,
+];
+
+// A label naming the question instead of answering it ("The tube closure question: …"). Kept for "The key question: who signs off?".
+const META_LABEL =
+  /^(?:the|your|on the|re:?) (?:(?!(?:key|open|real|big|main|core|central|hard|tough|right|next|only) question)(?:[\w'’-]+ ){0,4}question|question (?:about|on) (?:[\w'’-]+ ){0,3}[\w'’-]+)\s*:\s*/i;
+// A status sentence on its own: "Writing tips now.", "Here are the tips:". Only as a whole sentence, so "Avoid giving tips in cash" stays.
+const META_STATUS =
+  /(?:^|(?<=[.!?:])\s+)(?:(?:I am |I'm |now )?(?:writing|drafting|preparing|listing|adding|giving) (?:the |my |some |these |your |two |three )?tips?(?: now| below| here)?|here (?:are|is) (?:the |my |some |your )?(?:tips?|answers?))(?:[.:!…]+(?=\s|$)|$)/gi;
+
+/** A tip without the model's label for the question or a status sentence: "The tube closure question: x. Writing tips now." → "X." */
+function tidyTip(line: string): string {
+  const unlabelled = line.replace(META_LABEL, "");
+  const tidy = unlabelled.replace(META_STATUS, "").trim();
+  return unlabelled === line ? tidy : tidy.charAt(0).toUpperCase() + tidy.slice(1);
+}
+
+/** True for a line of the model's reasoning about its rules or status narration, not a tip. Exported for the live conversation test. */
+export function isMetaTip(line: string): boolean {
+  return META_TIP.some((pattern) => pattern.test(line)) || tidyTip(line) !== line;
+}
+
+/** A tip line worth showing: not blank, not NONE, not reasoning. */
+const isTip = (line: string) => line.length > 0 && line.toUpperCase() !== "NONE" && !isMetaTip(line);
 
 export function parseLunaTips(text: string, maxTips = MAX_TIPS): string[] {
   if (text.trim().toUpperCase() === "NONE") return [];
   return text
     .split("\n")
-    .map((line) => stripMarkdown(line.trim()))
-    .filter((line) => line.length > 0 && line.toUpperCase() !== "NONE")
-    .slice(0, maxTips);
+    .map((line) => tidyTip(stripMarkdown(line.trim())))
+    .filter(isTip)
+    .slice(0, maxTips)
+    .map(clampTip);
 }
 
 /** One step's stream in order: its text parts and its tool calls (local or provider-run, such as web_search). */
@@ -284,10 +347,10 @@ const MIN_LIVE_WORDS = 4;
 export function streamingTips(text: string, maxTips = MAX_TIPS): string[] {
   const parts = text.split("\n");
   const open = (parts.pop() ?? "").replace(/\S*$/, "");
-  const tips = parts.map((line) => stripMarkdown(line.trim())).filter((line) => line.length > 0 && line.toUpperCase() !== "NONE");
-  const live = stripMarkdown(open.trim());
-  if (live.split(/\s+/).length >= MIN_LIVE_WORDS && live.toUpperCase() !== "NONE") tips.push(live);
-  return tips.slice(0, maxTips);
+  const tips = parts.map((line) => tidyTip(stripMarkdown(line.trim()))).filter(isTip);
+  const live = tidyTip(stripMarkdown(open.trim()));
+  if (live.split(/\s+/).length >= MIN_LIVE_WORDS && isTip(live)) tips.push(live);
+  return tips.slice(0, maxTips).map(clampTip);
 }
 
 export type LunaResult = {
@@ -343,6 +406,10 @@ export async function guideWithLuna(args: {
   notes: Snippet[];
   /** Tips already on screen (complete lines). Luna adds tips for the new lines and returns the full set, up to 3. */
   shown?: string[];
+  /** On a new turn, the last answer, sent as context for a follow-up question. */
+  earlier?: string[];
+  /** How many of the newest transcript lines are the current turn (buildLunaPrompt). */
+  turnLines?: number;
   /** The brief for the meeting in progress, sent with every turn. */
   meetingBrief?: string;
   timeoutMs?: number;
@@ -366,6 +433,9 @@ export async function guideWithLuna(args: {
 }): Promise<LunaResult> {
   const startedAt = performance.now();
   const maxTips = tipCap(args.shown?.length ?? 0);
+  // A new turn never shows the last answer again: a tip that repeats it is dropped (the prompt asks for no repeats).
+  const repeats = new Set((args.shown?.length ? [] : (args.earlier ?? [])).map(tipKey));
+  const fresh = (tips: string[]) => tips.filter((tip) => !repeats.has(tipKey(tip)));
   let firstTokenMs: number | null = null;
   let extra: ToolSet = { ...args.extraTools };
   let web = true;
@@ -458,7 +528,7 @@ export async function guideWithLuna(args: {
         if (last?.type === "text") last.text += part.text;
         else segments.push({ type: "text", text: part.text });
         if (firstTokenMs === null && part.text.trim()) firstTokenMs = performance.now() - startedAt;
-        const tips = streamingTips(answerText(segments), maxTips);
+        const tips = fresh(streamingTips(answerText(segments), maxTips));
         const key = JSON.stringify(tips);
         if (tips.length > 0 && key !== sent) {
           sent = key;
@@ -491,7 +561,7 @@ export async function guideWithLuna(args: {
       const done = { usage: result.usage, finishReason: result.finishReason, empty: result.text.trim() === "" };
       // No answer text is a failure, not "no tips" (that is a literal NONE). Not retried: it would double latency and cost.
       if (done.empty) return { tips: [], sources: [], error: `AI guidance failed: ${emptyReason(done)}`, skipped: skipped(), ...timings(done) };
-      return { tips: parseLunaTips(result.text, maxTips), sources: sourcesFromGenerateResult(result), error: null, skipped: skipped(), ...timings(done) };
+      return { tips: fresh(parseLunaTips(result.text, maxTips)), sources: sourcesFromGenerateResult(result), error: null, skipped: skipped(), ...timings(done) };
     } catch (error) {
       // Match on the whole text so a tool named late in a long error is still found. Show the short one.
       const message = errorText(error, Number.POSITIVE_INFINITY);

@@ -1,10 +1,11 @@
 import { getToken } from "@clerk/electron/react";
 import { useSyncExternalStore } from "react";
 import { detectLinks, mergeChips, visibleChips, type LinkChip } from "../../core/link-suggest";
-import { inCommitWindow, isFiller, isNewTurn, mergeTips, recentRestarts, runDelayMs, tipCap, tipKey } from "../../core/steering";
+import { MAX_STEERING_TIPS, isFiller, isNewTurn, isQuestion, mergeTips, recentRestarts, runDelayMs, tipCap, tipKey, waitsForRun } from "../../core/steering";
 import { mergeLines, pipelineText, summaryTranscript, type SessionLine } from "../../core/sync-lines";
 import {
   SESSION_TRANSCRIPT_MAX,
+  clampTip,
   type McpSave,
   type McpServerView,
   type McpSetEnabled,
@@ -194,12 +195,21 @@ let lastLineAt = 0;
 let spokenDuringRun = false;
 // The line that opened this turn has not started a run yet: nothing is kept.
 let pendingFresh = false;
+// The line that opened this turn, so Luna answers only the turn's lines. lastAnswer: the latest settled tips; a new turn takes
+// them as turnEarlier, context for a follow-up ("why…"). Only that one answer: older ones kept the model on an old subject.
+let turnFirstId: string | null = null;
+let lastAnswer: string[] = [];
+let turnEarlier: string[] = [];
+// A direct question came since the run in flight started (steering.ts isQuestion, waitsForRun).
+let asked = false;
 // A run is waiting out its debounce (runTimer), or waiting for a run in its commit window to finish (deferred).
 let runTimer: ReturnType<typeof setTimeout> | undefined;
 let doneTimer: ReturnType<typeof setTimeout> | undefined;
 let deferred = false;
-// The run in flight: its keep list, and the tips it has streamed so far (the last may be half written).
+// The run in flight: its keep list, and the tips it has streamed so far (the last may be half written). runAnswering: a question
+// came just before it started, so lines that are not questions wait for it instead of cancelling it.
 let inFlight: number | null = null;
+let runAnswering = false;
 let runKept: string[] = [];
 let runTips: string[] = [];
 let restarts: number[] = [];
@@ -361,6 +371,7 @@ async function enrichChips(sent: LinkChip[], text: string, seq: number): Promise
  */
 function startTurn(lines: SessionLine[]): void {
   const fresh = isNewTurn({ open: turnOpen, busy: state.busy, spokenDuringRun });
+  if (lines.some((line) => isQuestion(line.text))) asked = true;
   spokenDuringRun = false;
   turnOpen = true;
   lastLineAt = Date.now();
@@ -368,6 +379,8 @@ function startTurn(lines: SessionLine[]): void {
   const found = mergeChips([], lines.flatMap((line) => detectLinks(line.text)));
   if (fresh) {
     pendingFresh = true;
+    turnFirstId = lines[0]?.id ?? null;
+    turnEarlier = lastAnswer.slice(-MAX_STEERING_TIPS).map(clampTip);
     const seq = ++turnSeq;
     turnText = text;
     void enrichChips(found, turnText, seq);
@@ -403,8 +416,10 @@ function keepList(): string[] {
 
 /** A line with content arrived: start at once for the first line of a turn; otherwise debounce, or pause once restarts pile up. */
 function scheduleRun(): void {
-  // A run waits for one in its commit window; it reads the whole transcript when it starts, so this line is already in.
-  if (deferred) return;
+  // A run waits for the one in flight; it reads the whole transcript when it starts, so this line is already in. A new turn or a
+  // new question is weighed again in fireRun: it may supersede that run.
+  if (deferred && !pendingFresh && !asked) return;
+  deferred = false;
   clearTimeout(runTimer);
   const keep = keepList();
   // Busy from now, so the pill never falls back to "Listening…" while the run waits.
@@ -415,8 +430,8 @@ function scheduleRun(): void {
 
 function fireRun(): void {
   runTimer = undefined;
-  // Nearly done: let the answer finish, then start. A new turn has nothing worth finishing.
-  if (inFlight !== null && !pendingFresh && inCommitWindow(runTips.length)) {
+  // Nearly done, or answering a question no newer question replaces: let the answer finish, then start. A new turn has nothing worth finishing.
+  if (inFlight !== null && waitsForRun({ fresh: pendingFresh, runTips: runTips.length, answering: runAnswering, asked })) {
     deferred = true;
     return;
   }
@@ -441,10 +456,16 @@ function celebrate(): void {
 }
 
 async function runPipeline(): Promise<void> {
-  const transcript = state.session.lines.slice(-PIPELINE_WINDOW).map(pipelineText);
+  const recent = state.session.lines.slice(-PIPELINE_WINDOW);
+  const transcript = recent.map(pipelineText);
   if (transcript.length === 0) return;
+  // The turn's lines, newest last. Its first line out of the window: the whole window is the turn.
+  const turnStart = recent.findIndex((line) => line.id === turnFirstId);
+  const turnLines = recent.length - Math.max(0, turnStart);
   const fresh = pendingFresh;
   const keep = keepList();
+  // A new turn drops the last answer from the screen, but Luna still gets it, so a follow-up ("why…") has its context.
+  const earlier = keep.length > 0 ? [] : turnEarlier;
   const cap = tipCap(keep.length);
   const now = Date.now();
   // A run still in flight is cancelled below: that is a restart.
@@ -456,6 +477,8 @@ async function runPipeline(): Promise<void> {
   pendingFresh = false;
   deferred = false;
   inFlight = run;
+  runAnswering = asked;
+  asked = false;
   runKept = keep;
   runTips = [];
   // The kept tips stay on screen (dimmed, pill "Updating…"). A new turn drops the old answer.
@@ -490,7 +513,9 @@ async function runPipeline(): Promise<void> {
     const result = await window.bee.runPipeline({
       transcript,
       runId: run,
-      ...(keep.length > 0 ? { shown: keep } : {}),
+      ...(keep.length > 0 ? { shown: keep.map(clampTip) } : {}),
+      ...(earlier.length > 0 ? { earlier } : {}),
+      turnLines,
       sessionToken: await sessionToken(),
     });
     if (run !== latestRun) return;
@@ -516,7 +541,10 @@ async function runPipeline(): Promise<void> {
       islandClosing: false,
     });
     if (!waiting) addToSession(shown);
-    if (!waiting && tips.length > 0) celebrate();
+    if (!waiting && tips.length > 0) {
+      lastAnswer = tips;
+      celebrate();
+    }
     touchIsland();
   } catch (error) {
     if (run === latestRun) {
@@ -670,6 +698,46 @@ async function mcpChange(change: () => Promise<McpServerView[]>, staleTestId?: s
     set({ mcp: { ...state.mcp, error: message || "Could not save the server" } });
     return false;
   }
+}
+
+/** What speech-to-text calls for each spoken phrase, in this order. Shared by the mic and the E2E mic (startTestMic). */
+const phraseCallbacks = {
+  // The phrase is over: show "Got it…" now, before speech-to-text. A cough never gets here.
+  onSpeechEnd: () => {
+    heardPending += 1;
+    // Spoken over a run: the line steers it even if the run settles before speech-to-text is done.
+    if (state.busy) spokenDuringRun = true;
+    set({ heard: true });
+  },
+  // Same path as a typed line; latestRun drops results from superseded runs.
+  onLine: (line: string) => void actions.simulateLine(line, "mic"),
+  // After onLine, so busy is already set when the ack ends and the pill never falls back to "Listening…".
+  onSettled: () => {
+    heardPending = Math.max(0, heardPending - 1);
+    if (heardPending === 0) spokenDuringRun = false;
+    if (heardPending === 0 && state.heard) set({ heard: false });
+  },
+};
+
+/**
+ * E2E only (test/e2e/conversation-page.ts): the mic is on with no capture, and phrase() hands a phrase's text to the same
+ * callbacks speech-to-text calls, so no audio or STT call is made. actions.stopMic turns it off.
+ */
+export function startTestMic(): { phrase: (text: string) => void } {
+  stopMic = () => undefined;
+  set({ mic: { on: true, level: 0, error: null } });
+  return {
+    phrase: (text) => {
+      phraseCallbacks.onSpeechEnd();
+      phraseCallbacks.onLine(text);
+      phraseCallbacks.onSettled();
+    },
+  };
+}
+
+/** E2E only: pipeline runs started since load, superseded ones included. */
+export function runsStarted(): number {
+  return latestRun;
 }
 
 export const actions = {
@@ -850,12 +918,13 @@ export const actions = {
     runTimer = undefined;
     deferred = false;
     turnOpen = false;
+    lastAnswer = [];
     set({ keptTips: [], revising: false, session: EMPTY_SESSION, chips: [], dismissedChipIds: [], summary: { saving: true, result: null, error: null } });
     try {
       const result = await window.bee.writeMeetingSummary({
         transcript: summaryTranscript(ended.lines, selfName()),
         notesCited: ended.notesCited,
-        tips: ended.tips,
+        tips: ended.tips.map(clampTip),
         ...(meetingId !== null ? { meetingId } : {}),
         sessionToken: await sessionToken(),
       });
@@ -903,22 +972,8 @@ export const actions = {
       const mic = startMicSession({
         sampleRate: capture.sampleRate,
         transcribe: transcribePhrase,
-        // The phrase is over: show "Got it…" now, before speech-to-text. A cough never gets here.
-        onSpeechEnd: () => {
-          heardPending += 1;
-          // Spoken over a run: the line steers it even if the run settles before speech-to-text is done.
-          if (state.busy) spokenDuringRun = true;
-          set({ heard: true });
-        },
-        // Same path as a typed line; latestRun drops results from superseded runs.
-        onLine: (line) => void actions.simulateLine(line, "mic"),
+        ...phraseCallbacks,
         onError: (error) => setMic({ error }),
-        // After onLine, so busy is already set when the ack ends and the pill never falls back to "Listening…".
-        onSettled: () => {
-          heardPending = Math.max(0, heardPending - 1);
-          if (heardPending === 0) spokenDuringRun = false;
-          if (heardPending === 0 && state.heard) set({ heard: false });
-        },
       });
       capture.start((frame) => setMic({ level: Math.min(1, mic.push(frame) * 4) }));
       let micOn = true;

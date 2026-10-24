@@ -27,7 +27,7 @@ import { DEFAULT_MOTION_PREFERENCE, MOTION_PREFERENCES, resolveReducedMotion, ty
 import { visibleChips, type LinkChip } from "../../core/link-suggest";
 import { tipKey } from "../../core/steering";
 import type { PipelineResult, SettingsView } from "../../shared/ipc";
-import { islandClick, mcpErrorNote, timingsLabel, timingsTitle } from "./island";
+import { bodyFollowsNewest, islandClick, mcpErrorNote, timingsLabel, timingsTitle } from "./island";
 import { NOTCH_LOGO_PX } from "./logo";
 import { NOTCH_BUTTON, NOTCH_UPDATE_BUTTON, logoState, notchStatus } from "./notch";
 import { actions, answerFolded, displayResult, islandOpen, useBee, type BeeState, type SummaryState, type UpdateState } from "./store";
@@ -67,12 +67,14 @@ function IslandBody({
   closing,
   keptTips,
   card,
+  follow,
 }: {
   result: PipelineResult | null;
   chips: LinkChip[];
   closing: boolean;
   keptTips: string[];
   card: string[];
+  follow: boolean;
 }) {
   const tips = result?.tips ?? [];
   const kept = new Set(keptTips.map(tipKey));
@@ -83,8 +85,9 @@ function IslandBody({
         <Button type="button" variant="ghost" size="icon-sm" className="island-close" title="Dismiss" aria-label="Dismiss" onClick={() => void actions.dismissIsland()}>
           <IconX {...ICON} />
         </Button>
-        {/* Pinned to the newest line until the user scrolls up (follow-bottom.ts). Scrolling keeps the body open. */}
-        <div className="island-scroll scrollbar-thin" ref={followBottom} onScroll={() => actions.islandScrolled()}>
+        {/* An answer that opened on its own is pinned to the newest line until the user scrolls up (follow-bottom.ts). The full
+            text view never scrolls by itself (island.ts bodyFollowsNewest). Scrolling keeps the body open. */}
+        <div className="island-scroll scrollbar-thin" ref={follow ? followBottom : null} onScroll={() => actions.islandScrolled()}>
           <div className="island-content">
             {card.length > 0 ? (
               <div className="island-card">
@@ -225,7 +228,7 @@ function Island({ state }: { state: BeeState }) {
         </Button>
       </header>
       {/* While busy the previous tips stay (and streamed tips replace them); displayResult drops the old error. */}
-      {showBody ? <IslandBody result={result} chips={chips} closing={state.islandClosing} keptTips={state.revising ? state.keptTips : []} card={state.meetingCard?.lines ?? []} /> : null}
+      {showBody ? <IslandBody result={result} chips={chips} closing={state.islandClosing} keptTips={state.revising ? state.keptTips : []} card={state.meetingCard?.lines ?? []} follow={bodyFollowsNewest(state.fullText)} /> : null}
     </div>
   );
 }

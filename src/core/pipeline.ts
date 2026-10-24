@@ -39,6 +39,10 @@ export async function runPipeline(args: {
   transcript: string[];
   /** Tips already on screen, passed to Luna as a keep list (live steering). */
   shown?: string[];
+  /** On a new turn, the last answer: context for a follow-up question, not to be repeated. */
+  earlier?: string[];
+  /** How many of the newest transcript lines are the current turn; Luna answers those. */
+  turnLines?: number;
   /** The brief for the meeting in progress (title, people, agenda, earlier decisions). Sent to Luna with every turn. */
   meetingBrief?: string;
   snippets: Snippet[];
@@ -85,6 +89,8 @@ export async function runPipeline(args: {
       model: args.gateway!(GUIDE_MODEL),
       transcript: args.transcript,
       shown: args.shown,
+      earlier: args.earlier,
+      turnLines: args.turnLines,
       meetingBrief: args.meetingBrief,
       notes: guideNotes,
       notesDir: args.notesDir,
