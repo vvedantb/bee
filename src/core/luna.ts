@@ -61,6 +61,16 @@ const SOURCE_DELIMITER = " | src: ";
 /** Starts a line of the model's own notes ("~ The London tips are out of date."), which Bee never shows (parseLunaTips, streamingTips). */
 const NOTE_PREFIX = "~ ";
 const NOTE_LINE = /^~(?:\s|$)/;
+/** Marks the prompt's bad example lines. Bee never shows a line with it, nor an echo of a bad example (parseTipLine). */
+const BAD_MARK = "✗ ";
+const BAD_LINE = /^✗/;
+// Tips the prompt shows as wrong: the source described in the text, search narration, first person, a header.
+const BAD_TIPS: readonly (readonly [text: string, source: string | null])[] = [
+  ["The TfL planned-closure document lists Circle and District line closures.", "TfL"],
+  ["Met Police also reported a man jailed for life.", "Met Police"],
+  ["The results show two closures, so I'll list them. Tips:", null],
+];
+const tipLine = (text: string, source: string | null) => (source ? `${text}${SOURCE_DELIMITER}${source}` : text);
 
 // Cached (gateway.ts ANTHROPIC_CACHE), so it must not change between turns: the tip cap and the steering rules, which do,
 // go in the user message's tail (buildLunaPrompt).
@@ -99,6 +109,13 @@ export const LUNA_SYSTEM = [
   "Never say which request you are answering or what you will do, such as \"The latest request is Paris, so I'll answer…\". Start with the answer.",
   `Any planning or note to yourself, such as which tips to keep or drop or which source to use, goes on its own line starting with "${NOTE_PREFIX}", or is left out. Bee never shows those lines. Never put it in a tip.`,
   "Never write as yourself in a tip: no \"I\", \"I'll\", \"me\" or \"my\". Put words for the user to say in quotes, for example: Say \"I can confirm by Friday.\"",
+  "Good tip lines, fact first (they show the format only: never reuse their facts):",
+  `- ${tipLine("Circle and District lines are closed this weekend for track work.", "TfL")}`,
+  `- ${tipLine("A tunnel-digging gang was jailed on 23 October over a jewellery-shop raid.", "Met Police")}`,
+  `- ${tipLine("Reasons differ: track work vs Piccadilly line upgrade works.", "TfL, Evening Standard")}`,
+  '- Say "Can we move the review to Friday?"',
+  `Bad tip lines, marked "${BAD_MARK.trim()}": never write these. The source goes only after "${SOURCE_DELIMITER.trim()}", never in the text.`,
+  ...BAD_TIPS.map(([text, source]) => BAD_MARK + tipLine(text, source)),
 ].join("\n");
 
 /** Added to the message tail when the turn gets no web_search tool (web-search.ts needsWebSearch, or a provider that rejects it). */
@@ -563,6 +580,53 @@ function sourceTags(tip: string): { text: string; names: string[] } {
   return { text, names };
 }
 
+// A label's publisher as the subject of a reporting verb, at a clause start: "Met Police also reported…", "The TfL planned-closure
+// document for this weekend lists…", "Met Police news from 23 October 2026 includes…". Group 1 is the clause start, group 2 the
+// words after the document ("from 23 October 2026"). A publisher doing the news ("The Met Police arrested 42 people") stays.
+const LABEL_DOCUMENT = "document|list|listing|page|site|website|newsroom|news|update|statement|report|schedule|bulletin|notice|release|feed";
+const LABEL_REPORTS = "lists|listed|says|said|reports|reported|shows|showed|includes|included|notes|noted|states|stated|confirms|confirmed";
+const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const labelSubject = (name: string) =>
+  new RegExp(
+    String.raw`(^|[.!?;]\s+|,\s+(?:and|while|but)\s+)(?:[Tt]he\s+)?${escapeRegExp(name)}(?:['’]s)?(?:(?:\s+\p{Ll}[\p{Ll}'’-]*){0,3}\s+(?:${LABEL_DOCUMENT})((?:\s+(?:for|from|on|of|dated)(?:\s+[^\s.!?;,]+){1,4})?))?\s+(?:also\s+)?(?:${LABEL_REPORTS})(?:\s+that)?\s+(?=[\p{L}\p{N}])`,
+    "gu",
+  );
+const labelNames = (label: string | null) => (label ? label.split(/\s*,\s*/) : []);
+// What is left must still read as a clause: a few words, not opening on a pronoun for the publisher ("TfL said it will…").
+const MIN_CLAUSE_WORDS = 3;
+const PRONOUN_START = /^(?:it|its|they|them|their|he|she|his|her|we|us|our)\b/i;
+
+/**
+ * A tip without its label's publisher as the subject of a reporting verb, keeping what was reported: "Met Police also reported a
+ * man jailed for life." → "A man jailed for life.". A date on the document moves to the end of the clause ("Met Police news from
+ * 23 October includes a gang jailed." → "A gang jailed on 23 October."). Kept as it was when the rest would not read as a clause.
+ */
+function dropLabelSubject(tip: string, label: string | null): string {
+  return labelNames(label).reduce(
+    (text, name) =>
+      // Last first, so earlier indices stay valid.
+      [...text.matchAll(labelSubject(name))].reverse().reduce((out, match) => {
+        const [subject, start = "", about = ""] = match;
+        const from = match.index + subject.length;
+        const stop = out.slice(from).search(/[.!?;](?=\s|$)/);
+        const end = stop < 0 ? out.length : from + stop;
+        const clause = out.slice(from, end);
+        if (clause.split(/\s+/).length < MIN_CLAUSE_WORDS || PRONOUN_START.test(clause)) return out;
+        const date = SOURCE_DATE.test(about) ? about.replace(/^\s+(?:from|on|dated)\s+/, "") : "";
+        const dated = date && !clause.includes(date) ? `${clause} on ${date}` : clause;
+        const opens = start === "" || /[.!?;]/.test(start);
+        return out.slice(0, match.index) + start + (opens ? dated.charAt(0).toUpperCase() + dated.slice(1) : dated) + out.slice(end);
+      }, text),
+    tip,
+  );
+}
+
+/**
+ * True when a tip's text has its label's publisher as the subject of a reporting verb ("Met Police also reported…" with the label
+ * Met Police), whether or not parseTipLine could rewrite it. Exported for the live conversation test.
+ */
+export const namesLabelInText = (tip: string, label: string | null) => labelNames(label).some((name) => labelSubject(name).test(tip));
+
 /** True when a tip repeats one of its own sentences. Exported for the live conversation test. */
 export const repeatsSentence = (tip: string) => dropRepeat(tip) !== tip;
 /** True when a tip's "per …" is followed by a date or content rather than a publisher name. Exported for the live conversation test. */
@@ -608,13 +672,15 @@ function sourceField(field: string): { label: string | null; cite: string | null
  */
 function parseTipLine(line: string): LunaTip | null {
   const [head = "", ...field] = stripMarkdown(line.trim()).split("|");
-  const text = NOTE_LINE.test(head) ? "" : tidyTip(head.trim());
+  const echoesBad = BAD_TIPS.some(([bad]) => bad === head.trim());
+  const text = NOTE_LINE.test(head) || BAD_LINE.test(head) || echoesBad ? "" : tidyTip(head.trim());
   if (!isTip(text)) return null;
   const { label, cite } = sourceField(field.join("|"));
   const whole = cite ? `${text} ${cite}` : text;
   const clean = sourceTags(cleanSource(dropRepeat(whole)));
+  const source = label ?? sourceLabel(clean.names.slice(0, 1));
   // Only text that lost something is tidied, so a normal tip stays byte for byte.
-  return { text: clampTip(clean.text === whole ? whole : tidyPunctuation(clean.text)), source: label ?? sourceLabel(clean.names.slice(0, 1)) };
+  return { text: clampTip(dropLabelSubject(clean.text === whole ? whole : tidyPunctuation(clean.text), source)), source };
 }
 
 export function parseLunaTips(text: string, maxTips = MAX_TIPS): LunaTip[] {

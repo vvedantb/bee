@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, expect, it, onTestFinished } from "vitest";
 import { z } from "zod";
-import { hasGarbledSource, hasSourceTag, isMetaTip, repeatsSentence } from "../src/core/luna";
+import { hasGarbledSource, hasSourceTag, isMetaTip, namesLabelInText, repeatsSentence } from "../src/core/luna";
 import { retrieve } from "../src/core/retrieve";
 import { loadSnippets } from "../src/main/notes";
 import { NO_FIXTURES, completeRecording, e2eModeSchema, fixtureFiles } from "./e2e/replay";
@@ -53,8 +53,9 @@ const looksMeta = (tip: string) =>
 const SOURCE_WORDING = /\[\d+\s*[-–]\s*\d+\]|\b[Pp]er\s+(?:the\s+)?\p{Lu}/u;
 // A source described in the text: "The TfL-based list says", "another report", "one source says", "the newest BBC piece".
 const SOURCE_DESCRIPTION = /-based (?:list|page|report|piece|article|source)\b|\banother (?:report|source|outlet|article|piece|story)\b|\bone (?:report|source|outlet) (?:says|said|reports)\b|\bthe (?:newest|latest) (?:\S+ ){1,4}(?:piece|article|story)\b/i;
-const hasSourceWording = (tip: string) =>
-  SOURCE_WORDING.test(tip) || SOURCE_DESCRIPTION.test(tip) || hasSourceTag(tip) || repeatsSentence(tip) || hasGarbledSource(tip);
+// Or the label's publisher reporting it in the text: "Met Police also reported…" with the label Met Police.
+const hasSourceWording = (tip: string, source: string | null) =>
+  SOURCE_WORDING.test(tip) || SOURCE_DESCRIPTION.test(tip) || hasSourceTag(tip) || repeatsSentence(tip) || hasGarbledSource(tip) || namesLabelInText(tip, source);
 const mode = e2eModeSchema.optional().parse(process.env.BEE_E2E_MODE?.trim() || undefined);
 const FIXTURES_DIR = join(root, "test/fixtures/replay/conversation");
 // Shares no word with the lines said, so retrieval finds nothing.
@@ -105,12 +106,12 @@ const prefixed = <T extends z.ZodType>(lines: string[], prefix: string, schema: 
 
 /**
  * The page's checks plus the test's own: no tip in the turn reads as reasoning about the rules, and no tip's text repeats a
- * sentence, garbles a "per", or still names its source ("(TfL)", "per TfL", "[2-2]"): that goes in the tip's source field.
+ * sentence, garbles a "per", or still names its source ("(TfL)", "per TfL", "[2-2]", "Met Police reported"): that goes in the tip's source field.
  */
 function withTipChecks(turn: Turn): Turn {
   const own = {
     noMetaTips: !turn.tips.some(looksMeta),
-    cleanWording: !turn.tips.some(hasSourceWording),
+    cleanWording: !turn.tips.some((tip, index) => hasSourceWording(tip, turn.tipSources[index] ?? null)),
   };
   return { ...turn, checks: { ...turn.checks, ...own }, pass: turn.pass && own.noMetaTips && own.cleanWording };
 }

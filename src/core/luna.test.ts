@@ -17,6 +17,7 @@ import {
   hasSourceTag,
   isMetaTip,
   lunaMcpSystem,
+  namesLabelInText,
   lunaRequest,
   parseLunaTips,
   repeatsSentence,
@@ -833,6 +834,78 @@ describe("Bee's own voice and note lines", () => {
     }
     expect(parsed("- The sources say the Circle line shuts. | src: TfL")).toEqual([{ text: "The Circle line shuts.", source: "TfL" }]);
     for (const line of ["Sources differ on details, so check TfL.", "Sources of funding include the ICB [n1]."]) expect(parsed(`- ${line}`), line).toEqual([{ text: line, source: null }]);
+  });
+});
+
+// Live run on fix/source-wording (24 October 2026): tips that credit their label's publisher in the text.
+const LABEL_IN_TEXT: [line: string, tip: LunaTip][] = [
+  [
+    "The main weekend closures are planned engineering works. The TfL planned-closure document for this weekend lists Circle and District line closures, and Circle line cancellations are linked to track work. | src: TfL, London Now",
+    {
+      text: "The main weekend closures are planned engineering works. Circle and District line closures, and Circle line cancellations are linked to track work.",
+      source: "TfL, London Now",
+    },
+  ],
+  [
+    "Met Police news from 23 October 2026 includes a jewellery-shop tunnel gang jailed for a combined ten years and two months. | src: Met Police",
+    { text: "A jewellery-shop tunnel gang jailed for a combined ten years and two months on 23 October 2026.", source: "Met Police" },
+  ],
+  [
+    "Met Police also reported a man jailed for life for a murder in Ealing on 23 October 2026. | src: Met Police",
+    { text: "A man jailed for life for a murder in Ealing on 23 October 2026.", source: "Met Police" },
+  ],
+];
+
+describe("the label's publisher in the tip text", () => {
+  it("drops the publisher and its reporting verb, keeping what was reported", () => {
+    const cases: [string, LunaTip][] = [
+      ...LABEL_IN_TEXT,
+      ["TfL says the Circle line reopens on Monday. | src: TfL", { text: "The Circle line reopens on Monday.", source: "TfL" }],
+      ["Rain on Saturday, and the Met Office's forecast page notes that Sunday is dry. | src: Met Office", { text: "Rain on Saturday, and Sunday is dry.", source: "Met Office" }],
+    ];
+    for (const [line, tip] of cases) {
+      const [text = "", source = ""] = line.split(" | src: ");
+      expect(namesLabelInText(text, source), line).toBe(true);
+      expect(parsed(`- ${line}`), line).toEqual([tip]);
+      expect(streamingTips(`- ${line}\n`, 10), line).toEqual([tip]);
+      expect(namesLabelInText(tip.text, tip.source), line).toBe(false);
+    }
+  });
+
+  it("keeps a publisher that is the news, another outlet's publisher, or a rewrite that would not read as a clause", () => {
+    const kept: [string, LunaTip][] = [
+      ["TfL is cutting fares from Monday. | src: BBC", { text: "TfL is cutting fares from Monday.", source: "BBC" }],
+      ["TfL is cutting fares from Monday. | src: TfL", { text: "TfL is cutting fares from Monday.", source: "TfL" }],
+      ["The Met Police arrested 42 people in a retail crime crackdown. | src: Met Police", { text: "The Met Police arrested 42 people in a retail crime crackdown.", source: "Met Police" }],
+      ["TfL says the strike is off. | src: BBC", { text: "TfL says the strike is off.", source: "BBC" }],
+      ["The TfL list says the Circle line shuts.", { text: "The TfL list says the Circle line shuts.", source: null }],
+    ];
+    for (const [line, tip] of kept) {
+      expect(parsed(`- ${line}`), line).toEqual([tip]);
+      expect(namesLabelInText(tip.text, tip.source), line).toBe(false);
+    }
+    // Too little left, or a pronoun for the publisher: kept, and the live test flags it.
+    for (const line of ["The TfL page lists two closures. | src: TfL", "Met Police said they will add patrols. | src: Met Police"]) {
+      const [text = "", source = ""] = line.split(" | src: ");
+      expect(parsed(`- ${line}`), line).toEqual([{ text, source }]);
+      expect(namesLabelInText(text, source), line).toBe(true);
+    }
+  });
+
+  it("shows good and bad example lines, and never shows a bad one echoed", () => {
+    expect(LUNA_SYSTEM).toContain("- Circle and District lines are closed this weekend for track work. | src: TfL");
+    expect(LUNA_SYSTEM).toContain("- A tunnel-digging gang was jailed on 23 October over a jewellery-shop raid. | src: Met Police");
+    expect(LUNA_SYSTEM).toContain('- Say "Can we move the review to Friday?"');
+    const good = LUNA_SYSTEM.split("\n").filter((line) => /^- \p{Lu}/u.test(line));
+    expect(parseLunaTips(good.join("\n"), 10)).toHaveLength(good.length);
+    const bad = LUNA_SYSTEM.split("\n").filter((line) => line.startsWith("✗ "));
+    expect(bad.length).toBeGreaterThanOrEqual(3);
+    for (const line of bad) {
+      expect(parsed(line), line).toEqual([]);
+      // Echoed without the mark, as a tip of its own.
+      expect(parsed(`- ${line.slice(2)}`), line).toEqual([]);
+      expect(streamingTips(`- ${line.slice(2)}\n`, 10), line).toEqual([]);
+    }
   });
 });
 
