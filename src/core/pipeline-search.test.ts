@@ -19,7 +19,7 @@ beforeEach(() => {
   rank.mockReset();
   guide.mockReset();
   rank.mockResolvedValue({ ranked: [], source: "fallback", error: null });
-  guide.mockResolvedValue({ tips: ["x"], sources: [], error: null, skipped: null, firstTokenMs: 1, totalMs: 2 });
+  guide.mockResolvedValue({ tips: ["x"], tipSources: [null], sources: [], error: null, skipped: null, firstTokenMs: 1, totalMs: 2 });
   vi.spyOn(console, "debug").mockImplementation(() => undefined);
 });
 afterEach(() => vi.restoreAllMocks());

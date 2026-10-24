@@ -1,6 +1,6 @@
 import { isStepCount, streamText, type FinishReason, type LanguageModel, type LanguageModelUsage, type ProviderMetadata, type SystemModelMessage, type ToolSet, type UserModelMessage } from "ai";
 import { z } from "zod";
-import { clampTip } from "../shared/ipc";
+import { TIP_SOURCE_MAX_CHARS, clampTip } from "../shared/ipc";
 import { withTimeout } from "./abort";
 import { ANTHROPIC_CACHE, guideProviderOptions } from "./gateway";
 import type { Snippet } from "./notes";
@@ -56,6 +56,9 @@ function safeJson(value: unknown): string {
   }
 }
 
+/** Ends a tip line before its source: "- The Circle line is closed on Saturday. | src: TfL" (parseLunaTips). */
+const SOURCE_DELIMITER = " | src: ";
+
 // Cached (gateway.ts ANTHROPIC_CACHE), so it must not change between turns: the tip cap and the steering rules, which do,
 // go in the user message's tail (buildLunaPrompt).
 export const LUNA_SYSTEM = [
@@ -76,7 +79,9 @@ export const LUNA_SYSTEM = [
   "If the results are only blogs, newsletters, aggregators or local listings, search again for the official source or a major outlet before answering.",
   "If sources disagree, say so plainly in the tip, for example \"TfL says Saturday, the BBC says Sunday\". Do not pick one silently.",
   "Keep a follow-up consistent with your last answer. If a newer source changes an earlier fact, such as which lines are closed today, say it changed. Never contradict it silently.",
-  "After a search, name the source once, by publisher name only, in brackets at the end of the tip before its full stop, for example \"… disruption (TfL).\" or \"… heist (Met Police).\". Keep it short: \"(TfL)\", not \"(TfL planned closures)\". Never write \"per TfL\" or a separate sentence such as \"Per the BBC.\", and no source or date in brackets mid-sentence, such as \"(Time Out, 23 Oct)\". Never put a date, snippet text or another sentence after it, and never repeat a sentence. Do not add links or tags such as [web].",
+  `After a search, end the tip line with "${SOURCE_DELIMITER}" and one short publisher name, for example "- The Circle line is closed on Saturday for engineering works.${SOURCE_DELIMITER}TfL". Short names only: TfL, BBC, Met Police, Météo-France.`,
+  "Write the publisher only after that delimiter, never in the tip text: no \"(TfL)\", \"per TfL\", \"Per the BBC.\" or \"(Time Out, 23 Oct)\". Leave the delimiter out for a tip from the notes or general knowledge. Note cites such as [n1] stay in the tip text.",
+  "Never repeat a sentence, and never paste snippet text, dates, links, index markers such as [2-2], or tags such as [web].",
   "Do not search for stable general knowledge or arithmetic, for example 15% of 18000. Answer those directly.",
   "If the notes do not cover a question about the user's own notes or files, use list_dir, search_files and read_file, then answer from what you read.",
   "Prefer the notes ([n1]…) first. Do not use web_search for private facts about the user's own work or files.",
@@ -271,8 +276,8 @@ function stripMarkdown(line: string): string {
     .replace(/(?<![\w*])\*(?=\S)([^*]+?)\*(?![\w*])/g, "$1")
     .replace(/(?<!\w)_(?=\S)([^_]+?)_(?!\w)/g, "$1")
     .replace(/`([^`]*)`/g, "$1")
-    // A search tag the model may still add; Bee lists the sources separately.
-    .replace(/\s*\[web\]/gi, "")
+    // Search tags and result index markers the model may still add ([web], [2-2], [4-7]); Bee lists the sources separately.
+    .replace(/\s*\[(?:web|\d+(?:\s*[-–]\s*\d+)?)\]/gi, "")
     .replace(/\s{2,}/g, " ")
     .trim();
 }
@@ -292,6 +297,8 @@ const META_TIP = [
   /\b(?:at most|no more than|up to) (?:\d+|one|two|three) (?:short )?tips\b/i,
   /\bsteering (?:rules?|turn)\b/i,
   /\bI(?:'ll| will)? (?:copy|keep|add|repeat) (?:them|it|the|each|both|all|these|those)\b/i,
+  // Narrating its sources: "The Paris sources are Sortiraparis and Météo-France, so I'll name them."
+  /\bI(?:'ll| will) (?:name|cite|credit|mention) (?:them|it|the sources?|each|both)\b/i,
   /^(?:let me|I'll|I will|I'm going to|I am going to) (?:search|check|look|find|answer|write|give)\b/i,
   /^tips?\s*:?$/i,
   // Restating the question: 'The question "Why are there two closures?" most likely means the two weekend Tube closures.'
@@ -309,9 +316,10 @@ const META_STATUS =
   /(?:^|(?<=[.!?:])\s+)(?:(?:I am |I'm |now )?(?:writing|drafting|preparing|listing|adding|giving) (?:the |my |some |these |your |two |three )?tips?(?: now| below| here)?|here (?:are|is) (?:the |my |some |your )?(?:tips?|answers?))(?:[.:!…]+(?=\s|$)|$)/gi;
 
 // A leading sentence about which of its own tips apply: "The London tips no longer apply, so I'm dropping them. Paris: rain."
-// Needs a determiner before "tips" and "no longer apply" or a first-person drop/keep, so "Your tips are kept by staff" stays.
+// Needs a determiner before "tips" and "no longer apply", "replace the" or a first-person drop/keep, so "Your tips are kept by
+// staff" stays.
 const META_TIPS_NOTE =
-  /^(?:the|my|your|those|these|earlier|previous|shown|old|other)\s+(?:[\w'’-]+\s+){0,3}(?:tips?|answers?)\b[^.!?;]*?(?:\bno longer (?:apply|applies|stand|stands|hold|holds|relevant)\b|\b(?:do not|don't|does not|doesn't) apply (?:any ?more|now)\b|\bI(?:'m| am|'ll| will|'ve| have)? (?:dropping|drop|dropped|keeping|keep|kept|replacing|replace|replaced|removing|remove|removed)\b)[^.!?;]*(?:[.!?;]+(?=\s|$)|$)\s*/i;
+  /^(?:the|my|your|those|these|earlier|previous|shown|old|other)\s+(?:[\w'’-]+\s+){0,3}(?:tips?|answers?)\b[^.!?;]*?(?:\bno longer (?:apply|applies|stand|stands|hold|holds|relevant)\b|\b(?:replace|replaces|supersede|supersedes) the\b|\b(?:do not|don't|does not|doesn't) apply (?:any ?more|now)\b|\bI(?:'m| am|'ll| will|'ve| have)? (?:dropping|drop|dropped|keeping|keep|kept|replacing|replace|replaced|removing|remove|removed)\b)[^.!?;]*(?:[.!?;]+(?=\s|$)|$)\s*/i;
 
 /** A tip without the model's label for the question, a note on which tips apply or a status sentence: "The tube closure question: x. Writing tips now." → "X." */
 function tidyTip(line: string): string {
@@ -375,8 +383,8 @@ const SOURCE_DESCRIBED = new RegExp(String.raw`^(${SOURCE_FULL})((?:\s+\p{Ll}[\p
 const SOURCE_LIST = new RegExp(String.raw`^${SOURCE_NAME}(?:\s*,\s*${SOURCE_NAME})+,?\s+and\s`, "u");
 const SOURCE_DATE = /\s+(?:from|on|dated)\s+(?:\d{1,2}\s+\p{Lu}\p{Ll}+|\p{Lu}\p{Ll}+\s+\d{1,2})(?:,?\s+\d{4})?$/u;
 const SOURCE_VERB = /\b(?:is|are|was|were|be|been|has|have|had|will|would|can|could|says?|said|shows?|faces?|runs?|closes?|opens?)\b/i;
-// "per" before a capital or a domain; "per cent", "per line" and "per day" never match.
-const PER = /(?:\s*,)?\s*\bper\s+(?=(?:the\s+)?\p{Lu}|[\p{Ll}\p{N}-]+\.\p{Ll}{2,})/gu;
+// "per" or "Per" before a capital or a domain; "per cent", "per line" and "per day" never match.
+const PER = /(?:\s*,)?\s*\b[Pp]er\s+(?=(?:the\s+)?\p{Lu}|[\p{Ll}\p{N}-]+\.\p{Ll}{2,})/gu;
 
 /**
  * The text after "per" as it should read: unchanged, without a trailing date or the words about the name ("TfL planned closures"
@@ -394,7 +402,7 @@ function sourceName(rest: string): string | null {
 /**
  * A tip whose "per …" source is a publisher name: a date after it is dropped ("per the London Buzz from 23 October" → "per the
  * London Buzz"), and a "per" followed by content instead of a name is dropped with it ("…, per the Circle, Elizabeth and Mildmay
- * lines all face disruption." → "…."). "per TfL", "per cent" and "per Sortiraparis citing Météo-France, Saturday…" stay.
+ * lines all face disruption." → "…."). sourceTags then moves the name to the source field.
  */
 function cleanSource(tip: string): string {
   // Last first, so earlier indices stay valid.
@@ -403,82 +411,108 @@ function cleanSource(tip: string): string {
     const stop = out.slice(from).search(/[.!?;]+(?=\s|$)/);
     const end = stop < 0 ? out.length : from + stop;
     const rest = out.slice(from, end);
+    // "Per TfL, the Circle line…" leads its sentence with the name: sourceTags takes it as a tag.
+    if (match[0].trimStart().startsWith("P") && rest.includes(",")) return out;
     const name = sourceName(rest);
     if (name === rest) return out;
     return name === null ? out.slice(0, match.index) + out.slice(end) : out.slice(0, from) + name + out.slice(end);
   }, tip);
 }
 
-// A source tag at the end of the text: "per X" (group 1) or "(X)" (group 2), with any comma before and full stop after.
-const END_TAG = new RegExp(String.raw`(?:\s*,)?\s*(?:\bper\s+(${SOURCE_FULL})|\((${SOURCE_FULL})\))\s*[.!?]?\s*$`, "u");
-// A dated source in brackets mid-sentence: "(ianVisits, 23 Oct)", "(the BBC, October 23, 2026)".
+// Source tags in the tip text, each with the name in group 1. A tag ends a clause: it is followed by punctuation, another
+// bracket ("(ONS) (ONS)") or the end.
+const CLAUSE_END = String.raw`(?=\s*(?:[,.;:!?(]|$))`;
+// "…, per TfL." or a sentence of its own, "Per the Met Police.". The name never ends in a full stop: that is the sentence's.
+const PER_TAG = new RegExp(String.raw`(?:\s*,)?\s*\b[Pp]er\s+(${SOURCE_FULL})(?<!\.)${CLAUSE_END}`, "gu");
+// "… disruption (TfL)." or "… from Greenwich (Met Police), and …".
+const BRACKET_TAG = new RegExp(String.raw`\s*\((${SOURCE_FULL})\)${CLAUSE_END}`, "gu");
+// A dated source in brackets: "(ianVisits, 23 Oct)", "(the BBC, October 23, 2026)".
 const MONTH = String.raw`(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)\p{Ll}*\.?`;
-const DATED_SOURCE = new RegExp(
-  String.raw`\s*\(\s*${SOURCE_NAME}\s*,\s*(?:\d{1,2}\s+${MONTH}|${MONTH}\s+\d{1,2})(?:,?\s+\d{4})?\s*\)`,
-  "gu",
-);
-const tagName = (match: RegExpMatchArray) => (match[1] ?? match[2] ?? "").replace(/^the\s+/i, "").replace(/\.+$/, "").toLowerCase();
+const DATED_TAG = new RegExp(String.raw`\s*\(\s*(${SOURCE_NAME})\s*,\s*(?:\d{1,2}\s+${MONTH}|${MONTH}\s+\d{1,2})(?:,?\s+\d{4})?\s*\)`, "gu");
 
-/**
- * A tip with one source tag: a second tag naming the same publisher at the end is dropped ("…, per Météo-France. (Météo-France)"
- * → "…, per Météo-France."; "(ONS) (ONS)" → "(ONS)"). Of a "per X" and an "(X)", the "per X" stays, for sourceTag to bracket. A
- * dated source in brackets mid-sentence is dropped when the tip already ends with a tag ("Round-ups (ianVisits, 23 Oct) lead with
- * …, per Newham Council.").
- */
-function dropDoubleSource(tip: string): string {
-  const last = tip.match(END_TAG);
-  if (!last || last.index === undefined) return tip;
-  const head = tip.slice(0, last.index);
-  const undated = head.replace(DATED_SOURCE, "");
-  if (undated !== head) return dropDoubleSource(undated + tip.slice(last.index));
-  const before = head.match(END_TAG);
-  if (!before || before.index === undefined || tagName(before) !== tagName(last)) return tip;
-  // "(X) per X": keep the "per", with the tip's own end.
-  if (before[2] !== undefined && last[1] !== undefined) return dropDoubleSource(head.slice(0, before.index) + tip.slice(last.index));
-  const kept = head.trimEnd();
-  return dropDoubleSource(/[.!?]$/.test(kept) ? kept : kept + (tip.trimEnd().match(/[.!?]$/)?.[0] ?? ""));
+/** True when "(ARR)" spells the words before it ("annual recurring revenue (ARR)"): a definition, not a source. */
+function definesAcronym(before: string, name: string): boolean {
+  if (!/^\p{Lu}{2,6}$/u.test(name)) return false;
+  const words = before.match(/[\p{L}\p{N}]+/gu) ?? [];
+  return words.slice(-name.length).map((word) => word.charAt(0).toUpperCase()).join("") === name;
 }
 
-// A sentence that is only a source, such as "Per the Met Police." (group 2), and the end of the sentence before it (group 1).
-const SOURCE_SENTENCE = /(^|[.!?])\s*\bPer\s+((?:[^.!?,;:]|\.(?=\S))+?)\s*(?:[.!?]+|$)(?=\s|$)/gu;
+/** The punctuation a removed tag leaves behind: "heist.." → "heist.", "Greenwich , and" → "Greenwich, and", a leading ", the". */
+const tidyPunctuation = (text: string) =>
+  text
+    .replace(/\s+([,.;:!?])/g, "$1")
+    .replace(/[,;:]+([.!?])/g, "$1")
+    .replace(/([.!?])\.+/g, "$1")
+    // A sentence that began with its tag ("Per TfL, the Circle line…") starts with a capital again.
+    .replace(/(^|[.!?]\s+)[,;:]\s*(\p{Ll}?)/gu, (_, start: string, letter: string) => start + letter.toUpperCase())
+    .replace(/[,;:]$/, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
 
-/**
- * A tip whose source sentence joins the sentence before it as a "per" tag, when it names a publisher: "…jewellery heist. Per the
- * Met Police." → "…jewellery heist, per the Met Police.", which sourceTag then puts in brackets.
- */
-const joinSourceSentence = (tip: string) =>
-  tip.replace(SOURCE_SENTENCE, (sentence, end: string, rest: string) => {
-    const name = end ? sourceName(rest) : null;
-    return name !== null && SOURCE.test(name) ? `, per ${name}${end}` : sentence;
-  });
-
-// A "per X" tag at the end of a sentence, with any comma before it. The name never ends in a full stop: that is the sentence's.
-const PER_TAG = new RegExp(String.raw`(?:\s*,)?\s+\bper\s+(${SOURCE_FULL})(?<!\.)(?=[.!?]+(?:\s|$)|\s*$)`, "gu");
-
-/** A tip with its sources in one style, in brackets: "…disruption, per TfL." → "…disruption (TfL)." A "per" mid-sentence stays. */
-const sourceTag = (tip: string) => tip.replace(PER_TAG, (_, name: string) => ` (${name.replace(/^the\s+/, "")})`);
+/** A tip's text without its source tags, and the publishers they named, in order: "Rain (BBC). Per the BBC." → "Rain..", ["BBC"]. */
+function sourceTags(tip: string): { text: string; names: string[] } {
+  const names: string[] = [];
+  const take = (name: string) => {
+    names.push(name.replace(/^the\s+/i, ""));
+    return "";
+  };
+  const text = tip
+    .replace(PER_TAG, (_, name: string) => take(name))
+    .replace(BRACKET_TAG, (tag, name: string, at: number, whole: string) => (definesAcronym(whole.slice(0, at), name) ? tag : take(name)))
+    .replace(DATED_TAG, (_, name: string) => take(name));
+  return { text, names };
+}
 
 /** True when a tip repeats one of its own sentences. Exported for the live conversation test. */
 export const repeatsSentence = (tip: string) => dropRepeat(tip) !== tip;
 /** True when a tip's "per …" is followed by a date or content rather than a publisher name. Exported for the live conversation test. */
 export const hasGarbledSource = (tip: string) => cleanSource(tip) !== tip;
+/** True when a tip's text still names its source: "(TfL)", "per TfL", "Per the BBC." or "(ianVisits, 23 Oct)". Exported for the live conversation test. */
+export const hasSourceTag = (tip: string) => sourceTags(tip).names.length > 0;
 
-/** True when a tip names its source twice or adds a dated source mid-sentence. Exported for the live conversation test. */
-export const hasDoubleSource = (tip: string) => dropDoubleSource(tip) !== tip;
-/** True when a tip names its source in a sentence of its own, such as "Per TfL.". Exported for the live conversation test. */
-export const hasSourceSentence = (tip: string) => tip.search(SOURCE_SENTENCE) >= 0;
+/** A tip and the publisher behind it ("TfL"), or null for a tip from the notes or general knowledge. */
+export type LunaTip = { text: string; source: string | null };
 
-const cleanTip = (tip: string) => sourceTag(dropDoubleSource(cleanSource(joinSourceSentence(dropRepeat(tip)))));
+/** Tips as IPC sends them: the texts, and each one's source by position. */
+export type TipFields = { tips: string[]; tipSources: (string | null)[] };
+export const tipFields = (tips: readonly LunaTip[]): TipFields => ({ tips: tips.map((tip) => tip.text), tipSources: tips.map((tip) => tip.source) });
 
-export function parseLunaTips(text: string, maxTips = MAX_TIPS): string[] {
+// "src: TfL" after the delimiter. "none", "-" or a blank means no source.
+const NO_SOURCE = /^(?:none|n\/?a|null|-+|–|—)?$/i;
+const NOTE_CITE = /^n\d+$/i;
+
+/** The source field as a short label: "src: (the BBC)." → "BBC". A note cite ([n1]) goes back into the text. */
+function sourceField(field: string): { label: string | null; cite: string | null } {
+  const label = field
+    .replace(/^\s*(?:src|sources?)\s*:/i, "")
+    .replace(/^[\s([“"']+|[\s)\]”"'.,;:]+$/g, "")
+    .replace(/^the\s+/i, "");
+  if (NOTE_CITE.test(label)) return { label: null, cite: `[${label.toLowerCase()}]` };
+  return { label: NO_SOURCE.test(label) ? null : oneLine(label, TIP_SOURCE_MAX_CHARS), cite: null };
+}
+
+/**
+ * One tip line as text and source. The source comes from the field after "|" ("… | src: TfL"); the text loses any source tag the
+ * model still wrote in it, a repeated sentence and a garbled "per", and a tag's publisher becomes the source when the field is empty.
+ * Null for a line that is not a tip (blank, NONE, reasoning).
+ */
+function parseTipLine(line: string): LunaTip | null {
+  const [head = "", ...field] = stripMarkdown(line.trim()).split("|");
+  const text = tidyTip(head.trim());
+  if (!isTip(text)) return null;
+  const { label, cite } = sourceField(field.join("|"));
+  const whole = cite ? `${text} ${cite}` : text;
+  const clean = sourceTags(cleanSource(dropRepeat(whole)));
+  // Only text that lost something is tidied, so a normal tip stays byte for byte.
+  return { text: clampTip(clean.text === whole ? whole : tidyPunctuation(clean.text)), source: label ?? clean.names[0] ?? null };
+}
+
+export function parseLunaTips(text: string, maxTips = MAX_TIPS): LunaTip[] {
   if (text.trim().toUpperCase() === "NONE") return [];
   return text
     .split("\n")
-    .map((line) => tidyTip(stripMarkdown(line.trim())))
-    .filter(isTip)
-    .map(cleanTip)
-    .slice(0, maxTips)
-    .map(clampTip);
+    .flatMap((line) => parseTipLine(line) ?? [])
+    .slice(0, maxTips);
 }
 
 /** One step's stream in order: its text parts and its tool calls (local or provider-run, such as web_search). */
@@ -515,19 +549,19 @@ const MIN_LIVE_WORDS = 4;
  * Tips so far from streamed text: every finished line, plus the line in progress once it has a few whole words.
  * Only a hint for the overlay. parseLunaTips on the full text stays the final authority (NONE, 2-tip cap).
  */
-export function streamingTips(text: string, maxTips = MAX_TIPS): string[] {
+export function streamingTips(text: string, maxTips = MAX_TIPS): LunaTip[] {
   const parts = text.split("\n");
-  const open = (parts.pop() ?? "").replace(/\S*$/, "");
-  const tips = parts.map((line) => tidyTip(stripMarkdown(line.trim()))).filter(isTip).map(cleanTip);
-  const live = tidyTip(stripMarkdown(open.trim()));
-  // The line in progress only loses a repeat: its "per …" may still be half written, so the source is checked once the line ends,
-  // and a source does not vanish and come back while a repeat after it is still too short to spot.
-  if (live.split(/\s+/).length >= MIN_LIVE_WORDS && isTip(live)) tips.push(dropRepeat(live));
-  return tips.slice(0, maxTips).map(clampTip);
+  // The line in progress stops at the source delimiter and at an unclosed bracket, so neither a half-written source nor the
+  // delimiter shows. Its source and any tags are read once the line ends: until then a "per …" may still be half written.
+  const open = (parts.pop() ?? "").replace(/\S*$/, "").split("|")[0] ?? "";
+  const tips = parts.flatMap((line) => parseTipLine(line) ?? []);
+  const live = tidyTip(stripMarkdown(open.replace(/\s*\([^)]*$/, "").trim()));
+  // It only loses a repeat, so text never vanishes and comes back while a repeat after it is still too short to spot.
+  if (live.split(/\s+/).length >= MIN_LIVE_WORDS && isTip(live)) tips.push({ text: clampTip(dropRepeat(live)), source: null });
+  return tips.slice(0, maxTips);
 }
 
-export type LunaResult = {
-  tips: string[];
+export type LunaResult = TipFields & {
   sources: BeeSource[];
   error: string | null;
   /** Short muted note when connected tools were skipped. */
@@ -602,7 +636,7 @@ export async function guideWithLuna(args: {
   /** Called when each tool call Luna makes starts and ends, so the overlay can show what it is doing. */
   onActivity?: (activity: LunaToolActivity) => void;
   /** Called with the tips so far as lines stream in. Only when they change. */
-  onPartial?: (tips: string[]) => void;
+  onPartial?: (partial: TipFields) => void;
   /** Cancels the call (a superseded run). Tool calls already running are left to finish. */
   signal?: AbortSignal;
   /** Called once after a run that finished (with or without answer text) with its total usage (cache read and write tokens) and provider metadata (Gateway cost). */
@@ -612,7 +646,7 @@ export async function guideWithLuna(args: {
   const maxTips = tipCap(args.shown?.length ?? 0);
   // A new turn never shows the last answer again: a tip that repeats it is dropped (the prompt asks for no repeats).
   const repeats = new Set((args.shown?.length ? [] : (args.earlier ?? [])).map(tipKey));
-  const fresh = (tips: string[]) => tips.filter((tip) => !repeats.has(tipKey(tip)));
+  const fresh = (tips: LunaTip[]) => tips.filter((tip) => !repeats.has(tipKey(tip.text)));
   let firstTokenMs: number | null = null;
   let extra: ToolSet = { ...args.extraTools };
   let web = args.webSearch ?? true;
@@ -684,7 +718,7 @@ export async function guideWithLuna(args: {
       if (segments.at(-1)?.type !== "tool") segments.push({ type: "tool" });
       if (sent !== "" && sent !== "[]") {
         sent = "[]";
-        args.onPartial?.([]);
+        args.onPartial?.({ tips: [], tipSources: [] });
       }
     };
     for await (const part of result.stream) {
@@ -711,7 +745,7 @@ export async function guideWithLuna(args: {
         const key = JSON.stringify(tips);
         if (tips.length > 0 && key !== sent) {
           sent = key;
-          args.onPartial?.(tips);
+          args.onPartial?.(tipFields(tips));
         }
       } else if (part.type === "error") {
         throw part.error;
@@ -740,8 +774,8 @@ export async function guideWithLuna(args: {
       args.onFinish?.({ usage: result.usage, providerMetadata: result.providerMetadata });
       const done = { usage: result.usage, finishReason: result.finishReason, empty: result.text.trim() === "" };
       // No answer text is a failure, not "no tips" (that is a literal NONE). Not retried: it would double latency and cost.
-      if (done.empty) return { tips: [], sources: [], error: `AI guidance failed: ${emptyReason(done)}`, skipped: skipped(), ...timings(done) };
-      return { tips: fresh(parseLunaTips(result.text, maxTips)), sources: sourcesFromGenerateResult(result), error: null, skipped: skipped(), ...timings(done) };
+      if (done.empty) return { tips: [], tipSources: [], sources: [], error: `AI guidance failed: ${emptyReason(done)}`, skipped: skipped(), ...timings(done) };
+      return { ...tipFields(fresh(parseLunaTips(result.text, maxTips))), sources: sourcesFromGenerateResult(result), error: null, skipped: skipped(), ...timings(done) };
     } catch (error) {
       // Match on the whole text so a tool named late in a long error is still found. Show the short one.
       const message = errorText(error, Number.POSITIVE_INFINITY);
@@ -758,7 +792,7 @@ export async function guideWithLuna(args: {
       }
       const tooMany = TOOL_COUNT_ERROR.test(message);
       if (args.signal?.aborted || !(tooMany || SCHEMA_ERROR.test(message)) || attempt >= 2 || Object.keys(extra).length === 0) {
-        return { tips: [], sources: [], error: `AI guidance failed: ${errorText(error)}`, skipped: skipped(), ...timings() };
+        return { tips: [], tipSources: [], sources: [], error: `AI guidance failed: ${errorText(error)}`, skipped: skipped(), ...timings() };
       }
       // Too many tools: no single tool is at fault, so every MCP tool goes at once.
       const drop = attempt === 0 && !tooMany ? toolsToDrop(message, extra) : Object.keys(extra);

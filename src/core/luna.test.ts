@@ -2,7 +2,7 @@ import { TypeValidationError, jsonSchema, simulateReadableStream, tool } from "a
 import { MockLanguageModelV4 } from "ai/test";
 import { describe, expect, it, vi } from "vitest";
 import { MOCK_TOKEN, startMockMcpServer } from "../../test/helpers/mock-mcp-server";
-import { TIP_MAX_CHARS } from "../shared/ipc";
+import { TIP_MAX_CHARS, TIP_SOURCE_MAX_CHARS } from "../shared/ipc";
 import { ANTHROPIC_CACHE } from "./gateway";
 import {
   LUNA_MEETING_SYSTEM,
@@ -13,16 +13,17 @@ import {
   buildLunaPrompt,
   errorText,
   guideWithLuna,
-  hasDoubleSource,
   hasGarbledSource,
-  hasSourceSentence,
+  hasSourceTag,
   isMetaTip,
   lunaMcpSystem,
   lunaRequest,
   parseLunaTips,
   repeatsSentence,
   streamingTips,
+  tipFields,
   type AnswerSegment,
+  type LunaTip,
 } from "./luna";
 import { loadMcpTools } from "./mcp";
 
@@ -208,17 +209,20 @@ describe("LUNA_SYSTEM", () => {
     expect(LUNA_SYSTEM).toContain("Never repeat an earlier answer in place of an answer.");
   });
 
-  it("asks for the publisher once, in short brackets at the end", () => {
-    expect(LUNA_SYSTEM).toContain("by publisher name only, in brackets at the end of the tip before its full stop");
-    expect(LUNA_SYSTEM).toContain('Keep it short: "(TfL)", not "(TfL planned closures)".');
-    expect(LUNA_SYSTEM).toContain('Never write "per TfL" or a separate sentence such as "Per the BBC."');
-    expect(LUNA_SYSTEM).toContain("Never put a date, snippet text or another sentence after it, and never repeat a sentence.");
-    expect(LUNA_SYSTEM).toContain("no source or date in brackets mid-sentence");
+  it("asks for the publisher once, after the source delimiter, never in the tip text", () => {
+    expect(LUNA_SYSTEM).toContain('end the tip line with " | src: " and one short publisher name');
+    expect(LUNA_SYSTEM).toContain("Short names only: TfL, BBC, Met Police, Météo-France.");
+    expect(LUNA_SYSTEM).toContain('never in the tip text: no "(TfL)", "per TfL", "Per the BBC." or "(Time Out, 23 Oct)"');
+    expect(LUNA_SYSTEM).toContain("Note cites such as [n1] stay in the tip text.");
+    expect(LUNA_SYSTEM).toContain("Never repeat a sentence");
+    // The example line parses to the text and the source the prompt describes.
+    const example = LUNA_SYSTEM.match(/"(- The Circle line[^"]+)"/)?.[1] ?? "";
+    expect(parseLunaTips(example)).toEqual([{ text: "The Circle line is closed on Saturday for engineering works.", source: "TfL" }]);
   });
 
   it("never asks for a [web] tag", () => {
     expect(LUNA_SYSTEM).not.toContain("or [web]");
-    expect(LUNA_SYSTEM).toContain("Do not add links or tags such as [web].");
+    expect(LUNA_SYSTEM).toContain("index markers such as [2-2], or tags such as [web].");
   });
 
   it("asks for plain text without markdown or links", () => {
@@ -240,26 +244,30 @@ describe("LUNA_SYSTEM", () => {
   });
 });
 
+// The parse tests below check the text only; "tip sources" checks the source field.
+const parseTexts = (text: string, max?: number) => parseLunaTips(text, max).map((tip) => tip.text);
+const streamTexts = (text: string, max?: number) => streamingTips(text, max).map((tip) => tip.text);
+
 describe("parseLunaTips", () => {
   it("clamps an overlong line to the IPC tip limit", () => {
     const line = "word ".repeat(TIP_MAX_CHARS);
-    expect(parseLunaTips(`- ${line}`)[0]).toHaveLength(TIP_MAX_CHARS);
-    expect(streamingTips(`- ${line}\n- next`)[0]).toHaveLength(TIP_MAX_CHARS);
+    expect(parseTexts(`- ${line}`)[0]).toHaveLength(TIP_MAX_CHARS);
+    expect(streamTexts(`- ${line}\n- next`)[0]).toHaveLength(TIP_MAX_CHARS);
   });
 
   it("strips bullets and numbering and caps at two tips", () => {
-    expect(parseLunaTips("- Offer 10% [n1]\n* Ask about timing\n3. Third")).toEqual(["Offer 10% [n1]", "Ask about timing"]);
-    expect(parseLunaTips("- One\n- Two\n- Three\n- Four", 3)).toEqual(["One", "Two", "Three"]);
+    expect(parseTexts("- Offer 10% [n1]\n* Ask about timing\n3. Third")).toEqual(["Offer 10% [n1]", "Ask about timing"]);
+    expect(parseTexts("- One\n- Two\n- Three\n- Four", 3)).toEqual(["One", "Two", "Three"]);
   });
 
   it("treats NONE and blank output as no tips", () => {
-    expect(parseLunaTips("NONE")).toEqual([]);
-    expect(parseLunaTips("  \n ")).toEqual([]);
+    expect(parseTexts("NONE")).toEqual([]);
+    expect(parseTexts("  \n ")).toEqual([]);
   });
 
   it("strips bold, italic, backticks and headings", () => {
-    expect(parseLunaTips("- **bold** and __also__ and *it* and _it2_")).toEqual(["bold and also and it and it2"]);
-    expect(parseLunaTips("## Summary\n- Use `read_file` [n1]")).toEqual(["Summary", "Use read_file [n1]"]);
+    expect(parseTexts("- **bold** and __also__ and *it* and _it2_")).toEqual(["bold and also and it and it2"]);
+    expect(parseTexts("## Summary\n- Use `read_file` [n1]")).toEqual(["Summary", "Use read_file [n1]"]);
   });
 
   it("drops the model's reasoning about its rules, keeping the real tips", () => {
@@ -270,11 +278,11 @@ describe("parseLunaTips", () => {
       "- London: rain Saturday, clearing Sunday.",
       "- The limit is 3 tips.",
     ].join("\n");
-    expect(parseLunaTips(text, 3)).toEqual(["Paris: sunny Saturday, showers Sunday, highs near 16°C. metoffice.gov.uk", "London: rain Saturday, clearing Sunday."]);
-    expect(streamingTips(`${text}\n`, 3)).toEqual(parseLunaTips(text, 3));
+    expect(parseTexts(text, 3)).toEqual(["Paris: sunny Saturday, showers Sunday, highs near 16°C. metoffice.gov.uk", "London: rain Saturday, clearing Sunday."]);
+    expect(streamTexts(`${text}\n`, 3)).toEqual(parseTexts(text, 3));
     // The line in progress is dropped too, once it has enough words to show.
-    expect(streamingTips("- London: rain Saturday, clearing Sunday.\n- The newest line asks about")).toEqual(["London: rain Saturday, clearing Sunday."]);
-    expect(parseLunaTips("- I'll keep the shown tips.\n- No more than two tips here.")).toEqual([]);
+    expect(streamTexts("- London: rain Saturday, clearing Sunday.\n- The newest line asks about")).toEqual(["London: rain Saturday, clearing Sunday."]);
+    expect(parseTexts("- I'll keep the shown tips.\n- No more than two tips here.")).toEqual([]);
   });
 
   it("flags reasoning lines but not answers that share a word with them", () => {
@@ -310,15 +318,15 @@ describe("parseLunaTips", () => {
     // Turn 4 of the live conversation test, after "make that Paris instead".
     const leaked = "The London tips no longer apply, so I'm dropping them. Sortiraparis forecasts Paris rain on Saturday.";
     expect(isMetaTip(leaked)).toBe(true);
-    expect(parseLunaTips(`- ${leaked}`)).toEqual(["Sortiraparis forecasts Paris rain on Saturday."]);
-    expect(streamingTips(`- ${leaked}\n`)).toEqual(["Sortiraparis forecasts Paris rain on Saturday."]);
+    expect(parseTexts(`- ${leaked}`)).toEqual(["Sortiraparis forecasts Paris rain on Saturday."]);
+    expect(streamTexts(`- ${leaked}\n`)).toEqual(["Sortiraparis forecasts Paris rain on Saturday."]);
     const cases: [string, string][] = [
       ["The earlier tips no longer apply. Paris: showers Sunday.", "Paris: showers Sunday."],
       ["My London tips don't apply now; Paris is dry on Saturday.", "Paris is dry on Saturday."],
       ["Those tips no longer stand, so I'm replacing them. Météo-France expects rain.", "Météo-France expects rain."],
       ["The London tips no longer apply, so I'm dropping them.", ""],
     ];
-    for (const [line, kept] of cases) expect(parseLunaTips(`- ${line}`), line).toEqual(kept ? [kept] : []);
+    for (const [line, kept] of cases) expect(parseTexts(`- ${line}`), line).toEqual(kept ? [kept] : []);
     for (const line of [
       "Your tips are kept by staff in most Paris restaurants.",
       "The tips in Paris are usually included in the bill.",
@@ -328,7 +336,7 @@ describe("parseLunaTips", () => {
       "Avoid giving tips in cash in Paris cafés.",
     ]) {
       expect(isMetaTip(line), line).toBe(false);
-      expect(parseLunaTips(`- ${line}`), line).toEqual([line]);
+      expect(parseTexts(`- ${line}`), line).toEqual([line]);
     }
   });
 
@@ -353,9 +361,9 @@ describe("parseLunaTips", () => {
       "Paris this weekend: sunny Saturday, showers Sunday. metoffice.gov.uk",
     ]) expect(isMetaTip(line), line).toBe(false);
     const text = ["- The tube closure question: the latest source for this weekend lists planned works. Writing tips now.", "- Writing tips now.", "- 15% of 18,000 is 2,700."].join("\n");
-    expect(parseLunaTips(text)).toEqual(["The latest source for this weekend lists planned works.", "15% of 18,000 is 2,700."]);
-    expect(streamingTips(`${text}\n`)).toEqual(parseLunaTips(text));
-    expect(parseLunaTips("- Here are the tips:\n- Rain on Saturday in London.")).toEqual(["Rain on Saturday in London."]);
+    expect(parseTexts(text)).toEqual(["The latest source for this weekend lists planned works.", "15% of 18,000 is 2,700."]);
+    expect(streamTexts(`${text}\n`)).toEqual(parseTexts(text));
+    expect(parseTexts("- Here are the tips:\n- Rain on Saturday in London.")).toEqual(["Rain on Saturday in London."]);
   });
 
   it("catches restating the question and narrating the answer, keeping real tips and quoted speech", () => {
@@ -387,142 +395,178 @@ describe("parseLunaTips", () => {
   });
 
   it("drops a [web] tag the model still adds, keeping note cites", () => {
-    expect(parseLunaTips("- Weekend closures are planned engineering works, near Tower Hill. [web]")).toEqual([
+    expect(parseTexts("- Weekend closures are planned engineering works, near Tower Hill. [web]")).toEqual([
       "Weekend closures are planned engineering works, near Tower Hill.",
     ]);
-    expect(parseLunaTips("- SSO ships in Q4 [n1] [WEB] tfl.gov.uk")).toEqual(["SSO ships in Q4 [n1] tfl.gov.uk"]);
-    expect(streamingTips("- Closures are for engineering works [web]\n")).toEqual(["Closures are for engineering works"]);
+    expect(parseTexts("- SSO ships in Q4 [n1] [WEB] tfl.gov.uk")).toEqual(["SSO ships in Q4 [n1] tfl.gov.uk"]);
+    expect(streamTexts("- Closures are for engineering works [web]\n")).toEqual(["Closures are for engineering works"]);
   });
 
   it("drops markdown links and citations but keeps the label and note cites", () => {
-    expect(parseLunaTips("- Node 22 is current ([nodejs.org](https://nodejs.org/en?utm_source=openai))")).toEqual(["Node 22 is current nodejs.org"]);
-    expect(parseLunaTips("- See [the docs](https://a.com/x) [n2]")).toEqual(["See the docs [n2]"]);
+    expect(parseTexts("- Node 22 is current ([nodejs.org](https://nodejs.org/en?utm_source=openai))")).toEqual(["Node 22 is current nodejs.org"]);
+    expect(parseTexts("- See [the docs](https://a.com/x) [n2]")).toEqual(["See the docs [n2]"]);
   });
 });
 
-// From a live run (24 October 2026): a snippet pasted after the source, and a "per" followed by content.
+// From live runs (24 October 2026), with the "…" filled in. Each comes out as clean text and one source.
 const REPEATED =
   "Canning Town: about 211 households were evacuated from two tower blocks over structural issues, per the London Buzz from 23 October Around 211 households have been evacuated from two tower blocks in Canning Town due to serious structural issues.";
 const GARBLED =
   "The tube closures are planned engineering works; TfL's track-closure list shows the Circle and District lines both shut this weekend, per the Circle, Elizabeth and Mildmay lines all face disruption.";
+const SOURCE_JUNK: [string, LunaTip][] = [
+  [REPEATED, { text: "Canning Town: about 211 households were evacuated from two tower blocks over structural issues.", source: "London Buzz" }],
+  [GARBLED, { text: "The tube closures are planned engineering works; TfL's track-closure list shows the Circle and District lines both shut this weekend.", source: null }],
+  [
+    "Paris this weekend: Saturday brings rain, with 6 to 15 mm forecast, and highs near 15 to 16°C, per Météo-France. (Météo-France)",
+    { text: "Paris this weekend: Saturday brings rain, with 6 to 15 mm forecast, and highs near 15 to 16°C.", source: "Météo-France" },
+  ],
+  [
+    "Latest London round-ups (ianVisits, 23 Oct) lead with about 211 households evacuated from two Canning Town tower blocks over structural issues, per Newham Council.",
+    { text: "Latest London round-ups lead with about 211 households evacuated from two Canning Town tower blocks over structural issues.", source: "Newham Council" },
+  ],
+  [
+    "Met Police latest: a tunnel-digging gang was jailed after a jewellery heist. Per the Met Police.",
+    { text: "Met Police latest: a tunnel-digging gang was jailed after a jewellery heist.", source: "Met Police" },
+  ],
+  [
+    "The Circle, District and Hammersmith & City lines are affected this weekend. [2-2] Sources say the closures are for track works. [4-7] Check TfL's live status before travelling (TfL)",
+    { text: "The Circle, District and Hammersmith & City lines are affected this weekend. Sources say the closures are for track works. Check TfL's live status before travelling", source: "TfL" },
+  ],
+  [
+    "Met Police news: a teenager was charged over a stabbing from Greenwich (Met Police), and a man jailed for life for murder in Ealing (Met Police).",
+    { text: "Met Police news: a teenager was charged over a stabbing from Greenwich, and a man jailed for life for murder in Ealing.", source: "Met Police" },
+  ],
+  ["The Circle, Elizabeth and Mildmay lines all face disruption. Per TfL planned closures. Check before travelling.", { text: "The Circle, Elizabeth and Mildmay lines all face disruption. Check before travelling.", source: "TfL" }],
+  ["The Circle line is closed this weekend for engineering works, per TfL.", { text: "The Circle line is closed this weekend for engineering works.", source: "TfL" }],
+  ["Storm warnings cover the south coast on Saturday, per the BBC.", { text: "Storm warnings cover the south coast on Saturday.", source: "BBC" }],
+  ["Expect queues at the Eiffel Tower, per Time Out London.", { text: "Expect queues at the Eiffel Tower.", source: "Time Out London" }],
+  ["Paris: rain on Saturday, per Sortiraparis citing Météo-France and Météo Paris.", { text: "Paris: rain on Saturday.", source: "Sortiraparis citing Météo-France and Météo Paris" }],
+  ["Rain on Saturday. Per Météo-France via Sortiraparis.", { text: "Rain on Saturday.", source: "Météo-France via Sortiraparis" }],
+  ["TfL closes the Circle line on Saturday. The Circle line reopens on Monday, per TfL.", { text: "TfL closes the Circle line on Saturday. The Circle line reopens on Monday.", source: "TfL" }],
+  ["The Office for National Statistics (ONS) says rents rose 9 per cent, per the BBC.", { text: "The Office for National Statistics (ONS) says rents rose 9 per cent.", source: "BBC" }],
+  ["Met Office warnings cover Saturday (Met Office), and TfL plans closures, per TfL.", { text: "Met Office warnings cover Saturday, and TfL plans closures.", source: "TfL" }],
+  ["Opening hours changed on 23 Oct (see the venue site), per Time Out.", { text: "Opening hours changed on 23 Oct (see the venue site).", source: "Time Out" }],
+  ["The Circle line shuts on Saturday per TfL. The District line runs as normal.", { text: "The Circle line shuts on Saturday. The District line runs as normal.", source: "TfL" }],
+  ["Rain on Saturday, per the Met Police news page.", { text: "Rain on Saturday.", source: "Met Police" }],
+  ["Per TfL, the Circle and District lines both have weekend closures.", { text: "The Circle and District lines both have weekend closures.", source: "TfL" }],
+  [
+    "For Paris this weekend, per Sortiraparis citing Météo-France and Météo Paris, Saturday brings rain with highs near 15 to 16°C.",
+    { text: "For Paris this weekend, Saturday brings rain with highs near 15 to 16°C.", source: "Sortiraparis citing Météo-France and Météo Paris" },
+  ],
+  ["Saturday brings rain (Météo-France), per Météo-France.", { text: "Saturday brings rain.", source: "Météo-France" }],
+  ["Rents rose 9 per cent (ONS) (ONS)", { text: "Rents rose 9 per cent", source: "ONS" }],
+  ["Rain on Saturday, per the BBC, per BBC.", { text: "Rain on Saturday.", source: "BBC" }],
+  ["Rain on Saturday (BBC). Per the BBC.", { text: "Rain on Saturday.", source: "BBC" }],
+  ["Rain on Saturday. Per Circle lines all face disruption.", { text: "Rain on Saturday.", source: null }],
+  ["The pool is shut on Sunday, per Circle lines all face disruption this week.", { text: "The pool is shut on Sunday.", source: null }],
+  ["The Circle line is shut on Saturday for works. The Circle line is shut on Saturday for engineering works.", { text: "The Circle line is shut on Saturday for works.", source: null }],
+];
+// Tips with no source: they come back byte for byte, with no source.
 const CLEAN_TIPS = [
-  "Rents rose 9 per cent in London last year (ONS).",
-  "Free museum entry runs on the first Sunday (sortiraparis.com).",
+  "Fifteen percent of eighteen thousand is 2,700.",
+  "Quick method: 10% is 1,800, and half of that, 900, gives 2,700.",
+  "Rents rose 9 per cent in London last year.",
+  "Charge £30 per hour, and two trains per hour run on Sunday.",
   "15% of 18,000 is 2,700.",
   "Sources differ on details, so check TfL before travelling: Lasttrip says the Circle line shuts Saturday, while TfL's own document lists specific dates per line.",
-  "For Paris this weekend, per Sortiraparis citing Météo-France and Météo Paris, Saturday brings rain with highs near 15 to 16°C, with rain totals of about 6 mm versus 10 to 15 mm.",
+  "TfL says Saturday, the BBC says Sunday.",
   "Offer 10% off if they sign this week [n1].",
-  "The Circle line is closed this weekend for engineering works (TfL).",
-  "Rain on Saturday (Météo-France via Sortiraparis).",
-  "Met Police latest: a tunnel-digging gang was jailed after a jewellery heist (Met Police).",
+  "Quote the annual recurring revenue (ARR).",
+  "Single sign-on (SSO) ships in Q4 [n2].",
 ];
-// A "per" tag at the end of a sentence, or a source sentence of its own, as the tip should read: in brackets.
-const PER_TAGS: [string, string][] = [
-  ["The Circle line is closed this weekend for engineering works, per TfL.", "The Circle line is closed this weekend for engineering works (TfL)."],
-  ["Storm warnings cover the south coast on Saturday, per the BBC.", "Storm warnings cover the south coast on Saturday (BBC)."],
-  ["Expect queues at the Eiffel Tower, per Time Out London.", "Expect queues at the Eiffel Tower (Time Out London)."],
-  ["Paris: rain on Saturday, per Sortiraparis citing Météo-France and Météo Paris.", "Paris: rain on Saturday (Sortiraparis citing Météo-France and Météo Paris)."],
-  ["Paris: rain on Saturday, per Météo-France via Sortiraparis.", "Paris: rain on Saturday (Météo-France via Sortiraparis)."],
-  ["TfL closes the Circle line on Saturday. The Circle line reopens on Monday, per TfL.", "TfL closes the Circle line on Saturday. The Circle line reopens on Monday (TfL)."],
-  ["The Office for National Statistics (ONS) says rents rose 9 per cent, per the BBC.", "The Office for National Statistics (ONS) says rents rose 9 per cent (BBC)."],
-  ["Met Office warnings cover Saturday (Met Office), and TfL plans closures, per TfL.", "Met Office warnings cover Saturday (Met Office), and TfL plans closures (TfL)."],
-  ["Opening hours changed on 23 Oct (see the venue site), per Time Out.", "Opening hours changed on 23 Oct (see the venue site) (Time Out)."],
-  ["The Circle line shuts on Saturday per TfL. The District line runs as normal.", "The Circle line shuts on Saturday (TfL). The District line runs as normal."],
-  ["Rain on Saturday, per the Met Police news page.", "Rain on Saturday (Met Police)."],
-];
-// From a live run (24 October 2026), with the "…" filled in: a source sentence of its own, at the end and mid-tip.
-const MET_POLICE = "Met Police latest: a tunnel-digging gang was jailed after a jewellery heist. Per the Met Police.";
-const TFL_PLANNED = "The Circle, Elizabeth and Mildmay lines all face disruption. Per TfL planned closures. Check before travelling.";
-// From a live run (24 October 2026): the source named twice, and a dated source mid-sentence.
-const DOUBLED = "Paris this weekend: Saturday brings rain, with 6 to 15 mm forecast, and highs near 15 to 16°C, per Météo-France. (Météo-France)";
-const TWO_SOURCES =
-  "Latest London round-ups (ianVisits, 23 Oct) lead with about 211 households evacuated from two Canning Town tower blocks over structural issues, per Newham Council.";
+const parsed = (text: string) => parseLunaTips(text, 10);
 
-describe("tip wording clean-up", () => {
-  it("drops a sentence the tip repeats after its source, and the date after the source", () => {
-    const clean = "Canning Town: about 211 households were evacuated from two tower blocks over structural issues (London Buzz).";
-    expect(parseLunaTips(`- ${REPEATED}`)).toEqual([clean]);
-    expect(streamingTips(`- ${REPEATED}\n`)).toEqual([clean]);
-    expect(repeatsSentence(REPEATED)).toBe(true);
-    expect(parseLunaTips("- The Circle line is shut on Saturday for works. The Circle line is shut on Saturday for engineering works.")).toEqual([
-      "The Circle line is shut on Saturday for works.",
+describe("tip sources", () => {
+  it("reads the source from the field after the delimiter, never from the text", () => {
+    expect(parseLunaTips("- The Circle line is closed on Saturday for engineering works. | src: TfL\n- Offer 10% off [n1]")).toEqual([
+      { text: "The Circle line is closed on Saturday for engineering works.", source: "TfL" },
+      { text: "Offer 10% off [n1]", source: null },
     ]);
+    expect(parsed("- Rain on Saturday. | src: (the BBC).")).toEqual([{ text: "Rain on Saturday.", source: "BBC" }]);
+    expect(parsed("- Rain on Saturday.|Met Office")).toEqual([{ text: "Rain on Saturday.", source: "Met Office" }]);
+    expect(parsed("- Rain on Saturday. | src: none")).toEqual([{ text: "Rain on Saturday.", source: null }]);
+    // The field wins over a tag the model still wrote; the tag leaves the text.
+    expect(parsed("- Rain on Saturday (Sortiraparis). | src: Météo-France")).toEqual([{ text: "Rain on Saturday.", source: "Météo-France" }]);
+    // A note cite in the field goes back into the text, where the panel's notes list matches it.
+    expect(parsed("- Offer 10% off | src: [n1]")).toEqual([{ text: "Offer 10% off [n1]", source: null }]);
+    expect(parsed(`- Rain. | src: ${"x".repeat(200)}`)[0]?.source).toHaveLength(TIP_SOURCE_MAX_CHARS);
+    expect(tipFields(parsed("- A | src: TfL\n- B"))).toEqual({ tips: ["A", "B"], tipSources: ["TfL", null] });
   });
 
-  it("drops a per that is followed by content instead of a publisher", () => {
-    const clean = "The tube closures are planned engineering works; TfL's track-closure list shows the Circle and District lines both shut this weekend.";
-    expect(parseLunaTips(`- ${GARBLED}`)).toEqual([clean]);
-    expect(streamingTips(`- ${GARBLED}\n`)).toEqual([clean]);
+  it("never streams the delimiter or a half-written source", () => {
+    const line = "- The Circle line is closed on Saturday for engineering works. | src: Met Police";
+    for (let end = 1; end <= line.length; end++) {
+      for (const tip of streamingTips(line.slice(0, end))) {
+        expect(tip.text, line.slice(0, end)).not.toMatch(/\||src|Met/);
+        expect(tip.source).toBeNull();
+      }
+    }
+    expect(streamingTips(`${line}\n`)).toEqual([{ text: "The Circle line is closed on Saturday for engineering works.", source: "Met Police" }]);
+    // An unclosed bracket on the line in progress waits for its close.
+    expect(streamingTips("- The Circle line is closed on Saturday (Tf")).toEqual([{ text: "The Circle line is closed on Saturday", source: null }]);
+  });
+
+  it("moves source tags, index markers and repeats out of the text, setting the source once", () => {
+    for (const [line, tip] of SOURCE_JUNK) {
+      expect(parsed(`- ${line}`), line).toEqual([tip]);
+      expect(streamingTips(`- ${line}\n`, 10), line).toEqual([tip]);
+      expect(hasSourceTag(tip.text), tip.text).toBe(false);
+      expect(tip.text, line).not.toMatch(/\[\d+\s*-\s*\d+\]|\[web\]|\b[Pp]er\s+(?:the\s+)?\p{Lu}/u);
+    }
+    expect(repeatsSentence(REPEATED)).toBe(true);
     expect(hasGarbledSource(GARBLED)).toBe(true);
-    expect(parseLunaTips("- The pool is shut on Sunday, per Circle lines all face disruption this week.")).toEqual(["The pool is shut on Sunday."]);
+    expect(hasSourceTag("Rain on Saturday (BBC).")).toBe(true);
+    expect(hasSourceTag("Rain on Saturday. Per the BBC.")).toBe(true);
   });
 
-  it("keeps one source tag when the tip names it twice", () => {
-    const clean = "Paris this weekend: Saturday brings rain, with 6 to 15 mm forecast, and highs near 15 to 16°C (Météo-France).";
-    expect(parseLunaTips(`- ${DOUBLED}`)).toEqual([clean]);
-    expect(streamingTips(`- ${DOUBLED}\n`)).toEqual([clean]);
-    expect(hasDoubleSource(DOUBLED)).toBe(true);
-    expect(parseLunaTips("- Saturday brings rain (Météo-France) per Météo-France.")).toEqual(["Saturday brings rain (Météo-France)."]);
-    expect(parseLunaTips("- Saturday brings rain (Météo-France), per Météo-France.")).toEqual(["Saturday brings rain (Météo-France)."]);
-    expect(parseLunaTips("- Rents rose 9 per cent (ONS) (ONS)")).toEqual(["Rents rose 9 per cent (ONS)"]);
-    expect(parseLunaTips("- Rents rose 9 per cent (ONS). (ONS).")).toEqual(["Rents rose 9 per cent (ONS)."]);
-    expect(parseLunaTips("- Rain on Saturday, per the BBC, per BBC.")).toEqual(["Rain on Saturday (BBC)."]);
-    expect(parseLunaTips("- Rain on Saturday (BBC). Per the BBC.")).toEqual(["Rain on Saturday (BBC)."]);
-  });
-
-  it("drops a dated source mid-sentence when the tip ends with its source", () => {
-    const clean =
-      "Latest London round-ups lead with about 211 households evacuated from two Canning Town tower blocks over structural issues (Newham Council).";
-    expect(parseLunaTips(`- ${TWO_SOURCES}`)).toEqual([clean]);
-    expect(streamingTips(`- ${TWO_SOURCES}\n`)).toEqual([clean]);
-    expect(hasDoubleSource(TWO_SOURCES)).toBe(true);
-    // Without a tag at the end, the dated source is the tip's only source and stays.
-    const only = "Latest round-ups (ianVisits, 23 Oct) lead with the Canning Town evacuations.";
-    expect(parseLunaTips(`- ${only}`)).toEqual([only]);
-  });
-
-  it("puts a per tag or a source sentence in brackets at the end of the sentence", () => {
-    for (const [line, clean] of PER_TAGS) {
-      expect(parseLunaTips(`- ${line}`), line).toEqual([clean]);
-      expect(parseLunaTips(`- ${clean}`), clean).toEqual([clean]);
-    }
-    const met = "Met Police latest: a tunnel-digging gang was jailed after a jewellery heist (Met Police).";
-    expect(parseLunaTips(`- ${MET_POLICE}`)).toEqual([met]);
-    expect(streamingTips(`- ${MET_POLICE}\n`)).toEqual([met]);
-    expect(parseLunaTips(`- ${TFL_PLANNED} `)).toEqual(["The Circle, Elizabeth and Mildmay lines all face disruption (TfL). Check before travelling."]);
-    expect(parseLunaTips("- Rain on Saturday. Per Météo-France via Sortiraparis.")).toEqual(["Rain on Saturday (Météo-France via Sortiraparis)."]);
-    expect(hasSourceSentence(MET_POLICE)).toBe(true);
-    expect(hasSourceSentence(TFL_PLANNED)).toBe(true);
-    expect(hasSourceSentence("Per the BBC.")).toBe(true);
-    // Not a publisher, or a source that leads its sentence: left as written.
-    expect(parseLunaTips("- Rain on Saturday. Per Circle lines all face disruption.")).toEqual(["Rain on Saturday. Per Circle lines all face disruption."]);
-    for (const line of ["Per TfL, the Circle and District lines both have weekend closures.", "Rents rose 9 per cent.", "Rain on Saturday (BBC)."]) {
-      expect(hasSourceSentence(line), line).toBe(false);
-      expect(parseLunaTips(`- ${line}`), line).toEqual([line]);
-    }
-  });
-
-  it("leaves normal tips byte for byte", () => {
-    expect(parseLunaTips(CLEAN_TIPS.map((tip) => `- ${tip}`).join("\n"), CLEAN_TIPS.length)).toEqual(CLEAN_TIPS);
-    expect(streamingTips(CLEAN_TIPS.map((tip) => `- ${tip}`).join("\n") + "\n", CLEAN_TIPS.length)).toEqual(CLEAN_TIPS);
+  it("leaves normal tips byte for byte, with no source", () => {
+    const text = CLEAN_TIPS.map((tip) => `- ${tip}`).join("\n");
+    const plain = CLEAN_TIPS.map((tip) => ({ text: tip, source: null }));
+    expect(parsed(text)).toEqual(plain);
+    expect(streamingTips(`${text}\n`, 10)).toEqual(plain);
     for (const tip of CLEAN_TIPS) {
       expect(repeatsSentence(tip), tip).toBe(false);
       expect(hasGarbledSource(tip), tip).toBe(false);
-      expect(hasDoubleSource(tip), tip).toBe(false);
-      expect(hasSourceSentence(tip), tip).toBe(false);
+      expect(hasSourceTag(tip), tip).toBe(false);
     }
   });
 
-  it("cuts a repeat from the line in progress but leaves its source until the line ends", () => {
+  it("cuts a repeat from the line in progress but leaves its tags until the line ends", () => {
     const words = REPEATED.split(" ");
-    const shown = words.map((_, index) => streamingTips(`- ${words.slice(0, index + 1).join(" ")} `)[0] ?? "");
+    const shown = words.map((_, index) => streamingTips(`- ${words.slice(0, index + 1).join(" ")} `)[0]?.text ?? "");
     // Once the repeat is long enough to spot (seven words in), it stays cut while the rest streams in.
     const cut = shown.findIndex((tip) => tip.includes("Around")) + 7;
     expect(shown.slice(cut).every((tip) => /23 October\.?$/.test(tip))).toBe(true);
     expect(shown.at(-1)).toBe(REPEATED.slice(0, REPEATED.indexOf(" Around")) + ".");
     expect(streamingTips("- The Circle and District lines shut this weekend, per the Circle, Elizabeth and ")).toEqual([
-      "The Circle and District lines shut this weekend, per the Circle, Elizabeth and",
+      { text: "The Circle and District lines shut this weekend, per the Circle, Elizabeth and", source: null },
     ]);
+  });
+});
+
+describe("meta text from live runs", () => {
+  it("drops or strips the model's notes on its tips and process", () => {
+    const cases: [string, string | null][] = [
+      [
+        "The newest line asks about Paris this weekend, so the first tip answers it. The earlier London tips stand, so I copy them word for word, then add the Paris tip. The limit is 3 tips.",
+        null,
+      ],
+      ["The tube closure question: the latest source for this weekend lists planned works. Writing tips now.", "The latest source for this weekend lists planned works."],
+      [
+        "The London tips no longer apply, so I'm dropping them. Sortiraparis, which cites Météo-France and Météo Paris, forecasts Paris rain on Saturday and a sunnier Sunday with strong westerly winds.",
+        "Sortiraparis, which cites Météo-France and Météo Paris, forecasts Paris rain on Saturday and a sunnier Sunday with strong westerly winds.",
+      ],
+      ["The Paris weekend tips below replace the London ones. The Paris sources are Sortiraparis and Météo-France, so I'll name them.", null],
+      ["The Paris tips replace the London ones. Paris: rain on Saturday.", "Paris: rain on Saturday."],
+    ];
+    for (const [line, kept] of cases) {
+      expect(isMetaTip(line), line).toBe(true);
+      expect(parsed(`- ${line}`), line).toEqual(kept === null ? [] : [{ text: kept, source: null }]);
+      expect(streamingTips(`- ${line}\n`), line).toEqual(parsed(`- ${line}`));
+    }
+    for (const line of ["Tips below 10% are rare in London restaurants.", "Name them in the follow-up email [n1].", "New rules replace the old ones on Monday."]) {
+      expect(isMetaTip(line), line).toBe(false);
+    }
   });
 });
 
@@ -561,25 +605,25 @@ describe("buildLunaPrompt meeting context", () => {
 
 describe("streamingTips", () => {
   it("returns finished lines, with markdown stripped", () => {
-    expect(streamingTips("- **Offer** 10% [n1]\n- Ask about timing\n")).toEqual(["Offer 10% [n1]", "Ask about timing"]);
+    expect(streamTexts("- **Offer** 10% [n1]\n- Ask about timing\n")).toEqual(["Offer 10% [n1]", "Ask about timing"]);
   });
 
   it("holds back a line in progress until it has a few whole words", () => {
-    expect(streamingTips("- Of")).toEqual([]);
-    expect(streamingTips("- Offer 10%")).toEqual([]);
-    expect(streamingTips("- Offer 10% off if they sign ")).toEqual(["Offer 10% off if they sign"]);
+    expect(streamTexts("- Of")).toEqual([]);
+    expect(streamTexts("- Offer 10%")).toEqual([]);
+    expect(streamTexts("- Offer 10% off if they sign ")).toEqual(["Offer 10% off if they sign"]);
     // The last word may be cut off, so it waits for the space after it.
-    expect(streamingTips("- Offer 10% off if they si")).toEqual(["Offer 10% off if they"]);
+    expect(streamTexts("- Offer 10% off if they si")).toEqual(["Offer 10% off if they"]);
   });
 
   it("never shows NONE", () => {
-    expect(streamingTips("NONE")).toEqual([]);
-    expect(streamingTips("NONE\n")).toEqual([]);
+    expect(streamTexts("NONE")).toEqual([]);
+    expect(streamTexts("NONE\n")).toEqual([]);
   });
 
   it("caps at two tips", () => {
-    expect(streamingTips("- a b c d\n- e f g h\n- i j k l\n")).toHaveLength(2);
-    expect(streamingTips("- a b c d\n- e f g h\n- i j k l\n", 3)).toHaveLength(3);
+    expect(streamTexts("- a b c d\n- e f g h\n- i j k l\n")).toHaveLength(2);
+    expect(streamTexts("- a b c d\n- e f g h\n- i j k l\n", 3)).toHaveLength(3);
   });
 });
 
@@ -657,7 +701,7 @@ describe("guideWithLuna streaming", () => {
   it("emits tips as lines finish, then returns the parsed tips and timings", async () => {
     const model = streamModel(() => textChunks("- Offer 10% ", "off if they sign this week [n1]\n", "- Ask about the ", "rollout timing next\n"));
     const partials: string[][] = [];
-    const result = await guideWithLuna({ model, transcript: ["Discount?"], notes: [], onPartial: (tips) => partials.push(tips) });
+    const result = await guideWithLuna({ model, transcript: ["Discount?"], notes: [], onPartial: ({ tips }) => partials.push(tips) });
     expect(result.error).toBeNull();
     expect(result.tips).toEqual(["Offer 10% off if they sign this week [n1]", "Ask about the rollout timing next"]);
     expect(partials.length).toBeGreaterThanOrEqual(2);
@@ -671,7 +715,7 @@ describe("guideWithLuna streaming", () => {
     const text = () => textChunks("- 15% of 18,000 is 2,700.\n", "- Paris: sunny Saturday, showers Sunday.\n");
     const partials: string[][] = [];
     const earlier = ["15% of 18,000 is 2,700. [n1]"];
-    const fresh = await guideWithLuna({ model: streamModel(text), transcript: ["weather in Paris"], notes: [], earlier, onPartial: (tips) => partials.push(tips) });
+    const fresh = await guideWithLuna({ model: streamModel(text), transcript: ["weather in Paris"], notes: [], earlier, onPartial: ({ tips }) => partials.push(tips) });
     expect(fresh.tips).toEqual(["Paris: sunny Saturday, showers Sunday."]);
     expect(partials.flat()).not.toContain("15% of 18,000 is 2,700.");
     const steering = await guideWithLuna({ model: streamModel(text), transcript: ["weather in Paris"], notes: [], shown: ["15% of 18,000 is 2,700."], earlier });
@@ -680,9 +724,9 @@ describe("guideWithLuna streaming", () => {
 
   it("holds back a short first line and never emits NONE", async () => {
     const partials: string[][] = [];
-    const none = await guideWithLuna({ model: streamModel(() => textChunks("NO", "NE")), transcript: ["Hi"], notes: [], onPartial: (tips) => partials.push(tips) });
+    const none = await guideWithLuna({ model: streamModel(() => textChunks("NO", "NE")), transcript: ["Hi"], notes: [], onPartial: ({ tips }) => partials.push(tips) });
     expect(none.tips).toEqual([]);
-    const short = await guideWithLuna({ model: streamModel(() => textChunks("- Say", " yes")), transcript: ["Hi"], notes: [], onPartial: (tips) => partials.push(tips) });
+    const short = await guideWithLuna({ model: streamModel(() => textChunks("- Say", " yes")), transcript: ["Hi"], notes: [], onPartial: ({ tips }) => partials.push(tips) });
     // Too short to show while streaming, but the final parse still returns it.
     expect(partials).toEqual([]);
     expect(short.tips).toEqual(["Say yes"]);
@@ -721,7 +765,7 @@ describe("guideWithLuna streaming", () => {
       { type: "text-end", id: "t4" },
       finish("stop"),
     ]);
-    const result = await guideWithLuna({ model, transcript: ["Score?"], notes: [], onPartial: (tips) => partials.push(tips) });
+    const result = await guideWithLuna({ model, transcript: ["Score?"], notes: [], onPartial: ({ tips }) => partials.push(tips) });
     expect(result.tips).toEqual(["The match ended 2-1 today"]);
     // The narration streams before Bee can know a tool follows; the tool call takes it back.
     expect(partials[0]).toEqual(["Looking up the latest score"]);

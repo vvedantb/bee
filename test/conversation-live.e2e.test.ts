@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, expect, it, onTestFinished } from "vitest";
 import { z } from "zod";
-import { hasDoubleSource, hasGarbledSource, hasSourceSentence, isMetaTip, repeatsSentence } from "../src/core/luna";
+import { hasGarbledSource, hasSourceTag, isMetaTip, repeatsSentence } from "../src/core/luna";
 import { retrieve } from "../src/core/retrieve";
 import { loadSnippets } from "../src/main/notes";
 import { NO_FIXTURES, completeRecording, e2eModeSchema, fixtureFiles } from "./e2e/replay";
@@ -39,6 +39,10 @@ const STATE_SHOT = "conversation-searching";
 // The model talking about its rules instead of answering ("The newest line asks…", "copy them word for word", "The limit is 3 tips").
 const META_WORDS = /\b(?:tips?|newest line|word for word|limit is)\b/i;
 const looksMeta = (tip: string) => isMetaTip(tip) || META_WORDS.test(tip);
+// Source wording left in a tip's text: an index marker ("[2-2]"), a "(Publisher)" or dated tag, or "per <Publisher>". The source
+// belongs in its own field (core/luna.ts parseLunaTips).
+const SOURCE_WORDING = /\[\d+\s*[-–]\s*\d+\]|\b[Pp]er\s+(?:the\s+)?\p{Lu}/u;
+const hasSourceWording = (tip: string) => SOURCE_WORDING.test(tip) || hasSourceTag(tip) || repeatsSentence(tip) || hasGarbledSource(tip);
 const mode = e2eModeSchema.optional().parse(process.env.BEE_E2E_MODE?.trim() || undefined);
 const FIXTURES_DIR = join(root, "test/fixtures/replay/conversation");
 // Shares no word with the lines said, so retrieval finds nothing.
@@ -59,6 +63,7 @@ const turnSchema = z.object({
   label: z.string(),
   injected: z.array(z.string()),
   tips: z.array(z.string()),
+  tipSources: z.array(z.string().nullable()).default([]),
   sources: z.number(),
   latencyMs: z.number().nullable(),
   workingMs: z.number().nullable(),
@@ -87,18 +92,20 @@ const prefixed = <T extends z.ZodType>(lines: string[], prefix: string, schema: 
   lines.filter((line) => line.startsWith(prefix)).map((line) => schema.parse(JSON.parse(line.slice(prefix.length))));
 
 /**
- * The page's checks plus the test's own: no tip in the turn reads as reasoning about the rules, and none repeats a sentence or
- * follows "per" with content instead of a publisher, names its source twice or names it in a sentence of its own ("Per TfL.").
+ * The page's checks plus the test's own: no tip in the turn reads as reasoning about the rules, and no tip's text repeats a
+ * sentence, garbles a "per", or still names its source ("(TfL)", "per TfL", "[2-2]"): that goes in the tip's source field.
  */
 function withTipChecks(turn: Turn): Turn {
   const own = {
     noMetaTips: !turn.tips.some(looksMeta),
-    cleanWording: !turn.tips.some((tip) => repeatsSentence(tip) || hasGarbledSource(tip) || hasDoubleSource(tip) || hasSourceSentence(tip)),
+    cleanWording: !turn.tips.some(hasSourceWording),
   };
   return { ...turn, checks: { ...turn.checks, ...own }, pass: turn.pass && own.noMetaTips && own.cleanWording };
 }
 
 const failed = (turn: Turn) => Object.keys(turn.checks).filter((name) => !turn.checks[name]);
+/** The turn's tips with their source labels: "tip text — src: TfL". */
+const tipsWithSources = (turn: Turn) => turn.tips.map((tip, index) => (turn.tipSources[index] ? `${tip} — src: ${turn.tipSources[index]}` : tip));
 const cell = (text: string) => text.replace(/\|/g, "\\|").replace(/\s+/g, " ").trim() || "–";
 
 function reportPath(): string | null {
@@ -127,7 +134,7 @@ function writeReport(file: string, args: { ok: boolean; error?: string; runsStar
       [
         `${turn.turn} ${turn.label}`,
         cell(turn.injected.join(" → ") || "(mic off)"),
-        cell(turn.tips.join(" / ") || "(no tips)") + (turn.error ? ` (error: ${cell(turn.error)})` : ""),
+        cell(tipsWithSources(turn).join(" / ") || "(no tips)") + (turn.error ? ` (error: ${cell(turn.error)})` : ""),
         turn.latencyMs ?? "–",
         turn.workingMs ?? "–",
         turn.firstTextMs ?? "–",
@@ -176,7 +183,7 @@ function printTurns(turns: Turn[]): void {
     })),
   );
   for (const turn of turns) {
-    console.log(`Turn ${turn.turn} (${turn.label})${turn.error ? ` error: ${turn.error}` : ""}${turn.shotError ? ` full text: ${turn.shotError}` : ""}\n${turn.tips.map((tip) => `  - ${tip}`).join("\n") || "  (no tips)"}`);
+    console.log(`Turn ${turn.turn} (${turn.label})${turn.error ? ` error: ${turn.error}` : ""}${turn.shotError ? ` full text: ${turn.shotError}` : ""}\n${tipsWithSources(turn).map((tip) => `  - ${tip}`).join("\n") || "  (no tips)"}`);
   }
 }
 
@@ -208,7 +215,7 @@ describe.skipIf(mode !== "replay" && !process.env.BEE_AI_GATEWAY_API_KEY?.trim()
     expect(report.runs).toBeLessThanOrEqual(MAX_RUNS);
     for (const item of report.turns) {
       expect(item.tips.filter(looksMeta), `turn ${item.turn} shows reasoning about the rules, not a tip`).toEqual([]);
-      expect(item.checks.cleanWording, `turn ${item.turn} repeats a sentence, garbles its source, names it twice or in a sentence of its own: ${item.tips.join(" / ")}`).toBe(true);
+      expect(item.checks.cleanWording, `turn ${item.turn} repeats a sentence, garbles a "per" or names its source in a tip's text: ${item.tips.join(" / ")}`).toBe(true);
     }
     expect(runs.length, "every run started returns to main").toBe(report.runs);
 

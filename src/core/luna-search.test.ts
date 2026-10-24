@@ -92,7 +92,7 @@ describe("guideWithLuna search option errors", () => {
           return { stream: simulateReadableStream<unknown>({ chunks: [{ type: "stream-start", warnings: [] }, { type: "error", error: new Error(message) }] }) as never };
         }
         const web = (tools ?? []).some((tool) => tool.name === "web_search");
-        return { stream: simulateReadableStream({ chunks: answer(web ? "- Planned works, per TfL\n" : "- No search this time\n") }) as never };
+        return { stream: simulateReadableStream({ chunks: answer(web ? "- Planned works | src: TfL\n" : "- No search this time\n") }) as never };
       },
     });
   }
@@ -105,7 +105,8 @@ describe("guideWithLuna search option errors", () => {
       const llm = failing(DOMAINS_ERROR, 1);
       const result = await guideWithLuna({ model: llm, transcript: ["why are there tube closures"], notes: [], searchLocation: location });
       expect(result.error).toBeNull();
-      expect(result.tips).toEqual(["Planned works (TfL)"]);
+      expect(result.tips).toEqual(["Planned works"]);
+      expect(result.tipSources).toEqual(["TfL"]);
       const [first, retry] = webTools(llm);
       expect(llm.doStreamCalls).toHaveLength(2);
       expect(first).toHaveProperty("args.userLocation");

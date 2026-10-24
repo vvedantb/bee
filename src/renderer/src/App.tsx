@@ -78,6 +78,7 @@ function IslandBody({
   follow: boolean;
 }) {
   const tips = result?.tips ?? [];
+  const tipSources = result?.tipSources ?? [];
   const kept = new Set(keptTips.map(tipKey));
   const sources = result?.sources ?? [];
   return (
@@ -103,6 +104,7 @@ function IslandBody({
                 {tips.map((tip, index) => (
                   <li key={index} className={kept.has(tipKey(tip)) ? "kept" : undefined}>
                     {tip}
+                    {tipSources[index] ? <span className="tip-source">{tipSources[index]}</span> : null}
                   </li>
                 ))}
               </ul>

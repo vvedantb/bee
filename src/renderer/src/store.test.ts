@@ -220,3 +220,35 @@ describe("store: a follow-up question while the mic stays on", () => {
     expect(store.getBeeState().result?.guideError ?? null).toBeNull();
   });
 });
+
+describe("store: tip sources", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.resetModules();
+    micSessions.length = 0;
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it("labels each tip with its source by tip text, and a new turn clears them", async () => {
+    const runMs = 1000;
+    const { store, say, bee } = await loadStore(runMs);
+    const run = bee.runPipeline;
+    bee.runPipeline = async (request) => ({ ...(await run(request)), tipSources: ["TfL", null] });
+    await say("what's in the news in London");
+    await vi.advanceTimersByTimeAsync(runMs);
+    expect(store.displayResult(store.getBeeState())?.tipSources).toEqual(["TfL", null]);
+    expect(store.getBeeState().result?.tipSources).toEqual(["TfL", null]);
+
+    // Streamed and kept tips find theirs by text, whatever their position.
+    const shown = store.displayResult({ result: result(CLOSURES), partialTips: [WHY, `  ${CLOSURES[0]} `], busy: true, tipSources: store.getBeeState().tipSources });
+    expect(shown?.tipSources).toEqual([null, "TfL"]);
+
+    bee.runPipeline = run;
+    await say("a new subject entirely");
+    expect(store.getBeeState().tipSources).toEqual({});
+  });
+});
