@@ -17,6 +17,9 @@ jobs:
       - run: npm test
       # Typecheck runs inside build.
       - run: npm run build
+      # The live conversation E2E on its recorded model calls (test/fixtures/replay): no key, no network.
+      - name: Conversation E2E (replay)
+        run: npm run test:replay
       - name: Package macOS dmg + zip (unsigned)
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"

@@ -15,7 +15,7 @@ const guide = vi.mocked(guideWithLuna);
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const snippets = chunkNotes(SEED_NOTES);
 const transcript = ["When does SSO ship for enterprise customers?"];
-const gateway = Object.assign(() => ({}), { evaluationModel: () => ({}) }) as unknown as BeeGateway;
+const gateway = { languageModel: () => ({}), evaluationModel: () => ({}) } as unknown as BeeGateway;
 
 const lunaOk = (extra: Partial<LunaResult> = {}): LunaResult => ({ tips: ["SSO ships in Q4 [n1]"], sources: [], error: null, skipped: null, firstTokenMs: 12, totalMs: 30, ...extra });
 

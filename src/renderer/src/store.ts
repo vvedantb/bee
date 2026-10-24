@@ -745,6 +745,54 @@ export function startTestMic(): { phrase: (text: string) => void } {
   };
 }
 
+type MicOptions = {
+  transcribe: (audio: Uint8Array<ArrayBuffer>) => Promise<TranscribeResult>;
+  systemAudio: boolean;
+  onFrame?: (frame: Float32Array, sampleRate: number) => void;
+};
+
+/** toggleMic's mic on. onFrame sees each frame just before the segmenter does. */
+async function startMic({ transcribe, systemAudio, onFrame }: MicOptions): Promise<void> {
+  try {
+    const capture = await openMic();
+    const mic = startMicSession({
+      sampleRate: capture.sampleRate,
+      transcribe,
+      ...phraseCallbacks,
+      onError: (error) => setMic({ error }),
+    });
+    capture.start((frame) => {
+      onFrame?.(frame, capture.sampleRate);
+      setMic({ level: Math.min(1, mic.push(frame) * 4) });
+    });
+    let micOn = true;
+    stopMic = () => {
+      micOn = false;
+      capture.stop();
+      // The phrase in progress is still transcribed.
+      void mic.stop();
+    };
+    set({ mic: { on: true, level: 0, error: null } });
+    if (!systemAudio) return;
+    // Best effort and off the critical path: the Screen Recording prompt never blocks the mic.
+    void openSystemAudio().then((extra) => {
+      if (!extra) return;
+      if (micOn) capture.attachExtra(extra);
+      else for (const track of extra.getTracks()) track.stop();
+    });
+  } catch (error) {
+    setMic({ ...MIC_OFF, error: `Microphone unavailable: ${error instanceof Error ? error.message : String(error)}` });
+  }
+}
+
+/**
+ * E2E only (test/e2e/mic-latency-page.ts): the real mic, segmenter and phrase callbacks, with no system audio. The page wraps
+ * transcribe and sees each frame, so it can time every STT call against the audio clock. actions.stopMic turns it off.
+ */
+export function startTestMicCapture(args: { transcribe: MicOptions["transcribe"]; onFrame: NonNullable<MicOptions["onFrame"]> }): Promise<void> {
+  return startMic({ ...args, systemAudio: false });
+}
+
 /** E2E only: pipeline runs started since load, superseded ones included. */
 export function runsStarted(): number {
   return latestRun;
@@ -977,32 +1025,7 @@ export const actions = {
       actions.stopMic(null);
       return;
     }
-    try {
-      const capture = await openMic();
-      const mic = startMicSession({
-        sampleRate: capture.sampleRate,
-        transcribe: transcribePhrase,
-        ...phraseCallbacks,
-        onError: (error) => setMic({ error }),
-      });
-      capture.start((frame) => setMic({ level: Math.min(1, mic.push(frame) * 4) }));
-      let micOn = true;
-      stopMic = () => {
-        micOn = false;
-        capture.stop();
-        // The phrase in progress is still transcribed.
-        void mic.stop();
-      };
-      set({ mic: { on: true, level: 0, error: null } });
-      // Best effort and off the critical path: the Screen Recording prompt never blocks the mic.
-      void openSystemAudio().then((extra) => {
-        if (!extra) return;
-        if (micOn) capture.attachExtra(extra);
-        else for (const track of extra.getTracks()) track.stop();
-      });
-    } catch (error) {
-      setMic({ ...MIC_OFF, error: `Microphone unavailable: ${error instanceof Error ? error.message : String(error)}` });
-    }
+    await startMic({ transcribe: transcribePhrase, systemAudio: true });
   },
 
   stopMic(error: string | null): void {

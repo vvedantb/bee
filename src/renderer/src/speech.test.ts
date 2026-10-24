@@ -1,4 +1,6 @@
+import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
+import { readWav, speechSpans } from "../../../test/helpers/wav";
 import { transcribeRequestSchema, type TranscribeResult } from "../../shared/ipc";
 import { END_SILENCE_MS, MAX_PHRASE_MS, MIN_SPEECH_MS, WAV_SAMPLE_RATE, createSegmenter, encodeWav, frameLevel, startMicSession } from "./speech";
 
@@ -67,6 +69,64 @@ describe("createSegmenter", () => {
     feed(segmenter.push, frames(600, tone));
     segmenter.flush();
     expect(onPhrase).toHaveBeenCalledTimes(1);
+  });
+});
+
+// The live mic E2E fixture (espeak-ng): "what's in the news in London today", 2.5 s of silence, "why are there tube closures".
+// Its samples go through the segmenter frame by frame, as the store's mic does, at the file's rate and resampled to 48 kHz.
+const FIXTURE = fileURLToPath(new URL("../../../test/fixtures/london-tube-question.wav", import.meta.url));
+// A sample at or above this is speech; a quieter gap this long separates phrases.
+const SAMPLE_LEVEL = 0.001;
+const GAP_S = 0.5;
+
+/** Linear interpolation to another rate. */
+function resample(samples: Float32Array, from: number, to: number): Float32Array {
+  return Float32Array.from({ length: Math.floor((samples.length * to) / from) }, (_, index) => {
+    const at = (index * from) / to;
+    const low = Math.floor(at);
+    return (samples[low] ?? 0) + ((samples[low + 1] ?? 0) - (samples[low] ?? 0)) * (at - low);
+  });
+}
+
+describe("createSegmenter on the live mic fixture", () => {
+  const wav = readWav(FIXTURE);
+  const spans = speechSpans(wav, SAMPLE_LEVEL, GAP_S);
+
+  // espeak-ng's audio ends before the times in the fixture's script (2.85 s and 7.12 s).
+  it("has two phrases, measured from its samples", () => {
+    expect(spans.map(({ start, end }) => [Number(start.toFixed(2)), Number(end.toFixed(2))])).toEqual([
+      [0.6, 2.5],
+      [5.35, 6.77],
+    ]);
+  });
+
+  it.each([wav.rate, RATE])("cuts one whole phrase per line, with pre-roll before the onset, at %i Hz", (rate) => {
+    const samples = rate === wav.rate ? wav.samples : resample(wav.samples, wav.rate, rate);
+    const phrases: Array<{ start: number; end: number; samples: Float32Array }> = [];
+    let pushed = 0;
+    const segmenter = createSegmenter({
+      sampleRate: rate,
+      // Fires inside push(), after the frame that ended the phrase was counted.
+      onPhrase: (phrase) => phrases.push({ start: (pushed - phrase.length) / rate, end: pushed / rate, samples: phrase }),
+    });
+    for (let at = 0; at < samples.length; at += FRAME) {
+      const frame = samples.slice(at, at + FRAME);
+      pushed += frame.length;
+      segmenter.push(frame);
+    }
+    segmenter.flush();
+
+    expect(phrases.length).toBe(spans.length);
+    for (const [index, phrase] of phrases.entries()) {
+      const span = spans[index] ?? { start: 0, end: 0 };
+      expect(phrase.start, `phrase ${index + 1} starts ≥ 150 ms before the onset`).toBeLessThanOrEqual(span.start - 0.15);
+      expect(phrase.end, `phrase ${index + 1} runs past the end of speech`).toBeGreaterThanOrEqual(span.end + END_SILENCE_MS / 1000);
+      // The phrase is the file's audio over that span with no frame dropped.
+      const from = Math.round(phrase.start * rate);
+      expect(phrase.samples).toEqual(samples.slice(from, from + phrase.samples.length));
+    }
+    // Neither phrase reaches into the other's speech.
+    expect(phrases[0]?.end ?? Infinity).toBeLessThan(spans[1]?.start ?? 0);
   });
 });
 

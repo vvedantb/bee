@@ -2,7 +2,7 @@ import { app, ipcMain, shell } from "electron";
 import { z } from "zod";
 import { loadMcpTools, type McpPool, type McpServerConfig } from "../core/mcp";
 import type { MeetingContext } from "../core/meeting-context";
-import { GUIDE_MODEL, NO_GATEWAY_KEY, STT_MODEL, createBeeGateway } from "../core/gateway";
+import { GUIDE_MODEL, NO_GATEWAY_KEY, STT_MODEL, createBeeGateway, type BeeGateway } from "../core/gateway";
 import { runPipeline } from "../core/pipeline";
 import { searchLocation } from "../core/web-search";
 import { buildLocalSummary, generateMeetingSummary } from "../core/summary";
@@ -32,7 +32,10 @@ export function registerMeetingIpc(args: { notesDir: string; fsRoots: () => stri
   mcpPool: McpPool;
   /** Which meeting the user is in, its brief for Luna, and the saved meetings. */
   meeting: MeetingContext;
-  gatewayApiKey: () => string | undefined }): void {
+  gatewayApiKey: () => string | undefined;
+  /** Builds the Gateway models from the key. Defaults to the real Gateway; the E2E harness records or replays them. */
+  gateway?: (apiKey: string) => BeeGateway }): void {
+  const createGateway = args.gateway ?? createBeeGateway;
   // One controller per run in flight. The renderer cancels a run when a newer line supersedes it.
   const runs = new Map<string, AbortController>();
 
@@ -41,7 +44,7 @@ export function registerMeetingIpc(args: { notesDir: string; fsRoots: () => stri
     assertSignedIn(request.sessionToken);
     const apiKey = args.gatewayApiKey();
     if (!apiKey) return { text: null, error: NO_GATEWAY_KEY };
-    return transcribeSpeech({ model: createBeeGateway(apiKey).transcription(STT_MODEL), audio: request.audio });
+    return transcribeSpeech({ model: createGateway(apiKey).transcription(STT_MODEL), audio: request.audio });
   });
 
   // The renderer polls this every few seconds. Main steps detection (title and calendar reads are throttled inside).
@@ -82,7 +85,7 @@ export function registerMeetingIpc(args: { notesDir: string; fsRoots: () => stri
         searchLocation: searchLocation({ timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone, locale: app.getSystemLocale() }),
         meetingBrief: args.meeting.brief(),
         snippets,
-        gateway: apiKey ? createBeeGateway(apiKey) : null,
+        gateway: apiKey ? createGateway(apiKey) : null,
         notesDir: args.notesDir,
         extraRoots: args.fsRoots(),
         // Settings are read now, so changes apply without a restart. Tool lists come from the pool's cache; servers connect on first call.
@@ -118,7 +121,7 @@ export function registerMeetingIpc(args: { notesDir: string; fsRoots: () => stri
     const when = new Date();
     const apiKey = args.gatewayApiKey();
     const summary = apiKey
-      ? await generateMeetingSummary({ ...input, model: createBeeGateway(apiKey)(GUIDE_MODEL), when })
+      ? await generateMeetingSummary({ ...input, model: createGateway(apiKey).languageModel(GUIDE_MODEL), when })
       : { markdown: buildLocalSummary({ ...input, when }), usedLlm: false, error: NO_GATEWAY_KEY };
     const path = writeMeetingSummaryFile(args.notesDir, summary.markdown, when);
     // Structured fields go to meeting memory too (when it is on and the meeting has a name). Failing to save never loses the note.

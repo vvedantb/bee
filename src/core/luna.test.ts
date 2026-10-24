@@ -274,6 +274,9 @@ describe("parseLunaTips", () => {
       "Per the steering rules, the new line corrects the city.",
       "I will copy them as they stand.",
       "At most 3 short tips allowed.",
+      "The old London tips are dropped since Paris replaces them, and the Paris forecast is the new answer.",
+      "The London answers were replaced by the Paris forecast.",
+      "Paris replaces London, so the Paris forecast is the new answer.",
     ]) expect(isMetaTip(line), line).toBe(true);
     for (const line of [
       "Paris this weekend: sunny Saturday, showers Sunday.",
@@ -284,6 +287,10 @@ describe("parseLunaTips", () => {
       "Raise it at Thursday's steering committee [n1].",
       "Copy Priya on the renewal email.",
       "Offer the first year at 10% off [n2].",
+      "Tips for the weekend: book the Louvre early and carry an umbrella.",
+      "Rail replacement buses replace trains between Stratford and Shenfield on Sunday.",
+      "The old town in Nice is easiest on foot.",
+      "The answer is yes: the rate includes FNC [n1].",
     ]) expect(isMetaTip(line), line).toBe(false);
   });
 

@@ -1,6 +1,7 @@
 // The pill's status text and logo state. No React or window here, so tests can call them.
 import { activityLabel } from "./island";
 import type { LogoState } from "./logo";
+import type { SettingsView } from "../../shared/ipc";
 import type { BeeState } from "./store";
 
 /** The notch's round, raised size="sm" buttons (mic off, collapse). The logo is as tall as they are (logo.ts NOTCH_LOGO_PX). */
@@ -41,17 +42,36 @@ export function workingLabel(state: Pick<BeeState, "tools" | "revising" | "quest
   return state.question ? ANSWERING_LABEL : activityLabel(null);
 }
 
-export function notchStatus(state: BeeState, signedIn: boolean | undefined): string {
-  if (signedIn === undefined) return "Loading…";
-  if (!signedIn) return "Sign in to use Bee";
+/**
+ * What the pill's status text is about, so a click on it can open the right place (island-click.ts statusClick). answer: the
+ * first tip; working: a run (thinking, answering, searching, reading notes, updating) or speech-to-text in flight; idle:
+ * listening, meeting mode or ready.
+ */
+export type NotchStatusKind = "loading" | "sign-in" | "working" | "mic-error" | "answer" | "gateway-key" | "idle";
+
+export type NotchLine = { kind: NotchStatusKind; text: string };
+
+type LineInputs = Pick<BeeState, "busy" | "revising" | "tools" | "question" | "heard" | "mic" | "result"> & {
+  settings: Pick<SettingsView, "gatewayKeySource" | "meetingMode"> | null;
+  session: Pick<BeeState["session"], "lines">;
+};
+
+/** The pill's status text and what it is about. */
+export function notchLine(state: LineInputs, signedIn: boolean | undefined): NotchLine {
+  if (signedIn === undefined) return { kind: "loading", text: "Loading…" };
+  if (!signedIn) return { kind: "sign-in", text: "Sign in to use Bee" };
   // Tips stay on screen while a newer line updates them.
-  if (state.busy) return workingLabel(state);
+  if (state.busy) return { kind: "working", text: workingLabel(state) };
   // The phrase ended and speech-to-text is running. No words are shown.
-  if (state.heard) return "Got it…";
-  if (state.mic.error) return state.mic.error;
+  if (state.heard) return { kind: "working", text: "Got it…" };
+  if (state.mic.error) return { kind: "mic-error", text: state.mic.error };
   const tip = state.result?.tips[0];
-  if (tip) return tip;
-  if (state.settings?.gatewayKeySource === "none") return "Add your AI Gateway key in Settings";
-  if (state.mic.on || state.session.lines.length > 0) return "Listening for something useful…";
-  return state.settings?.meetingMode ? "Meeting mode on" : "Bee is ready";
+  if (tip) return { kind: "answer", text: tip };
+  if (state.settings?.gatewayKeySource === "none") return { kind: "gateway-key", text: "Add your AI Gateway key in Settings" };
+  if (state.mic.on || state.session.lines.length > 0) return { kind: "idle", text: "Listening for something useful…" };
+  return { kind: "idle", text: state.settings?.meetingMode ? "Meeting mode on" : "Bee is ready" };
+}
+
+export function notchStatus(state: BeeState, signedIn: boolean | undefined): string {
+  return notchLine(state, signedIn).text;
 }

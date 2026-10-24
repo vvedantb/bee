@@ -283,7 +283,10 @@ function stripMarkdown(line: string): string {
 const META_TIP = [
   /\bthe (?:newest|latest|new|earlier|previous) (?:transcript )?lines? (?:asks?|says?|wants?|corrects?|changes?|needs?|is)\b/i,
   /\b(?:newest|latest) (?:transcript )?line\b/i,
-  /\b(?:first|second|third|new|earlier|previous|shown|existing|kept|other|above) (?:\w+ )?tips?\b/i,
+  /\b(?:first|second|third|new|old|earlier|previous|shown|existing|kept|other|above) (?:\w+ )?tips?\b/i,
+  // Narrating its own edits: "The old London tips are dropped since Paris replaces them, and the Paris forecast is the new answer."
+  /\b(?:tips?|answers?) (?:are|is|get|gets|were|was|have been|has been) (?:now )?(?:dropped|replaced|removed|superseded|discarded|kept|updated)\b/i,
+  /\b(?:is|as|becomes) the (?:new|updated|replacement) answer\b/i,
   /\bword for word\b/i,
   /\b(?:limit|cap) is (?:\d+|one|two|three) (?:short )?tips?\b/i,
   /\b(?:at most|no more than|up to) (?:\d+|one|two|three) (?:short )?tips\b/i,

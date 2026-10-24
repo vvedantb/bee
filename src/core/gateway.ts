@@ -57,9 +57,10 @@ export const ANTHROPIC_CACHE = { anthropic: { cacheControl: { type: "ephemeral" 
 
 export const NO_GATEWAY_KEY = "No AI Gateway key. Add one in Settings.";
 
-export type BeeGateway = GatewayProvider;
+/** The models Bee takes from the Gateway. The E2E harness swaps in recording or replaying models (test/e2e/replay.ts). */
+export type BeeGateway = Pick<GatewayProvider, "languageModel" | "evaluationModel" | "transcription">;
 
-export function createBeeGateway(apiKey: string): BeeGateway {
+export function createBeeGateway(apiKey: string): GatewayProvider {
   return createGateway({ apiKey });
 }
 

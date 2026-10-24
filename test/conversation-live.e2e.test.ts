@@ -1,23 +1,34 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, onTestFinished } from "vitest";
 import { z } from "zod";
 import { isMetaTip } from "../src/core/luna";
 import { retrieve } from "../src/core/retrieve";
 import { loadSnippets } from "../src/main/notes";
-import { runHarnessWithOutput } from "./e2e/run";
+import { NO_FIXTURES, completeRecording, e2eModeSchema, fixtureFiles } from "./e2e/replay";
+import { root, runHarnessWithOutput } from "./e2e/run";
 
 // Live multi-turn Electron E2E (test/e2e/conversation-page.ts): the real store and island App, lines injected where speech-to-text
 // hands them over with the mic on, then preload → main (meeting-ipc.ts) → live Gateway (Jev, and Luna on GUIDE_MODEL). No STT.
-// One Electron launch, about five pipeline runs. Needs BEE_AI_GATEWAY_API_KEY; skipped otherwise. With BEE_E2E_SHOTS_DIR, the full
-// text after turns 2 and 4 is written there as conversation-turn2-fulltext.png and conversation-turn4-fulltext.png, and the island
-// in its searching (or working) state in turn 1 or 2 as conversation-searching.png. Each turn reports the ms to the working state,
-// to web search and to the first tip on screen, and whether web search ran; turn 3 (a sum) must not search.
+// One Electron launch, about five pipeline runs. Live and record need BEE_AI_GATEWAY_API_KEY (skipped without it); replay does not.
+// With BEE_E2E_SHOTS_DIR, the full text after turns 2 and 4 is written there as conversation-turn2-fulltext.png and
+// conversation-turn4-fulltext.png, and the island in its searching (or working) state in turn 1 or 2 as conversation-searching.png.
+// Each turn reports the ms to the working state, to web search and to the first tip on screen, and whether web search ran; turn 3
+// (a sum) must not search.
 // Run it with BEE_E2E_NOTES_DIR set to a folder holding one note unrelated to the questions (no London, Paris, news, weather,
 // tube or percent): retrieval then finds nothing, so Jev is never called, and the test asserts that. Without it the harness
 // seeds the sample notes and Jev may run.
 // Vitest hides console output, so a markdown report is written before the assertions run (it exists on failure too): to
 // BEE_CONVERSATION_REPORT (a file path) if set, else <BEE_E2E_SHOTS_DIR>/conversation-report.md.
+//
+// Record and replay (test/e2e/replay.ts). Record runs live and writes every Gateway model call to test/fixtures/replay/conversation:
+//   BEE_E2E_MODE=record BEE_AI_GATEWAY_API_KEY=... npm run test:e2e -- test/conversation-live.e2e.test.ts
+// Replay (CI) needs no key and no network, and runs the whole scenario on those fixtures at their recorded timing:
+//   npm run test:replay        (on Linux without a display, run.ts starts Electron under xvfb-run)
+// In both modes BEE_E2E_NOTES_DIR defaults to a fresh folder holding UNRELATED_NOTE, so both runs see the same notes and Jev
+// is never called. Re-record after changing the turns or their timing; prompt edits alone only warn (calls match by order).
+// A record run that fails any check leaves the folder marked INCOMPLETE, and replay refuses it until a record run passes.
 
 // Each run is one Jev call at most and one or more Luna steps, so this keeps the scenario near 10 model calls (5 runs expected).
 const MAX_RUNS = 6;
@@ -28,6 +39,19 @@ const STATE_SHOT = "conversation-searching";
 // The model talking about its rules instead of answering ("The newest line asks…", "copy them word for word", "The limit is 3 tips").
 const META_WORDS = /\b(?:tips?|newest line|word for word|limit is)\b/i;
 const looksMeta = (tip: string) => isMetaTip(tip) || META_WORDS.test(tip);
+const mode = e2eModeSchema.optional().parse(process.env.BEE_E2E_MODE?.trim() || undefined);
+const FIXTURES_DIR = join(root, "test/fixtures/replay/conversation");
+// Shares no word with the lines said, so retrieval finds nothing.
+const UNRELATED_NOTE = "# Garden\n\nTomato seedlings, basil, chives and marigolds. Compost weekly.\n";
+
+/** BEE_E2E_NOTES_DIR, or in record and replay a new folder holding UNRELATED_NOTE. */
+function notesDir(): string | undefined {
+  const dir = process.env.BEE_E2E_NOTES_DIR?.trim();
+  if (dir || !mode) return dir || undefined;
+  const fresh = mkdtempSync(join(tmpdir(), "bee-conversation-notes-"));
+  writeFileSync(join(fresh, "garden.md"), UNRELATED_NOTE);
+  return fresh;
+}
 
 const scrollSchema = z.object({ scrollTop: z.number(), scrollTopAfter2s: z.number(), scrollHeight: z.number(), clientHeight: z.number() });
 const turnSchema = z.object({
@@ -150,9 +174,18 @@ function printTurns(turns: Turn[]): void {
   }
 }
 
-describe.skipIf(!process.env.BEE_AI_GATEWAY_API_KEY?.trim())("live multi-turn conversation (Electron E2E)", () => {
+// Replay needs no key; live and record do.
+describe.skipIf(mode !== "replay" && !process.env.BEE_AI_GATEWAY_API_KEY?.trim())(`multi-turn conversation (Electron E2E, ${mode ?? "live"})`, () => {
   it("answers a follow-up with the mic on, starts afresh on a new subject, steers, and stays quiet after mic off", { timeout: 250_000 }, async () => {
-    const { report: raw, lines } = await runHarnessWithOutput({ page: "conversation-page", env: {}, report: reportSchema, timeoutMs: 240_000 });
+    if (mode === "replay" && fixtureFiles(FIXTURES_DIR).length === 0) throw new Error(`${NO_FIXTURES} Looked in ${FIXTURES_DIR}.`);
+    // A recording counts only if this run passed every check; until then replay refuses the folder.
+    if (mode === "record") onTestFinished(({ task }) => (task.result?.state === "pass" ? completeRecording(FIXTURES_DIR) : undefined));
+    const notes = notesDir();
+    const env = {
+      ...(mode ? { BEE_E2E_MODE: mode, BEE_E2E_FIXTURES_DIR: FIXTURES_DIR } : {}),
+      ...(notes ? { BEE_E2E_NOTES_DIR: notes } : {}),
+    };
+    const { report: raw, lines } = await runHarnessWithOutput({ page: "conversation-page", env, report: reportSchema, timeoutMs: 240_000 });
     const report = { ...raw, turns: raw.turns.map(withMetaCheck) };
     const runs = prefixed(lines, "E2E_RUN ", runLineSchema);
     const file = reportPath();
@@ -161,6 +194,7 @@ describe.skipIf(!process.env.BEE_AI_GATEWAY_API_KEY?.trim())("live multi-turn co
     console.log(`Pipeline runs started: ${report.runs} (max ${MAX_RUNS}). Jev called in ${runs.filter((run) => run.jevCalled).length} of ${runs.length} runs.`);
     if (file) console.log(`Report: ${file}`);
     if (!report.ok) throw new Error(`E2E failed: ${report.error ?? "unknown"}`);
+    expect(lines.filter((line) => line.startsWith("E2E_RECORD_ERROR ")), "every model call was recorded").toEqual([]);
 
     const turn = (n: number) => turnSchema.parse(report.turns.find((item) => item.turn === n));
     expect(report.turns.map((item) => item.turn)).toEqual([1, 2, 3, 4, 5]);
@@ -171,11 +205,10 @@ describe.skipIf(!process.env.BEE_AI_GATEWAY_API_KEY?.trim())("live multi-turn co
     }
     expect(runs.length, "every run started returns to main").toBe(report.runs);
 
-    const notesDir = process.env.BEE_E2E_NOTES_DIR?.trim();
-    if (notesDir) {
+    if (notes) {
       // Every query is drawn from the lines said, so if all of them together retrieve nothing, no run can.
       const said = report.turns.flatMap((item) => item.injected).join(" ");
-      expect(retrieve(said, loadSnippets(notesDir)), "BEE_E2E_NOTES_DIR must hold only notes unrelated to the questions").toEqual([]);
+      expect(retrieve(said, loadSnippets(notes)), "BEE_E2E_NOTES_DIR must hold only notes unrelated to the questions").toEqual([]);
       expect(runs.filter((run) => run.jevCalled), "Jev was called").toEqual([]);
     }
 
