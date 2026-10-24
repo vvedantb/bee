@@ -207,12 +207,14 @@ describe("LUNA_SYSTEM", () => {
     expect(LUNA_SYSTEM).toContain("the first tip answers that question directly");
     expect(LUNA_SYSTEM).toContain("A follow-up question");
     expect(LUNA_SYSTEM).toContain("Never repeat an earlier answer in place of an answer.");
+    expect(LUNA_SYSTEM).toContain("Never say which request you are answering or what you will do");
+    expect(LUNA_SYSTEM).toContain("Start with the answer.");
   });
 
   it("asks for the publisher once, after the source delimiter, never in the tip text", () => {
     expect(LUNA_SYSTEM).toContain('end the tip line with " | src: " and one short publisher name');
     expect(LUNA_SYSTEM).toContain("Short names only: TfL, BBC, Met Police, Météo-France.");
-    expect(LUNA_SYSTEM).toContain('never in the tip text: no "(TfL)", "per TfL", "Per the BBC." or "(Time Out, 23 Oct)"');
+    expect(LUNA_SYSTEM).toContain('never in the tip text: no "(TfL)", "per TfL", "Per the BBC.", "(Time Out, 23 Oct)" or "The latest BBC piece says"');
     expect(LUNA_SYSTEM).toContain("Note cites such as [n1] stay in the tip text.");
     expect(LUNA_SYSTEM).toContain("Never repeat a sentence");
     // The example line parses to the text and the source the prompt describes.
@@ -364,6 +366,37 @@ describe("parseLunaTips", () => {
     expect(parseTexts(text)).toEqual(["The latest source for this weekend lists planned works.", "15% of 18,000 is 2,700."]);
     expect(streamTexts(`${text}\n`)).toEqual(parseTexts(text));
     expect(parseTexts("- Here are the tips:\n- Rain on Saturday in London.")).toEqual(["Rain on Saturday in London."]);
+  });
+
+  it("strips a leading note on which request it answers and a source preamble, keeping the answer", () => {
+    // Turn 4 of live run 1 on fix/source-wording, after "make that Paris instead".
+    const leaked =
+      "The latest request is Paris, so I'll answer with the Paris forecast. The newest Sortiraparis piece says Saturday is wet with highs near 15 to 16C and Sunday brighter, while the Météo-France figures differ slightly on rain totals.";
+    const answer = "Saturday is wet with highs near 15 to 16C and Sunday brighter, while the Météo-France figures differ slightly on rain totals.";
+    expect(isMetaTip(leaked)).toBe(true);
+    expect(parseLunaTips(`- ${leaked}`)).toEqual([{ text: answer, source: "Sortiraparis" }]);
+    expect(streamingTips(`- ${leaked}\n`)).toEqual([{ text: answer, source: "Sortiraparis" }]);
+    // The field wins over the preamble's publisher.
+    expect(parseLunaTips(`- ${leaked} | src: Météo-France`)).toEqual([{ text: answer, source: "Météo-France" }]);
+    const cases: [string, string][] = [
+      ["The newest line asks about Paris. Rain on Saturday.", "Rain on Saturday."],
+      ["Since you asked about Paris, I'll give the forecast. Rain on Saturday.", "Rain on Saturday."],
+      ["I'll answer with the Paris forecast: rain on Saturday.", "Rain on Saturday."],
+      ["The latest request is Paris. I will answer with the forecast. Rain on Saturday.", "Rain on Saturday."],
+      ["The latest request is Paris, so I'll answer with the Paris forecast.", ""],
+      ["Rain on Saturday. The latest BBC article says that Sunday is dry.", "Rain on Saturday. Sunday is dry."],
+    ];
+    for (const [line, kept] of cases) expect(parseTexts(`- ${line}`), line).toEqual(kept ? [kept] : []);
+    for (const line of [
+      "The latest TfL figures show the Circle line reopens on Monday.",
+      "The new line opens on Monday.",
+      "Since you asked, rain is likely on Saturday.",
+      "The latest Paris forecast says rain on Saturday.",
+      "The request for a refund goes to the venue [n1].",
+    ]) {
+      expect(isMetaTip(line), line).toBe(false);
+      expect(parseLunaTips(`- ${line}`), line).toEqual([{ text: line, source: null }]);
+    }
   });
 
   it("catches restating the question and narrating the answer, keeping real tips and quoted speech", () => {

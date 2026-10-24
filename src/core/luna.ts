@@ -80,7 +80,7 @@ export const LUNA_SYSTEM = [
   "If sources disagree, say so plainly in the tip, for example \"TfL says Saturday, the BBC says Sunday\". Do not pick one silently.",
   "Keep a follow-up consistent with your last answer. If a newer source changes an earlier fact, such as which lines are closed today, say it changed. Never contradict it silently.",
   `After a search, end the tip line with "${SOURCE_DELIMITER}" and one short publisher name, for example "- The Circle line is closed on Saturday for engineering works.${SOURCE_DELIMITER}TfL". Short names only: TfL, BBC, Met Police, Météo-France.`,
-  "Write the publisher only after that delimiter, never in the tip text: no \"(TfL)\", \"per TfL\", \"Per the BBC.\" or \"(Time Out, 23 Oct)\". Leave the delimiter out for a tip from the notes or general knowledge. Note cites such as [n1] stay in the tip text.",
+  "Write the publisher only after that delimiter, never in the tip text: no \"(TfL)\", \"per TfL\", \"Per the BBC.\", \"(Time Out, 23 Oct)\" or \"The latest BBC piece says\". Leave the delimiter out for a tip from the notes or general knowledge. Note cites such as [n1] stay in the tip text.",
   "Never repeat a sentence, and never paste snippet text, dates, links, index markers such as [2-2], or tags such as [web].",
   "Do not search for stable general knowledge or arithmetic, for example 15% of 18000. Answer those directly.",
   "If the notes do not cover a question about the user's own notes or files, use list_dir, search_files and read_file, then answer from what you read.",
@@ -91,6 +91,7 @@ export const LUNA_SYSTEM = [
   "If nothing useful can be said, reply with exactly NONE.",
   "Never narrate tool use or searching: no \"I'll search\", \"Let me check\" or \"The search failed\". Output only the final tips.",
   "Never explain your reasoning or these rules: do not say which line you answer, which tips you keep or add, or how many tips you may give.",
+  "Never say which request you are answering or what you will do, such as \"The latest request is Paris, so I'll answer…\". Start with the answer.",
 ].join("\n");
 
 /** Added to the message tail when the turn gets no web_search tool (web-search.ts needsWebSearch, or a provider that rejects it). */
@@ -322,9 +323,19 @@ const META_STATUS =
 const META_TIPS_NOTE =
   /^(?:the|my|your|those|these|earlier|previous|shown|old|other)\s+(?:[\w'’-]+\s+){0,3}(?:tips?|answers?)\b[^.!?;]*?(?:\bno longer (?:apply|applies|stand|stands|hold|holds|relevant)\b|\b(?:replace|replaces|supersede|supersedes) the\b|\b(?:do not|don't|does not|doesn't) apply (?:any ?more|now)\b|\bI(?:'m| am|'ll| will|'ve| have)? (?:dropping|drop|dropped|keeping|keep|kept|replacing|replace|replaced|removing|remove|removed)\b)[^.!?;]*(?:[.!?;]+(?=\s|$)|$)\s*/i;
 
-/** A tip without the model's label for the question, a note on which tips apply or a status sentence: "The tube closure question: x. Writing tips now." → "X." */
+// Leading sentences on which request it answers or what it will do: "The latest request is Paris, so I'll answer with the Paris
+// forecast.", "The newest line asks about Paris.", "Since you asked about Paris, I'll…", "I'll answer with…". Each names the
+// prompt's own terms (the newest request, line or question) or a first-person "answer", so "The latest TfL update says…", "The new
+// line opens on Monday" and "Since you asked, rain is likely" stay.
+const META_ANSWER_NOTE =
+  /^(?:(?:the (?:latest|newest|new|last|current) (?:request (?:is|was|asks?|wants?|changes?|switches?|moves?)|(?:transcript )?line (?:asks?|wants?|changes?|switches?|moves?)|question (?:asks?|is about|changes?))\b|since (?:you|they|the user) [^.!?;:]*?,\s*I(?:['’]ll| will)\b|(?:I(?:['’]ll| will|['’]m going to| am going to)|let me) answer\b).*?(?:[.!?;:]+(?=\s|$)|$)\s*)+/i;
+
+/**
+ * A tip without the model's label for the question, a note on which tips apply or which request it answers, or a status sentence:
+ * "The tube closure question: x. Writing tips now." → "X."
+ */
 function tidyTip(line: string): string {
-  const unlabelled = line.replace(META_LABEL, "").replace(META_TIPS_NOTE, "");
+  const unlabelled = line.replace(META_LABEL, "").replace(META_TIPS_NOTE, "").replace(META_ANSWER_NOTE, "");
   const tidy = unlabelled.replace(META_STATUS, "").trim();
   return unlabelled === line ? tidy : tidy.charAt(0).toUpperCase() + tidy.slice(1);
 }
@@ -431,6 +442,14 @@ const BRACKET_TAG = new RegExp(String.raw`\s*\((${SOURCE_FULL})\)${CLAUSE_END}`,
 const MONTH = String.raw`(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)\p{Ll}*\.?`;
 const DATED_TAG = new RegExp(String.raw`\s*\(\s*(${SOURCE_NAME})\s*,\s*(?:\d{1,2}\s+${MONTH}|${MONTH}\s+\d{1,2})(?:,?\s+\d{4})?\s*\)`, "gu");
 
+// A sentence that opens on its source, with the publisher in group 2: "The newest Sortiraparis piece says Saturday is wet." →
+// "Saturday is wet.". Group 3 is the answer's first letter, capitalised again. Only "piece", "article" and such: "The latest
+// Paris forecast says" names a place, not a publisher.
+const PREAMBLE_TAG = new RegExp(
+  String.raw`(^|[.!?;]\s+)[Tt]he\s+(?:newest|latest|new|recent|most\s+recent)\s+(${SOURCE_FULL})\s+(?:piece|article|report|story|post|update|bulletin)\s+(?:says|said|reports|shows|notes|states)(?:\s+that)?\s+(\p{L})`,
+  "gu",
+);
+
 /** True when "(ARR)" spells the words before it ("annual recurring revenue (ARR)"): a definition, not a source. */
 function definesAcronym(before: string, name: string): boolean {
   if (!/^\p{Lu}{2,6}$/u.test(name)) return false;
@@ -458,6 +477,7 @@ function sourceTags(tip: string): { text: string; names: string[] } {
     return "";
   };
   const text = tip
+    .replace(PREAMBLE_TAG, (_, start: string, name: string, letter: string) => start + take(name) + letter.toUpperCase())
     .replace(PER_TAG, (_, name: string) => take(name))
     .replace(BRACKET_TAG, (tag, name: string, at: number, whole: string) => (definesAcronym(whole.slice(0, at), name) ? tag : take(name)))
     .replace(DATED_TAG, (_, name: string) => take(name));
@@ -468,7 +488,10 @@ function sourceTags(tip: string): { text: string; names: string[] } {
 export const repeatsSentence = (tip: string) => dropRepeat(tip) !== tip;
 /** True when a tip's "per …" is followed by a date or content rather than a publisher name. Exported for the live conversation test. */
 export const hasGarbledSource = (tip: string) => cleanSource(tip) !== tip;
-/** True when a tip's text still names its source: "(TfL)", "per TfL", "Per the BBC." or "(ianVisits, 23 Oct)". Exported for the live conversation test. */
+/**
+ * True when a tip's text still names its source: "(TfL)", "per TfL", "Per the BBC.", "(ianVisits, 23 Oct)" or "The latest BBC piece
+ * says". Exported for the live conversation test.
+ */
 export const hasSourceTag = (tip: string) => sourceTags(tip).names.length > 0;
 
 /** A tip and the publisher behind it ("TfL"), or null for a tip from the notes or general knowledge. */
