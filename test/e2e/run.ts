@@ -58,6 +58,14 @@ async function bundle(page: string): Promise<{ main: string; html: string }> {
     format: "iife",
     // Components from @vvedantb/ui ship as TSX without a tsconfig of their own, so esbuild would default to classic JSX.
     jsx: "automatic",
+    // @vvedantb/ui Markdown imports katex CSS whose font urls need file loaders (Vite handles this in the app build; this esbuild path does not).
+    loader: {
+      ".woff": "file",
+      ".woff2": "file",
+      ".ttf": "file",
+      ".otf": "file",
+      ".eot": "file",
+    },
     define,
     plugins: [stubStyles, stubClerk],
     logLevel: "error",
