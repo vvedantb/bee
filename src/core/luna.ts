@@ -67,6 +67,7 @@ const tipLine = (text: string, source: string | null) => (source ? `${text}${SOU
 const BAD_TIPS: readonly (readonly [text: string, source: string | null])[] = [
   ["Met Police also reported a man jailed for life, per the Met.", "Met Police"],
   ["The results show two closures, so I'll list them. Tips:", null],
+  ['Say "Which London story would you like me to look into?"', null],
 ];
 
 // Cached (gateway.ts ANTHROPIC_CACHE), so it must not change between turns: the tip cap and the steering rules, which do,
@@ -79,6 +80,7 @@ export const LUNA_SYSTEM = [
   "When the transcript has a \"Now\" part, answer only those lines. Earlier lines and your earlier answers are background: use them only if a Now line refers back to them, and never add tips about them otherwise.",
   "A line that changes the request, such as \"make that Paris instead\", replaces it: answer the changed request.",
   "If the newest transcript line asks a direct question (a fact, a definition, a quick sum, a why or a how), the first tip answers that question directly.",
+  "For a broad request, such as the news or what's on, give the top one to three concrete items: what happened, where and when. Never ask the user to clarify or choose: answer the most likely reading.",
   "A follow-up question, such as \"why…\" after an answer, refers to the earlier answers: answer the new question, for example give the reasons. Never repeat an earlier answer in place of an answer.",
   "Keep a follow-up consistent with your last answer. If a newer source changes an earlier fact, such as which lines are closed today, say it changed. Never contradict it silently.",
   "Prefer the notes ([n1]…) first: answer from them when they cover it and cite them by id, for example [n1].",
@@ -97,8 +99,8 @@ export const LUNA_SYSTEM = [
   "Otherwise, suggest what to say or do next, using the notes when they help and citing them.",
   "Never invent facts, figures or dates about the user's own work that are not in the transcript or notes.",
   "If nothing useful can be said, reply with exactly NONE.",
-  "Output only the tips. Start every tip with a fact about the world or words to say. Never write as yourself (\"I\", \"me\", \"my\") or about your own work: the request, these rules, which tips you keep or drop, the search or its results. Put words for the user to say in quotes, for example: Say \"I can confirm by Friday.\"",
-  `Any plan or note to yourself goes on its own line starting with "${NOTE_PREFIX}", or nowhere. Bee never shows those lines.`,
+  "Output only the tips. Start every tip with a fact about the world or words to say. Never write as yourself (\"I\", \"me\", \"my\") or about your own work: the request, these rules, which tips you keep or drop, the search or its results, the sources, or how you phrase, rewrite or copy anything. Put words for the user to say in quotes, for example: Say \"I can confirm by Friday.\"",
+  `Put any plan or note to yourself on its own line starting with "${NOTE_PREFIX}"; Bee never shows it. Never put a plan in a tip.`,
   "Good tip lines (they show the format only: never reuse their facts):",
   `- ${tipLine("Circle and District lines are closed this weekend for track work.", "TfL")}`,
   `- ${tipLine("6–15 mm of rain on Saturday.", "Météo-France, Météo Paris")}`,
@@ -281,8 +283,8 @@ export function lunaRequest(prompt: LunaPrompt): { instructions: SystemModelMess
 /*
  * Tip clean-up. The prompt asks for clean tips; these rules catch what the model still writes. cleanLine applies them in this
  * order, for parseLunaTips and streamingTips alike:
- *  a) Non-tip lines go: blank, NONE, "~ " notes, the prompt's bad examples echoed, and a header with nothing after it ("Tips:",
- *     "…works. Sources:").
+ *  a) Non-tip lines go: blank, NONE, "~ " notes, the prompt's bad examples echoed, and a header with nothing after it: a last
+ *     sentence that ends with a colon ("Tips:", "…works. Sources:", "A tip that answers this directly:").
  *  b) Citation markup leaves the text: markdown and links, index markers ([2-2]) and [web]; "(Publisher)", "(Publisher, 23 Oct)"
  *     and "per Publisher" move to the label, unless the model's label field names one. A "per" before a title or a clause instead
  *     of a name goes with it. Not a tag: a rate ("£2 per GB", "per cent"), a reference ("per Section 4"), an acronym's
@@ -291,7 +293,8 @@ export function lunaRequest(prompt: LunaPrompt): { instructions: SystemModelMess
  *     material rather than the world: its tips, the request, the search or its results, the sources themselves ("The source is
  *     a round-up…"), what it picked ("The most useful headline is…") and where a reason is given. "Sources agree on X" keeps X;
  *     "Sources differ" stays only with what differs. Its tips by place count too: "The first tip covers…", "The second covers…"
- *     at a tip's start. A tip with nothing left goes. isMetaTip is this same check, for the live test.
+ *     at a tip's start. So do its writing process ("Rewriting the phrasing so…") and suggested words that ask the user what
+ *     to look into ('Say "Which story would you like me to look into?"'). A tip with nothing left goes. isMetaTip is this same check, for the live test.
  *  d) Repeats go: a sentence or pasted snippet that repeats or restates an earlier one in the tip, and a tip that repeats an
  *     earlier tip of the same answer, a suggested-speech tip by its quoted words. Numbers compare as digits ("eighteen
  *     thousand" ≈ "18,000"). repeatsTips is this same check, for the live test.
@@ -303,7 +306,7 @@ export function lunaRequest(prompt: LunaPrompt): { instructions: SystemModelMess
 const NOTE_LINE = /^~(?:\s|$)/;
 const BAD_LINE = /^✗/;
 // Only at the end, so "Summary: rain on Saturday." stays.
-const TRAILING_HEADER = /(?:^|(?<=[.!?])\s+)(?:here (?:are|is) (?:the |my |some |your )?)?(?:tips?|answers?|sources?|summary|notes?)\s*:\s*$/i;
+const TRAILING_HEADER = /(?:^|(?<=[.!?])\s+)[^.!?]*:\s*$/;
 const isTipLine = (head: string) =>
   head.length > 0 && head.toUpperCase() !== "NONE" && !NOTE_LINE.test(head) && !BAD_LINE.test(head) && !BAD_TIPS.some(([bad]) => bad === head);
 
@@ -440,8 +443,8 @@ const DETERMINER = "(?:[Tt]he|[Tt]hese|[Tt]hose|[Bb]oth|[Aa]ll|[Mm]ost|[Ii]ts|[T
 const MODIFIER = String.raw`(?:${SOURCE_WORD}|newest|latest|newer|new|recent|most\s+recent|older|oldest|old|other|earlier|previous|shown|main|only|primary|original|first|second|two|three|several|weather|news|local|official)`;
 const subject = (nouns: string) => String.raw`${DETERMINER}\s+(?:${MODIFIER}\s+){0,3}(?:${nouns})`;
 // Things that report the news; bare at the start too: "Sources differ…", "Reports agree…".
-const REPORTERS = "sources?|reports?|forecasts?|outlets?|articles?|pieces?|coverage|headlines?";
-const REPORTERS_SUBJECT = String.raw`(?:${subject(REPORTERS)}|[Ss]ources|[Rr]eports|[Ff]orecasts)`;
+const REPORTERS = "sources?|publishers?|reports?|forecasts?|outlets?|articles?|pieces?|coverage|headlines?";
+const REPORTERS_SUBJECT = String.raw`(?:${subject(REPORTERS)}|[Ss]ources|[Pp]ublishers|[Rr]eports|[Ff]orecasts)`;
 // "The newest Paris reports agree on rain Saturday…" states what they agree on: the agreement goes, the fact stays.
 const AGREEMENT = new RegExp(String.raw`(^|[.!?]\s+)${REPORTERS_SUBJECT}\s+(?:all\s+|both\s+|broadly\s+|mostly\s+|also\s+)?agrees?\s+(?:on|that)\s+(\p{L})`, "gu");
 const dropAgreement = (tip: string) => tip.replace(AGREEMENT, (_, start: string, letter: string) => start + letter.toUpperCase());
@@ -459,6 +462,8 @@ const ABOUT_SOURCES = [
   // "The source is a round-up from ianVisits", "The Paris sources are Sortiraparis and Météo-France", "The sources do not give a
   // reason". "The sources say…" is a reported claim (hasSourceWording); "The main source of delays is…" is about the world.
   new RegExp(String.raw`^${subject("sources?|round-?ups?")}\s+(?:also\s+|both\s+|all\s+|now\s+)?(?:is|are|was|were|seems?|looks?|appears?|comes?|came|dates?|dated|covers?|covered|mentions?|focus(?:es)?|leads?|do not|does not|did not|don['’]t|doesn['’]t|didn['’]t)\b`, "u"),
+  // Sources named in brackets after the subject: "The newest Paris sources (Sortiraparis, published today) agree on…".
+  new RegExp(String.raw`^${REPORTERS_SUBJECT}\s*\(`, "u"),
   // "Both reports agree." with nothing after it.
   new RegExp(String.raw`^${REPORTERS_SUBJECT}\s+(?:all\s+|both\s+|broadly\s+|mostly\s+|also\s+)?agrees?\b`, "u"),
   // "The London tips drop because…", "These tips stand". Not "Your tips are kept by staff" nor "The tips in Paris are included".
@@ -471,6 +476,14 @@ const ABOUT_SOURCES = [
   /\b(?:is|are|was|were)\s+(?:also\s+|not\s+)?(?:given|stated|explained|described|covered|mentioned|noted|set out|cited|listed|found)\s+(?:in|by|on)\s+(?:the|a|an|its|their|this|that)\s+(?:[\p{L}\p{N}'’-]+\s+){0,4}?(?:coverage|sources?|round-?ups?|search(?:es)?|results|articles?|pieces?|documents?)\b/u,
 ];
 const DIFFERS = new RegExp(String.raw`^${REPORTERS_SUBJECT}\s+(?:\p{Ll}+ly\s+)?(?:differ|differs|disagree|disagrees|conflict|conflicts|vary|varies)\b`, "u");
+// Its writing process, led by a gerund with no subject: "Rewriting the phrasing so none of it copies…", "Checking the sources.".
+// Its object must be its own material, so "Using the Elizabeth line saves time" and "Adding tips is optional" stay.
+const WRITING_PROCESS =
+  /^(?:re)?(?:writ|word|phras|paraphras|check|search|copy|us|keep|draft|cit|quot|compar|pick|summari[sz])ing\s+(?:(?:on|for|in|from|with|over|through)\s+)?(?:(?:the|my|these|those|each|both|all|its)\s+)?(?:[\p{L}'’-]+\s+){0,2}?(?:phrasing|wording|sentences?|sources?|results|search(?:es)?|answers?|request)\b/iu;
+// Suggested words that ask the user what Bee should look into: 'Say "Which story would you like me to look into?"'. An offer to a
+// meeting ('Say "Would you like me to send the deck?"') stays.
+const ASKS_TO_CLARIFY =
+  /\b(?:you['’]d|would you|do you|you would) (?:like|want) me to (?:look (?:into|up|for|at)|search|find|check|cover|research|dig into|focus on)\b/i;
 const aboutSources = (part: string) => (DIFFERS.test(part) && !STATES_DIFFERENCE.test(part)) || ABOUT_SOURCES.some((pattern) => pattern.test(part));
 // Quoted speech, and words for the user to say after "Say:" or "Ask:", are not the model speaking: 'TfL said: "I'll mention it."'.
 const QUOTED = /"[^"]*"|“[^”]*”|‘[^’]*’(?!\p{L})/gu;
@@ -485,19 +498,24 @@ const CLAUSE_BREAK = /[.!?]+(?:\s+|$)|:\s+/g;
  * an "I" inside one never counts) and the parts kept before it. Unchanged when nothing is dropped; a new first letter is
  * capitalised ("The tube closure question: the latest…" → "The latest…").
  */
-function dropParts(tip: string, breaks: RegExp, drop: (part: string, kept: readonly string[]) => boolean): string {
+function dropParts(tip: string, breaks: RegExp, drop: (part: string, kept: readonly string[], raw: string) => boolean): string {
   const masked = tip.replace(QUOTED, (quote) => "x".repeat(quote.length)).replace(SPEECH, (speech) => "x".repeat(speech.length));
   const ends = [...masked.matchAll(breaks)].map((match) => match.index + match[0].length).filter((end) => end < tip.length);
   const bounds = [0, ...ends, tip.length];
   const spans = bounds.slice(1).map((end, index) => [bounds[index] ?? 0, end]);
-  const kept = spans.reduce<number[][]>((out, span) => (drop(masked.slice(span[0], span[1]), out.map(([start, end]) => masked.slice(start, end))) ? out : [...out, span]), []);
+  const kept = spans.reduce<number[][]>((out, span) => (drop(masked.slice(span[0], span[1]), out.map(([start, end]) => masked.slice(start, end)), tip.slice(span[0], span[1])) ? out : [...out, span]), []);
   if (kept.length === spans.length) return tip;
   const text = kept.map(([start, end]) => tip.slice(start, end)).join("").trim();
   return kept[0]?.[0] === 0 ? text : text.replace(/^\p{Ll}(?!\p{Lu})/u, (letter) => letter.toUpperCase());
 }
 
-const ownVoice = (part: string, kept: readonly string[]) =>
-  FIRST_PERSON.test(part) || OWN_WORK.some((pattern) => pattern.test(part.trim())) || aboutSources(part.trim()) || (kept.length === 0 && BARE_ORDINAL.test(part.trim()));
+const ownVoice = (part: string, kept: readonly string[], raw: string) =>
+  FIRST_PERSON.test(part) ||
+  OWN_WORK.some((pattern) => pattern.test(part.trim())) ||
+  aboutSources(part.trim()) ||
+  WRITING_PROCESS.test(part.trim()) ||
+  ASKS_TO_CLARIFY.test(raw) ||
+  (kept.length === 0 && BARE_ORDINAL.test(part.trim()));
 /** A line without a trailing header, an agreement preamble and its parts in the model's own voice (rules a and c). */
 const dropOwnVoice = (line: string) => dropParts(dropAgreement(line.replace(TRAILING_HEADER, "").trim()), CLAUSE_BREAK, ownVoice);
 

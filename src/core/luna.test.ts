@@ -786,13 +786,76 @@ describe("sentences about the sources or the answer", () => {
   });
 });
 
+// Live run on fix/source-wording at 6aeb59d (24 October 2026): turn 1 asked for the news and got a header and a question back;
+// turn 4 got a tip about its sources and its own rewriting.
+const LIVE_T1_HEADER = "A tip that answers this directly:";
+const LIVE_T1_CLARIFY = 'Say "Can you tell me which London story you\'d like me to look into?"';
+const LIVE_T4_PROCESS =
+  "The newest Paris sources (Sortiraparis, published today) agree on rain Saturday and a sunnier, windy Sunday, with publishers giving different rainfall totals. Rewriting the phrasing so none of it copies the source sentences.";
+
+describe("headers, clarifying questions and the writing process", () => {
+  it("asks for the top items on a broad request, never a clarifying question or notes on phrasing", () => {
+    expect(LUNA_SYSTEM).toContain("For a broad request, such as the news or what's on, give the top one to three concrete items");
+    expect(LUNA_SYSTEM).toContain("Never ask the user to clarify or choose");
+    expect(LUNA_SYSTEM).toContain("the sources, or how you phrase, rewrite or copy anything");
+  });
+
+  it("drops the live run's tips", () => {
+    for (const line of [LIVE_T1_HEADER, LIVE_T1_CLARIFY, LIVE_T4_PROCESS]) {
+      expect(isMetaTip(line), line).toBe(true);
+      expect(parsed(`- ${line}`), line).toEqual([]);
+      expect(parsed(`- ${line} | src: Sortiraparis`), line).toEqual([]);
+      expect(streamingTips(`- ${line}\n`), line).toEqual([]);
+    }
+    expect(parsed(`- ${LIVE_T1_HEADER}\n- ${LIVE_T1_CLARIFY}`)).toEqual([]);
+  });
+
+  it("drops any tip ending with a colon, sources in brackets as the subject, the writing process and requests to clarify", () => {
+    const cases: [string, string][] = [
+      ["The main London stories today:", ""],
+      ["Rain on Saturday. Paris this weekend:", "Rain on Saturday."],
+      ["The BBC reports (BBC London, 24 October) say the line is shut.", ""],
+      ["Publishers (Le Parisien, Sortiraparis) differ on totals. Rain on Saturday.", "Rain on Saturday."],
+      ["Rain on Saturday. Checking the sources for Sunday.", "Rain on Saturday."],
+      ["Using the newest sources. Rain on Saturday.", "Rain on Saturday."],
+      ["Keeping the wording short.", ""],
+      ['Rain on Saturday. Ask "Which day would you like me to check?"', "Rain on Saturday."],
+      ["Say: which topic do you want me to research?", ""],
+    ];
+    for (const [line, kept] of cases) {
+      expect(isMetaTip(line), line).toBe(true);
+      expect(parseTexts(`- ${line}`), line).toEqual(kept ? [kept] : []);
+      expect(streamTexts(`- ${line}\n`), line).toEqual(kept ? [kept] : []);
+    }
+  });
+
+  it("keeps meeting lines, gerund subjects about the world and colons with content after them", () => {
+    for (const line of [
+      'Say "Can we plan outdoor items for Sunday in Paris?"',
+      'Say "Would you like me to send the deck after the call?"',
+      'Say "I can confirm the rate by Friday."',
+      "Using the Elizabeth line saves about ten minutes.",
+      "Checking in online opens 24 hours before the flight.",
+      "Keeping receipts helps with expense claims [n1].",
+      "Adding tips is optional in Paris restaurants.",
+      "Paris: rain on Saturday, highs near 15°C.",
+      "Summary: rain on Saturday.",
+      "Publishers raised book prices by 5% this year.",
+    ]) {
+      expect(isMetaTip(line), line).toBe(false);
+      expect(parsed(`- ${line}`), line).toEqual([{ text: line, source: null }]);
+      expect(streamingTips(`- ${line}\n`), line).toEqual([{ text: line, source: null }]);
+    }
+  });
+});
+
 // Live STEER turn on fix/source-wording (24 October 2026): a whole first tip of notes on sources and tips.
 const STEER_NOTES =
   "The most recent Paris source is a Sortiraparis piece from today, so I'll rely on it. The London Storm Boelo tips were about London, so they're dropped. The Sortiraparis line also differs from older forecasts, which put Saturday at 10°C; I'll use the newer one.";
 
 describe("Bee's own voice and note lines", () => {
   it("asks for notes on a \"~ \" line and no first person in tips", () => {
-    expect(LUNA_SYSTEM).toContain('Any plan or note to yourself goes on its own line starting with "~ ", or nowhere. Bee never shows those lines.');
+    expect(LUNA_SYSTEM).toContain('Put any plan or note to yourself on its own line starting with "~ "; Bee never shows it. Never put a plan in a tip.');
     expect(LUNA_SYSTEM).toContain('Never write as yourself ("I", "me", "my") or about your own work');
     expect(LUNA_STEERING_RULES).toContain('goes on a "~ " line, never in a tip.');
   });
@@ -993,7 +1056,7 @@ describe("the label's publisher and other source forms in the tip text", () => {
     expect(good).toHaveLength(3);
     expect(parseLunaTips(good.join("\n"), 10)).toHaveLength(good.length);
     const bad = LUNA_SYSTEM.split("\n").filter((line) => line.startsWith("✗ "));
-    expect(bad).toHaveLength(2);
+    expect(bad).toHaveLength(3);
     for (const line of bad) {
       expect(parsed(line), line).toEqual([]);
       // Echoed without the mark, as a tip of its own.
