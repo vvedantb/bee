@@ -21,10 +21,11 @@ import { readWav, speechSpans } from "./helpers/wav";
 
 const AUDIO = `${root}test/fixtures/london-tube-question.wav`;
 // Each line's transcript must match every pattern in `expect`, so a garbled line fails. Where its speech ends is measured from
-// the file (FILE_SPEECH), as espeak-ng ends each phrase with about 0.5 s of near-silence.
-const LINES = [
+// the file (FILE_SPEECH), as espeak-ng ends each phrase with about 0.5 s of near-silence. espeak-ng says "tube" much like "two",
+// so STT may hear "Why are there two closures?"; that counts as heard, but `answer` then checks the new tips are about Tube closures.
+const LINES: { label: string; expect: RegExp[]; notExpect: RegExp; answer?: RegExp }[] = [
   { label: "news", expect: [/london|news/i], notExpect: /tube|closure/i },
-  { label: "follow-up", expect: [/tube/i, /closure/i], notExpect: /london|news/i },
+  { label: "follow-up", expect: [/\b(?:tube|two)\s+closures?\b/i], notExpect: /london|news/i, answer: /\b(?:tube|tfl|circle|district)\b|\bline closures?\b/i },
 ];
 // A sample at or above this is speech; a quieter gap this long separates lines.
 const FILE_SPEECH = { level: 0.001, gapS: 0.5 };
@@ -113,6 +114,8 @@ function analyse(report: Report, onsetS: number, speechEndsS: number[]) {
       heard: line.expect.every((pattern) => pattern.test(transcript ?? "")),
       // Words of the other line in this transcript: two lines merged, or a cut in the wrong place.
       mixed: line.notExpect.test(transcript ?? ""),
+      // The new tips answer what was asked: Tube closures, not just any two closures.
+      onTopic: line.answer?.test(newTips.join(" ")) ?? true,
     };
   });
   return { offsetS, lines };
@@ -140,7 +143,7 @@ function markdown(args: { report: Report; onsetS: number; analysis: ReturnType<t
     "| Line | Transcript | Runs | First answer text | New tips | Pass |",
     "| --- | --- | --- | --- | --- | --- |",
     ...analysis.lines.map((line, index) =>
-      `| ${index + 1} ${line.label} | ${cell(line.transcript ?? `(none${line.sttError ? `: ${line.sttError}` : ""})`)} | ${cell(line.runs.join(", "))} | ${cell(line.firstAnswer.join(" / "))} | ${line.newTips.length} | ${line.heard && !line.mixed && line.newTips.length > 0 ? "PASS" : "FAIL"} |`,
+      `| ${index + 1} ${line.label} | ${cell(line.transcript ?? `(none${line.sttError ? `: ${line.sttError}` : ""})`)} | ${cell(line.runs.join(", "))} | ${cell(line.firstAnswer.join(" / "))} | ${line.newTips.length} | ${line.heard && !line.mixed && line.onTopic && line.newTips.length > 0 ? "PASS" : "FAIL"} |`,
     ),
     "",
     `Lines heard in full: ${LINES.length - missed.length} of ${LINES.length}${missed.length > 0 ? ` (not: ${missed.join(", ")})` : ""}. Segments detected: ${report.segments.length}. STT calls: ${report.stt.length} (max ${MAX_STT}). Pipeline runs started: ${report.runs.length} (max ${MAX_RUNS}); returned to main: ${runLines.length}.`,
@@ -191,6 +194,7 @@ describe.skipIf(!live)("live mic latency: fake mic → segmenter → Grok STT �
       expect(line.mixed, `line ${index + 1} holds the other line's words: ${line.transcript}`).toBe(false);
       expect(line.runs.length, `line ${index + 1} started a run`).toBeGreaterThan(0);
       expect(line.newTips.length, `line ${index + 1} got an answer of its own`).toBeGreaterThan(0);
+      expect(line.onTopic, `line ${index + 1} answer is on topic: ${line.newTips.join(" / ")}`).toBe(true);
     }
     expect(report.seenTips.filter((tip) => WEB_TAG.test(tip)), "tips with a [web] tag").toEqual([]);
     expect(report.stt.length).toBeLessThanOrEqual(MAX_STT);

@@ -294,6 +294,11 @@ const META_TIP = [
   /\bI(?:'ll| will)? (?:copy|keep|add|repeat) (?:them|it|the|each|both|all|these|those)\b/i,
   /^(?:let me|I'll|I will|I'm going to|I am going to) (?:search|check|look|find|answer|write|give)\b/i,
   /^tips?\s*:?$/i,
+  // Restating the question: 'The question "Why are there two closures?" most likely means the two weekend Tube closures.'
+  /^the question\s+(?:["“'‘].*?["”'’]\s+)?(?:(?:most )?likely |probably )?(?:means|refers to)\b/i,
+  /(?:^|[.!?;]\s+)the user (?:is asking|asks|means)\b/i,
+  // Narrating the answer it writes, only at a sentence start or after ", so", so quoted speech in news stays.
+  /(?:^|[.!?;]\s+|,\s*so\s+)I(?:['’]ll| will) (?:note|mention)\b/i,
 ];
 
 // A label naming the question instead of answering it ("The tube closure question: …"). Kept for "The key question: who signs off?".
