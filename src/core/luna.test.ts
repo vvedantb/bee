@@ -212,14 +212,22 @@ describe("LUNA_SYSTEM", () => {
   });
 
   it("asks for the publisher once, after the source delimiter, never in the tip text", () => {
-    expect(LUNA_SYSTEM).toContain('end the tip line with " | src: " and one short publisher name');
+    expect(LUNA_SYSTEM).toContain('end the tip line with " | src: " and one short publisher name, or up to three separated by commas');
     expect(LUNA_SYSTEM).toContain("Short names only: TfL, BBC, Met Police, Météo-France.");
     expect(LUNA_SYSTEM).toContain('never in the tip text: no "(TfL)", "per TfL", "Per the BBC.", "(Time Out, 23 Oct)" or "The latest BBC piece says"');
+    expect(LUNA_SYSTEM).toContain('Never describe sources in the text either: no "the TfL-based list says", "another report", "one source" or "the newest BBC piece".');
     expect(LUNA_SYSTEM).toContain("Note cites such as [n1] stay in the tip text.");
     expect(LUNA_SYSTEM).toContain("Never repeat a sentence");
     // The example line parses to the text and the source the prompt describes.
     const example = LUNA_SYSTEM.match(/"(- The Circle line[^"]+)"/)?.[1] ?? "";
     expect(parseLunaTips(example)).toEqual([{ text: "The Circle line is closed on Saturday for engineering works.", source: "TfL" }]);
+  });
+
+  it("asks for a disagreement stated plainly, with every publisher in the source field", () => {
+    expect(LUNA_SYSTEM).toContain("If sources disagree, say so plainly in one tip and put each publisher in its source field");
+    expect(LUNA_SYSTEM).not.toContain("TfL says Saturday, the BBC says Sunday");
+    const example = LUNA_SYSTEM.match(/"(- Reasons differ[^"]+)"/)?.[1] ?? "";
+    expect(parseLunaTips(example)).toEqual([{ text: "Reasons differ: track work vs Piccadilly line upgrade works.", source: "TfL, Evening Standard" }]);
   });
 
   it("never asks for a [web] tag", () => {
@@ -523,6 +531,10 @@ describe("tip sources", () => {
     // A note cite in the field goes back into the text, where the panel's notes list matches it.
     expect(parsed("- Offer 10% off | src: [n1]")).toEqual([{ text: "Offer 10% off [n1]", source: null }]);
     expect(parsed(`- Rain. | src: ${"x".repeat(200)}`)[0]?.source).toHaveLength(TIP_SOURCE_MAX_CHARS);
+    // Up to three publishers, each once, as written.
+    expect(parsed("- Reasons differ. | src: TfL, the Evening Standard")).toEqual([{ text: "Reasons differ.", source: "TfL, Evening Standard" }]);
+    expect(parsed("- Reasons differ. | src: TfL; BBC, tfl, Time Out, Reuters")[0]?.source).toBe("TfL, BBC, Time Out");
+    expect(parsed("- Reasons differ. | src: TfL, none")[0]?.source).toBe("TfL");
     expect(tipFields(parsed("- A | src: TfL\n- B"))).toEqual({ tips: ["A", "B"], tipSources: ["TfL", null] });
   });
 
@@ -574,6 +586,81 @@ describe("tip sources", () => {
     expect(streamingTips("- The Circle and District lines shut this weekend, per the Circle, Elizabeth and ")).toEqual([
       { text: "The Circle and District lines shut this weekend, per the Circle, Elizabeth and", source: null },
     ]);
+  });
+});
+
+// Live run 2, turn 2 on fix/source-wording (24 October 2026), after "why are there tube closures".
+const RUN2_DISAGREE =
+  "Sources give different reasons. The TfL-based list says the work is track work, while another report ties the District line closures to Piccadilly line upgrade works. Tips:";
+const RUN2_ANSWER = "The weekend tube closures are mainly for planned track work on the Circle and District lines.";
+
+describe("source descriptions and headers", () => {
+  it("turns the run-2 disagreement into a plain statement with the publisher as its label", () => {
+    const text = `- ${RUN2_DISAGREE}\n- ${RUN2_ANSWER} | src: TfL`;
+    const tips = [
+      { text: "Sources give different reasons. The work is track work, while others tie the District line closures to Piccadilly line upgrade works.", source: "TfL" },
+      { text: RUN2_ANSWER, source: "TfL" },
+    ];
+    expect(parseLunaTips(text)).toEqual(tips);
+    expect(streamingTips(`${text}\n`)).toEqual(tips);
+    expect(isMetaTip(RUN2_DISAGREE)).toBe(true);
+    expect(hasSourceTag(RUN2_DISAGREE)).toBe(true);
+    for (const tip of tips) {
+      expect(hasSourceTag(tip.text), tip.text).toBe(false);
+      expect(isMetaTip(tip.text), tip.text).toBe(false);
+    }
+  });
+
+  it("drops a header alone or ending a tip, keeping one with content after it", () => {
+    const cases: [string, string][] = [
+      ["Tips:", ""],
+      ["Here are the tips:", ""],
+      ["Answer:", ""],
+      ["Sources:", ""],
+      ["Summary:", ""],
+      ["Rain on Saturday. Tips:", "Rain on Saturday."],
+      ["Rain on Saturday. Here are the tips:", "Rain on Saturday."],
+      ["Rain on Saturday! Sources:", "Rain on Saturday!"],
+    ];
+    for (const [line, kept] of cases) {
+      expect(isMetaTip(line), line).toBe(true);
+      expect(parseTexts(`- ${line}`), line).toEqual(kept ? [kept] : []);
+      expect(streamTexts(`- ${line}\n`), line).toEqual(kept ? [kept] : []);
+    }
+    for (const line of ["Summary: rain on Saturday.", "Answer: 2,700.", "Notes: bring the signed contract [n1].", "Ask for their sources: the contract and the rates."]) {
+      expect(isMetaTip(line), line).toBe(false);
+      expect(parseTexts(`- ${line}`), line).toEqual([line]);
+    }
+  });
+
+  it("rewrites source descriptions, keeping the claim and moving a named publisher to the label", () => {
+    const cases: [string, LunaTip][] = [
+      ["The TfL-based list says the Circle line shuts on Saturday.", { text: "The Circle line shuts on Saturday.", source: "TfL" }],
+      ["Rain on Saturday. The Met Office-based page says that Sunday is dry.", { text: "Rain on Saturday. Sunday is dry.", source: "Met Office" }],
+      ["Another report says the District line also shuts.", { text: "The District line also shuts.", source: null }],
+      ["One source says that the closures are for track work.", { text: "The closures are for track work.", source: null }],
+      ["The Circle line shuts, while another report says the District line also shuts.", { text: "The Circle line shuts, while the District line also shuts.", source: null }],
+      ["Track work is the main reason; a second report links the closures to signal upgrades.", { text: "Track work is the main reason; others link the closures to signal upgrades.", source: null }],
+      ["Other outlets say the strike is off.", { text: "The strike is off.", source: null }],
+      ["The newest Evening Standard piece says the strike is off, per TfL.", { text: "The strike is off.", source: "Evening Standard" }],
+    ];
+    for (const [line, tip] of cases) {
+      expect(parsed(`- ${line}`), line).toEqual([tip]);
+      expect(streamingTips(`- ${line}\n`, 10), line).toEqual([tip]);
+      expect(hasSourceTag(line), line).toBe(true);
+    }
+    // The model's field still wins over names found in the text.
+    expect(parsed("- The TfL-based list says the Circle line shuts. | src: BBC")).toEqual([{ text: "The Circle line shuts.", source: "BBC" }]);
+    for (const line of [
+      "The Q3 report says revenue rose 5% [n1].",
+      "The TfL list says the Circle line shuts on Saturday.",
+      "Another report is due on Friday [n1].",
+      "Cash is one source of delays at the till.",
+      "Evidence-based care plans cut readmissions.",
+    ]) {
+      expect(hasSourceTag(line), line).toBe(false);
+      expect(parsed(`- ${line}`), line).toEqual([{ text: line, source: null }]);
+    }
   });
 });
 

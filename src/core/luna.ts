@@ -77,10 +77,10 @@ export const LUNA_SYSTEM = [
   "Trust official and primary sources first, such as tfl.gov.uk, gov.uk, nhs.uk and the Met Office, then major news outlets, such as the BBC, Reuters and the AP. Avoid aggregators, content farms and listicles.",
   "Put that source's name in the search query, for example \"TfL planned closures this weekend\" or \"BBC London news today\".",
   "If the results are only blogs, newsletters, aggregators or local listings, search again for the official source or a major outlet before answering.",
-  "If sources disagree, say so plainly in the tip, for example \"TfL says Saturday, the BBC says Sunday\". Do not pick one silently.",
+  `If sources disagree, say so plainly in one tip and put each publisher in its source field, for example "- Reasons differ: track work vs Piccadilly line upgrade works.${SOURCE_DELIMITER}TfL, Evening Standard". Do not pick one silently.`,
   "Keep a follow-up consistent with your last answer. If a newer source changes an earlier fact, such as which lines are closed today, say it changed. Never contradict it silently.",
-  `After a search, end the tip line with "${SOURCE_DELIMITER}" and one short publisher name, for example "- The Circle line is closed on Saturday for engineering works.${SOURCE_DELIMITER}TfL". Short names only: TfL, BBC, Met Police, Météo-France.`,
-  "Write the publisher only after that delimiter, never in the tip text: no \"(TfL)\", \"per TfL\", \"Per the BBC.\", \"(Time Out, 23 Oct)\" or \"The latest BBC piece says\". Leave the delimiter out for a tip from the notes or general knowledge. Note cites such as [n1] stay in the tip text.",
+  `After a search, end the tip line with "${SOURCE_DELIMITER}" and one short publisher name, or up to three separated by commas, for example "- The Circle line is closed on Saturday for engineering works.${SOURCE_DELIMITER}TfL". Short names only: TfL, BBC, Met Police, Météo-France.`,
+  "Write the publisher only after that delimiter, never in the tip text: no \"(TfL)\", \"per TfL\", \"Per the BBC.\", \"(Time Out, 23 Oct)\" or \"The latest BBC piece says\". Never describe sources in the text either: no \"the TfL-based list says\", \"another report\", \"one source\" or \"the newest BBC piece\". Leave the delimiter out for a tip from the notes or general knowledge. Note cites such as [n1] stay in the tip text.",
   "Never repeat a sentence, and never paste snippet text, dates, links, index markers such as [2-2], or tags such as [web].",
   "Do not search for stable general knowledge or arithmetic, for example 15% of 18000. Answer those directly.",
   "If the notes do not cover a question about the user's own notes or files, use list_dir, search_files and read_file, then answer from what you read.",
@@ -317,6 +317,10 @@ const META_LABEL =
 const META_STATUS =
   /(?:^|(?<=[.!?:])\s+)(?:(?:I am |I'm |now )?(?:writing|drafting|preparing|listing|adding|giving) (?:the |my |some |these |your |two |three )?tips?(?: now| below| here)?|here (?:are|is) (?:the |my |some |your )?(?:tips?|answers?))(?:[.:!…]+(?=\s|$)|$)/gi;
 
+// A header with nothing after it, alone or ending the line: "Tips:", "…upgrade works. Tips:", "Here are the tips:", "Sources:".
+// Only at the end, so "Summary: rain on Saturday." stays.
+const META_HEADER = /(?:^|(?<=[.!?])\s+)(?:here (?:are|is) (?:the |my |some |your )?)?(?:tips?|answers?|sources?|summary|notes?)\s*:\s*$/i;
+
 // A leading sentence about which of its own tips apply: "The London tips no longer apply, so I'm dropping them. Paris: rain."
 // Needs a determiner before "tips" and "no longer apply", "replace the" or a first-person drop/keep, so "Your tips are kept by
 // staff" stays.
@@ -331,12 +335,12 @@ const META_ANSWER_NOTE =
   /^(?:(?:the (?:latest|newest|new|last|current) (?:request (?:is|was|asks?|wants?|changes?|switches?|moves?)|(?:transcript )?line (?:asks?|wants?|changes?|switches?|moves?)|question (?:asks?|is about|changes?))\b|since (?:you|they|the user) [^.!?;:]*?,\s*I(?:['’]ll| will)\b|(?:I(?:['’]ll| will|['’]m going to| am going to)|let me) answer\b).*?(?:[.!?;:]+(?=\s|$)|$)\s*)+/i;
 
 /**
- * A tip without the model's label for the question, a note on which tips apply or which request it answers, or a status sentence:
- * "The tube closure question: x. Writing tips now." → "X."
+ * A tip without the model's label for the question, a note on which tips apply or which request it answers, a status sentence or
+ * a trailing header: "The tube closure question: x. Writing tips now. Tips:" → "X."
  */
 function tidyTip(line: string): string {
   const unlabelled = line.replace(META_LABEL, "").replace(META_TIPS_NOTE, "").replace(META_ANSWER_NOTE, "");
-  const tidy = unlabelled.replace(META_STATUS, "").trim();
+  const tidy = unlabelled.replace(META_STATUS, "").replace(META_HEADER, "").trim();
   return unlabelled === line ? tidy : tidy.charAt(0).toUpperCase() + tidy.slice(1);
 }
 
@@ -442,13 +446,22 @@ const BRACKET_TAG = new RegExp(String.raw`\s*\((${SOURCE_FULL})\)${CLAUSE_END}`,
 const MONTH = String.raw`(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)\p{Ll}*\.?`;
 const DATED_TAG = new RegExp(String.raw`\s*\(\s*(${SOURCE_NAME})\s*,\s*(?:\d{1,2}\s+${MONTH}|${MONTH}\s+\d{1,2})(?:,?\s+\d{4})?\s*\)`, "gu");
 
-// A sentence that opens on its source, with the publisher in group 2: "The newest Sortiraparis piece says Saturday is wet." →
-// "Saturday is wet.". Group 3 is the answer's first letter, capitalised again. Only "piece", "article" and such: "The latest
-// Paris forecast says" names a place, not a publisher.
+// A sentence that opens on its source, with the publisher in group 3: "The newest Sortiraparis piece says Saturday is wet." or
+// "The TfL-based list says the work is track work." → "Saturday is wet.". Group 4 is the answer's first letter, capitalised again.
+// Only "piece", "list" and such, after "newest" or before "-based" (sourceTags): "The latest Paris forecast says" names a place and
+// "The Q3 report says" a document, not a publisher.
 const PREAMBLE_TAG = new RegExp(
-  String.raw`(^|[.!?;]\s+)[Tt]he\s+(?:newest|latest|new|recent|most\s+recent)\s+(${SOURCE_FULL})\s+(?:piece|article|report|story|post|update|bulletin)\s+(?:says|said|reports|shows|notes|states)(?:\s+that)?\s+(\p{L})`,
+  String.raw`(^|[.!?;]\s+)[Tt]he\s+(?:(newest|latest|new|recent|most\s+recent)\s+)?(${SOURCE_FULL})\s+(?:piece|article|report|story|post|update|bulletin|list|page)\s+(?:says|said|reports|shows|notes|states|lists)(?:\s+that)?\s+(\p{L})`,
   "gu",
 );
+// A source described but not named, with the verb in group 2: "another report ties", "One source says that", "other outlets say".
+// A reporting verb goes with it ("…, while another report says the line is shut." → "…, while the line is shut."); any other verb
+// keeps its claim, credited to "others" ("another report ties A to B" → "others tie A to B").
+const UNNAMED_SOURCE = new RegExp(
+  String.raw`(^|[.!?;]\s+|\b)(?:[Aa]nother|[Oo]ne|[Ss]ome|[Oo]ther|[Aa]\s+(?:second|different|separate))\s+(?:(?:news|media|local)\s+)?(?:report|source|outlet|article|piece|story|site)s?\s+(says?|said|reports?|reported|notes?|states?|claims?|suggests?|adds?|ties?|links?|attributes?|blames?|puts?|gives?|cites?|lists?)(\s+that)?\s+(\p{L})`,
+  "gu",
+);
+const REPORTING_VERB = /^(?:says?|said|reports?|reported|notes?|states?|claims?|suggests?|adds?)$/;
 
 /** True when "(ARR)" spells the words before it ("annual recurring revenue (ARR)"): a definition, not a source. */
 function definesAcronym(before: string, name: string): boolean {
@@ -469,7 +482,10 @@ const tidyPunctuation = (text: string) =>
     .replace(/\s{2,}/g, " ")
     .trim();
 
-/** A tip's text without its source tags, and the publishers they named, in order: "Rain (BBC). Per the BBC." → "Rain..", ["BBC"]. */
+/**
+ * A tip's text without its source tags or source descriptions, and the publishers they named, in order: "Rain (BBC). Per the BBC."
+ * → "Rain..", ["BBC"].
+ */
 function sourceTags(tip: string): { text: string; names: string[] } {
   const names: string[] = [];
   const take = (name: string) => {
@@ -477,7 +493,18 @@ function sourceTags(tip: string): { text: string; names: string[] } {
     return "";
   };
   const text = tip
-    .replace(PREAMBLE_TAG, (_, start: string, name: string, letter: string) => start + take(name) + letter.toUpperCase())
+    .replace(PREAMBLE_TAG, (match: string, start: string, fresh = "", name: string, letter: string) => {
+      // The name takes "-based" with it, as hyphens are part of a name ("Météo-France").
+      const based = name.match(/^(.+)-based$/);
+      // "The TfL list says" without "newest" or "-based" may be a document: kept.
+      if (!based && !fresh) return match;
+      return start + take(based?.[1] ?? name) + letter.toUpperCase();
+    })
+    .replace(UNNAMED_SOURCE, (_, start: string, verb: string, that = "", letter: string, at: number) => {
+      const opens = at === 0 || /[.!?]/.test(start);
+      if (REPORTING_VERB.test(verb)) return start + (opens ? letter.toUpperCase() : letter);
+      return `${start}${opens ? "Others" : "others"} ${verb.replace(/s$/, "")}${that} ${letter}`;
+    })
     .replace(PER_TAG, (_, name: string) => take(name))
     .replace(BRACKET_TAG, (tag, name: string, at: number, whole: string) => (definesAcronym(whole.slice(0, at), name) ? tag : take(name)))
     .replace(DATED_TAG, (_, name: string) => take(name));
@@ -489,10 +516,10 @@ export const repeatsSentence = (tip: string) => dropRepeat(tip) !== tip;
 /** True when a tip's "per …" is followed by a date or content rather than a publisher name. Exported for the live conversation test. */
 export const hasGarbledSource = (tip: string) => cleanSource(tip) !== tip;
 /**
- * True when a tip's text still names its source: "(TfL)", "per TfL", "Per the BBC.", "(ianVisits, 23 Oct)" or "The latest BBC piece
- * says". Exported for the live conversation test.
+ * True when a tip's text still names or describes its source: "(TfL)", "per TfL", "Per the BBC.", "(ianVisits, 23 Oct)", "The latest
+ * BBC piece says", "The TfL-based list says" or "another report says". Exported for the live conversation test.
  */
-export const hasSourceTag = (tip: string) => sourceTags(tip).names.length > 0;
+export const hasSourceTag = (tip: string) => sourceTags(tip).text !== tip;
 
 /** A tip and the publisher behind it ("TfL"), or null for a tip from the notes or general knowledge. */
 export type LunaTip = { text: string; source: string | null };
@@ -505,19 +532,26 @@ export const tipFields = (tips: readonly LunaTip[]): TipFields => ({ tips: tips.
 const NO_SOURCE = /^(?:none|n\/?a|null|-+|–|—)?$/i;
 const NOTE_CITE = /^n\d+$/i;
 
-/** The source field as a short label: "src: (the BBC)." → "BBC". A note cite ([n1]) goes back into the text. */
+const MAX_SOURCE_NAMES = 3;
+
+/** Publisher names as one label, at most three and each once: ["TfL", "the BBC", "TfL"] → "TfL, BBC". Null for none. */
+function sourceLabel(names: readonly string[]): string | null {
+  const clean = names.map((name) => name.replace(/^[\s([“"']+|[\s)\]”"'.,;:]+$/g, "").replace(/^the\s+/i, "")).filter((name) => !NO_SOURCE.test(name));
+  const unique = clean.filter((name, index) => clean.findIndex((other) => other.toLowerCase() === name.toLowerCase()) === index);
+  return unique.length > 0 ? oneLine(unique.slice(0, MAX_SOURCE_NAMES).join(", "), TIP_SOURCE_MAX_CHARS) : null;
+}
+
+/** The source field as a short label: "src: (the BBC)." → "BBC", "TfL, the Evening Standard" → "TfL, Evening Standard". A note cite ([n1]) goes back into the text. */
 function sourceField(field: string): { label: string | null; cite: string | null } {
-  const label = field
-    .replace(/^\s*(?:src|sources?)\s*:/i, "")
-    .replace(/^[\s([“"']+|[\s)\]”"'.,;:]+$/g, "")
-    .replace(/^the\s+/i, "");
+  const label = field.replace(/^\s*(?:src|sources?)\s*:/i, "").replace(/^[\s([“"']+|[\s)\]”"'.,;:]+$/g, "");
   if (NOTE_CITE.test(label)) return { label: null, cite: `[${label.toLowerCase()}]` };
-  return { label: NO_SOURCE.test(label) ? null : oneLine(label, TIP_SOURCE_MAX_CHARS), cite: null };
+  return { label: sourceLabel(label.split(/\s*[,;]\s*/)), cite: null };
 }
 
 /**
- * One tip line as text and source. The source comes from the field after "|" ("… | src: TfL"); the text loses any source tag the
- * model still wrote in it, a repeated sentence and a garbled "per", and a tag's publisher becomes the source when the field is empty.
+ * One tip line as text and source. The source comes from the field after "|" ("… | src: TfL" or "… | src: TfL, BBC"); the text loses
+ * any source tag or description the model still wrote in it, a repeated sentence and a garbled "per", and the first publisher it
+ * named becomes the source when the field is empty. So a tip has a label exactly when the model gave one or the text named one.
  * Null for a line that is not a tip (blank, NONE, reasoning).
  */
 function parseTipLine(line: string): LunaTip | null {
@@ -528,7 +562,7 @@ function parseTipLine(line: string): LunaTip | null {
   const whole = cite ? `${text} ${cite}` : text;
   const clean = sourceTags(cleanSource(dropRepeat(whole)));
   // Only text that lost something is tidied, so a normal tip stays byte for byte.
-  return { text: clampTip(clean.text === whole ? whole : tidyPunctuation(clean.text)), source: label ?? clean.names[0] ?? null };
+  return { text: clampTip(clean.text === whole ? whole : tidyPunctuation(clean.text)), source: label ?? sourceLabel(clean.names.slice(0, 1)) };
 }
 
 export function parseLunaTips(text: string, maxTips = MAX_TIPS): LunaTip[] {

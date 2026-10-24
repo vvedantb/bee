@@ -97,8 +97,8 @@ const runIdSchema = z.union([z.string().max(100), z.number()]);
 export const TIP_MAX_CHARS = 4000;
 export const clampTip = (tip: string): string => tip.slice(0, TIP_MAX_CHARS);
 const tipSchema = z.string().max(TIP_MAX_CHARS);
-// A tip's publisher, such as "TfL", cut to this where it is parsed (core/luna.ts). Null for a tip with no web source.
-export const TIP_SOURCE_MAX_CHARS = 60;
+// A tip's publishers, such as "TfL" or "TfL, Evening Standard" (up to three), cut to this where it is parsed (core/luna.ts). Null for a tip with no web source.
+export const TIP_SOURCE_MAX_CHARS = 80;
 // Each tip's source, by position. Optional: a result without it shows no labels.
 const tipSourcesSchema = z.array(z.string().max(TIP_SOURCE_MAX_CHARS).nullable()).max(10).optional();
 

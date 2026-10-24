@@ -38,11 +38,16 @@ const SHOTS = ["conversation-turn2-fulltext", "conversation-turn4-fulltext"];
 const STATE_SHOT = "conversation-searching";
 // The model talking about its rules instead of answering ("The newest line asks…", "copy them word for word", "The limit is 3 tips").
 const META_WORDS = /\b(?:tips?|newest line|word for word|limit is)\b/i;
-const looksMeta = (tip: string) => isMetaTip(tip) || META_WORDS.test(tip);
+// A header left at the end of a tip or alone: "…upgrade works. Tips:", "Sources:".
+const META_HEADER = /(?:^|[.!?]\s+)(?:here (?:are|is) (?:the |my |some |your )?)?(?:tips?|answers?|sources?|summary)\s*:\s*$/i;
+const looksMeta = (tip: string) => isMetaTip(tip) || META_WORDS.test(tip) || META_HEADER.test(tip);
 // Source wording left in a tip's text: an index marker ("[2-2]"), a "(Publisher)" or dated tag, or "per <Publisher>". The source
 // belongs in its own field (core/luna.ts parseLunaTips).
 const SOURCE_WORDING = /\[\d+\s*[-–]\s*\d+\]|\b[Pp]er\s+(?:the\s+)?\p{Lu}/u;
-const hasSourceWording = (tip: string) => SOURCE_WORDING.test(tip) || hasSourceTag(tip) || repeatsSentence(tip) || hasGarbledSource(tip);
+// A source described in the text: "The TfL-based list says", "another report", "one source says", "the newest BBC piece".
+const SOURCE_DESCRIPTION = /-based (?:list|page|report|piece|article|source)\b|\banother (?:report|source|outlet|article|piece|story)\b|\bone (?:report|source|outlet) (?:says|said|reports)\b|\bthe (?:newest|latest) (?:\S+ ){1,4}(?:piece|article|story)\b/i;
+const hasSourceWording = (tip: string) =>
+  SOURCE_WORDING.test(tip) || SOURCE_DESCRIPTION.test(tip) || hasSourceTag(tip) || repeatsSentence(tip) || hasGarbledSource(tip);
 const mode = e2eModeSchema.optional().parse(process.env.BEE_E2E_MODE?.trim() || undefined);
 const FIXTURES_DIR = join(root, "test/fixtures/replay/conversation");
 // Shares no word with the lines said, so retrieval finds nothing.
@@ -215,7 +220,7 @@ describe.skipIf(mode !== "replay" && !process.env.BEE_AI_GATEWAY_API_KEY?.trim()
     expect(report.runs).toBeLessThanOrEqual(MAX_RUNS);
     for (const item of report.turns) {
       expect(item.tips.filter(looksMeta), `turn ${item.turn} shows reasoning about the rules, not a tip`).toEqual([]);
-      expect(item.checks.cleanWording, `turn ${item.turn} repeats a sentence, garbles a "per" or names its source in a tip's text: ${item.tips.join(" / ")}`).toBe(true);
+      expect(item.checks.cleanWording, `turn ${item.turn} repeats a sentence, garbles a "per" or names or describes its source in a tip's text: ${item.tips.join(" / ")}`).toBe(true);
     }
     expect(runs.length, "every run started returns to main").toBe(report.runs);
 
