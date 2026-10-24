@@ -1,6 +1,6 @@
 {
   "name": "bee",
-  "version": "0.3.16",
+  "version": "0.3.17",
   "description": "Bee: a meeting notch overlay that surfaces relevant local notes and short guidance.",
   "license": "MIT",
   "author": "Bee contributors",
