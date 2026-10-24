@@ -9,8 +9,10 @@ const ICON = { size: 16, stroke: 1.75 };
 // multiline: a textarea (for KEY=value lines), drawn as dots while typing. Omitted from the form until Replace is pressed.
 // reveal / copy: optional eye and copy buttons on the saved field. Main answers on click; a revealed value lives only in this
 // component's state and is dropped on hide, after 30 s, on Replace, and on unmount.
+// id: set on the focusable input, masked or entry, so other code can focus it.
 export function SecretField(props: {
   name: string;
+  id?: string;
   label: string;
   placeholder: string;
   saved: boolean;
@@ -54,7 +56,7 @@ export function SecretField(props: {
       <span className="row">
         {masked && (reveal || copy) ? (
           <InputGroup className="h-9">
-            <InputGroupInput key="saved" type="text" value={revealed?.value ?? "•••••••• (saved)"} readOnly spellCheck={false} aria-label={`${props.label} (saved)`} />
+            <InputGroupInput key="saved" id={props.id} type="text" value={revealed?.value ?? "•••••••• (saved)"} readOnly spellCheck={false} aria-label={`${props.label} (saved)`} />
             <InputGroupAddon align="inline-end">
               {reveal ? (
                 <InputGroupButton size="icon-xs" title={revealed ? "Hide key" : "Show key"} aria-label={revealed ? "Hide key" : "Show key"} aria-pressed={Boolean(revealed)} onClick={() => void toggleReveal(reveal)}>
@@ -71,9 +73,9 @@ export function SecretField(props: {
         ) : masked ? (
           <Input key="saved" className="h-9" type="text" value="•••••••• (saved)" disabled aria-label={`${props.label} (saved)`} />
         ) : props.multiline ? (
-          <Textarea name={props.name} className="secret-area" rows={3} placeholder={placeholder} autoComplete="off" spellCheck={false} autoFocus={replacing} />
+          <Textarea id={props.id} name={props.name} className="secret-area" rows={3} placeholder={placeholder} autoComplete="off" spellCheck={false} autoFocus={replacing} />
         ) : (
-          <Input key="entry" className="h-9" name={props.name} type="password" placeholder={placeholder} autoComplete="off" autoFocus={replacing} />
+          <Input key="entry" id={props.id} className="h-9" name={props.name} type="password" placeholder={placeholder} autoComplete="off" autoFocus={replacing} />
         )}
         {props.saved ? (
           <Button
