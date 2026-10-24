@@ -59,11 +59,12 @@ export const LUNA_SYSTEM = [
   "Each tip is one line, starts with \"- \", and is under 20 words.",
   "Reply in plain text only. No markdown: no bold, italic, headings or backticks, and no lists other than the \"- \" tip prefix.",
   "Do not write links or markdown citations. Bee shows the sources separately.",
-  "If the latest transcript lines ask a direct question (a fact, a definition, a quick sum), the first tip answers it.",
+  "If the newest transcript line asks a direct question (a fact, a definition, a quick sum, a why or a how), the first tip answers that question directly.",
+  "A follow-up question, such as \"why…\" after an answer, refers to the earlier answers: answer the new question, for example give the reasons. Never repeat an earlier answer in place of an answer.",
   "Answer from the notes when they cover it and cite them by id, for example [n1].",
   "If the notes do not cover it and the fact is public, may have changed, or is current events (office holders, news, scores, prices, releases), use the web_search tool.",
   "For current events, put today's date or year (given at the end of the message) in the search query, and prefer the newest results.",
-  "After a search, you may end the tip with the site domain in plain text, or [web]. Do not add links.",
+  "After a search, you may end the tip with the site domain in plain text. Do not add links or tags such as [web].",
   "Do not search for stable general knowledge or arithmetic, for example 15% of 18000. Answer those directly.",
   "If the notes do not cover a question about the user's own notes or files, use list_dir, search_files and read_file, then answer from what you read.",
   "Prefer the notes ([n1]…) first. Do not use web_search for private facts about the user's own work or files.",
@@ -79,6 +80,7 @@ export const LUNA_STEERING_RULES = [
   "If tips are already shown, add tips for new lines.",
   "Return the full set: copy each shown tip that still stands word for word, then add the new tips.",
   "Replace a shown tip only if the new line corrects it.",
+  "If a new line asks a question, one new tip answers it. Never only copy the shown tips then.",
   "If the new lines need no tip, copy the shown tips.",
 ].join("\n");
 
@@ -172,6 +174,8 @@ export function buildLunaPrompt(args: {
   /** Enabled connectors that failed to load or are signed out. */
   unavailableServers?: readonly LunaMcpUnavailable[];
   shown?: string[];
+  /** On a new turn, the latest settled tips: context for a follow-up question. Ignored while tips are shown (they cover it). */
+  earlier?: string[];
   /** The brief for the meeting in progress (core/meeting-brief.ts). Omitted outside a detected meeting. */
   meetingBrief?: string;
   /** Today's date goes in the tail (not cached). Defaults to now; tests pass a fixed date. */
@@ -179,14 +183,22 @@ export function buildLunaPrompt(args: {
 }): LunaPrompt {
   const meeting = meetingBlock(args.meetingBrief);
   const lines = args.transcript.slice(-TRANSCRIPT_WINDOW).map((line) => `- ${line.trim()}`);
-  const shown = (args.shown ?? []).map((tip) => tip.replace(/\s+/g, " ").trim()).filter((tip) => tip.length > 0);
+  const clean = (tips: string[] | undefined) => (tips ?? []).map((tip) => tip.replace(/\s+/g, " ").trim()).filter((tip) => tip.length > 0);
+  const shown = clean(args.shown);
+  const earlier = shown.length > 0 ? [] : clean(args.earlier);
   const notes = args.notes.map((note, index) => `[${noteCitation(index)}] ${note.title}\n${note.text}`);
   const context = [
     ...(meeting ? ["Meeting context:", meeting, ""] : []),
     "Relevant notes:",
     notes.length > 0 ? notes.join("\n\n") : "(none)",
   ].join("\n");
-  const transcript = ["Recent transcript (oldest first):", lines.join("\n")].join("\n");
+  const transcript = [
+    "Recent transcript (oldest first):",
+    lines.join("\n"),
+    ...(earlier.length > 0
+      ? ["", "Your earlier answers, no longer on screen (context for follow-ups; do not repeat them):", ...earlier.map((tip) => `- ${tip}`)]
+      : []),
+  ].join("\n");
   const tail = [
     ...(shown.length > 0
       ? ["Already shown to the user (keep; do not repeat; refine only if the new line changes the answer):", ...shown.map((tip) => `- ${tip}`), ""]
@@ -234,6 +246,8 @@ function stripMarkdown(line: string): string {
     .replace(/(?<![\w*])\*(?=\S)([^*]+?)\*(?![\w*])/g, "$1")
     .replace(/(?<!\w)_(?=\S)([^_]+?)_(?!\w)/g, "$1")
     .replace(/`([^`]*)`/g, "$1")
+    // A search tag the model may still add; Bee lists the sources separately.
+    .replace(/\s*\[web\]/gi, "")
     .replace(/\s{2,}/g, " ")
     .trim();
 }
@@ -343,6 +357,8 @@ export async function guideWithLuna(args: {
   notes: Snippet[];
   /** Tips already on screen (complete lines). Luna adds tips for the new lines and returns the full set, up to 3. */
   shown?: string[];
+  /** On a new turn, the latest settled tips, sent as context for a follow-up question. */
+  earlier?: string[];
   /** The brief for the meeting in progress, sent with every turn. */
   meetingBrief?: string;
   timeoutMs?: number;

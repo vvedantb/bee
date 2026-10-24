@@ -78,6 +78,14 @@ describe("runPipeline", () => {
     expect(guide.mock.calls[0]?.[0].shown).toEqual(["Tip already on screen"]);
   });
 
+  it("passes the earlier answer to Luna on a new turn, and accepts at most 3", async () => {
+    jevAfter(1);
+    guide.mockResolvedValue(lunaOk());
+    await runPipeline({ transcript, earlier: ["District line closed Saturday"], snippets, gateway });
+    expect(guide.mock.calls[0]?.[0].earlier).toEqual(["District line closed Saturday"]);
+    expect(() => pipelineRequestSchema.parse({ transcript: ["a"], sessionToken: "t", earlier: ["a", "b", "c", "d"] })).toThrow();
+  });
+
   it("passes the meeting brief to Luna, and nothing when there is none", async () => {
     jevAfter(1);
     guide.mockResolvedValue(lunaOk());

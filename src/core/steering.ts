@@ -18,6 +18,16 @@ export function isFiller(line: string): boolean {
   return tokenize(line).length === 0;
 }
 
+// Speech-to-text often drops the "?", so a line that opens like a question counts too.
+const QUESTION_START =
+  /^(?:(?:so|and|but|okay|ok|hey|right|well|then)[\s,]+)*(?:(?:what|what's|whats|why|how|how's|when|where|who|whom|whose|which|explain|tell me)\b|(?:is|are|was|were|does|did|can|could|will|would|should|has|have)\s+(?:i|you|we|they|he|she|it|there|this|that|these|those|the|any)\b|do\s+(?:i|you|we|they)\b)/i;
+
+/** True when the line asks something directly: it ends with "?" or opens like a question ("why are there tube closures"). */
+export function isQuestion(line: string): boolean {
+  const text = line.trim();
+  return text.endsWith("?") || QUESTION_START.test(text);
+}
+
 /** A tip's identity: trimmed, note cites ([n1], [web]) removed, spaces collapsed. */
 export function tipKey(tip: string): string {
   return tip
@@ -73,6 +83,16 @@ export function inCommitWindow(runTips: number): boolean {
   return runTips >= 2;
 }
 
+/**
+ * Whether a line that steers waits for the run in flight to finish instead of cancelling it. A new turn never waits. A run in its
+ * commit window is let finish. So is a run answering a question (answering), unless a newer question came (asked): a web search
+ * can take several seconds with nothing streamed, and otherwise steady talk in the room would cancel the answer again and again.
+ */
+export function waitsForRun(args: { fresh: boolean; runTips: number; answering: boolean; asked: boolean }): boolean {
+  if (args.fresh) return false;
+  return inCommitWindow(args.runTips) || (args.answering && !args.asked);
+}
+
 /** Restarts (times in ms) still inside the window. */
 export function recentRestarts(
   restarts: readonly number[],
@@ -93,10 +113,11 @@ export function runDelayMs(restarts: readonly number[], now: number, steering: b
 }
 
 /**
- * Whether a line starts a new turn: the last answer goes and nothing is kept or shown from it. A line steers the current turn
- * (earlier tips stay, dimmed) only when it interrupts a run: it came while Bee was busy (debounce, run or deferred restart), or
- * its phrase ended while Bee was busy and its speech-to-text finished after. A fresh question after an answer has settled, or any
- * line after the island was dismissed (open false), starts afresh, however soon it follows.
+ * Whether a line starts a new turn: the last answer goes from the screen (Luna still gets it as context, store.ts runPipeline).
+ * A line steers the current turn (earlier tips stay, dimmed) only when it interrupts a run: it came while Bee was busy
+ * (debounce, run or deferred restart), or its phrase ended while Bee was busy and its speech-to-text finished after. A fresh
+ * question after an answer has settled, or any line after the island was dismissed (open false), starts afresh, however soon
+ * it follows.
  */
 export function isNewTurn(args: { open: boolean; busy: boolean; spokenDuringRun: boolean }): boolean {
   return !args.open || !(args.busy || args.spokenDuringRun);

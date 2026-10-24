@@ -111,6 +111,14 @@ export function timingsTitle(timings: PipelineTimings): string {
   return `retrieve ${ms(timings.retrieve)} · Jev ${ms(timings.rank)} · MCP ${ms(timings.mcp)} · AI ${ms(timings.guide)} (Jev runs beside MCP and the AI)`;
 }
 
+/**
+ * Whether the island body pins its newest line (follow-bottom.ts). Only an answer that opened on its own does, like a
+ * teleprompter. The full text the user opened by clicking the one-line answer opens at the top and stays where they scroll.
+ */
+export function bodyFollowsNewest(fullText: boolean): boolean {
+  return !fullText;
+}
+
 /** How close to the end of the island body counts as "at the bottom", in CSS px. */
 export const FOLLOW_SLACK_PX = 24;
 

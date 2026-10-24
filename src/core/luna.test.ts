@@ -94,6 +94,7 @@ describe("buildLunaPrompt", () => {
     );
     expect(LUNA_STEERING_RULES).toContain("If tips are already shown, add tips for new lines.");
     expect(LUNA_STEERING_RULES).toContain("Replace a shown tip only if the new line corrects it.");
+    expect(LUNA_STEERING_RULES).toContain("If a new line asks a question, one new tip answers it.");
   });
 
   it("keeps the system and context identical between a fresh turn and a steering turn", () => {
@@ -111,6 +112,19 @@ describe("buildLunaPrompt", () => {
     expect(prompt.system).not.toContain("2026");
     expect(prompt.context).not.toContain("2026");
     expect(buildLunaPrompt({ transcript: ["a"], notes: [], meetingBrief: "Meeting: Sync", now: new Date(2027, 0, 1, 12) }).system).toBe(prompt.system);
+  });
+
+  it("sends the earlier answer as follow-up context on a new turn, outside the cached blocks", () => {
+    const earlier = ["District line closed Saturday", "No DLR at Tower Hill"];
+    const prompt = buildLunaPrompt({ transcript: ["what's in the news in London", "why are there tube closures"], notes: [], earlier, now: NOW });
+    expect(prompt.transcript).toContain("Your earlier answers, no longer on screen (context for follow-ups; do not repeat them):");
+    expect(prompt.transcript).toContain("- District line closed Saturday\n- No DLR at Tower Hill");
+    expect(prompt.system).toBe(LUNA_SYSTEM);
+    expect(prompt.context).toBe("Relevant notes:\n(none)");
+    expect(prompt.tail).toContain("Give at most 2 short tips.");
+    // While tips are on screen they are the context: no second copy.
+    expect(buildLunaPrompt({ transcript: ["a"], notes: [], shown: ["x"], earlier }).transcript).not.toContain("earlier answers");
+    expect(buildLunaPrompt({ transcript: ["a"], notes: [], earlier: [" "] }).transcript).not.toContain("earlier answers");
   });
 
   it("ignores blank shown tips", () => {
@@ -150,6 +164,17 @@ describe("LUNA_SYSTEM", () => {
     expect(LUNA_SYSTEM).not.toMatch(/\d short tips/);
   });
 
+  it("answers a follow-up question instead of repeating the earlier answer", () => {
+    expect(LUNA_SYSTEM).toContain("the first tip answers that question directly");
+    expect(LUNA_SYSTEM).toContain("A follow-up question");
+    expect(LUNA_SYSTEM).toContain("Never repeat an earlier answer in place of an answer.");
+  });
+
+  it("never asks for a [web] tag", () => {
+    expect(LUNA_SYSTEM).not.toContain("or [web]");
+    expect(LUNA_SYSTEM).toContain("Do not add links or tags such as [web].");
+  });
+
   it("asks for plain text without markdown or links", () => {
     expect(LUNA_SYSTEM).toContain("plain text only");
     expect(LUNA_SYSTEM).toContain("Do not write links");
@@ -183,6 +208,14 @@ describe("parseLunaTips", () => {
   it("strips bold, italic, backticks and headings", () => {
     expect(parseLunaTips("- **bold** and __also__ and *it* and _it2_")).toEqual(["bold and also and it and it2"]);
     expect(parseLunaTips("## Summary\n- Use `read_file` [n1]")).toEqual(["Summary", "Use read_file [n1]"]);
+  });
+
+  it("drops a [web] tag the model still adds, keeping note cites", () => {
+    expect(parseLunaTips("- Weekend closures are planned engineering works, near Tower Hill. [web]")).toEqual([
+      "Weekend closures are planned engineering works, near Tower Hill.",
+    ]);
+    expect(parseLunaTips("- SSO ships in Q4 [n1] [WEB] tfl.gov.uk")).toEqual(["SSO ships in Q4 [n1] tfl.gov.uk"]);
+    expect(streamingTips("- Closures are for engineering works [web]\n")).toEqual(["Closures are for engineering works"]);
   });
 
   it("drops markdown links and citations but keeps the label and note cites", () => {
@@ -495,6 +528,18 @@ describe("guideWithLuna streaming", () => {
     expect(JSON.stringify(parts[2])).toContain("Give at most 3 short tips.");
     // Thinking is off at the call level; the message-level cache markers above stay as they were.
     expect(model.doStreamCalls[0]?.providerOptions).toEqual({ gateway: { only: ["anthropic"] }, ...NO_THINKING });
+  });
+
+  it("keeps web_search for a follow-up question and sends the earlier answer", async () => {
+    let seen = { tools: [""], prompt: "" };
+    const model = streamModel((options) => {
+      seen = options;
+      return textChunks("- They are planned engineering works this weekend\n");
+    });
+    const result = await guideWithLuna({ model, transcript: ["what's in the news in London", "why are there tube closures"], notes: [], earlier: ["District line closed Saturday"] });
+    expect(result.tips).toEqual(["They are planned engineering works this weekend"]);
+    expect(seen.tools).toContain("web_search");
+    expect(seen.prompt).toContain("District line closed Saturday");
   });
 
   it("ignores a signal that never fires", async () => {

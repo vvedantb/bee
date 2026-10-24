@@ -97,6 +97,8 @@ export const pipelineRequestSchema = z.object({
   runId: runIdSchema.optional(),
   // Tips already on screen when a newer line restarts the run (live steering). Complete lines only.
   shown: z.array(z.string().max(500)).max(3).optional(),
+  // On a new turn: the latest settled tips, gone from the screen but sent as context so a follow-up question can use them.
+  earlier: z.array(z.string().max(500)).max(3).optional(),
   // Clerk session token; main refuses to run the pipeline without a live one (main/auth.ts).
   sessionToken: z.string().max(8000),
 });

@@ -1,7 +1,7 @@
 import { getToken } from "@clerk/electron/react";
 import { useSyncExternalStore } from "react";
 import { detectLinks, mergeChips, visibleChips, type LinkChip } from "../../core/link-suggest";
-import { inCommitWindow, isFiller, isNewTurn, mergeTips, recentRestarts, runDelayMs, tipCap, tipKey } from "../../core/steering";
+import { MAX_STEERING_TIPS, isFiller, isNewTurn, isQuestion, mergeTips, recentRestarts, runDelayMs, tipCap, tipKey, waitsForRun } from "../../core/steering";
 import { mergeLines, pipelineText, summaryTranscript, type SessionLine } from "../../core/sync-lines";
 import {
   SESSION_TRANSCRIPT_MAX,
@@ -194,12 +194,16 @@ let lastLineAt = 0;
 let spokenDuringRun = false;
 // The line that opened this turn has not started a run yet: nothing is kept.
 let pendingFresh = false;
+// A direct question came since the run in flight started (steering.ts isQuestion, waitsForRun).
+let asked = false;
 // A run is waiting out its debounce (runTimer), or waiting for a run in its commit window to finish (deferred).
 let runTimer: ReturnType<typeof setTimeout> | undefined;
 let doneTimer: ReturnType<typeof setTimeout> | undefined;
 let deferred = false;
-// The run in flight: its keep list, and the tips it has streamed so far (the last may be half written).
+// The run in flight: its keep list, and the tips it has streamed so far (the last may be half written). runAnswering: a question
+// came just before it started, so lines that are not questions wait for it instead of cancelling it.
 let inFlight: number | null = null;
+let runAnswering = false;
 let runKept: string[] = [];
 let runTips: string[] = [];
 let restarts: number[] = [];
@@ -361,6 +365,7 @@ async function enrichChips(sent: LinkChip[], text: string, seq: number): Promise
  */
 function startTurn(lines: SessionLine[]): void {
   const fresh = isNewTurn({ open: turnOpen, busy: state.busy, spokenDuringRun });
+  if (lines.some((line) => isQuestion(line.text))) asked = true;
   spokenDuringRun = false;
   turnOpen = true;
   lastLineAt = Date.now();
@@ -403,8 +408,10 @@ function keepList(): string[] {
 
 /** A line with content arrived: start at once for the first line of a turn; otherwise debounce, or pause once restarts pile up. */
 function scheduleRun(): void {
-  // A run waits for one in its commit window; it reads the whole transcript when it starts, so this line is already in.
-  if (deferred) return;
+  // A run waits for the one in flight; it reads the whole transcript when it starts, so this line is already in. A new turn or a
+  // new question is weighed again in fireRun: it may supersede that run.
+  if (deferred && !pendingFresh && !asked) return;
+  deferred = false;
   clearTimeout(runTimer);
   const keep = keepList();
   // Busy from now, so the pill never falls back to "Listening…" while the run waits.
@@ -415,8 +422,8 @@ function scheduleRun(): void {
 
 function fireRun(): void {
   runTimer = undefined;
-  // Nearly done: let the answer finish, then start. A new turn has nothing worth finishing.
-  if (inFlight !== null && !pendingFresh && inCommitWindow(runTips.length)) {
+  // Nearly done, or answering a question no newer question replaces: let the answer finish, then start. A new turn has nothing worth finishing.
+  if (inFlight !== null && waitsForRun({ fresh: pendingFresh, runTips: runTips.length, answering: runAnswering, asked })) {
     deferred = true;
     return;
   }
@@ -445,6 +452,8 @@ async function runPipeline(): Promise<void> {
   if (transcript.length === 0) return;
   const fresh = pendingFresh;
   const keep = keepList();
+  // A new turn drops the last answer from the screen, but Luna still gets the latest settled tips, so a follow-up ("why…") has its context.
+  const earlier = keep.length > 0 ? [] : state.session.tips.slice(-MAX_STEERING_TIPS);
   const cap = tipCap(keep.length);
   const now = Date.now();
   // A run still in flight is cancelled below: that is a restart.
@@ -456,6 +465,8 @@ async function runPipeline(): Promise<void> {
   pendingFresh = false;
   deferred = false;
   inFlight = run;
+  runAnswering = asked;
+  asked = false;
   runKept = keep;
   runTips = [];
   // The kept tips stay on screen (dimmed, pill "Updating…"). A new turn drops the old answer.
@@ -491,6 +502,7 @@ async function runPipeline(): Promise<void> {
       transcript,
       runId: run,
       ...(keep.length > 0 ? { shown: keep } : {}),
+      ...(earlier.length > 0 ? { earlier } : {}),
       sessionToken: await sessionToken(),
     });
     if (run !== latestRun) return;
