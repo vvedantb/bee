@@ -2,7 +2,8 @@
 @import "@vvedantb/ui/tokens";
 @import "@vvedantb/ui/tokens/css/base.css";
 @import "@vvedantb/ui/landing.css";
-@source "../node_modules/@vvedantb/ui/src/**/*.{ts,tsx}";
+@source "../node_modules/@vvedantb/ui/src/**/*";
+@source "../node_modules/@vvedantb/ui/src/marketing/landing.css";
 @source "./**/*.{ts,tsx}";
 
 /* Instrument Sans only, for headings and content. */

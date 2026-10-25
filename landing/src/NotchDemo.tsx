@@ -47,7 +47,9 @@ export function NotchDemo() {
   };
 
   const run = () => {
-    const [next, ms] = steps[idx.current];
+    const step = steps[idx.current];
+    if (!step) return;
+    const [next, ms] = step;
     setState(next);
     window.clearInterval(stream.current);
     if (next === "idle") setSpoken(0);
@@ -70,7 +72,7 @@ export function NotchDemo() {
   useEffect(() => {
     const el = stage.current;
     if (!el) return;
-    const io = new IntersectionObserver(([e]) => setVisible(e.isIntersecting), { threshold: 0.2 });
+    const io = new IntersectionObserver(([e]) => setVisible(e?.isIntersecting ?? false), { threshold: 0.2 });
     io.observe(el);
     return () => io.disconnect();
   }, []);
