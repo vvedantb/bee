@@ -7,8 +7,8 @@ import { REACT_DEDUPE, defineWebViteConfig, srcAlias } from "@vvedantb/config";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// Custom domain on Pages (bee.vedantb.com), so assets load from the root.
-// The build lands in ../docs so branch-based Pages ("Deploy from branch / docs") keeps working.
+// Custom domain on Vercel (bee.vedantb.com), so assets load from the root.
+// The marketing site deploys through Vercel. The build lands in ../docs.
 // docs/design is kept: the design notes live in public/design and are copied into the output.
 export default defineConfig({
   ...defineWebViteConfig({
