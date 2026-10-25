@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en-GB">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Bee: your notes, in the meeting</title>
+    <meta name="description" content="Bee is a small notch at the top centre of your screen. It listens to the meeting, finds your local markdown notes and shows one or two short tips. Open source, MIT licence." />
+    <meta name="theme-color" content="#fabe28" />
+    <meta property="og:title" content="Bee: your notes, in the meeting" />
+    <meta property="og:description" content="A small notch that listens and shows a short tip. Open source." />
+    <meta property="og:type" content="website" />
+    <link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48" />
+    <link rel="icon" type="image/png" sizes="256x256" href="/icon.png" />
+    <link rel="apple-touch-icon" href="/icon.png" />
+
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:ital,wght@0,400..700;1,400..700&display=swap" />
+
+    <script>
+      // The kit themes on a .dark class. Follow the system setting and keep following it.
+      (function () {
+        var q = window.matchMedia("(prefers-color-scheme: dark)");
+        function apply() {
+          document.documentElement.classList.toggle("dark", q.matches);
+        }
+        apply();
+        q.addEventListener("change", apply);
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
