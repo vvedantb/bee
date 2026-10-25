@@ -1,0 +1,29 @@
+@import "tailwindcss";
+@import "@vvedantb/ui/tokens";
+@import "@vvedantb/ui/tokens/css/base.css";
+@import "@vvedantb/ui/landing.css";
+@source "../node_modules/@vvedantb/ui/src/**/*";
+@source "../node_modules/@vvedantb/ui/src/marketing/landing.css";
+@source "./**/*.{ts,tsx}";
+
+/* Instrument Sans only, for headings and content. */
+html,
+body {
+  font-family: "Instrument Sans", system-ui, sans-serif;
+}
+
+/* Bee accent. Tints the Download button only. */
+:root {
+  --bee-accent: #fabe28;
+  --bee-accent-hover: #ffcb4d;
+  --bee-on-accent: #17140f;
+}
+
+.bee-download {
+  background: var(--bee-accent);
+  color: var(--bee-on-accent);
+}
+.bee-download:hover {
+  background: var(--bee-accent-hover);
+  opacity: 1;
+}

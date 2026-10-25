@@ -14,6 +14,7 @@
     "check:asar": "vvedantb-check-asar list --default-asar release/mac-arm64/Bee.app/Contents/Resources/app.asar --default-asar release/mac/Bee.app/Contents/Resources/app.asar --scan out/main --scan out/preload --require electron-store",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
+    "landing:build": "npm --prefix landing run build",
     "icons": "node scripts/make-icons.mjs",
     "test:gateway": "vitest run --config vitest.gateway.config.ts",
     "test:e2e": "electron-vite build && vitest run --config vitest.e2e.config.ts",
