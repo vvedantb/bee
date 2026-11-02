@@ -1,6 +1,8 @@
 import { app, ipcMain, shell } from "electron";
 import { z } from "zod";
 import { meetingTerms, meetingWindowBrief, type MeetingWindowContext } from "../core/agent-desktop-meeting";
+import type { DesktopActions } from "../core/desktop-actions";
+import { runDirectCommand } from "../core/direct-command";
 import { loadMcpTools, type McpPool, type McpServerConfig } from "../core/mcp";
 import type { MeetingContext } from "../core/meeting-context";
 import { GUIDE_MODEL, NO_GATEWAY_KEY, STT_MODEL, createBeeGateway, type BeeGateway } from "../core/gateway";
@@ -10,6 +12,7 @@ import { buildLocalSummary, generateMeetingSummary } from "../core/summary";
 import { transcribeSpeech } from "../core/transcribe";
 import {
   IPC,
+  commandRequestSchema,
   meetingContextRequestSchema,
   meetingSummaryRequestSchema,
   pipelineCancelSchema,
@@ -39,10 +42,32 @@ export function registerMeetingIpc(args: { notesDir: string; fsRoots: () => stri
   meetingWindow?: { read: () => Promise<unknown>; context: () => MeetingWindowContext | null; status: () => MeetingWindowStatus };
   gatewayApiKey: () => string | undefined;
   /** Builds the Gateway models from the key. Defaults to the real Gateway; the E2E harness records or replays them. */
-  gateway?: (apiKey: string) => BeeGateway }): void {
+  gateway?: (apiKey: string) => BeeGateway;
+  /** Desktop tools for a direct request ("Bee, open Teams", main/desktop-actions.ts). Without them the AI only answers. */
+  desktop?: DesktopActions;
+  /** The wake word setting: a direct request is refused while it is off. Defaults to on. */
+  wakeWordEnabled?: () => boolean }): void {
   const createGateway = args.gateway ?? createBeeGateway;
   // One controller per run in flight. The renderer cancels a run when a newer line supersedes it.
   const runs = new Map<string, AbortController>();
+
+  /** A fresh controller for the run, aborting an older one with the same id. done() forgets it. */
+  const track = (runId: string | number | undefined) => {
+    const key = runId === undefined ? null : String(runId);
+    const controller = new AbortController();
+    if (key !== null) {
+      runs.get(key)?.abort();
+      runs.set(key, controller);
+    }
+    return { controller, done: () => key !== null && runs.get(key) === controller && runs.delete(key) };
+  };
+
+  /** Settings read per run, so changes apply without a restart. Tool lists come from the pool's cache. */
+  const mcpTools = async () => {
+    const signedOut = args.mcpSignedOut().map((server) => ({ server, error: "not signed in" }));
+    const mcp = await loadMcpTools(args.mcpConfigs(), { pool: args.mcpPool });
+    return { ...mcp, errors: [...signedOut, ...mcp.errors] };
+  };
 
   ipcMain.handle(IPC.transcribe, (_event, payload) => {
     const request = transcribeRequestSchema.parse(payload);
@@ -72,12 +97,7 @@ export function registerMeetingIpc(args: { notesDir: string; fsRoots: () => stri
     const request = pipelineRequestSchema.parse(payload);
     assertSignedIn(request.sessionToken);
     const apiKey = args.gatewayApiKey();
-    const key = request.runId === undefined ? null : String(request.runId);
-    const controller = new AbortController();
-    if (key !== null) {
-      runs.get(key)?.abort();
-      runs.set(key, controller);
-    }
+    const { controller, done } = track(request.runId);
     const loadStarted = performance.now();
     const snippets = loadSnippets(args.notesDir);
     const loadNotes = performance.now() - loadStarted;
@@ -102,11 +122,7 @@ export function registerMeetingIpc(args: { notesDir: string; fsRoots: () => stri
         notesDir: args.notesDir,
         extraRoots: args.fsRoots(),
         // Settings are read now, so changes apply without a restart. Tool lists come from the pool's cache; servers connect on first call.
-        loadMcpTools: async () => {
-          const signedOut = args.mcpSignedOut().map((server) => ({ server, error: "not signed in" }));
-          const mcp = await loadMcpTools(args.mcpConfigs(), { pool: args.mcpPool });
-          return { ...mcp, errors: [...signedOut, ...mcp.errors] };
-        },
+        loadMcpTools: mcpTools,
         signal: controller.signal,
         onActivity: (activity) => {
           if (!event.sender.isDestroyed()) event.sender.send(IPC.lunaActivity, { runId: request.runId, ...activity } satisfies LunaActivity);
@@ -117,7 +133,43 @@ export function registerMeetingIpc(args: { notesDir: string; fsRoots: () => stri
       });
       return { ...result, timingsMs: { ...result.timingsMs, loadNotes } };
     } finally {
-      if (key !== null && runs.get(key) === controller) runs.delete(key);
+      done();
+    }
+  });
+
+  // A direct request ("Bee, open Teams", core/direct-command.ts): the reply and desktop action lines for the island. Never a
+  // meeting line. The renderer sends one only with the wake word setting on; main checks it again. The request is never logged.
+  ipcMain.handle(IPC.runCommand, async (event, payload) => {
+    const request = commandRequestSchema.parse(payload);
+    assertSignedIn(request.sessionToken);
+    if (args.wakeWordEnabled && !args.wakeWordEnabled()) throw new Error("Talking to Bee by name is off in Settings.");
+    const apiKey = args.gatewayApiKey();
+    const { controller, done } = track(request.runId);
+    const windowContext = args.meetingWindow?.context() ?? null;
+    const meetingBrief = [args.meeting.brief(), meetingWindowBrief(windowContext)].filter((part) => part && part.trim()).join("\n") || undefined;
+    try {
+      return await runDirectCommand({
+        command: request.command,
+        transcript: request.transcript,
+        meetingBrief,
+        meetingTerms: meetingTerms(windowContext) || undefined,
+        searchLocation: searchLocation({ timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone, locale: app.getSystemLocale() }),
+        snippets: loadSnippets(args.notesDir),
+        gateway: apiKey ? createGateway(apiKey) : null,
+        notesDir: args.notesDir,
+        extraRoots: args.fsRoots(),
+        loadMcpTools: mcpTools,
+        actions: args.desktop ?? null,
+        signal: controller.signal,
+        onActivity: (activity) => {
+          if (!event.sender.isDestroyed()) event.sender.send(IPC.lunaActivity, { runId: request.runId, ...activity } satisfies LunaActivity);
+        },
+        onPartial: (partial) => {
+          if (!controller.signal.aborted && !event.sender.isDestroyed()) event.sender.send(IPC.lunaPartial, { runId: request.runId, ...partial } satisfies LunaPartial);
+        },
+      });
+    } finally {
+      done();
     }
   });
 

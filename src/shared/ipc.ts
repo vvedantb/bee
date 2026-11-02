@@ -10,6 +10,7 @@ export const IPC = {
   revealGatewayKey: "bee:settings:reveal-gateway-key",
   copyGatewayKey: "bee:settings:copy-gateway-key",
   runPipeline: "bee:pipeline:run",
+  runCommand: "bee:command:run",
   transcribe: "bee:speech:transcribe",
   writeMeetingSummary: "bee:meeting:write-summary",
   openMeetingSummary: "bee:meeting:open-summary",
@@ -80,6 +81,9 @@ export const settingsViewSchema = z.object({
   teamsAudioFallbackEnabled: z.boolean(),
   // Mic hints (renderer/src/hints.ts): local suggestions when the mic is silent, quiet or too loud. On by default.
   hintsEnabled: z.boolean(),
+  // "Bee" wake word (core/wake-word.ts): an own mic phrase that starts with "Bee…" is a direct request to the AI, not meeting
+  // conversation. On by default.
+  wakeWordEnabled: z.boolean(),
 });
 export type SettingsView = z.infer<typeof settingsViewSchema>;
 
@@ -98,6 +102,7 @@ export const settingsUpdateSchema = z.object({
   readMeetingWindowEnabled: z.boolean().optional(),
   teamsAudioFallbackEnabled: z.boolean().optional(),
   hintsEnabled: z.boolean().optional(),
+  wakeWordEnabled: z.boolean().optional(),
 });
 export type SettingsUpdate = z.infer<typeof settingsUpdateSchema>;
 
@@ -135,6 +140,18 @@ export const pipelineRequestSchema = z.object({
   sessionToken: z.string().max(8000),
 });
 export type PipelineRequest = z.infer<typeof pipelineRequestSchema>;
+
+// A direct request to the AI: an own mic phrase that started with the wake word, without it ("open Teams"). It is never a
+// meeting line: not in the session, the summary, meeting memory or the Teams sync. The reply comes back as a PipelineResult.
+export const COMMAND_MAX_CHARS = 2000;
+export const commandRequestSchema = z.object({
+  command: z.string().trim().min(1).max(COMMAND_MAX_CHARS),
+  // The latest meeting lines, as background for a request about the meeting ("what did Priya just say"). Never answered as tips.
+  transcript: z.array(z.string().max(2000)).max(8).optional(),
+  runId: runIdSchema.optional(),
+  sessionToken: z.string().max(8000),
+});
+export type CommandRequest = z.infer<typeof commandRequestSchema>;
 
 export const pipelineCancelSchema = z.object({ runId: runIdSchema });
 export type PipelineCancel = z.infer<typeof pipelineCancelSchema>;

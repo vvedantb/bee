@@ -68,6 +68,7 @@ const SETTINGS: SettingsView = {
   readMeetingWindowEnabled: true,
   teamsAudioFallbackEnabled: true,
   hintsEnabled: false,
+  wakeWordEnabled: true,
 };
 
 const VIEW: TeamsView = {

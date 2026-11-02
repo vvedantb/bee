@@ -49,6 +49,9 @@ describe("activityLabel", () => {
 
   it("names the note writer", () => {
     expect(activityLabel("append_note")).toBe("Writing a note");
+    expect(activityLabel("open_app")).toBe("Opening the app…");
+    expect(activityLabel("focus_window")).toBe("Switching windows…");
+    expect(activityLabel("open_url")).toBe("Opening the link…");
   });
 
   it("falls back to Thinking… for unknown, missing or inherited names", () => {

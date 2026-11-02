@@ -546,6 +546,13 @@ function SettingsTab({ state, settings }: { state: BeeState; settings: SettingsV
         checked={settings.hintsEnabled}
         onCheckedChange={(hintsEnabled) => void actions.saveSettings({ hintsEnabled })}
       />
+      <SettingRow
+        id="wake-word"
+        label="Talk to Bee by saying 'Bee'"
+        description="When your mic hears “Bee…” first, the rest is a request to the AI, not the meeting. It can open apps and links."
+        checked={settings.wakeWordEnabled}
+        onCheckedChange={(wakeWordEnabled) => void actions.saveSettings({ wakeWordEnabled })}
+      />
 
       <div className="flex flex-col gap-1">
         Interface size

@@ -1,7 +1,9 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
+  DESKTOP_ACTION_COMMANDS,
   READ_ONLY_COMMANDS,
+  assertDesktopAction,
   assertReadOnly,
   parseAccessibility,
   parseApps,
@@ -31,6 +33,43 @@ describe("assertReadOnly", () => {
       expect(() => assertReadOnly("snapshot", ["--app", "Zoom", flag]), flag).toThrow(/flag not allowed/);
     }
     expect(() => assertReadOnly("snapshot", ["--app", "zoom.us", "--window-id", "w-1", "--compact", "--max-depth", "25"])).not.toThrow();
+  });
+});
+
+describe("assertDesktopAction", () => {
+  it("allows only launching, focusing and listing apps and windows", () => {
+    expect([...DESKTOP_ACTION_COMMANDS]).toEqual(["launch", "focus-window", "list-apps", "list-windows"]);
+    expect(() => assertDesktopAction("launch", ["Microsoft Teams", "--activate", "--timeout", "8000"])).not.toThrow();
+    expect(() => assertDesktopAction("focus-window", ["--app", "Microsoft Teams", "--title", "Standup"])).not.toThrow();
+    expect(() => assertDesktopAction("list-apps", [])).not.toThrow();
+    expect(() => assertDesktopAction("list-windows", ["--app", "Slack"])).not.toThrow();
+    for (const command of ["click", "type", "press", "focus", "set-value", "close-app", "clipboard-set", "clipboard-get", "batch", "mouse-click", "snapshot", "resize-window", "notification-action"]) {
+      expect(() => assertDesktopAction(command, []), command).toThrow(/not allowed/);
+    }
+  });
+
+  it("refuses flags outside each command's list, so launch never passes arguments, env or a debug port", () => {
+    for (const flag of ["--headed", "--arg", "--arg=--evil", "--env", "--cwd", "--cdp", "--no-attach", "--session", "--trace", "--screenshot", "--force", "--app"]) {
+      expect(() => assertDesktopAction("launch", ["Teams", flag, "x"]), flag).toThrow(/not allowed/);
+    }
+    expect(() => assertDesktopAction("focus-window", ["--app", "Teams", "--headed"])).toThrow(/not allowed/);
+    expect(() => assertDesktopAction("list-apps", ["--wait-for", "x"])).toThrow(/not allowed/);
+  });
+
+  it("needs exactly one app for launch and a value for each value flag", () => {
+    expect(() => assertDesktopAction("launch", [])).toThrow(/arguments not allowed/);
+    expect(() => assertDesktopAction("launch", ["Teams", "Slack"])).toThrow(/arguments not allowed/);
+    expect(() => assertDesktopAction("launch", ["-n"])).toThrow(/not allowed/);
+    expect(() => assertDesktopAction("focus-window", ["Teams"])).toThrow(/arguments not allowed/);
+    expect(() => assertDesktopAction("focus-window", ["--app"])).toThrow(/needs a value/);
+    expect(() => assertDesktopAction("focus-window", ["--app", "--headed"])).toThrow(/needs a value/);
+    expect(() => assertDesktopAction("launch", ["Teams", "--timeout"])).toThrow(/needs a value/);
+  });
+
+  it("is a separate list: the read-only check still refuses every action command", () => {
+    for (const command of DESKTOP_ACTION_COMMANDS.filter((command) => !(READ_ONLY_COMMANDS as readonly string[]).includes(command))) {
+      expect(() => assertReadOnly(command, []), command).toThrow(/not allowed/);
+    }
   });
 });
 

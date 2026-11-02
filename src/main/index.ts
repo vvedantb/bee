@@ -15,8 +15,9 @@ import { createMeetingContext } from "../core/meeting-context";
 import { createMeetingMemoryStore } from "../core/meeting-memory";
 import { searchMcpNotes } from "../core/meeting-search";
 import { createVmemSearch } from "../core/vmem-history";
-import { createAgentDesktopRunner, resolveAgentDesktop } from "./agent-desktop";
+import { createAgentDesktopActionRunner, createAgentDesktopRunner, resolveAgentDesktop } from "./agent-desktop";
 import { bringToFront, registerClerkOAuthIpc } from "./clerk-oauth-ipc";
+import { createDesktopActions, windowsStartMenuDirs } from "./desktop-actions";
 import { registerFaviconIpc } from "./favicon-ipc";
 import { registerGatewayKeyIpc } from "./gateway-key-ipc";
 import { registerLinkIpc } from "./link-ipc";
@@ -268,6 +269,17 @@ if (clerk.isPrimaryInstance) {
       onIdle: () => agentDesktop?.cleanup(),
     });
     app.on("will-quit", () => meetingWindow.stop());
+    // Desktop tools for a direct request ("Bee, open Teams"): their own agent-desktop runner (launch, focus and list only),
+    // never the meeting window reader's. Apps open by fixed arguments or Electron's shell; nothing runs a shell.
+    const desktopRunner = agentDesktopBinary ? createAgentDesktopActionRunner(agentDesktopBinary) : null;
+    app.on("will-quit", () => desktopRunner?.cleanup());
+    const desktop = createDesktopActions({
+      platform: process.platform,
+      run: desktopRunner?.run ?? null,
+      openExternal: (url) => shell.openExternal(url),
+      openPath: (path) => shell.openPath(path),
+      startMenuDirs: windowsStartMenuDirs(process.env),
+    });
     ipcMain.handle(IPC.openAccessibilitySettings, async () => {
       if (isMac) await shell.openExternal(MAC_ACCESSIBILITY_SETTINGS);
     });
@@ -314,7 +326,7 @@ if (clerk.isPrimaryInstance) {
       // macOS has no in-call detector, so it reads Teams window names on its own schedule.
       pollTitlesWhenIdle: isMac,
     });
-    registerMeetingIpc({ notesDir, fsRoots: settings.fsRoots, mcpConfigs: settings.mcpConfigs, mcpSignedOut: settings.mcpSignedOut, mcpPool, meeting, meetingWindow, gatewayApiKey: settings.gatewayApiKey });
+    registerMeetingIpc({ notesDir, fsRoots: settings.fsRoots, mcpConfigs: settings.mcpConfigs, mcpSignedOut: settings.mcpSignedOut, mcpPool, meeting, meetingWindow, gatewayApiKey: settings.gatewayApiKey, desktop, wakeWordEnabled: settings.wakeWord });
 
     const teams = registerTeamsIpc({ relayUrl: relayUrlFromEnv(process.env.BEE_RELAY_URL || import.meta.env.MAIN_VITE_BEE_RELAY_URL), detector });
     onInvite = (link) => teams.setPendingInvite(link);

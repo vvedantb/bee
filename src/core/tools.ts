@@ -21,6 +21,8 @@ export function lunaTools(
     extra?: ToolSet;
     web?: boolean;
     location?: SearchLocation;
+    /** Desktop tools (core/desktop-tools.ts), only for a direct request to Bee. */
+    desktop?: ToolSet;
   } = {},
 ): ToolSet {
   // Anthropic runs this search itself, so the Gateway must route the call to Anthropic (gateway.ts guideProviderOptions).
@@ -33,7 +35,7 @@ export function lunaTools(
   const web: ToolSet = options.web === false ? {} : { web_search: search };
   const local = options.notesDir ? { ...web, ...fsTools({ notesDir: options.notesDir, extraRoots: options.extraRoots }) } : web;
   // MCP tools (core/mcp.ts) are namespaced; spreading them first also means they can never replace a built-in.
-  return { ...options.extra, ...local };
+  return { ...options.extra, ...local, ...options.desktop };
 }
 
 // Search results as providers return them. Document sources have no url, so they never parse.
