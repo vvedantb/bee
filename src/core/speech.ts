@@ -21,6 +21,13 @@ export function frameLevel(frame: Float32Array): number {
   return frame.length === 0 ? 0 : Math.sqrt(sum / frame.length);
 }
 
+/** The frame's largest absolute sample, for clipping (renderer/src/hints.ts). */
+export function framePeak(frame: Float32Array): number {
+  let peak = 0;
+  for (const sample of frame) peak = Math.max(peak, Math.abs(sample));
+  return peak;
+}
+
 function concat(frames: Float32Array[]): Float32Array {
   const out = new Float32Array(frames.reduce((total, frame) => total + frame.length, 0));
   let offset = 0;
@@ -176,11 +183,14 @@ export function encodeWav(samples: Float32Array, sampleRate: number): Uint8Array
   return bytes;
 }
 
+/** How a phrase's speech-to-text ended: words came back, none did (noise, a cough), or the call failed. */
+export type PhraseOutcome = "words" | "empty" | "failed";
+
 /**
  * One mic session. Phrases are transcribed one at a time, in order, and each non-empty transcript goes to onLine.
  * onError gets a short message when a transcription fails, and null once one succeeds again.
  * onSpeechEnd fires the moment a phrase ends, before any encoding or STT. onSettled fires once that phrase's STT is done and
- * onLine or onError has run. Timings go to console.debug as numbers only.
+ * onLine or onError has run, with its outcome (never the words). Timings go to console.debug as numbers only.
  */
 export function startMicSession(args: {
   sampleRate: number;
@@ -188,7 +198,7 @@ export function startMicSession(args: {
   onLine: (text: string) => void;
   onError: (message: string | null) => void;
   onSpeechEnd?: () => void;
-  onSettled?: () => void;
+  onSettled?: (outcome: PhraseOutcome) => void;
   /** The perf log label (numbers only). */
   label?: string;
 }) {
@@ -198,16 +208,18 @@ export function startMicSession(args: {
 
   async function send(samples: Float32Array, endedAt: number): Promise<void> {
     const sttStart = performance.now();
+    let outcome: PhraseOutcome = "failed";
     try {
       const { text, error } = await args.transcribe(encodeWav(samples, args.sampleRate));
       const done = performance.now();
       console.debug(`perf ${label} ${Math.round(done - sttStart)}ms, ${Math.round(done - endedAt)}ms since speech end`);
       args.onError(error);
       if (text) args.onLine(text);
+      outcome = text ? "words" : error ? "failed" : "empty";
     } catch (error) {
       args.onError(error instanceof Error ? error.message : "Speech-to-text failed");
     } finally {
-      args.onSettled?.();
+      args.onSettled?.(outcome);
     }
   }
 

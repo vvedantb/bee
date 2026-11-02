@@ -67,6 +67,7 @@ const SETTINGS: SettingsView = {
   meetingMemoryEnabled: true,
   readMeetingWindowEnabled: true,
   teamsAudioFallbackEnabled: true,
+  hintsEnabled: false,
 };
 
 const VIEW: TeamsView = {

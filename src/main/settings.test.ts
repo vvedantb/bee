@@ -460,6 +460,35 @@ describe("settings Teams audio fallback", () => {
   });
 });
 
+describe("settings mic hints", () => {
+  it("is on by default and in the view", () => {
+    expect(create().view().hintsEnabled).toBe(true);
+  });
+
+  it("round-trips through settings.json and survives unrelated saves", () => {
+    const store = create();
+    expect(store.save({ hintsEnabled: false }).hintsEnabled).toBe(false);
+    expect(JSON.parse(readFileSync(join(dir, "settings.json"), "utf8")).hintsEnabled).toBe(false);
+    store.save({ meetingMode: true });
+    expect(create().view().hintsEnabled).toBe(false);
+    store.save({ hintsEnabled: true });
+    expect(create().view().hintsEnabled).toBe(true);
+  });
+
+  it("stays on for an older settings file without it, and reads a bad stored value as on", () => {
+    writeFileSync(join(dir, "settings.json"), JSON.stringify({ meetingMode: true }));
+    expect(create().view()).toMatchObject({ meetingMode: true, hintsEnabled: true });
+    writeFileSync(join(dir, "settings.json"), JSON.stringify({ hintsEnabled: "no" }));
+    expect(create().view().hintsEnabled).toBe(true);
+  });
+
+  it("rejects a non-boolean update at the IPC schema", async () => {
+    const { settingsUpdateSchema } = await import("../shared/ipc");
+    expect(() => settingsUpdateSchema.parse({ hintsEnabled: "off" })).toThrow();
+    expect(settingsUpdateSchema.parse({ hintsEnabled: false })).toEqual({ hintsEnabled: false });
+  });
+});
+
 describe("settings savedGatewayApiKey", () => {
   const withEnv = () => createSettingsStore({ userDataDir: dir, notesDir: join(dir, "notes"), envGatewayKey: "env-key-FAKE" });
 

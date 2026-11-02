@@ -16,6 +16,7 @@ import { createMeetingMemoryStore } from "../core/meeting-memory";
 import { searchMcpNotes } from "../core/meeting-search";
 import { createVmemSearch } from "../core/vmem-history";
 import { createAgentDesktopRunner, resolveAgentDesktop } from "./agent-desktop";
+import { bringToFront, registerClerkOAuthIpc } from "./clerk-oauth-ipc";
 import { registerFaviconIpc } from "./favicon-ipc";
 import { registerGatewayKeyIpc } from "./gateway-key-ipc";
 import { registerLinkIpc } from "./link-ipc";
@@ -179,7 +180,8 @@ function createTray(notesDir: string): void {
   }
 }
 
-// Before whenReady: registers the bee:// scheme, Clerk's token and OAuth IPC, and the single-instance lock.
+// Before whenReady: registers the bee:// scheme, Clerk's token and OAuth IPC, and the single-instance lock. Bee then
+// swaps the OAuth IPC for its loopback (registerClerkOAuthIpc below).
 const clerk = createClerkBridge({
   storage: storage(),
   renderer: { scheme: RENDERER_SCHEME, host: RENDERER_HOST },
@@ -198,15 +200,25 @@ function receiveInvite(link: string | null): void {
 }
 
 if (clerk.isPrimaryInstance) {
+  // Social sign-in returns the browser to Bee's page on 127.0.0.1, not to bee://renderer/ (main/clerk-oauth-loopback.ts).
+  const stopClerkOAuth = registerClerkOAuthIpc();
+  app.on("will-quit", stopClerkOAuth);
+
+  // Also bee://renderer/ from Return to Bee on that page, on Windows and Linux.
   app.on("second-instance", (_event, argv) => {
-    win?.show();
+    bringToFront(win);
     receiveInvite(inviteFromArgv(argv));
   });
   // macOS delivers deep links as open-url.
   app.on("open-url", (event, url) => {
-    if (!/^bee:\/\/team\//i.test(url)) return;
-    event.preventDefault();
-    receiveInvite(url);
+    if (/^bee:\/\/team\//i.test(url)) {
+      event.preventDefault();
+      receiveInvite(url);
+    } else if (/^bee:\/\/renderer(?:[/?#]|$)/i.test(url)) {
+      // Return to Bee on the sign-in page.
+      event.preventDefault();
+      bringToFront(win);
+    }
   });
 
   void app.whenReady().then(() => {

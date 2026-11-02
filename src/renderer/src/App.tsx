@@ -20,6 +20,7 @@ import { Favicon } from "./Favicon";
 import { followBottom } from "./follow-bottom";
 import { Connectors } from "./Connectors";
 import { MeetingContextSection } from "./MeetingContextSection";
+import { MicHint } from "./MicHint";
 import { SecretField } from "./SecretField";
 import { SettingRow } from "./SettingRow";
 import { INTERFACE_SCALES } from "../../core/interface-scale";
@@ -31,7 +32,7 @@ import { bodyFollowsNewest, islandClick, mcpErrorNote, timingsLabel, timingsTitl
 import { NOTCH_LOGO_PX } from "./logo";
 import { focusKeyFieldWhenReady, GATEWAY_KEY_FIELD_ID, statusClick, type StatusClick } from "./island-click";
 import { NOTCH_BUTTON, NOTCH_UPDATE_BUTTON, logoState, notchLine, workingLabel, type NotchLine } from "./notch";
-import { actions, answerFolded, displayResult, islandOpen, teamsAudioNow, useBee, type BeeState, type SummaryState, type UpdateState } from "./store";
+import { actions, answerFolded, displayResult, islandOpen, responseOpen, teamsAudioNow, useBee, type BeeState, type SummaryState, type UpdateState } from "./store";
 import { SyncCard, SyncSection, TeamSection, syncedWith } from "./Teams";
 import { TEAMS_AUDIO_LISTENING } from "./teams-audio-message";
 import { updateButton } from "./update";
@@ -69,6 +70,8 @@ function IslandBody({
   closing,
   keptTips,
   card,
+  hint,
+  hintClosing,
   follow,
 }: {
   result: PipelineResult | null;
@@ -76,6 +79,8 @@ function IslandBody({
   closing: boolean;
   keptTips: string[];
   card: string[];
+  hint: BeeState["hint"];
+  hintClosing: boolean;
   follow: boolean;
 }) {
   const tips = result?.tips ?? [];
@@ -127,6 +132,8 @@ function IslandBody({
                 </ul>
               </div>
             ) : null}
+            {/* Last, so a body pinned to its newest line (follow-bottom.ts) keeps the hint in view. */}
+            {hint ? <MicHint text={hint.text} closing={hintClosing} /> : null}
           </div>
         </div>
       </div>
@@ -172,13 +179,15 @@ function Island({ state }: { state: BeeState }) {
   const open = state.expanded && !state.collapsing;
   const result = displayResult(state);
   const chips = visibleChips(state.chips, state.dismissedChipIds);
+  // The body opens for a response, or for a mic hint alone. A hint alone leaves the pill as it was ("Listening…").
+  const showResponse = responseOpen(state);
   const showBody = islandOpen(state);
   // While Luna thinks, chips may open the body but the pill keeps its thinking text.
   const cardOnly = (state.meetingCard?.lines.length ?? 0) > 0 && (result?.tips.length ?? 0) === 0;
-  const line: NotchLine = showBody && !state.busy && !state.heard && !state.mic.error ? { kind: "answer", text: cardOnly ? "Last time" : "Tips" } : notchLine(state, isSignedIn);
+  const line: NotchLine = showResponse && !state.busy && !state.heard && !state.mic.error ? { kind: "answer", text: cardOnly ? "Last time" : "Tips" } : notchLine(state, isSignedIn);
   const status = line.text;
-  // A folded answer opens in full in the island; status that asks for action opens its place in the panel (island-click.ts).
-  const click = statusClick({ kind: line.kind, panelOpen: state.expanded, bodyShown: showBody, answerFolded: answerFolded(state) });
+  // A folded answer opens in full in the island, even under a hint; status that asks for action opens its place in the panel (island-click.ts).
+  const click = statusClick({ kind: line.kind, panelOpen: state.expanded, bodyShown: showResponse, answerFolded: answerFolded(state) });
   const newVersion = state.update.check?.available ? state.update.check.latestVersion : null;
   const statusClass = state.mic.error ? "notch-status error-text" : "notch-status";
   return (
@@ -244,8 +253,20 @@ function Island({ state }: { state: BeeState }) {
           <IconChevronDown {...ICON} />
         </Button>
       </header>
-      {/* While busy the previous tips stay (and streamed tips replace them); displayResult drops the old error. */}
-      {showBody ? <IslandBody result={result} chips={chips} closing={state.islandClosing} keptTips={state.revising ? state.keptTips : []} card={state.meetingCard?.lines ?? []} follow={bodyFollowsNewest(state.fullText)} /> : null}
+      {/* While busy the previous tips stay (and streamed tips replace them); displayResult drops the old error. A hint alone shows
+          none of a closed response, and closing it closes the body. */}
+      {showBody ? (
+        <IslandBody
+          result={showResponse ? result : null}
+          chips={showResponse ? chips : []}
+          closing={state.islandClosing || (state.hintClosing && !showResponse)}
+          keptTips={state.revising ? state.keptTips : []}
+          card={showResponse ? (state.meetingCard?.lines ?? []) : []}
+          hint={state.hint}
+          hintClosing={state.hintClosing}
+          follow={bodyFollowsNewest(state.fullText)}
+        />
+      ) : null}
     </div>
   );
 }
@@ -331,6 +352,8 @@ function LiveTab({ state }: { state: BeeState }) {
           </div>
         ) : null}
         {state.mic.error ? <p className="error">{state.mic.error}</p> : null}
+        {/* The island is hidden behind the panel, so the mic hint shows here too. Guidance, not an error. */}
+        {state.hint ? <p className="muted">{state.hint.text}</p> : null}
         {result?.guideError ? <p className="error">{result.guideError}</p> : null}
         {mcpNote ? <p className="muted">{mcpNote}</p> : null}
         {state.error ? <p className="error">{state.error}</p> : null}
@@ -515,6 +538,13 @@ function SettingsTab({ state, settings }: { state: BeeState; settings: SettingsV
         description="Hidden from screen sharing, kept on top."
         checked={settings.meetingMode}
         onCheckedChange={(meetingMode) => void actions.saveSettings({ meetingMode })}
+      />
+      <SettingRow
+        id="mic-hints"
+        label="Mic hints"
+        description="Suggest fixes when the mic is quiet, silent or too loud."
+        checked={settings.hintsEnabled}
+        onCheckedChange={(hintsEnabled) => void actions.saveSettings({ hintsEnabled })}
       />
 
       <div className="flex flex-col gap-1">

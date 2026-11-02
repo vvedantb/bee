@@ -283,6 +283,25 @@ describe("ack before speech-to-text", () => {
     expect(onSettled).toHaveBeenCalledTimes(1);
   });
 
+  it("tells onSettled whether words came back, none did, or the call failed, never the words", async () => {
+    const replies: TranscribeResult[] = [
+      { text: "hello there", error: null },
+      { text: null, error: null },
+      { text: null, error: "Speech-to-text failed: x" },
+    ];
+    const outcomes: unknown[][] = [];
+    const mic = startMicSession({
+      sampleRate: RATE,
+      transcribe: async () => replies.shift() ?? { text: null, error: null },
+      onLine: vi.fn(),
+      onError: vi.fn(),
+      onSettled: (...args: unknown[]) => outcomes.push(args),
+    });
+    for (let phrase = 0; phrase < 3; phrase += 1) feed(mic.push, frames(800, tone), frames(END_SILENCE_MS + 200, silence));
+    await mic.stop();
+    expect(outcomes).toEqual([["words"], ["empty"], ["failed"]]);
+  });
+
   it("logs timings as numbers only", async () => {
     const debug = vi.spyOn(console, "debug").mockImplementation(() => undefined);
     try {

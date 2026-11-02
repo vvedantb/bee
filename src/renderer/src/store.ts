@@ -26,11 +26,12 @@ import {
   type UpdateCheck,
   type WindowSize,
 } from "../../shared/ipc";
+import { HINT_SHOW_MS, createHintDetector, type Hint, type HintId } from "./hints";
 import { islandOpenMs, islandShowsBody, shouldAutoCollapse, shouldShowResponse } from "./island";
 import { LOGO_DONE_MS } from "./logo";
 import { openMic } from "./mic";
 import { motionReduced } from "./motion";
-import { startMicSession } from "./speech";
+import { framePeak, startMicSession, type PhraseOutcome } from "./speech";
 import { openTeamsAudio } from "./teams-audio";
 import { downloadUpdate, installUpdate, updateNow } from "./update";
 
@@ -104,6 +105,10 @@ export type BeeState = {
   meetingCard: MeetingCard | null;
   error: string | null;
   mic: { on: boolean; level: number; error: string | null };
+  // A mic hint (hints.ts: no input, quiet, too loud, noisy) in the island body. Calm guidance, never mic.error. hintClosing: it
+  // plays its exit before it goes.
+  hint: { id: HintId; text: string } | null;
+  hintClosing: boolean;
   update: UpdateState;
   // Teams mode, from main (null until the first tick after sign-in).
   teams: TeamsView | null;
@@ -171,6 +176,8 @@ let state: BeeState = {
   meetingCard: null,
   error: null,
   mic: { ...MIC_OFF, error: null },
+  hint: null,
+  hintClosing: false,
   update: { status: "idle", check: null, error: null },
   teams: null,
   teamsBusy: false,
@@ -254,6 +261,9 @@ let cardShownFor = 0;
 let meetingTicking = false;
 let islandActivityAt = 0;
 let islandTimer: ReturnType<typeof setTimeout> | undefined;
+// Mic hints: one detector for the app, so a hint's cooldown outlasts a mic toggle. Fed by each mic frame and phrase outcome.
+const hintDetector = createHintDetector({ enabled: false });
+let hintShownAt = 0;
 const EMPTY_RESULT = { tips: [], sources: [], guideError: null };
 
 /**
@@ -297,19 +307,24 @@ function islandText(current: BeeState): string {
 function touchIsland(): void {
   islandActivityAt = Date.now();
   clearTimeout(islandTimer);
-  if (!islandOpen(state) || islandHovered || state.fullText) return;
+  if (!responseOpen(state) || islandHovered || state.fullText) return;
   islandTimer = setTimeout(autoCollapseIsland, islandOpenMs(islandText(state)));
 }
 
 function autoCollapseIsland(): void {
+  // A hint goes by itself (hints.ts). Fold the response once it has, so the body does not close and then reopen for the hint.
+  if (state.hint && responseOpen(state)) {
+    islandTimer = setTimeout(autoCollapseIsland, HINT_SHOW_MS);
+    return;
+  }
   // Chips can hold the body open while Luna thinks; the pill's phase then stays "thinking" and nothing collapses.
-  const phase = state.busy ? "thinking" : islandOpen(state) ? "expanded" : "idle";
+  const phase = state.busy ? "thinking" : responseOpen(state) ? "expanded" : "idle";
   const openMs = islandOpenMs(islandText(state));
   if (shouldAutoCollapse({ phase, hovered: islandHovered, fullText: state.fullText, lastActivityAt: islandActivityAt, now: Date.now(), openMs })) void closeIsland();
 }
 
 async function closeIsland(): Promise<void> {
-  if (!islandOpen(state) || state.islandClosing) return;
+  if (!responseOpen(state) || state.islandClosing) return;
   set({ islandClosing: true });
   await new Promise((resolve) => setTimeout(resolve, motionReduced() ? REDUCED_EXIT_MS : ISLAND_CLOSE_MS));
   if (!state.islandClosing) return;
@@ -328,10 +343,51 @@ export function syncCard(current: BeeState): SyncCard {
   return null;
 }
 
-/** The island body (tips, sources and link chips under the pill) is open: something to show, and no panel or sync card in the way. */
-export function islandOpen(current: BeeState): boolean {
+/** The island body shows a response (tips, sources, link chips, the meeting card): something to show, and no panel or sync card in the way. */
+export function responseOpen(current: BeeState): boolean {
   if (current.expanded || syncCard(current)) return false;
   return islandShowsBody(islandArgs(current));
+}
+
+/** The island body is open: for a response, or for a mic hint alone (a hint shows even after the response was closed). */
+export function islandOpen(current: BeeState): boolean {
+  if (current.expanded || syncCard(current)) return false;
+  return current.hint !== null || responseOpen(current);
+}
+
+/**
+ * Shows the detector's hint, or folds the one on screen once the detector drops it (timed out, speech heard, setting off). Logs
+ * the hint's id and time on screen only, never levels or words.
+ */
+function syncHint(hint: Hint | null): void {
+  if ((hint?.id ?? null) === (state.hint?.id ?? null)) return;
+  if (!hint) {
+    void hideHint();
+    return;
+  }
+  hintShownAt = Date.now();
+  console.debug(`Bee: mic hint ${hint.id}`);
+  set({ hint: { id: hint.id, text: hint.text }, hintClosing: false });
+  void applyWindowSize();
+}
+
+/** The hint plays its exit, then goes. With nothing else in the body, the body closes with it, like the dismiss button. */
+async function hideHint(): Promise<void> {
+  const hint = state.hint;
+  if (!hint || state.hintClosing) return;
+  set({ hintClosing: true });
+  await new Promise((resolve) => setTimeout(resolve, motionReduced() ? REDUCED_EXIT_MS : ISLAND_CLOSE_MS));
+  if (state.hint?.id !== hint.id || !state.hintClosing) return;
+  console.debug(`Bee: mic hint ${hint.id} hidden after ${Math.round((Date.now() - hintShownAt) / 1000)} s`);
+  set({ hint: null, hintClosing: false });
+  await applyWindowSize();
+}
+
+/** Feeds one mic frame to the hint detector while the setting is on. Numbers only: the frame itself goes no further. */
+function hintFrame(level: number, frame: Float32Array): void {
+  const enabled = state.settings?.hintsEnabled === true;
+  hintDetector.setEnabled(enabled);
+  syncHint(enabled ? hintDetector.push({ now: Date.now(), level, peak: framePeak(frame), micOn: true }) : null);
 }
 
 /**
@@ -868,10 +924,12 @@ const phraseCallbacks = {
   // Same path as a typed line; latestRun drops results from superseded runs.
   onLine: (line: string) => void actions.simulateLine(line, "mic"),
   // After onLine, so busy is already set when the ack ends and the pill never falls back to "Listening…".
-  onSettled: () => {
+  onSettled: (outcome?: PhraseOutcome) => {
     heardPending = Math.max(0, heardPending - 1);
     if (heardPending === 0) spokenDuringRun = false;
     if (heardPending === 0 && state.heard) set({ heard: false });
+    // Phrases with no words feed the noisy hint. Whether words came back, never the words; a failed call says nothing about noise.
+    if (outcome === "words" || outcome === "empty") syncHint(hintDetector.phrase({ now: Date.now(), words: outcome === "words" }));
   },
 };
 
@@ -908,7 +966,9 @@ async function startMic({ transcribe, onFrame }: MicOptions): Promise<void> {
     });
     capture.start((frame) => {
       onFrame?.(frame, capture.sampleRate);
-      setMic({ level: Math.min(1, mic.push(frame) * 4) });
+      const level = mic.push(frame);
+      setMic({ level: Math.min(1, level * 4) });
+      hintFrame(level, frame);
     });
     stopMic = () => {
       capture.stop();
@@ -1001,8 +1061,13 @@ export const actions = {
     }
   },
 
-  /** Close the island body without closing the window. */
+  /** Close the island body without closing the window. A mic hint closes with it, and its cooldown starts (hints.ts). */
   dismissIsland(): Promise<void> {
+    if (!state.hint) return closeIsland();
+    hintDetector.dismiss(state.hint.id);
+    // The hint alone holds the body open: close just the hint, so a run in flight keeps its turn.
+    if (!responseOpen(state)) return hideHint();
+    void hideHint();
     return closeIsland();
   },
 
@@ -1232,6 +1297,9 @@ export const actions = {
     set({ mic: { ...MIC_OFF, error } });
     // Teams audio only runs while the mic is on.
     void syncTeamsAudio();
+    // Hints are about the mic: they go with it, and the levels heard are forgotten.
+    hintDetector.clear();
+    void hideHint();
   },
 
   async checkForUpdate(): Promise<void> {
