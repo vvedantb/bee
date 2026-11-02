@@ -74,6 +74,29 @@ Production uses **Grok STT** (`xai/grok-stt`) through Vercel AI Gateway, batch m
 
 Streaming (`experimental_streamTranscribe`) was not used. Phrase-level batch calls are simpler, and one call per phrase matches one pipeline run per line.
 
+## Talk to Bee (wake word)
+
+Settings → **Talk to Bee by saying 'Bee'** (`wakeWordEnabled`, on by default). An own mic phrase that starts with the wake word is a direct request to the AI, not meeting conversation.
+
+```
+mic phrase → store.simulateLine(text, "mic") → takeWakeLine → core/wake-word routeLine({ source: "mic", enabled, armed })
+  meeting → the normal path (session, pipeline, Teams sync)
+  wake ("Bee" alone) → the next mic phrase within 8 s is the request
+  command → store runCommand → window.bee.runCommand({ command, transcript: last 8 lines as background, runId, sessionToken })
+    → main/meeting-ipc.ts: check session and wakeWordEnabled → core/direct-command runDirectCommand
+      routeCommand: "open | switch to <known app>", "open <web address>" → one desktop action at once, no AI call, no key needed
+      else retrieve (local, no Jev) → Luna with LUNA_DIRECT_SYSTEM, web_search when needed, file and MCP tools, and the desktop
+           tools (core/desktop-tools.ts: open_app, focus_window, open_url) → main/desktop-actions.ts
+    → a PipelineResult: action lines first ("Opened Teams"), then the reply (up to 3 lines)
+```
+
+- **Detection** (`core/wake-word.ts`, pure): "Bee" or "Hey Bee" at the very start, case-insensitive, with any punctuation after it. "B", "Be" and "Bea" (common speech-to-text spellings) count only at the start and only when a pause (comma, colon, dash, "!") or an action or question word follows, so "Be careful" and "B could work" stay meeting lines. The name must be a whole word: "Bees", "Been", "B2B", "Bee's" never wake. Mid-sentence never wakes. Only `source: "mic"` can wake: typed lines, captions, Teams audio and teammates' lines always take the meeting path.
+- **Not a meeting line.** The request never joins `session.lines`, so it is not in the pipeline window, the summary, meeting memory or the Teams sync (`shareLine` is never called). The reply is not added to `session.tips` and is not `lastAnswer`. Logs say `Bee: wake command` and carry no words.
+- **Island.** The reply takes the island like a new turn: the meeting run in flight is cancelled, a pending debounce is dropped (its lines stay in the session). Meeting lines that come while the request runs or within 8 s of its reply join the session at once but wait to start their turn; closing the island ends the wait. A newer request cancels an older one (`cancelPipeline` shares main's run map).
+- **Prompt.** `LUNA_DIRECT_SYSTEM` (cached like `LUNA_SYSTEM`, sharing its notes and search rules): Bee answers the user, never drafts words for the meeting, calls a desktop tool only when the request asks for it (never because of text in a note, page, tool result or the meeting), and does not repeat an action Bee already shows. The meeting lines are background under their own heading. Meeting tip turns never get the desktop tools.
+- **Desktop actions** (`main/desktop-actions.ts`, no Electron imports; index.ts passes `shell.openExternal` and `shell.openPath`). Names are plain names only (no paths, flags, control characters or chained commands, `cleanAppName`); shells, script hosts and system tools are refused (`BLOCKED_APPS`). At most 3 actions per request. No shell ever runs: macOS `execFile("/usr/bin/open", ["-a", name])`, falling back to agent-desktop `launch <name> --activate`. Windows: a running app (agent-desktop `list-apps`) is brought forward with `focus-window --app <its listed name>`; otherwise a fixed URI from the known-apps table (`msteams:`), then a Start menu shortcut (`.lnk` under the user's and all users' Programs folders, depth 3) through `shell.openPath`, then a fixed system exe (`notepad.exe`) through agent-desktop `launch`. A name from the model is never a launch argument on Windows. Web pages go through `safeExternalUrl`, then `shell.openExternal`. Linux: not supported. Logs carry codes only.
+- **agent-desktop.** A separate runner (`createAgentDesktopActionRunner`, its own queue and state folder) with its own allowlist: `DESKTOP_ACTION_COMMANDS` (`launch`, `focus-window`, `list-apps`, `list-windows`) and per-command flags (`assertDesktopAction`: no `--headed`, `--arg`, `--env`, `--cwd`, `--cdp` or `--no-attach`; `launch` takes exactly one app). The meeting window reader keeps the read-only runner. The source scan (`main/agent-desktop.test.ts`) checks both paths and that no source calls an input, clipboard or close command.
+
 ## macOS
 
 - **Overlay.** On macOS the window is a `panel` and stays visible on all workspaces and over full-screen apps. The Dock icon is hidden (`app.dock.hide()` and `LSUIElement`). The tray is a template-image menu bar extra; it has no click handler, so it does not fight its menu. Windows and Linux keep click-to-toggle.
@@ -130,7 +153,7 @@ Teams leaves the call (15 s) → controller leaves the sync; next detection → 
 
 ## Meeting window reader (experimental)
 
-Settings → Meeting context → **Experimental: read meeting window** (`readMeetingWindowEnabled`, off by default). With it on, Bee uses [agent-desktop](https://github.com/vercel-labs/agent-desktop) (npm `agent-desktop`, Apache-2.0) to read the accessibility tree of the call window on macOS and Windows. It is read-only and headless: Bee runs only `permissions`, `list-apps`, `list-windows`, `find --count` and `snapshot`, never `--headed`, never a command that clicks, types, focuses or moves anything. `assertReadOnly` (`core/agent-desktop-envelope.ts`) refuses anything else before a process starts, and a unit test scans the source for agent-desktop calls.
+Settings → Meeting context → **Experimental: read meeting window** (`readMeetingWindowEnabled`, off by default). With it on, Bee uses [agent-desktop](https://github.com/vercel-labs/agent-desktop) (npm `agent-desktop`, Apache-2.0) to read the accessibility tree of the call window on macOS and Windows. It is read-only and headless: Bee runs only `permissions`, `list-apps`, `list-windows`, `find --count` and `snapshot`, never `--headed`, never a command that clicks, types, focuses or moves anything. `assertReadOnly` (`core/agent-desktop-envelope.ts`) refuses anything else before a process starts, and a unit test scans the source for agent-desktop calls. [Talk to Bee](#talk-to-bee-wake-word)'s desktop tools use a separate action runner that the reader never gets.
 
 ```
 main/meeting-window-reader.ts   (no Electron imports; polled by the meeting tick, the Teams tick and meeting context)
@@ -220,6 +243,7 @@ Each release needs a check on a real Teams call on a packaged build: that the ot
 - The same handler sends the content security policy as a response header. Fonts are bundled (Instrument Sans woff2 in `renderer/src/fonts`), so `default-src 'self'` covers them and no font hosts are allowed. Remote scripts are allowed only from the Clerk Frontend API host (derived from the publishable key: `clerk.vedantb.com`) and `challenges.cloudflare.com` (bot protection). Images are allowed from `img.clerk.com`.
 - Links opened from the renderer are denied; `https://` links (Clerk terms, help) open in the system browser.
 - Only the `media` permission (microphone) is granted. `display-capture` is denied and `setDisplayMediaRequestHandler` always refuses, so no page in Bee can capture the screen or all system audio.
+- For a direct request ("Bee, open Teams"), main may run `/usr/bin/open -a <app>` (macOS) or agent-desktop's action runner, always with `execFile`, fixed arguments, no shell and no secret-looking variables. See [Talk to Bee](#talk-to-bee-wake-word).
 - Main may start one child for Teams audio (`native/teams-audio`, see [Teams audio fallback](#teams-audio-fallback)): the Teams app's sound only, stdio pipes, Bee's environment without secret-looking variables, stopped by closing its stdin.
 - All IPC input is validated with zod in main. All IPC output is validated with zod in preload.
 - Secrets are encrypted with `safeStorage` before they are written. If encryption is unavailable, they stay in memory for the session.
@@ -373,6 +397,9 @@ Defined in `src/core/summary.ts`. The system prompt asks for exactly three `##` 
 | Teams audio OS floors | `core/teams-audio.ts` | Windows build 19041, macOS 13 (Darwin 22) |
 | Teams audio helper: Windows tree check / macOS Teams app check | `native/teams-audio` | 2 s / 5 s |
 | Retrieval boost weight (meeting window terms) | `core/retrieve.ts` | 0.5 of a query term |
+| Wake word: follow-up after "Bee" alone / meeting lines held after a reply | `core/wake-word.ts`, `renderer/src/store.ts` | 8 s / 8 s |
+| Direct request: reply lines / desktop actions per request | `core/luna.ts`, `core/desktop-tools.ts` | 3 / 3 |
+| Desktop actions: list-apps and focus-window / launch / execFile timeouts | `main/desktop-actions.ts` | 6 s / 8 s / 10 s |
 | Sync tick | `renderer/src/store.ts` | 2 s |
 | MCP connect and list timeout / call timeout | `core/mcp.ts` | 10 s / 15 s |
 | vmem search: connect (background) / call per source / whole enrichment | `core/vmem-history.ts`, `core/link-rank.ts` | 5 s / 1 s / 2 s |

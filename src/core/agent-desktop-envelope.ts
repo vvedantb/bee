@@ -18,6 +18,45 @@ export function assertReadOnly(command: string, args: readonly string[]): assert
   if (blocked) throw new Error(`agent-desktop flag not allowed: ${blocked}`);
 }
 
+/**
+ * The only commands Bee's desktop tools run, for a direct request ("Bee, open Teams"): open or bring forward an app, and find
+ * it. They run on their own runner (main/agent-desktop.ts), which the meeting window reader never gets. None
+ * clicks, types, presses keys, sets the clipboard or closes anything.
+ */
+export const DESKTOP_ACTION_COMMANDS = ["launch", "focus-window", "list-apps", "list-windows"] as const;
+export type DesktopActionCommand = (typeof DESKTOP_ACTION_COMMANDS)[number];
+
+// The flags each action command may take (true: it takes a value). Anything else is refused, so launch never gets --arg, --env,
+// --cwd, --cdp or --no-attach, and nothing gets --headed.
+const ACTION_FLAGS: Record<DesktopActionCommand, Record<string, boolean>> = {
+  launch: { "--activate": false, "--timeout": true },
+  "focus-window": { "--app": true, "--title": true, "--window-id": true },
+  "list-apps": { "--app": true, "--timeout-ms": true },
+  "list-windows": { "--app": true, "--timeout-ms": true },
+};
+// launch takes the app name; the others take none.
+const ACTION_POSITIONALS: Record<DesktopActionCommand, number> = { launch: 1, "focus-window": 0, "list-apps": 0, "list-windows": 0 };
+
+/** Throws for any command, flag or argument outside the desktop action set. Called before every spawn on that runner. */
+export function assertDesktopAction(command: string, args: readonly string[]): asserts command is DesktopActionCommand {
+  if (!(DESKTOP_ACTION_COMMANDS as readonly string[]).includes(command)) throw new Error(`agent-desktop command not allowed: ${command}`);
+  const flags = ACTION_FLAGS[command as DesktopActionCommand];
+  let positionals = 0;
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index] ?? "";
+    if (!arg.startsWith("-")) {
+      positionals += 1;
+      continue;
+    }
+    if (!Object.hasOwn(flags, arg)) throw new Error(`agent-desktop flag not allowed: ${arg.split("=")[0]}`);
+    if (!flags[arg]) continue;
+    const value = args[index + 1];
+    if (value === undefined || value.startsWith("-")) throw new Error(`agent-desktop flag needs a value: ${arg}`);
+    index += 1;
+  }
+  if (positionals !== ACTION_POSITIONALS[command as DesktopActionCommand]) throw new Error(`agent-desktop arguments not allowed for ${command}`);
+}
+
 /** ok: the command's data. Otherwise a short code safe for logs (agent-desktop's own, or SPAWN_FAILED, TIMEOUT_LOCAL, BAD_OUTPUT). */
 export type AgentDesktopResult = { ok: true; data: unknown } | { ok: false; code: string };
 

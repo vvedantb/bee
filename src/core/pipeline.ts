@@ -13,8 +13,8 @@ const GUIDE_NOTE_LIMIT = 3;
 const MCP_ERRORS_MAX = 20;
 const MCP_ERROR_CHARS = 300;
 
-// Fail open: if the loader itself throws, Luna runs without MCP tools.
-async function loadMcp(load: (() => Promise<McpTools>) | undefined): Promise<McpTools | null> {
+// Fail open: if the loader itself throws, Luna runs without MCP tools. Also used for a direct request (core/direct-command.ts).
+export async function loadMcp(load: (() => Promise<McpTools>) | undefined): Promise<McpTools | null> {
   if (!load) return null;
   try {
     const mcp = await load();

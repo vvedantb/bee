@@ -14,6 +14,10 @@ const ACTIVITY_LABELS = new Map([
   ["list_dir", "Reading notes"],
   ["search_files", "Reading notes"],
   ["append_note", "Writing a note"],
+  // Desktop tools, for a direct request ("Bee, open Teams").
+  ["open_app", "Opening the app…"],
+  ["focus_window", "Switching windows…"],
+  ["open_url", "Opening the link…"],
 ]);
 
 /** Pill text for the tool Luna is using. MCP tools are named server__tool. Anything unknown reads as thinking. */

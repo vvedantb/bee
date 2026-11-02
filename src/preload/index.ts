@@ -28,6 +28,7 @@ import {
   transcribeResultSchema,
   updateActionSchema,
   updateCheckSchema,
+  type CommandRequest,
   type EnrichLinksRequest,
   type LunaActivity,
   type LunaPartial,
@@ -57,6 +58,8 @@ const api = {
   copyGatewayKey: async () => copyGatewayKeyResultSchema.parse(await ipcRenderer.invoke(IPC.copyGatewayKey)).copied,
   runPipeline: async (request: PipelineRequest) =>
     pipelineResultSchema.parse(await ipcRenderer.invoke(IPC.runPipeline, request)),
+  // A direct request ("Bee, open Teams"): the reply and any desktop action lines, shaped like a pipeline result. Cancelled like a run.
+  runCommand: async (request: CommandRequest) => pipelineResultSchema.parse(await ipcRenderer.invoke(IPC.runCommand, request)),
   // Cancels a run a newer line has superseded. Fire and forget: the run's own result is dropped anyway.
   cancelPipeline: async (request: PipelineCancel) => {
     z.void().parse(await ipcRenderer.invoke(IPC.cancelPipeline, request));

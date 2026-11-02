@@ -5,8 +5,10 @@ import { detectLinks, mergeChips, sourceChips, visibleChips, type LinkChip } fro
 import { MAX_STEERING_TIPS, isFiller, isNewTurn, isQuestion, mergeTips, recentRestarts, runDelayMs, tipCap, tipKey, waitsForRun } from "../../core/steering";
 import { mergeLines, pipelineText, summaryTranscript, type SessionLine } from "../../core/sync-lines";
 import { TEAMS_AUDIO_SPEAKER, TEAMS_AUDIO_SPEAKER_ID, teamsAudioEcho, teamsAudioPlan, teamsAudioReplaced, type TeamsAudioPlan } from "../../core/teams-audio";
+import { WAKE_FOLLOW_MS, routeLine } from "../../core/wake-word";
 import type { TeamsAudioFailure } from "../../core/teams-audio-protocol";
 import {
+  COMMAND_MAX_CHARS,
   SESSION_TRANSCRIPT_MAX,
   clampTip,
   type McpSave,
@@ -141,6 +143,9 @@ const DISMISS_FINALIZE_MS = 10 * 60_000;
 const CAPTION_ECHO_MS = 20_000;
 // Caption lines with no speaker label.
 const CAPTION_SPEAKER = "Meeting";
+// After a direct request's reply lands ("Bee, open Teams"), meeting lines wait this long before they start a turn, so the
+// reply can be read. Closing the island ends the wait.
+const COMMAND_HOLD_MS = 8000;
 
 export const SAMPLE_LINES = [
   "Let's pick up the Acme renewal. They are asking for a bigger discount.",
@@ -247,6 +252,13 @@ let runKept: string[] = [];
 let runTips: string[] = [];
 let restarts: number[] = [];
 let stopMic: (() => void) | null = null;
+// The wake word (core/wake-word.ts). "Bee" alone arms it: the next mic phrase before this time is the request.
+let wakeArmedUntil = 0;
+// The direct request in flight (its run number), the wait after its reply (COMMAND_HOLD_MS), and the meeting lines with
+// content that came meanwhile: they start their turn when the wait ends.
+let commandRun: number | null = null;
+let commandHold: ReturnType<typeof setTimeout> | undefined;
+let parkedLines: SessionLine[] = [];
 // The Teams audio capture while it runs, and guards while it opens and while main is asked for its status.
 let stopTeamsAudio: (() => void) | null = null;
 let teamsAudioOpening = false;
@@ -331,6 +343,8 @@ async function closeIsland(): Promise<void> {
   // Dismissed tips are a finished turn: the next line starts afresh. A run in flight carries on.
   turnOpen = false;
   set({ dismissed: true, islandClosing: false, fullText: false, meetingCard: null });
+  // A direct request's reply was closed: meeting lines that waited for it go now.
+  if (commandHold !== undefined) endCommandHold();
   await applyWindowSize();
 }
 
@@ -448,6 +462,11 @@ function addLines(lines: SessionLine[]): boolean {
   if (merged === before) return false;
   const content = lines.filter((line) => !isFiller(line.text) && !replacing.has(line.id));
   if (content.length === 0) return false;
+  // A direct request's reply holds the island: the lines are in the session now, and start their turn when it lets go.
+  if (commandRun !== null || commandHold !== undefined) {
+    parkedLines = [...parkedLines, ...content];
+    return false;
+  }
   startTurn(content);
   return true;
 }
@@ -690,6 +709,124 @@ async function runPipeline(): Promise<void> {
         deferred = false;
         void runPipeline();
       }
+    }
+    void applyWindowSize();
+  }
+}
+
+/** The direct request's wait is over: lines that came meanwhile start their turn, as if they had just arrived. */
+function endCommandHold(): void {
+  clearTimeout(commandHold);
+  commandHold = undefined;
+  if (commandRun !== null) return;
+  const lines = parkedLines;
+  parkedLines = [];
+  if (lines.length === 0) return;
+  startTurn(lines);
+  scheduleRun();
+}
+
+/**
+ * A mic phrase that starts with the wake word ("Bee, open Teams") is a request to the AI, not a meeting line: it never joins
+ * the session, the summary, meeting memory or the Teams sync. "Bee" alone arms the next phrase. Returns true when the phrase
+ * was taken. Logs never carry the words.
+ */
+function takeWakeLine(text: string): boolean {
+  const now = Date.now();
+  const route = routeLine({ text, source: "mic", enabled: state.settings?.wakeWordEnabled ?? true, armed: now < wakeArmedUntil });
+  wakeArmedUntil = route.kind === "wake" ? now + WAKE_FOLLOW_MS : 0;
+  if (route.kind === "meeting") return false;
+  console.debug(`Bee: wake ${route.kind}`);
+  if (route.kind === "command") void runCommand(route.command);
+  return true;
+}
+
+/**
+ * Runs a direct request in main (core/direct-command.ts) and shows the reply in the island as the answer to the user: action
+ * lines first ("Opened Teams"), then the AI's reply. It takes the island like a new turn: the meeting run in flight is dropped
+ * (its lines stay in the session), and meeting lines wait until the reply has been on screen for COMMAND_HOLD_MS. The reply is
+ * not a meeting answer: it is not kept for the summary or meeting memory, nor sent as context for later tips.
+ */
+async function runCommand(command: string): Promise<void> {
+  const previous = latestRun;
+  const run = ++latestRun;
+  if (previous > 0) void window.bee.cancelPipeline({ runId: previous }).catch(() => undefined);
+  clearTimeout(runTimer);
+  runTimer = undefined;
+  deferred = false;
+  inFlight = null;
+  runKept = [];
+  runTips = [];
+  pendingFresh = false;
+  turnOpen = false;
+  commandRun = run;
+  clearTimeout(commandHold);
+  commandHold = undefined;
+  clearTimeout(islandTimer);
+  set({
+    busy: true,
+    heard: false,
+    question: true,
+    tools: [],
+    done: false,
+    error: null,
+    keptTips: [],
+    revising: false,
+    result: null,
+    partialTips: null,
+    tipSources: {},
+    fullText: false,
+    chips: [],
+    dismissedChipIds: [],
+    dismissed: false,
+    islandClosing: false,
+  });
+  void applyWindowSize();
+  const stopActivity = window.bee.onLunaActivity(({ runId, tool, phase }) => {
+    if (run !== latestRun || (runId !== undefined && runId !== run)) return;
+    set({ tools: phase === "start" ? [...state.tools, tool] : withoutOne(state.tools, tool) });
+  });
+  const stopPartial = window.bee.onLunaPartial((partial) => {
+    if (run !== latestRun || (partial.runId !== undefined && partial.runId !== run)) return;
+    set({ partialTips: partial.tips, tipSources: withSources(state.tipSources, partial), dismissed: false, islandClosing: false });
+    touchIsland();
+    void applyWindowSize();
+  });
+  try {
+    // The meeting so far, as background for a request about it ("what did Priya just say").
+    const recent = state.session.lines.slice(-PIPELINE_WINDOW).map(pipelineText);
+    const result = await window.bee.runCommand({
+      command: command.slice(0, COMMAND_MAX_CHARS),
+      ...(recent.length > 0 ? { transcript: recent } : {}),
+      runId: run,
+      sessionToken: await sessionToken(),
+    });
+    if (run !== latestRun) return;
+    const tipSources = withSources(state.tipSources, result);
+    set({
+      result: { ...result, tipSources: sourcesOf(tipSources, result.tips) },
+      partialTips: null,
+      tipSources,
+      chips: mergeChips([], result.tips.flatMap((tip) => detectLinks(tip))),
+      busy: false,
+      tools: [],
+      dismissed: false,
+      islandClosing: false,
+    });
+    if (result.tips.length > 0) celebrate();
+    touchIsland();
+  } catch (error) {
+    if (run === latestRun) {
+      // Electron prefixes a handler's error with "Error invoking remote method …".
+      const message = error instanceof Error ? error.message.replace(/^Error invoking remote method '[^']*': (Error: )?/, "") : "";
+      set({ busy: false, partialTips: null, tools: [], error: message || "The AI could not answer" });
+    }
+  } finally {
+    stopActivity();
+    stopPartial();
+    if (commandRun === run) {
+      commandRun = null;
+      commandHold = setTimeout(endCommandHold, COMMAND_HOLD_MS);
     }
     void applyWindowSize();
   }
@@ -1148,11 +1285,13 @@ export const actions = {
 
   /**
    * Add a meeting line (typed, or a phrase from Grok STT) and, if it has content words, schedule retrieve → Jev → Luna (after a
-   * short debounce). Mic phrases are also shared with the Teams sync, if one is on and sharing is not paused.
+   * short debounce). Mic phrases are also shared with the Teams sync, if one is on and sharing is not paused. A mic phrase that
+   * starts with the wake word ("Bee, open Teams") is a direct request instead (takeWakeLine); typed lines never are.
    */
   simulateLine(line: string, source: "typed" | "mic" = "typed"): void {
     const text = line.trim();
     if (!text) return;
+    if (source === "mic" && takeWakeLine(text)) return;
     localSeq += 1;
     const own: SessionLine = {
       id: `local-${localSeq}`,
@@ -1241,6 +1380,8 @@ export const actions = {
     deferred = false;
     turnOpen = false;
     lastAnswer = [];
+    // Lines waiting for a direct request's reply are in the session being saved.
+    parkedLines = [];
     set({ keptTips: [], revising: false, session: EMPTY_SESSION, chips: [], dismissedChipIds: [], summary: { saving: true, result: null, error: null } });
     try {
       const result = await window.bee.writeMeetingSummary({

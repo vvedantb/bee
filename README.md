@@ -116,6 +116,15 @@ It fails open. The whole step has a 2 second limit. With the switch off or the G
 
 **Icons** are fetched by the main process, since the window's content policy blocks remote images. Bee tries `/favicon.ico`, then the icon named in the site's home page, then Google's favicon service (`google.com/s2/favicons`, which sees the domain name). Icons are kept as small data URLs in memory and in the `favicons` folder of the user data folder for 7 days. Until an icon loads, or if none does, the chip shows a globe. Loopback addresses (127.0.0.0/8, 0.0.0.0, ::1) and dotless names are never fetched or opened.
 
+### Talk to Bee
+
+With the mic on, start a phrase with **"Bee"** (or "Hey Bee") and the rest is a request to the AI, not part of the meeting: "Bee, what's 15% of 18000?", "Bee, open Teams", "Hey Bee, open bbc.co.uk". The answer shows in the island straight away, written to you, not as words to say in the meeting. If you pause after "Bee", your next phrase is the request.
+
+- **Your own mic only.** Typed lines, live captions, Teams audio and teammates' lines never count, even when they start with "Bee". Speech-to-text often writes "Bee" as "B", "Be" or "Bea"; at the very start of a phrase those count too, when a pause or a request follows ("Be, open Teams", "B what's the time in Tokyo"). "Be careful…", "maybe later" and "the bee flew" do not. "Bea, can you share your screen?" to a colleague called Bea does count: switch the setting off if that is a problem.
+- **Not meeting conversation.** The request and its answer stay out of the meeting summary, meeting memory and the Teams sync. Meeting tips wait while the answer is on screen (8 s, or until you close it), then catch up.
+- **Desktop actions.** The AI can open an app or bring it to the front ("open Teams", "switch to Outlook"), bring one window forward, and open a web page. "Open" or "switch to" a common app, and "open" a web address, run at once without the AI. Each action shows a short line, such as "Opened Teams". Bee never clicks, types, sends messages or closes apps, and never opens terminals or script tools. Opening apps works on Windows and macOS.
+- Switch it off in **Settings → Talk to Bee by saying 'Bee'** (on by default).
+
 ### Speech-to-text
 
 Bee transcribes with **Grok STT** (`xai/grok-stt`) through Vercel AI Gateway, using the same Gateway key as the AI and Jev.
@@ -312,6 +321,7 @@ Unit tests cover the relay (JWT signature, issuer, expiry and `azp` checks; team
 - **Electron binary.** `npm install` does not download Electron itself. It downloads on first `npm run dev` or `npm start`. On a restricted network, allow `github.com` downloads or set `ELECTRON_MIRROR`.
 - **Teams audio fallback.** Not yet tested on a real Teams call. CI builds both helpers and checks they are packaged and answer `--version`; it cannot join a call. Before release, check on a packaged build on Windows 11, Windows 10 22H2 and macOS 13 or later: the other side of a Teams call is heard; music from another app is not; your own voice is dropped or deduped; and on macOS the Screen Recording steps work.
 - **Speech-to-text on Windows.** Not yet tested on a real Windows machine with a microphone. The full path was checked in Electron on Linux with a fake microphone and live Grok STT. The speech threshold (about −40 dBFS) is fixed and not tuned; a very quiet mic may never start a phrase.
+- **Talk to Bee desktop actions.** Not yet tested on a real Windows or macOS desktop. Unit tests fake every OS call. Before release, check on packaged builds: "Bee, open Teams" opens or brings forward Teams (Windows `msteams:`, macOS `open -a "Microsoft Teams"`); "Bee, switch to Outlook" with Outlook running; "Bee, open Slack" from the Windows Start menu; "Bee, open bbc.co.uk". agent-desktop `focus-window` may need macOS Accessibility; without it Bee falls back to `open -a`.
 - **Microphone.** Windows asks for microphone permission the first time you click **Mic**. If it is blocked, allow desktop apps under Settings → Privacy & security → Microphone.
 - **Code signing.** Not configured. Add a certificate to `build.win` in `package.json` before distributing.
 - **Transparency on Linux.** Without a compositor (for example, Xvfb), the area around the notch may show as black rather than transparent.

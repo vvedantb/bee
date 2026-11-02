@@ -3,8 +3,8 @@ import { tmpdir } from "node:os";
 import { join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { READ_ONLY_COMMANDS } from "../core/agent-desktop-envelope";
-import { childEnv, createAgentDesktopRunner, platformBinaryNames, resolveAgentDesktop, type ExecFile } from "./agent-desktop";
+import { DESKTOP_ACTION_COMMANDS, READ_ONLY_COMMANDS } from "../core/agent-desktop-envelope";
+import { childEnv, createAgentDesktopActionRunner, createAgentDesktopRunner, platformBinaryNames, resolveAgentDesktop, type ExecFile } from "./agent-desktop";
 
 const root = new URL("../../", import.meta.url);
 const repo = (path: string) => fileURLToPath(new URL(path, root));
@@ -183,6 +183,47 @@ describe("createAgentDesktopRunner", () => {
   });
 });
 
+describe("createAgentDesktopActionRunner", () => {
+  let temp: string;
+  afterEach(() => rmSync(temp, { recursive: true, force: true }));
+
+  const make = () => {
+    temp = mkdtempSync(join(tmpdir(), "bee-ad-action-test-"));
+    const calls: Array<{ args: string[]; env: NodeJS.ProcessEnv }> = [];
+    const exec: ExecFile = (_file, args, options, callback) => {
+      calls.push({ args, env: options.env });
+      setTimeout(() => callback(null, ENVELOPE), 0);
+    };
+    const runner = createAgentDesktopActionRunner({ path: "/bin/agent-desktop", macHelper: null }, { exec, env: { PATH: "/bin", GITHUB_TOKEN: "FAKE" }, tempDir: () => temp });
+    return { runner, calls };
+  };
+
+  it("runs launch, focus-window and the app and window lists, headless, in its own state folder", async () => {
+    const { runner, calls } = make();
+    expect((await runner.run("launch", ["Microsoft Teams", "--activate", "--timeout", "8000"])).ok).toBe(true);
+    expect((await runner.run("focus-window", ["--app", "Microsoft Teams"])).ok).toBe(true);
+    expect((await runner.run("list-apps", [])).ok).toBe(true);
+    expect(calls.map((call) => call.args[0])).toEqual(["launch", "focus-window", "list-apps"]);
+    for (const call of calls) {
+      expect(call.args).not.toContain("--headed");
+      expect(call.env.GITHUB_TOKEN).toBeUndefined();
+      expect(call.env.AGENT_DESKTOP_HOME?.startsWith(temp)).toBe(true);
+    }
+    runner.cleanup();
+  });
+
+  it("refuses input, clipboard, close and read commands, and launch flags that pass arguments, before any process starts", () => {
+    const { runner, calls } = make();
+    for (const command of ["click", "type", "press", "clipboard-set", "close-app", "snapshot", "find", "mouse-click", "set-value"]) {
+      expect(() => runner.run(command as never, []), command).toThrow(/not allowed/);
+    }
+    expect(() => runner.run("launch", ["Teams", "--arg", "--evil"])).toThrow(/not allowed/);
+    expect(() => runner.run("launch", ["Teams", "--headed"])).toThrow(/not allowed/);
+    expect(() => runner.run("focus-window", ["--app", "Teams", "--headed"])).toThrow(/not allowed/);
+    expect(calls).toEqual([]);
+  });
+});
+
 describe("source scan: agent-desktop stays read-only", () => {
   const files = (dir: string): string[] =>
     readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
@@ -194,15 +235,47 @@ describe("source scan: agent-desktop stays read-only", () => {
   // Path under src/ with "/" separators on every OS (Windows paths use "\").
   const fromSrc = (path: string) => relative(repo("src"), path).split(sep).join("/");
 
-  it("calls only read-only commands and never asks for --headed", () => {
-    const sources = files(repo("src")).map((path) => ({ path, text: readFileSync(path, "utf8") }));
-    // Every agent-desktop call goes through an AgentDesktopRun (main/teams-detector.ts has its own run for reg and tasklist).
-    const callers = sources.filter(({ text }) => text.includes("AgentDesktopRun"));
+  const sources = () => files(repo("src")).map((path) => ({ path, text: readFileSync(path, "utf8") }));
+  const commandsIn = (text: string) => [...text.matchAll(/\brun\(\s*"([a-z-]+)"/g)].map((match) => match[1]);
+
+  it("calls only read-only commands on the meeting window path and never asks for --headed", () => {
+    const all = sources();
+    // Every meeting window call goes through an AgentDesktopRun (main/teams-detector.ts has its own run for reg and tasklist).
+    const callers = all.filter(({ text }) => text.includes("AgentDesktopRun"));
     expect(callers.map(({ path }) => fromSrc(path)).sort()).toEqual(["main/agent-desktop.ts", "main/index.ts", "main/meeting-window-reader.ts"]);
-    const commands = callers.flatMap(({ text }) => [...text.matchAll(/\brun\(\s*"([a-z-]+)"/g)].map((match) => match[1]));
+    const commands = callers.flatMap(({ text }) => commandsIn(text));
     expect(commands.length).toBeGreaterThan(0);
     for (const command of commands) expect(READ_ONLY_COMMANDS as readonly (string | undefined)[]).toContain(command);
-    const headed = sources.filter(({ text }) => text.includes('"--headed"')).map(({ path }) => fromSrc(path));
+    const headed = all.filter(({ text }) => text.includes('"--headed"')).map(({ path }) => fromSrc(path));
     expect(headed).toEqual(["core/agent-desktop-envelope.ts"]);
+  });
+
+  it("keeps the desktop action runner off the meeting window reader", () => {
+    const reader = readFileSync(repo("src/main/meeting-window-reader.ts"), "utf8");
+    for (const name of ["AgentDesktopAction", "createAgentDesktopActionRunner", "desktop-actions", "launch", "focus-window"]) expect(reader, name).not.toContain(name);
+    // index.ts hands the reader the read-only runner, and only the desktop actions get the action runner.
+    const index = readFileSync(repo("src/main/index.ts"), "utf8");
+    expect(index).toMatch(/createMeetingWindowReader\(\{[^}]*run: agentDesktop\?\.run/s);
+    expect(index).toMatch(/createDesktopActions\(\{[^}]*run: desktopRunner\?\.run/s);
+  });
+
+  it("calls only launch, focus-window and list commands on the desktop action path, with no shell", () => {
+    const all = sources();
+    const callers = all.filter(({ text }) => text.includes("AgentDesktopActionRun"));
+    expect(callers.map(({ path }) => fromSrc(path)).sort()).toEqual(["main/agent-desktop.ts", "main/desktop-actions.ts", "main/index.ts"]);
+    const commands = callers.flatMap(({ text }) => commandsIn(text));
+    expect(new Set(commands)).toEqual(new Set(["list-apps", "focus-window", "launch"]));
+    for (const command of commands) expect(DESKTOP_ACTION_COMMANDS as readonly (string | undefined)[]).toContain(command);
+    const actions = readFileSync(repo("src/main/desktop-actions.ts"), "utf8");
+    expect(actions).not.toMatch(/\bexec\(|execSync|spawn\(|shell:\s*true|"cmd(?:\.exe)?"|powershell|"\/bin\/(?:ba|z)?sh"|osascript/i);
+    expect(actions).toContain("shell: false");
+  });
+
+  it("never calls an input, clipboard or close command anywhere", () => {
+    const allowed = new Set<string | undefined>([...READ_ONLY_COMMANDS, ...DESKTOP_ACTION_COMMANDS]);
+    // main/teams-detector.ts runs reg and tasklist through its own runner, not agent-desktop.
+    for (const { path, text } of sources().filter(({ path }) => fromSrc(path) !== "main/teams-detector.ts")) {
+      for (const command of commandsIn(text)) expect(allowed.has(command), `${fromSrc(path)}: ${command}`).toBe(true);
+    }
   });
 });

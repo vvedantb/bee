@@ -494,6 +494,47 @@ describe("settings mic hints", () => {
   });
 });
 
+describe("settings wake word", () => {
+  it("is on by default, in the view and for main", () => {
+    const store = create();
+    expect(store.view().wakeWordEnabled).toBe(true);
+    expect(store.wakeWord()).toBe(true);
+  });
+
+  it("round-trips through settings.json and survives unrelated saves", () => {
+    const store = create();
+    expect(store.save({ wakeWordEnabled: false }).wakeWordEnabled).toBe(false);
+    expect(JSON.parse(readFileSync(join(dir, "settings.json"), "utf8")).wakeWordEnabled).toBe(false);
+    store.save({ hintsEnabled: false });
+    expect(create().view().wakeWordEnabled).toBe(false);
+    expect(create().wakeWord()).toBe(false);
+    store.save({ wakeWordEnabled: true });
+    expect(create().view().wakeWordEnabled).toBe(true);
+  });
+
+  it("stays on for an older settings file without it, and reads a bad stored value as on", () => {
+    writeFileSync(join(dir, "settings.json"), JSON.stringify({ meetingMode: true }));
+    expect(create().view()).toMatchObject({ meetingMode: true, wakeWordEnabled: true });
+    writeFileSync(join(dir, "settings.json"), JSON.stringify({ wakeWordEnabled: "no" }));
+    expect(create().view().wakeWordEnabled).toBe(true);
+    writeFileSync(join(dir, "settings.json"), JSON.stringify({ wakeWordEnabled: null }));
+    expect(create().wakeWord()).toBe(true);
+  });
+
+  it("starts on from a missing or corrupt file", () => {
+    writeFileSync(join(dir, "settings.json"), "{not json");
+    expect(create().view().wakeWordEnabled).toBe(true);
+  });
+
+  it("rejects a non-boolean update at the IPC schema", async () => {
+    const { settingsUpdateSchema, settingsViewSchema } = await import("../shared/ipc");
+    expect(() => settingsUpdateSchema.parse({ wakeWordEnabled: "off" })).toThrow();
+    expect(settingsUpdateSchema.parse({ wakeWordEnabled: false })).toEqual({ wakeWordEnabled: false });
+    // The view always carries it, so the renderer never guesses.
+    expect(settingsViewSchema.parse(create().view()).wakeWordEnabled).toBe(true);
+  });
+});
+
 describe("settings savedGatewayApiKey", () => {
   const withEnv = () => createSettingsStore({ userDataDir: dir, notesDir: join(dir, "notes"), envGatewayKey: "env-key-FAKE" });
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { TIP_MAX_CHARS, clampTip, lunaActivitySchema, lunaPartialSchema, meetingSummaryRequestSchema, pipelineRequestSchema, pipelineResultSchema } from "./ipc";
+import { COMMAND_MAX_CHARS, TIP_MAX_CHARS, clampTip, commandRequestSchema, lunaActivitySchema, lunaPartialSchema, meetingSummaryRequestSchema, pipelineRequestSchema, pipelineResultSchema } from "./ipc";
 
 describe("lunaActivitySchema", () => {
   it("takes a tool call's start and end, with or without the run id", () => {
@@ -36,5 +36,19 @@ describe("tip limits", () => {
     expect(clampTip(over)).toHaveLength(TIP_MAX_CHARS);
     expect(clampTip(long)).toBe(long);
     expect(pipelineRequestSchema.safeParse({ transcript: ["a"], sessionToken: "t", earlier: [clampTip(over)] }).success).toBe(true);
+  });
+});
+
+describe("commandRequestSchema", () => {
+  it("takes a trimmed request, optional background lines and a run id", () => {
+    expect(commandRequestSchema.parse({ command: "  open Teams ", runId: 3, sessionToken: "t" })).toEqual({ command: "open Teams", runId: 3, sessionToken: "t" });
+    expect(commandRequestSchema.parse({ command: "what did Priya ask?", transcript: ["Priya: Can we ship Friday?"], sessionToken: "t" }).transcript).toEqual(["Priya: Can we ship Friday?"]);
+  });
+
+  it("refuses an empty or overlong request, too many lines, and no session token", () => {
+    expect(() => commandRequestSchema.parse({ command: "   ", sessionToken: "t" })).toThrow();
+    expect(() => commandRequestSchema.parse({ command: "x".repeat(COMMAND_MAX_CHARS + 1), sessionToken: "t" })).toThrow();
+    expect(() => commandRequestSchema.parse({ command: "open Teams", transcript: Array(9).fill("line"), sessionToken: "t" })).toThrow();
+    expect(() => commandRequestSchema.parse({ command: "open Teams" })).toThrow();
   });
 });

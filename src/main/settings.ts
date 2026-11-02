@@ -45,6 +45,8 @@ const fileSchema = z.object({
   teamsAudioFallbackEnabled: z.boolean().default(false).catch(false),
   // Mic hints in the island (renderer/src/hints.ts). On until switched off.
   hintsEnabled: z.boolean().default(true).catch(true),
+  // "Bee" wake word (core/wake-word.ts): own mic phrases that start with "Bee…" go to the AI as a direct request. On until switched off.
+  wakeWordEnabled: z.boolean().default(true).catch(true),
   // Non-secret MCP settings. A bad entry drops the list, not the whole file.
   mcpServers: z.array(mcpServerSchema).catch([]).default([]),
   // One safeStorage ciphertext (base64) for every server's secrets, as JSON keyed by server id.
@@ -96,6 +98,7 @@ export function createSettingsStore(args: {
       readMeetingWindowEnabled: false,
       teamsAudioFallbackEnabled: false,
       hintsEnabled: true,
+      wakeWordEnabled: true,
       mcpServers: [],
     };
   }
@@ -366,6 +369,7 @@ export function createSettingsStore(args: {
       readMeetingWindowEnabled: file.readMeetingWindowEnabled,
       teamsAudioFallbackEnabled: file.teamsAudioFallbackEnabled,
       hintsEnabled: file.hintsEnabled,
+      wakeWordEnabled: file.wakeWordEnabled,
     };
   }
 
@@ -385,6 +389,11 @@ export function createSettingsStore(args: {
     return read().teamsAudioFallbackEnabled;
   }
 
+  /** The wake word switch, read on each direct request so main refuses one with it off. Main only. */
+  function wakeWord(): boolean {
+    return read().wakeWordEnabled;
+  }
+
   function save(update: SettingsUpdate): SettingsView {
     let file = read();
     if (update.gatewayApiKey !== undefined) file = setSecret(file, "gatewayApiKey", update.gatewayApiKey);
@@ -398,6 +407,7 @@ export function createSettingsStore(args: {
     if (update.readMeetingWindowEnabled !== undefined) file = { ...file, readMeetingWindowEnabled: update.readMeetingWindowEnabled };
     if (update.teamsAudioFallbackEnabled !== undefined) file = { ...file, teamsAudioFallbackEnabled: update.teamsAudioFallbackEnabled };
     if (update.hintsEnabled !== undefined) file = { ...file, hintsEnabled: update.hintsEnabled };
+    if (update.wakeWordEnabled !== undefined) file = { ...file, wakeWordEnabled: update.wakeWordEnabled };
     if (update.fsRoots !== undefined) {
       const { roots, invalid } = normalizeFsRoots(update.fsRoots);
       if (invalid.length > 0) throw new Error(`Folders must be absolute paths: ${invalid.join(", ")}`);
@@ -420,5 +430,5 @@ export function createSettingsStore(args: {
     write({ ...read(), overlayPosition: position });
   }
 
-  return { view, save, meetingContext, readMeetingWindow, teamsAudioFallback, overlayPosition, saveOverlayPosition, gatewayApiKey, savedGatewayApiKey, linkSettings, vmemConfig, fsRoots, mcpList, mcpSave, mcpRemove, mcpSetEnabled, mcpRecordTools, mcpConfigs, mcpSignedOut, mcpConfig, mcpOAuthStorage };
+  return { view, save, meetingContext, readMeetingWindow, teamsAudioFallback, wakeWord, overlayPosition, saveOverlayPosition, gatewayApiKey, savedGatewayApiKey, linkSettings, vmemConfig, fsRoots, mcpList, mcpSave, mcpRemove, mcpSetEnabled, mcpRecordTools, mcpConfigs, mcpSignedOut, mcpConfig, mcpOAuthStorage };
 }

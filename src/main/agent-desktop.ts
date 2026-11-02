@@ -2,11 +2,13 @@ import { execFile } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { assertReadOnly, parseEnvelope, type AgentDesktopResult, type ReadOnlyCommand } from "../core/agent-desktop-envelope";
+import { assertDesktopAction, assertReadOnly, parseEnvelope, type AgentDesktopResult, type DesktopActionCommand, type ReadOnlyCommand } from "../core/agent-desktop-envelope";
 
-// Runs the agent-desktop CLI (npm agent-desktop, Apache-2.0) for the experimental meeting window reader. Read-only commands
-// only (assertReadOnly), always headless (never --headed), one at a time, each with a timeout. stdout is parsed and dropped:
-// nothing it holds is logged. Spawn failures come back as codes, never as throws.
+// Runs the agent-desktop CLI (npm agent-desktop, Apache-2.0). The experimental meeting window reader gets a runner for
+// read-only commands only (assertReadOnly). Bee's desktop tools for a direct request ("Bee, open Teams") get a separate runner
+// for launching, focusing and listing apps only (assertDesktopAction). Both are always headless (never --headed), one command
+// at a time, each with a timeout. stdout is parsed and dropped: nothing it holds is logged. Spawn failures come back as codes,
+// never as throws.
 
 export type AgentDesktopBinary = { path: string; macHelper: string | null };
 
@@ -87,11 +89,28 @@ export type AgentDesktopRunner = {
   cleanup: () => void;
 };
 
+type RunnerDeps = { exec?: ExecFile; env?: NodeJS.ProcessEnv; tempDir?: () => string };
+
 /**
  * One command at a time. agent-desktop keeps snapshot ref maps under AGENT_DESKTOP_HOME; Bee points it at a private
  * temporary folder (mode 0700) instead of ~/.agent-desktop, and deletes it when reading stops and at quit.
  */
-export function createAgentDesktopRunner(binary: AgentDesktopBinary, deps: { exec?: ExecFile; env?: NodeJS.ProcessEnv; tempDir?: () => string } = {}): AgentDesktopRunner {
+export function createAgentDesktopRunner(binary: AgentDesktopBinary, deps: RunnerDeps = {}): AgentDesktopRunner {
+  return queuedRunner<ReadOnlyCommand>(binary, deps, assertReadOnly);
+}
+
+/** A desktop action command for Bee's desktop tools only: launch, focus-window, list-apps or list-windows (assertDesktopAction). */
+export type AgentDesktopActionRun = (command: DesktopActionCommand, args: string[], options?: { timeoutMs?: number }) => Promise<AgentDesktopResult>;
+
+export type AgentDesktopActionRunner = { run: AgentDesktopActionRun; cleanup: () => void };
+
+/** The desktop tools' own runner, with its own state folder and queue. Never handed to the meeting window reader. */
+export function createAgentDesktopActionRunner(binary: AgentDesktopBinary, deps: RunnerDeps = {}): AgentDesktopActionRunner {
+  return queuedRunner<DesktopActionCommand>(binary, deps, assertDesktopAction);
+}
+
+/** Runs one command at a time after `allow` checks it (it throws, before any process starts, for anything else). */
+function queuedRunner<C extends string>(binary: AgentDesktopBinary, deps: RunnerDeps, allow: (command: string, args: readonly string[]) => void) {
   const exec: ExecFile = deps.exec ?? (execFile as unknown as ExecFile);
   let home: string | null = null;
   let queue: Promise<unknown> = Promise.resolve();
@@ -101,7 +120,7 @@ export function createAgentDesktopRunner(binary: AgentDesktopBinary, deps: { exe
     return home;
   };
 
-  const spawn = (command: ReadOnlyCommand, args: string[], timeoutMs: number): Promise<AgentDesktopResult> =>
+  const spawn = (command: C, args: string[], timeoutMs: number): Promise<AgentDesktopResult> =>
     new Promise((resolve) => {
       let dir: string;
       try {
@@ -124,9 +143,9 @@ export function createAgentDesktopRunner(binary: AgentDesktopBinary, deps: { exe
     });
 
   return {
-    run: (command, args, options = {}) => {
-      // Throws on anything outside the read-only set, before a process starts.
-      assertReadOnly(command, args);
+    run: (command: C, args: string[], options: { timeoutMs?: number } = {}): Promise<AgentDesktopResult> => {
+      // Throws on anything outside the runner's set, before a process starts.
+      allow(command, args);
       const result = queue.then(() => spawn(command, args, options.timeoutMs ?? DEFAULT_TIMEOUT_MS));
       queue = result.catch(() => undefined);
       return result;
