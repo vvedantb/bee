@@ -64,6 +64,14 @@ describe("activityLabel", () => {
     expect(activityLabel("open_url")).toBe("Opening the link…");
   });
 
+  it("names every computer-use tool, so none reads as Thinking…", async () => {
+    const { COMPUTER_TOOL_NAMES } = await import("../../core/computer-tools");
+    for (const tool of [...COMPUTER_TOOL_NAMES, "use_computer"]) expect(activityLabel(tool), tool).not.toBe("Thinking…");
+    expect(activityLabel("click")).toBe("Clicking…");
+    expect(activityLabel("type_text")).toBe("Typing…");
+    expect(activityLabel("use_computer")).toBe("Using your computer…");
+  });
+
   it("falls back to Thinking… for unknown, missing or inherited names", () => {
     expect(activityLabel("calendar_lookup")).toBe("Thinking…");
     expect(activityLabel(null)).toBe("Thinking…");

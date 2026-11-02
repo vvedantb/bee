@@ -1,0 +1,16 @@
+import type { ComputerAccessView } from "../../shared/ipc";
+
+// Settings → computer use: the line under "Ask before sending or deleting". Pure, so tests can call it.
+
+export const ACCESS_UNSUPPORTED = "Bee uses apps for you on Windows and Mac only.";
+export const ACCESS_NEEDS_ACCESSIBILITY = "To use apps for you, Bee needs Accessibility: in System Settings → Privacy & Security → Accessibility, turn on Bee.";
+export const ACCESS_NEEDS_SCREEN_RECORDING = "Bee can use apps for you. To also look at a window when its controls are not enough, allow Bee in Screen Recording.";
+
+/** What macOS still has to allow, or that this OS has no computer use. Null when there is nothing to do, or before the first check. */
+export function computerAccessMessage(access: ComputerAccessView | null | undefined): string | null {
+  if (!access) return null;
+  if (!access.supported) return ACCESS_UNSUPPORTED;
+  if (access.accessibility === "denied") return ACCESS_NEEDS_ACCESSIBILITY;
+  if (access.screenRecording === "denied") return ACCESS_NEEDS_SCREEN_RECORDING;
+  return null;
+}

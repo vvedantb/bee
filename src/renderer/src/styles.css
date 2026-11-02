@@ -633,6 +633,24 @@ body {
   font-weight: 600;
 }
 
+/* Computer use waits for the user: the question, what Bee is about to do (muted), then Confirm and Cancel. */
+.island-confirm {
+  padding: 0 36px 0 0;
+  animation: island-rise 460ms var(--spring) backwards;
+}
+
+.island-confirm p {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+.island-confirm p + p {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
 .panel {
   display: flex;
   flex-direction: column;

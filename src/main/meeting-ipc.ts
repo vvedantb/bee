@@ -1,8 +1,11 @@
 import { app, ipcMain, shell } from "electron";
 import { z } from "zod";
 import { meetingTerms, meetingWindowBrief, type MeetingWindowContext } from "../core/agent-desktop-meeting";
+import type { ComputerRun } from "../core/agent-desktop-envelope";
+import type { ComputerPlatform, RunControl } from "../core/computer-control";
+import { computerAccess } from "../core/computer-use";
 import type { DesktopActions } from "../core/desktop-actions";
-import { runDirectCommand } from "../core/direct-command";
+import { runDirectCommand, type ComputerHost } from "../core/direct-command";
 import { loadMcpTools, type McpPool, type McpServerConfig } from "../core/mcp";
 import type { MeetingContext } from "../core/meeting-context";
 import { GUIDE_MODEL, NO_GATEWAY_KEY, STT_MODEL, createBeeGateway, type BeeGateway } from "../core/gateway";
@@ -11,13 +14,18 @@ import { searchLocation } from "../core/web-search";
 import { buildLocalSummary, generateMeetingSummary } from "../core/summary";
 import { transcribeSpeech } from "../core/transcribe";
 import {
+  COMPUTER_LINE_MAX,
   IPC,
   commandRequestSchema,
+  commandStopSchema,
+  computerAnswerSchema,
   meetingContextRequestSchema,
   meetingSummaryRequestSchema,
   pipelineCancelSchema,
   pipelineRequestSchema,
   transcribeRequestSchema,
+  type ComputerAccessView,
+  type ComputerUpdate,
   type LunaActivity,
   type LunaPartial,
   type MeetingSummaryResult,
@@ -46,10 +54,58 @@ export function registerMeetingIpc(args: { notesDir: string; fsRoots: () => stri
   /** Desktop tools for a direct request ("Bee, open Teams", main/desktop-actions.ts). Without them the AI only answers. */
   desktop?: DesktopActions;
   /** The wake word setting: a direct request is refused while it is off. Defaults to on. */
-  wakeWordEnabled?: () => boolean }): void {
+  wakeWordEnabled?: () => boolean;
+  /**
+   * Computer use for a direct request (core/computer-use.ts): its own agent-desktop runner, never the meeting window reader's,
+   * and the "Ask before sending or deleting" setting. Absent: Bee cannot operate apps here (Linux, or no agent-desktop).
+   */
+  computer?: { platform: ComputerPlatform; run: ComputerRun; askFirst: () => boolean; cleanup: () => void } }): void {
   const createGateway = args.gateway ?? createBeeGateway;
   // One controller per run in flight. The renderer cancels a run when a newer line supersedes it.
   const runs = new Map<string, AbortController>();
+  // Computer use in flight, by run id (Stop), its open Confirm prompts by id, and how many runs use the runner now.
+  const controls = new Map<string, RunControl>();
+  const confirms = new Map<number, { runId: string; resolve: (confirmed: boolean) => void }>();
+  let confirmSeq = 0;
+  let computerRuns = 0;
+
+  /** Main's side of one request's computer use: step lines and Confirm prompts go to the window that asked. */
+  const computerHost = (computer: NonNullable<typeof args.computer>, sender: { isDestroyed: () => boolean; send: (channel: string, payload: unknown) => void }, runId: string | number | undefined): ComputerHost => {
+    const key = runId === undefined ? null : String(runId);
+    const send = (update: ComputerUpdate) => {
+      if (runId !== undefined && !sender.isDestroyed()) sender.send(IPC.computerUpdate, update);
+    };
+    return {
+      platform: computer.platform,
+      run: computer.run,
+      askFirst: computer.askFirst,
+      onStep: (label) => {
+        if (runId !== undefined) send({ runId, type: "step", label: label.slice(0, COMPUTER_LINE_MAX) });
+      },
+      // Settled by the island's Confirm or Cancel (computerAnswer), or false once the run stops or the wait times out.
+      confirm: (request, signal) =>
+        new Promise((resolve) => {
+          if (runId === undefined || key === null) return resolve(false);
+          const id = ++confirmSeq;
+          const settle = (confirmed: boolean) => {
+            if (!confirms.has(id)) return;
+            confirms.delete(id);
+            resolve(confirmed);
+          };
+          confirms.set(id, { runId: key, resolve: settle });
+          signal.addEventListener("abort", () => settle(false), { once: true });
+          send({ runId, type: "confirm", id, kind: request.kind, question: request.question.slice(0, COMPUTER_LINE_MAX), detail: request.detail.slice(0, COMPUTER_LINE_MAX) });
+        }),
+      onControl: (control) => {
+        if (key !== null) controls.set(key, control);
+      },
+    };
+  };
+
+  /** The runner keeps snapshot refs for a run; once no run uses it, they go. */
+  const releaseComputer = () => {
+    if (computerRuns === 0) args.computer?.cleanup();
+  };
 
   /** A fresh controller for the run, aborting an older one with the same id. done() forgets it. */
   const track = (runId: string | number | undefined) => {
@@ -147,6 +203,9 @@ export function registerMeetingIpc(args: { notesDir: string; fsRoots: () => stri
     const { controller, done } = track(request.runId);
     const windowContext = args.meetingWindow?.context() ?? null;
     const meetingBrief = [args.meeting.brief(), meetingWindowBrief(windowContext)].filter((part) => part && part.trim()).join("\n") || undefined;
+    const key = request.runId === undefined ? null : String(request.runId);
+    const computer = args.computer ? computerHost(args.computer, event.sender, request.runId) : null;
+    if (computer) computerRuns += 1;
     try {
       return await runDirectCommand({
         command: request.command,
@@ -160,6 +219,7 @@ export function registerMeetingIpc(args: { notesDir: string; fsRoots: () => stri
         extraRoots: args.fsRoots(),
         loadMcpTools: mcpTools,
         actions: args.desktop ?? null,
+        computer,
         signal: controller.signal,
         onActivity: (activity) => {
           if (!event.sender.isDestroyed()) event.sender.send(IPC.lunaActivity, { runId: request.runId, ...activity } satisfies LunaActivity);
@@ -170,6 +230,42 @@ export function registerMeetingIpc(args: { notesDir: string; fsRoots: () => stri
       });
     } finally {
       done();
+      if (computer) {
+        if (key !== null) controls.delete(key);
+        computerRuns -= 1;
+        releaseComputer();
+      }
+    }
+  });
+
+  // Stop for a direct request: the island's Stop button or "Bee, stop" from the user's own mic. Computer use stops at once (the
+  // agent-desktop command in flight is killed) and the request returns "Stopped."; an answer in flight is cancelled.
+  ipcMain.handle(IPC.stopCommand, (_event, payload) => {
+    const key = String(commandStopSchema.parse(payload).runId);
+    const control = controls.get(key);
+    if (control) control.stop("user");
+    else runs.get(key)?.abort();
+  });
+
+  // The island's Confirm or Cancel for an open prompt of that run. Anything else is ignored.
+  ipcMain.handle(IPC.computerAnswer, (_event, payload) => {
+    const answer = computerAnswerSchema.parse(payload);
+    const pending = confirms.get(answer.id);
+    if (pending && pending.runId === String(answer.runId)) pending.resolve(answer.confirmed);
+  });
+
+  // Settings: may computer use run here, and has macOS allowed Bee Accessibility and Screen Recording. Fails open as unknown.
+  ipcMain.handle(IPC.computerAccess, async (): Promise<ComputerAccessView> => {
+    if (!args.computer) return { supported: false, platform: "other", accessibility: "unknown", screenRecording: "unknown" };
+    const platform = args.computer.platform;
+    computerRuns += 1;
+    try {
+      return { supported: true, platform, ...(await computerAccess(args.computer.run)) };
+    } catch {
+      return { supported: true, platform, accessibility: "unknown", screenRecording: "unknown" };
+    } finally {
+      computerRuns -= 1;
+      releaseComputer();
     }
   });
 

@@ -68,6 +68,11 @@ const BLOCKED_APPS = new Set(
 
 export const BLOCKED_APP_MESSAGE = "Bee does not open terminals, script tools or system tools";
 
+/** A shell, script host or system tool Bee never opens, nor reads or types into for computer use (core/computer-tools.ts). */
+export function isBlockedApp(name: string): boolean {
+  return BLOCKED_APPS.has(appKey(name));
+}
+
 /** Lower case, single spaces, no "the" in front or "app" behind: the key app names are compared by. */
 export function appKey(name: string): string {
   return name

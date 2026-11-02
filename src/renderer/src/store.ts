@@ -5,12 +5,14 @@ import { detectLinks, mergeChips, sourceChips, visibleChips, type LinkChip } fro
 import { MAX_STEERING_TIPS, isFiller, isNewTurn, isQuestion, mergeTips, recentRestarts, runDelayMs, tipCap, tipKey, waitsForRun } from "../../core/steering";
 import { mergeLines, pipelineText, summaryTranscript, type SessionLine } from "../../core/sync-lines";
 import { TEAMS_AUDIO_SPEAKER, TEAMS_AUDIO_SPEAKER_ID, teamsAudioEcho, teamsAudioPlan, teamsAudioReplaced, type TeamsAudioPlan } from "../../core/teams-audio";
-import { WAKE_FOLLOW_MS, routeLine } from "../../core/wake-word";
+import { WAKE_FOLLOW_MS, isConfirmWords, routeLine } from "../../core/wake-word";
 import type { TeamsAudioFailure } from "../../core/teams-audio-protocol";
 import {
   COMMAND_MAX_CHARS,
   SESSION_TRANSCRIPT_MAX,
   clampTip,
+  type ComputerAccessView,
+  type ComputerUpdate,
   type McpSave,
   type McpServerView,
   type McpSetEnabled,
@@ -61,6 +63,11 @@ export type McpTestState = { busy: boolean; result: McpTestResult | null };
 
 // The "Last time with these people…" card at meeting start: shown once per detected meeting (id), until the island closes.
 export type MeetingCard = { id: number; lines: string[] };
+
+// Computer use in progress for a direct request ("Bee, send Sam a message in Discord"): the step as one short line for the
+// pill, and a Confirm prompt while one waits for the user's tap. Only the island's buttons answer it.
+export type ComputerConfirm = Extract<ComputerUpdate, { type: "confirm" }>;
+export type ComputerView = { runId: number; step: string; confirm: ComputerConfirm | null };
 
 // App-wide state shared by the notch and the panel. Local form input stays in the DOM (uncontrolled forms).
 export type BeeState = {
@@ -122,6 +129,9 @@ export type BeeState = {
   // poll), and whether Bee hears the Teams app now. failed: the capture would not open or ended in this call; Bee carries on
   // with the mic and tries again in the next call. failure: why (core/teams-audio-protocol.ts), for the Settings line.
   teamsAudio: { status: TeamsAudioStatus | null; listening: boolean; failed: boolean; failure: TeamsAudioFailure | null };
+  // Computer use in progress (null when none), and what macOS allows it, for Settings (null until asked).
+  computer: ComputerView | null;
+  computerAccess: ComputerAccessView | null;
 };
 
 const PIPELINE_WINDOW = 8;
@@ -189,6 +199,8 @@ let state: BeeState = {
   teamsError: null,
   inviteOpen: false,
   teamsAudio: { status: null, listening: false, failed: false, failure: null },
+  computer: null,
+  computerAccess: null,
 };
 const listeners = new Set<() => void>();
 
@@ -277,6 +289,16 @@ let islandTimer: ReturnType<typeof setTimeout> | undefined;
 const hintDetector = createHintDetector({ enabled: false });
 let hintShownAt = 0;
 const EMPTY_RESULT = { tips: [], guideError: null };
+const STOPPED_RESULT: PipelineResult = {
+  notes: [],
+  rankSource: "fallback",
+  rankError: null,
+  tips: ["Stopped."],
+  tipSources: [null],
+  sources: [],
+  guideError: null,
+  timingsMs: { retrieve: 0, rank: 0, guide: 0, mcp: 0, lunaFirstToken: null, lunaTotal: 0 },
+};
 
 /**
  * What the island and panel show: the last result, with the streamed tips over it while a run is in flight.
@@ -357,9 +379,14 @@ export function syncCard(current: BeeState): SyncCard {
   return null;
 }
 
-/** The island body shows a response (tips, link chips, the meeting card): something to show, and no panel or sync card in the way. */
+/**
+ * The island body shows a response (tips, link chips, the meeting card): something to show, and no panel or sync card in the
+ * way. A Confirm prompt for computer use always shows, over a sync card.
+ */
 export function responseOpen(current: BeeState): boolean {
-  if (current.expanded || syncCard(current)) return false;
+  if (current.expanded) return false;
+  if (current.computer?.confirm) return true;
+  if (syncCard(current)) return false;
   return islandShowsBody(islandArgs(current));
 }
 
@@ -428,7 +455,7 @@ export function islandArgs(current: BeeState) {
 /** Resize the window to fit: full panel, notch plus sync card, notch plus island body, or notch only. */
 async function applyWindowSize(): Promise<void> {
   const size: WindowSize =
-    state.expanded && !state.collapsing ? "expanded" : syncCard(state) ? "prompt" : islandOpen(state) ? "response" : "collapsed";
+    state.expanded && !state.collapsing ? "expanded" : state.computer?.confirm ? "response" : syncCard(state) ? "prompt" : islandOpen(state) ? "response" : "collapsed";
   if (size === sentSize) return;
   sentSize = size;
   await window.bee.setWindowSize(size);
@@ -737,8 +764,38 @@ function takeWakeLine(text: string): boolean {
   wakeArmedUntil = route.kind === "wake" ? now + WAKE_FOLLOW_MS : 0;
   if (route.kind === "meeting") return false;
   console.debug(`Bee: wake ${route.kind}`);
+  // Only a tap answers a Confirm prompt. "Bee, yes, send it" leaves the prompt as it is, rather than cancelling the task.
+  if (route.kind === "command" && state.computer?.confirm && isConfirmWords(route.command)) {
+    set({ computer: { ...state.computer, step: "Tap Confirm to go ahead…" } });
+    return true;
+  }
   if (route.kind === "command") void runCommand(route.command);
+  // "Bee, stop" ends the request in flight, if any. Nothing else happens.
+  if (route.kind === "stop") void stopCommand();
   return true;
+}
+
+/**
+ * Stops the direct request in flight: computer use ends in main ("Stopped." comes back as its line); an answer is dropped and
+ * "Stopped." shows at once. Only the user's own mic ("Bee, stop") and the island's Stop button call this.
+ */
+async function stopCommand(): Promise<void> {
+  const run = commandRun;
+  if (run === null) return;
+  if (state.computer?.runId === run) {
+    set({ computer: { ...state.computer, step: "Stopping…", confirm: null } });
+    void applyWindowSize();
+    await window.bee.stopCommand({ runId: run }).catch(() => undefined);
+    return;
+  }
+  // No computer use: the answer is not worth waiting for.
+  latestRun += 1;
+  commandRun = null;
+  void window.bee.stopCommand({ runId: run }).catch(() => undefined);
+  set({ busy: false, tools: [], partialTips: null, computer: null, result: { ...STOPPED_RESULT }, dismissed: false, islandClosing: false });
+  commandHold = setTimeout(endCommandHold, COMMAND_HOLD_MS);
+  touchIsland();
+  void applyWindowSize();
 }
 
 /**
@@ -792,6 +849,15 @@ async function runCommand(command: string): Promise<void> {
     touchIsland();
     void applyWindowSize();
   });
+  // Computer use: the step line, and a Confirm prompt that opens the island (the panel folds so the island shows it).
+  const stopComputer = window.bee.computer.onUpdate((update) => {
+    if (run !== latestRun || update.runId !== run) return;
+    const step = update.type === "step" ? update.label : (state.computer?.step ?? "");
+    set({ computer: { runId: run, step, confirm: update.type === "confirm" ? update : null }, dismissed: false, islandClosing: false });
+    if (update.type === "confirm" && state.expanded) void actions.setExpanded(false);
+    touchIsland();
+    void applyWindowSize();
+  });
   try {
     // The meeting so far, as background for a request about it ("what did Priya just say").
     const recent = state.session.lines.slice(-PIPELINE_WINDOW).map(pipelineText);
@@ -810,6 +876,7 @@ async function runCommand(command: string): Promise<void> {
       chips: mergeChips([], result.tips.flatMap((tip) => detectLinks(tip))),
       busy: false,
       tools: [],
+      computer: null,
       dismissed: false,
       islandClosing: false,
     });
@@ -819,11 +886,12 @@ async function runCommand(command: string): Promise<void> {
     if (run === latestRun) {
       // Electron prefixes a handler's error with "Error invoking remote method …".
       const message = error instanceof Error ? error.message.replace(/^Error invoking remote method '[^']*': (Error: )?/, "") : "";
-      set({ busy: false, partialTips: null, tools: [], error: message || "The AI could not answer" });
+      set({ busy: false, partialTips: null, tools: [], computer: null, error: message || "The AI could not answer" });
     }
   } finally {
     stopActivity();
     stopPartial();
+    stopComputer();
     if (commandRun === run) {
       commandRun = null;
       commandHold = setTimeout(endCommandHold, COMMAND_HOLD_MS);
@@ -1202,6 +1270,8 @@ export const actions = {
 
   /** Close the island body without closing the window. A mic hint closes with it, and its cooldown starts (hints.ts). */
   dismissIsland(): Promise<void> {
+    // Closing a Confirm prompt is Cancel.
+    if (state.computer?.confirm) return actions.answerConfirm(false);
     if (!state.hint) return closeIsland();
     hintDetector.dismiss(state.hint.id);
     // The hint alone holds the body open: close just the hint, so a run in flight keeps its turn.
@@ -1343,6 +1413,37 @@ export const actions = {
       });
     console.debug(`teams-audio lines +${fresh.length} echo ${texts.length - fresh.length}`);
     if (fresh.length > 0 && addLines(fresh)) scheduleRun();
+  },
+
+  /** The island's Stop button: ends the direct request in flight (computer use or an answer). */
+  stopCommand(): Promise<void> {
+    return stopCommand();
+  },
+
+  /**
+   * The island's Confirm or Cancel for the prompt on screen. This is the only way a Confirm is answered: nothing spoken, typed,
+   * captioned or heard from Teams reaches it.
+   */
+  async answerConfirm(confirmed: boolean): Promise<void> {
+    const computer = state.computer;
+    const confirm = computer?.confirm;
+    if (!computer || !confirm) return;
+    set({ computer: { ...computer, step: confirmed ? computer.step : "Stopping…", confirm: null } });
+    void applyWindowSize();
+    try {
+      await window.bee.computer.answer({ runId: computer.runId, id: confirm.id, confirmed });
+    } catch {
+      // Main stops waiting by itself; the run ends with its own line.
+    }
+  },
+
+  /** Settings: may computer use run here, and what macOS allows it. Unknown on failure. */
+  async refreshComputerAccess(): Promise<void> {
+    try {
+      set({ computerAccess: await window.bee.computer.access() });
+    } catch {
+      set({ computerAccess: { supported: false, platform: "other", accessibility: "unknown", screenRecording: "unknown" } });
+    }
   },
 
   /** macOS: opens System Settings at Privacy & Security → Accessibility, so the user can allow Bee to read the meeting window. */

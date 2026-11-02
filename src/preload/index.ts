@@ -8,6 +8,8 @@ import {
   lunaActivitySchema,
   lunaPartialSchema,
   clearMeetingMemoryResultSchema,
+  computerAccessSchema,
+  computerUpdateSchema,
   copyGatewayKeyResultSchema,
   meetingContextViewSchema,
   meetingWindowCaptionsSchema,
@@ -29,6 +31,9 @@ import {
   updateActionSchema,
   updateCheckSchema,
   type CommandRequest,
+  type CommandStop,
+  type ComputerAnswer,
+  type ComputerUpdate,
   type EnrichLinksRequest,
   type LunaActivity,
   type LunaPartial,
@@ -63,6 +68,27 @@ const api = {
   // Cancels a run a newer line has superseded. Fire and forget: the run's own result is dropped anyway.
   cancelPipeline: async (request: PipelineCancel) => {
     z.void().parse(await ipcRenderer.invoke(IPC.cancelPipeline, request));
+  },
+  // Stops a direct request (the island's Stop, or "Bee, stop" from the user's own mic). Its result still comes back: "Stopped."
+  stopCommand: async (request: CommandStop) => {
+    z.void().parse(await ipcRenderer.invoke(IPC.stopCommand, request));
+  },
+  // Computer use: the step in progress and Confirm prompts, the user's Confirm or Cancel tap, and what macOS allows.
+  computer: {
+    onUpdate: (listener: (update: ComputerUpdate) => void): (() => void) => {
+      const handler = (_event: unknown, payload: unknown) => {
+        const parsed = computerUpdateSchema.safeParse(payload);
+        if (parsed.success) listener(parsed.data);
+      };
+      ipcRenderer.on(IPC.computerUpdate, handler);
+      return () => {
+        ipcRenderer.removeListener(IPC.computerUpdate, handler);
+      };
+    },
+    answer: async (answer: ComputerAnswer) => {
+      z.void().parse(await ipcRenderer.invoke(IPC.computerAnswer, answer));
+    },
+    access: async () => computerAccessSchema.parse(await ipcRenderer.invoke(IPC.computerAccess)),
   },
   transcribe: async (request: TranscribeRequest) =>
     transcribeResultSchema.parse(await ipcRenderer.invoke(IPC.transcribe, request)),

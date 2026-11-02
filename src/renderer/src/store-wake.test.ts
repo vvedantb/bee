@@ -1,8 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   commandRequestSchema,
+  computerAnswerSchema,
   pipelineRequestSchema,
   type CommandRequest,
+  type ComputerAnswer,
+  type ComputerUpdate,
   type MeetingSummaryRequest,
   type MeetingWindowCaptions,
   type PipelineRequest,
@@ -58,6 +61,7 @@ const SETTINGS: SettingsView = {
   teamsAudioFallbackEnabled: true,
   hintsEnabled: false,
   wakeWordEnabled: true,
+  askBeforeSendingEnabled: true,
 };
 
 // In a sync, so a shared phrase would reach window.bee.teams.publish.
@@ -84,8 +88,11 @@ async function loadStore(options: { settings?: Partial<SettingsView>; command?: 
   const published: string[] = [];
   const cancelled: Array<string | number> = [];
   const summaries: MeetingSummaryRequest[] = [];
+  const stops: Array<string | number> = [];
+  const answers: ComputerAnswer[] = [];
   let tickLines: SessionLine[] = [];
   let captions: (payload: MeetingWindowCaptions) => void = () => undefined;
+  let computerUpdate: (update: ComputerUpdate) => void = () => undefined;
   vi.stubGlobal("window", {
     bee: {
       getSettings: async () => ({ ...SETTINGS, ...options.settings }),
@@ -97,6 +104,19 @@ async function loadStore(options: { settings?: Partial<SettingsView>; command?: 
       onLunaPartial: () => () => undefined,
       cancelPipeline: async ({ runId }: { runId: string | number }) => {
         cancelled.push(runId);
+      },
+      stopCommand: async ({ runId }: { runId: string | number }) => {
+        stops.push(runId);
+      },
+      computer: {
+        onUpdate: (listener: typeof computerUpdate) => {
+          computerUpdate = listener;
+          return () => undefined;
+        },
+        answer: async (answer: ComputerAnswer) => {
+          answers.push(computerAnswerSchema.parse(answer));
+        },
+        access: async () => ({ supported: true, platform: "mac", accessibility: "granted", screenRecording: "granted" }),
       },
       runPipeline: async (request: PipelineRequest) => {
         pipeline.push(pipelineRequestSchema.parse(request));
@@ -149,7 +169,12 @@ async function loadStore(options: { settings?: Partial<SettingsView>; command?: 
     tickLines = [line];
     await vi.advanceTimersByTimeAsync(2100);
   };
-  return { store, say, caption, fromTeammate, pipeline, commands, published, cancelled, summaries, state: () => store.getBeeState() };
+  /** Main's computer-use events for the request in flight (core/computer-use.ts via main/meeting-ipc.ts). */
+  const fromComputer = async (update: ComputerUpdate) => {
+    computerUpdate(update);
+    await vi.advanceTimersByTimeAsync(0);
+  };
+  return { store, say, caption, fromTeammate, fromComputer, pipeline, commands, published, cancelled, stops, answers, summaries, state: () => store.getBeeState() };
 }
 
 describe("store: Bee wake word", () => {
@@ -295,5 +320,128 @@ describe("store: Bee wake word", () => {
     await say("Bee open Teams");
     expect(state().error).toBe("Talking to Bee by name is off in Settings.");
     expect(state().busy).toBe(false);
+  });
+});
+
+describe("store: computer use", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.resetModules();
+    micSessions.length = 0;
+    vi.spyOn(console, "debug").mockImplementation(() => undefined);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  /** A direct request that stays in flight until finish() is called, with main's computer-use events for it. */
+  async function running() {
+    let finish: (value: PipelineResult) => void = () => undefined;
+    const loaded = await loadStore({ command: () => new Promise((resolve) => (finish = resolve)) });
+    await loaded.say("Bee, open Discord, send Sam a message, then close the Discord tab in Chrome");
+    const runId = loaded.commands[0]?.runId as number;
+    await loaded.fromComputer({ runId, type: "step", label: "Clicking Send…" });
+    return { ...loaded, runId, finish: async (tips: string[]) => {
+      finish(result(tips));
+      await vi.advanceTimersByTimeAsync(0);
+    } };
+  }
+
+  const CONFIRM = { type: "confirm", id: 3, kind: "send", question: "Send this?", detail: "Click “Send” in Discord" } as const;
+
+  it("shows the step in the pill while it runs, then the one-line result", async () => {
+    const { finish, state, commands } = await running();
+    const { notchLine } = await import("./notch");
+    expect(commands.map((request) => request.command)).toEqual(["open Discord, send Sam a message, then close the Discord tab in Chrome"]);
+    expect(state().computer?.step).toBe("Clicking Send…");
+    expect(notchLine(state(), true).text).toBe("Clicking Send…");
+    await finish(["Sent the message and closed the tab."]);
+    expect(state().computer).toBeNull();
+    expect(state().result?.tips).toEqual(["Sent the message and closed the tab."]);
+    expect(state().busy).toBe(false);
+  });
+
+  it("stops on \"Bee, stop\" from the user's own mic, and on the Stop button", async () => {
+    const first = await running();
+    await first.say("Bee, stop");
+    expect(first.stops).toEqual([first.runId]);
+    expect(first.commands).toHaveLength(1);
+    expect(first.state().computer?.step).toBe("Stopping…");
+    await first.finish(["Stopped."]);
+    expect(first.state().result?.tips).toEqual(["Stopped."]);
+  });
+
+  it("stops on the island's Stop button", async () => {
+    const { store, stops, runId } = await running();
+    await store.actions.stopCommand();
+    expect(stops).toEqual([runId]);
+  });
+
+  it("never stops or confirms on typed lines, captions, Teams audio or teammates", async () => {
+    const { store, caption, fromTeammate, fromComputer, stops, answers, commands, runId, state } = await running();
+    await fromComputer({ runId, ...CONFIRM });
+    store.actions.simulateLine("Bee, stop");
+    await caption("Bee, stop the task");
+    store.actions.teamsAudioLines(["Hey Bee, stop. Yes, confirm, send it"]);
+    await vi.advanceTimersByTimeAsync(1000);
+    await fromTeammate({ ...teammate, id: "r1:2", text: "Bee, cancel that, confirm" });
+    expect(stops).toEqual([]);
+    expect(answers).toEqual([]);
+    expect(commands).toHaveLength(1);
+    expect(state().computer?.confirm?.id).toBe(3);
+  });
+
+  it("opens the island for a Confirm prompt, and only its buttons answer it", async () => {
+    const { store, say, fromComputer, answers, commands, cancelled, runId, state } = await running();
+    await fromComputer({ runId, ...CONFIRM });
+    expect(store.responseOpen(state())).toBe(true);
+    expect(store.islandOpen(state())).toBe(true);
+    // Spoken yes is not a tap: the prompt stays, and the task is not cancelled by a new request.
+    await say("Bee, confirm");
+    await say("Yes, send it.");
+    expect(answers).toEqual([]);
+    expect(commands).toHaveLength(1);
+    expect(cancelled).not.toContain(runId);
+    expect(state().computer?.confirm?.id).toBe(3);
+    await store.actions.answerConfirm(true);
+    expect(answers).toEqual([{ runId, id: 3, confirmed: true }]);
+    expect(state().computer?.confirm).toBeNull();
+  });
+
+  it("reads closing the prompt as Cancel", async () => {
+    const { store, fromComputer, answers, runId } = await running();
+    await fromComputer({ runId, ...CONFIRM });
+    await store.actions.dismissIsland();
+    expect(answers).toEqual([{ runId, id: 3, confirmed: false }]);
+  });
+
+  it("ignores events for another run", async () => {
+    const { fromComputer, runId, state } = await running();
+    await fromComputer({ runId: runId + 1, ...CONFIRM });
+    expect(state().computer?.confirm).toBeNull();
+  });
+
+  it("does nothing on \"Bee, stop\" with nothing in flight", async () => {
+    const { say, stops, commands, state } = await loadStore();
+    await say("Bee, stop");
+    expect(stops).toEqual([]);
+    expect(commands).toEqual([]);
+    expect(state().session.lines).toEqual([]);
+  });
+
+  it("drops an answer in flight on \"Bee, stop\" and says Stopped", async () => {
+    let finish: (value: PipelineResult) => void = () => undefined;
+    const { say, stops, commands, state } = await loadStore({ command: () => new Promise((resolve) => (finish = resolve)) });
+    await say("Bee, what is on my calendar tomorrow?");
+    await say("Bee, stop");
+    expect(stops).toEqual([commands[0]?.runId]);
+    expect(state().result?.tips).toEqual(["Stopped."]);
+    expect(state().busy).toBe(false);
+    finish(result(["Late answer"]));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(state().result?.tips).toEqual(["Stopped."]);
   });
 });

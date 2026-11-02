@@ -47,6 +47,9 @@ const fileSchema = z.object({
   hintsEnabled: z.boolean().default(true).catch(true),
   // "Bee" wake word (core/wake-word.ts): own mic phrases that start with "Bee…" go to the AI as a direct request. On until switched off.
   wakeWordEnabled: z.boolean().default(true).catch(true),
+  // "Ask before sending or deleting" (core/computer-gate.ts): computer use waits for a Confirm tap before it sends, deletes, buys
+  // or submits. On until switched off; a bad stored value reads as on, the safe side.
+  askBeforeSendingEnabled: z.boolean().default(true).catch(true),
   // Non-secret MCP settings. A bad entry drops the list, not the whole file.
   mcpServers: z.array(mcpServerSchema).catch([]).default([]),
   // One safeStorage ciphertext (base64) for every server's secrets, as JSON keyed by server id.
@@ -99,6 +102,7 @@ export function createSettingsStore(args: {
       teamsAudioFallbackEnabled: false,
       hintsEnabled: true,
       wakeWordEnabled: true,
+      askBeforeSendingEnabled: true,
       mcpServers: [],
     };
   }
@@ -370,6 +374,7 @@ export function createSettingsStore(args: {
       teamsAudioFallbackEnabled: file.teamsAudioFallbackEnabled,
       hintsEnabled: file.hintsEnabled,
       wakeWordEnabled: file.wakeWordEnabled,
+      askBeforeSendingEnabled: file.askBeforeSendingEnabled,
     };
   }
 
@@ -394,6 +399,11 @@ export function createSettingsStore(args: {
     return read().wakeWordEnabled;
   }
 
+  /** "Ask before sending or deleting", read before each action computer use takes, so a change applies mid-task. Main only. */
+  function askBeforeSending(): boolean {
+    return read().askBeforeSendingEnabled;
+  }
+
   function save(update: SettingsUpdate): SettingsView {
     let file = read();
     if (update.gatewayApiKey !== undefined) file = setSecret(file, "gatewayApiKey", update.gatewayApiKey);
@@ -408,6 +418,7 @@ export function createSettingsStore(args: {
     if (update.teamsAudioFallbackEnabled !== undefined) file = { ...file, teamsAudioFallbackEnabled: update.teamsAudioFallbackEnabled };
     if (update.hintsEnabled !== undefined) file = { ...file, hintsEnabled: update.hintsEnabled };
     if (update.wakeWordEnabled !== undefined) file = { ...file, wakeWordEnabled: update.wakeWordEnabled };
+    if (update.askBeforeSendingEnabled !== undefined) file = { ...file, askBeforeSendingEnabled: update.askBeforeSendingEnabled };
     if (update.fsRoots !== undefined) {
       const { roots, invalid } = normalizeFsRoots(update.fsRoots);
       if (invalid.length > 0) throw new Error(`Folders must be absolute paths: ${invalid.join(", ")}`);
@@ -430,5 +441,5 @@ export function createSettingsStore(args: {
     write({ ...read(), overlayPosition: position });
   }
 
-  return { view, save, meetingContext, readMeetingWindow, teamsAudioFallback, wakeWord, overlayPosition, saveOverlayPosition, gatewayApiKey, savedGatewayApiKey, linkSettings, vmemConfig, fsRoots, mcpList, mcpSave, mcpRemove, mcpSetEnabled, mcpRecordTools, mcpConfigs, mcpSignedOut, mcpConfig, mcpOAuthStorage };
+  return { view, save, meetingContext, readMeetingWindow, teamsAudioFallback, wakeWord, askBeforeSending, overlayPosition, saveOverlayPosition, gatewayApiKey, savedGatewayApiKey, linkSettings, vmemConfig, fsRoots, mcpList, mcpSave, mcpRemove, mcpSetEnabled, mcpRecordTools, mcpConfigs, mcpSignedOut, mcpConfig, mcpOAuthStorage };
 }

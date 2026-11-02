@@ -15,7 +15,7 @@ import { createMeetingContext } from "../core/meeting-context";
 import { createMeetingMemoryStore } from "../core/meeting-memory";
 import { searchMcpNotes } from "../core/meeting-search";
 import { createVmemSearch } from "../core/vmem-history";
-import { createAgentDesktopActionRunner, createAgentDesktopRunner, resolveAgentDesktop } from "./agent-desktop";
+import { createAgentDesktopActionRunner, createAgentDesktopComputerRunner, createAgentDesktopRunner, resolveAgentDesktop } from "./agent-desktop";
 import { bringToFront, registerClerkOAuthIpc } from "./clerk-oauth-ipc";
 import { createDesktopActions, windowsStartMenuDirs } from "./desktop-actions";
 import { registerFaviconIpc } from "./favicon-ipc";
@@ -50,7 +50,7 @@ const SIZES: Record<WindowSize, { width: number; height: number }> = {
 const TOP_MARGIN = 8;
 const isMac = process.platform === "darwin";
 const TOGGLE_SHORTCUT = "CommandOrControl+Shift+Space";
-// System Settings → Privacy & Security → Accessibility, for the experimental meeting window reader.
+// System Settings → Privacy & Security → Accessibility, for the experimental meeting window reader and computer use.
 const MAC_ACCESSIBILITY_SETTINGS = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility";
 
 const outDir = fileURLToPath(new URL(".", import.meta.url));
@@ -280,8 +280,15 @@ if (clerk.isPrimaryInstance) {
       openPath: (path) => shell.openPath(path),
       startMenuDirs: windowsStartMenuDirs(process.env),
     });
+    // Computer use for a direct request ("Bee, send Sam a message in Discord"): a third agent-desktop runner, with its own
+    // allowlist (assertComputerUse) and state folder. Never the meeting window reader's. Windows and macOS only.
+    const computerRunner = agentDesktopBinary && (isMac || process.platform === "win32") ? createAgentDesktopComputerRunner(agentDesktopBinary) : null;
+    app.on("will-quit", () => computerRunner?.cleanup());
     ipcMain.handle(IPC.openAccessibilitySettings, async () => {
-      if (isMac) await shell.openExternal(MAC_ACCESSIBILITY_SETTINGS);
+      if (!isMac) return;
+      // Asking once lists Bee in the pane (macOS shows its own prompt); the pane opens either way.
+      systemPreferences.isTrustedAccessibilityClient(true);
+      await shell.openExternal(MAC_ACCESSIBILITY_SETTINGS);
     });
 
     ipcMain.handle(IPC.getSettings, () => settings.view());
@@ -326,7 +333,21 @@ if (clerk.isPrimaryInstance) {
       // macOS has no in-call detector, so it reads Teams window names on its own schedule.
       pollTitlesWhenIdle: isMac,
     });
-    registerMeetingIpc({ notesDir, fsRoots: settings.fsRoots, mcpConfigs: settings.mcpConfigs, mcpSignedOut: settings.mcpSignedOut, mcpPool, meeting, meetingWindow, gatewayApiKey: settings.gatewayApiKey, desktop, wakeWordEnabled: settings.wakeWord });
+    registerMeetingIpc({
+      notesDir,
+      fsRoots: settings.fsRoots,
+      mcpConfigs: settings.mcpConfigs,
+      mcpSignedOut: settings.mcpSignedOut,
+      mcpPool,
+      meeting,
+      meetingWindow,
+      gatewayApiKey: settings.gatewayApiKey,
+      desktop,
+      wakeWordEnabled: settings.wakeWord,
+      computer: computerRunner
+        ? { platform: isMac ? "mac" : "windows", run: computerRunner.run, askFirst: settings.askBeforeSending, cleanup: computerRunner.cleanup }
+        : undefined,
+    });
 
     const teams = registerTeamsIpc({ relayUrl: relayUrlFromEnv(process.env.BEE_RELAY_URL || import.meta.env.MAIN_VITE_BEE_RELAY_URL), detector });
     onInvite = (link) => teams.setPendingInvite(link);

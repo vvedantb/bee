@@ -2,13 +2,24 @@ import { execFile } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { assertDesktopAction, assertReadOnly, parseEnvelope, type AgentDesktopResult, type DesktopActionCommand, type ReadOnlyCommand } from "../core/agent-desktop-envelope";
+import {
+  assertComputerUse,
+  assertDesktopAction,
+  assertReadOnly,
+  parseEnvelope,
+  type AgentDesktopResult,
+  type ComputerRun,
+  type ComputerUseCommand,
+  type DesktopActionCommand,
+  type ReadOnlyCommand,
+} from "../core/agent-desktop-envelope";
 
 // Runs the agent-desktop CLI (npm agent-desktop, Apache-2.0). The experimental meeting window reader gets a runner for
 // read-only commands only (assertReadOnly). Bee's desktop tools for a direct request ("Bee, open Teams") get a separate runner
-// for launching, focusing and listing apps only (assertDesktopAction). Both are always headless (never --headed), one command
-// at a time, each with a timeout. stdout is parsed and dropped: nothing it holds is logged. Spawn failures come back as codes,
-// never as throws.
+// for launching, focusing and listing apps only (assertDesktopAction). Computer use ("Bee, send Sam a message in Slack") gets a
+// third, for observing and acting on one element at a time (assertComputerUse). The first two are always headless; computer use
+// is headless unless the AI asks for physical keys on press, type or focus. One command at a time per runner, each with a
+// timeout. stdout is parsed and dropped: nothing it holds is logged. Spawn failures come back as codes, never as throws.
 
 export type AgentDesktopBinary = { path: string; macHelper: string | null };
 
@@ -53,7 +64,7 @@ export type AgentDesktopRun = (command: ReadOnlyCommand, args: string[], options
 export type ExecFile = (
   file: string,
   args: string[],
-  options: { timeout: number; maxBuffer: number; windowsHide: boolean; env: NodeJS.ProcessEnv; encoding: "utf8" },
+  options: { timeout: number; maxBuffer: number; windowsHide: boolean; env: NodeJS.ProcessEnv; encoding: "utf8"; signal?: AbortSignal },
   callback: (error: (Error & { code?: unknown; killed?: boolean }) | null, stdout: string) => void,
 ) => void;
 
@@ -109,6 +120,13 @@ export function createAgentDesktopActionRunner(binary: AgentDesktopBinary, deps:
   return queuedRunner<DesktopActionCommand>(binary, deps, assertDesktopAction);
 }
 
+/** Computer use's own runner, with its own state folder and queue (snapshot refs live there for one run). Never the reader's. */
+export type AgentDesktopComputerRunner = { run: ComputerRun; cleanup: () => void };
+
+export function createAgentDesktopComputerRunner(binary: AgentDesktopBinary, deps: RunnerDeps = {}): AgentDesktopComputerRunner {
+  return queuedRunner<ComputerUseCommand>(binary, deps, assertComputerUse);
+}
+
 /** Runs one command at a time after `allow` checks it (it throws, before any process starts, for anything else). */
 function queuedRunner<C extends string>(binary: AgentDesktopBinary, deps: RunnerDeps, allow: (command: string, args: readonly string[]) => void) {
   const exec: ExecFile = deps.exec ?? (execFile as unknown as ExecFile);
@@ -120,8 +138,13 @@ function queuedRunner<C extends string>(binary: AgentDesktopBinary, deps: Runner
     return home;
   };
 
-  const spawn = (command: C, args: string[], timeoutMs: number): Promise<AgentDesktopResult> =>
+  const spawn = (command: C, args: string[], timeoutMs: number, signal?: AbortSignal): Promise<AgentDesktopResult> =>
     new Promise((resolve) => {
+      // Stopped while it waited its turn: it never starts.
+      if (signal?.aborted) {
+        resolve({ ok: false, code: "ABORTED" });
+        return;
+      }
       let dir: string;
       try {
         dir = ensureHome();
@@ -130,7 +153,10 @@ function queuedRunner<C extends string>(binary: AgentDesktopBinary, deps: Runner
         return;
       }
       try {
-        exec(binary.path, [command, ...args], { timeout: timeoutMs, maxBuffer: MAX_BUFFER, windowsHide: true, env: childEnv(deps.env ?? process.env, dir, binary.macHelper), encoding: "utf8" }, (error, stdout) => {
+        const options = { timeout: timeoutMs, maxBuffer: MAX_BUFFER, windowsHide: true, env: childEnv(deps.env ?? process.env, dir, binary.macHelper), encoding: "utf8" as const };
+        // The signal kills the command in flight (Stop, a newer request).
+        exec(binary.path, [command, ...args], signal ? { ...options, signal } : options, (error, stdout) => {
+          if (signal?.aborted) return resolve({ ok: false, code: "ABORTED" });
           // Exit code 1 still prints the error envelope, so stdout is read first.
           const parsed = parseEnvelope(stdout ?? "");
           if (parsed.ok || parsed.code !== "BAD_OUTPUT" || !error) return resolve(parsed);
@@ -143,10 +169,10 @@ function queuedRunner<C extends string>(binary: AgentDesktopBinary, deps: Runner
     });
 
   return {
-    run: (command: C, args: string[], options: { timeoutMs?: number } = {}): Promise<AgentDesktopResult> => {
+    run: (command: C, args: string[], options: { timeoutMs?: number; signal?: AbortSignal } = {}): Promise<AgentDesktopResult> => {
       // Throws on anything outside the runner's set, before a process starts.
       allow(command, args);
-      const result = queue.then(() => spawn(command, args, options.timeoutMs ?? DEFAULT_TIMEOUT_MS));
+      const result = queue.then(() => spawn(command, args, options.timeoutMs ?? DEFAULT_TIMEOUT_MS, options.signal));
       queue = result.catch(() => undefined);
       return result;
     },

@@ -9,6 +9,7 @@ import {
   IconMicrophoneOff,
   IconNotebook,
   IconPlayerPlay,
+  IconPlayerStop,
   IconRefresh,
   IconUsersGroup,
   IconX,
@@ -22,6 +23,7 @@ import { MeetingContextSection } from "./MeetingContextSection";
 import { MicHint } from "./MicHint";
 import { SecretField } from "./SecretField";
 import { SettingRow } from "./SettingRow";
+import { computerAccessMessage } from "./computer-access";
 import { INTERFACE_SCALES } from "../../core/interface-scale";
 import { DEFAULT_MOTION_PREFERENCE, MOTION_PREFERENCES, resolveReducedMotion, type MotionPreference } from "../../core/motion-preference";
 import { visibleChips, type LinkChip } from "../../core/link-suggest";
@@ -31,7 +33,7 @@ import { displayTip, islandClick, mcpErrorNote, timingsLabel, timingsTitle } fro
 import { NOTCH_LOGO_PX } from "./logo";
 import { focusKeyFieldWhenReady, GATEWAY_KEY_FIELD_ID, statusClick, type StatusClick } from "./island-click";
 import { NOTCH_BUTTON, NOTCH_UPDATE_BUTTON, logoState, notchLine, workingLabel, type NotchLine } from "./notch";
-import { actions, answerFolded, displayResult, islandOpen, responseOpen, teamsAudioNow, useBee, type BeeState, type SummaryState, type UpdateState } from "./store";
+import { actions, answerFolded, displayResult, islandOpen, responseOpen, teamsAudioNow, useBee, type BeeState, type ComputerConfirm, type SummaryState, type UpdateState } from "./store";
 import { SyncCard, SyncSection, TeamSection, syncedWith } from "./Teams";
 import { TEAMS_AUDIO_LISTENING } from "./teams-audio-message";
 import { updateButton } from "./update";
@@ -63,6 +65,25 @@ function LinkChips({ chips }: { chips: LinkChip[] }) {
   );
 }
 
+// Computer use waits for the user before it sends, deletes, buys or submits (Settings → Ask before sending or deleting). Only
+// these two buttons answer it.
+function ConfirmPrompt({ confirm }: { confirm: ComputerConfirm }) {
+  return (
+    <div className="island-confirm" role="group" aria-label={confirm.question}>
+      <p>{confirm.question}</p>
+      <p>{confirm.detail}</p>
+      <div className="row actions">
+        <Button type="button" size="sm" autoFocus onClick={() => void actions.answerConfirm(true)}>
+          Confirm
+        </Button>
+        <Button type="button" variant="ghost" size="sm" onClick={() => void actions.answerConfirm(false)}>
+          Cancel
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 function IslandBody({
   result,
   chips,
@@ -71,6 +92,7 @@ function IslandBody({
   card,
   hint,
   hintClosing,
+  confirm,
 }: {
   result: PipelineResult | null;
   chips: LinkChip[];
@@ -79,6 +101,7 @@ function IslandBody({
   card: string[];
   hint: BeeState["hint"];
   hintClosing: boolean;
+  confirm: ComputerConfirm | null;
 }) {
   const tips = result?.tips ?? [];
   const tipSources = result?.tipSources ?? [];
@@ -92,6 +115,7 @@ function IslandBody({
         {/* Answers open at the top and never scroll by themselves, so the user reads from the start. Scrolling keeps the body open. */}
         <div className="island-scroll scrollbar-thin" onScroll={() => actions.islandScrolled()}>
           <div className="island-content">
+            {confirm ? <ConfirmPrompt confirm={confirm} /> : null}
             {card.length > 0 ? (
               <div className="island-card">
                 {card.map((line, index) => (
@@ -196,6 +220,12 @@ function Island({ state }: { state: BeeState }) {
           </span>
         )}
         {newVersion ? <UpdateButton update={state.update} /> : null}
+        {/* Computer use in progress: one tap stops it, like saying "Bee, stop". */}
+        {state.computer ? (
+          <Button type="button" variant="secondary" size="sm" className="rounded-full" title="Stop" onClick={() => void actions.stopCommand()}>
+            <IconPlayerStop {...ICON} /> Stop
+          </Button>
+        ) : null}
         {state.teams?.room ? (
           <Button
             type="button"
@@ -244,6 +274,7 @@ function Island({ state }: { state: BeeState }) {
           card={showResponse ? (state.meetingCard?.lines ?? []) : []}
           hint={state.hint}
           hintClosing={state.hintClosing}
+          confirm={showResponse ? (state.computer?.confirm ?? null) : null}
         />
       ) : null}
     </div>
@@ -439,6 +470,39 @@ function UpdateSection({ update }: { update: UpdateState }) {
   );
 }
 
+// Settings → computer use: on a Mac, Accessibility (required) and Screen Recording (for pictures of a window) for Bee.
+function ComputerAccessSection({ access }: { access: BeeState["computerAccess"] }) {
+  useEffect(() => {
+    void actions.refreshComputerAccess();
+  }, []);
+  const message = computerAccessMessage(access);
+  const mac = access?.supported === true && access.platform === "mac";
+  if (!message && !mac) return null;
+  const recheck = (open: () => Promise<void>) => async () => {
+    await open();
+    await actions.refreshComputerAccess();
+  };
+  return (
+    <div className="flex flex-col gap-1">
+      {message ? (
+        <p className={access?.accessibility === "denied" ? "error" : "muted"} role="status">
+          {message}
+        </p>
+      ) : null}
+      {mac ? (
+        <div className="row actions">
+          <Button type="button" variant="secondary" size="sm" onClick={() => void recheck(actions.openAccessibilitySettings)()}>
+            Open Accessibility settings
+          </Button>
+          <Button type="button" variant="secondary" size="sm" onClick={() => void recheck(actions.openScreenRecordingSettings)()}>
+            Open Screen Recording settings
+          </Button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function SettingsTab({ state, settings }: { state: BeeState; settings: SettingsView }) {
   const { update, error } = state;
   // Remounting the form after a save clears typed secrets and returns saved fields to their masked state.
@@ -514,10 +578,18 @@ function SettingsTab({ state, settings }: { state: BeeState; settings: SettingsV
       <SettingRow
         id="wake-word"
         label="Talk to Bee by saying 'Bee'"
-        description="When your mic hears “Bee…” first, the rest is a request to the AI, not the meeting. It can open apps and links."
+        description="When your mic hears “Bee…” first, the rest is a request to the AI, not the meeting. It can open apps and links, and use apps for you. Say “Bee, stop” to stop."
         checked={settings.wakeWordEnabled}
         onCheckedChange={(wakeWordEnabled) => void actions.saveSettings({ wakeWordEnabled })}
       />
+      <SettingRow
+        id="ask-before-sending"
+        label="Ask before sending or deleting"
+        description="Before the AI sends a message or email, deletes something, buys something, or submits a form, Bee asks you to confirm in the island."
+        checked={settings.askBeforeSendingEnabled}
+        onCheckedChange={(askBeforeSendingEnabled) => void actions.saveSettings({ askBeforeSendingEnabled })}
+      />
+      <ComputerAccessSection access={state.computerAccess} />
 
       <div className="flex flex-col gap-1">
         Interface size

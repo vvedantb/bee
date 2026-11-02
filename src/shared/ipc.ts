@@ -44,6 +44,10 @@ export const IPC = {
   teamsAudioLines: "bee:teams-audio:lines",
   teamsAudioEnded: "bee:teams-audio:ended",
   openScreenRecordingSettings: "bee:teams-audio:open-screen-recording-settings",
+  stopCommand: "bee:command:stop",
+  computerUpdate: "bee:computer:update",
+  computerAnswer: "bee:computer:answer",
+  computerAccess: "bee:computer:access",
 };
 
 // Collapsed notch, notch plus the sync popup, notch plus the island response, or the full panel.
@@ -84,6 +88,9 @@ export const settingsViewSchema = z.object({
   // "Bee" wake word (core/wake-word.ts): an own mic phrase that starts with "Bee…" is a direct request to the AI, not meeting
   // conversation. On by default.
   wakeWordEnabled: z.boolean(),
+  // "Ask before sending or deleting" (core/computer-gate.ts): computer use waits for a Confirm tap in the island before it
+  // sends, deletes, buys or submits a form. On by default.
+  askBeforeSendingEnabled: z.boolean(),
 });
 export type SettingsView = z.infer<typeof settingsViewSchema>;
 
@@ -103,6 +110,7 @@ export const settingsUpdateSchema = z.object({
   teamsAudioFallbackEnabled: z.boolean().optional(),
   hintsEnabled: z.boolean().optional(),
   wakeWordEnabled: z.boolean().optional(),
+  askBeforeSendingEnabled: z.boolean().optional(),
 });
 export type SettingsUpdate = z.infer<typeof settingsUpdateSchema>;
 
@@ -155,6 +163,43 @@ export type CommandRequest = z.infer<typeof commandRequestSchema>;
 
 export const pipelineCancelSchema = z.object({ runId: runIdSchema });
 export type PipelineCancel = z.infer<typeof pipelineCancelSchema>;
+
+// Stop: the island's Stop button or "Bee, stop" (own mic only). Main stops that request's computer use (or its answer), and
+// the request still returns, with "Stopped." as its line.
+export const commandStopSchema = z.object({ runId: runIdSchema });
+export type CommandStop = z.infer<typeof commandStopSchema>;
+
+// Main → renderer while computer use runs (core/computer-use.ts): the step in progress as one short line ("Clicking Send…"),
+// or a Confirm prompt before a send, delete, purchase or form (core/computer-gate.ts). Lines describe the user's own screen
+// to the user; they are never logged.
+export const COMPUTER_LINE_MAX = 120;
+export const computerUpdateSchema = z.discriminatedUnion("type", [
+  z.object({ runId: runIdSchema, type: z.literal("step"), label: z.string().max(COMPUTER_LINE_MAX) }),
+  z.object({
+    runId: runIdSchema,
+    type: z.literal("confirm"),
+    id: z.number().int().positive(),
+    kind: z.enum(["send", "delete", "buy", "submit"]),
+    question: z.string().max(COMPUTER_LINE_MAX),
+    detail: z.string().max(COMPUTER_LINE_MAX),
+  }),
+]);
+export type ComputerUpdate = z.infer<typeof computerUpdateSchema>;
+
+// Renderer → main: the user's tap on a Confirm prompt. Only the island's Confirm and Cancel buttons send it; nothing spoken,
+// typed, captioned or heard from Teams can.
+export const computerAnswerSchema = z.object({ runId: runIdSchema, id: z.number().int().positive(), confirmed: z.boolean() });
+export type ComputerAnswer = z.infer<typeof computerAnswerSchema>;
+
+// What computer use may do here, for Settings. supported: Windows or Mac with agent-desktop. States are agent-desktop's.
+const accessStateSchema = z.enum(["granted", "denied", "not_required", "unknown"]);
+export const computerAccessSchema = z.object({
+  supported: z.boolean(),
+  platform: z.enum(["mac", "windows", "other"]),
+  accessibility: accessStateSchema,
+  screenRecording: accessStateSchema,
+});
+export type ComputerAccessView = z.infer<typeof computerAccessSchema>;
 
 // Lines the renderer keeps for the end-of-meeting summary (store.ts); the pipeline still gets only the last 8.
 export const SESSION_TRANSCRIPT_MAX = 200;

@@ -18,6 +18,28 @@ const ACTIVITY_LABELS = new Map([
   ["open_app", "Opening the app…"],
   ["focus_window", "Switching windows…"],
   ["open_url", "Opening the link…"],
+  // Computer use (core/computer-tools.ts). The step line from main ("Clicking Send…") wins over these while it runs.
+  ["use_computer", "Using your computer…"],
+  ["snapshot", "Looking at the screen…"],
+  ["find", "Looking at the screen…"],
+  ["read", "Looking at the screen…"],
+  ["check_state", "Looking at the screen…"],
+  ["screenshot", "Looking at the screen…"],
+  ["list_apps", "Checking open apps…"],
+  ["list_windows", "Checking open windows…"],
+  ["click", "Clicking…"],
+  ["type_text", "Typing…"],
+  ["set_value", "Typing…"],
+  ["clear", "Clearing a field…"],
+  ["focus", "Selecting a field…"],
+  ["select_option", "Choosing an option…"],
+  ["set_checked", "Ticking a box…"],
+  ["expand", "Expanding…"],
+  ["scroll", "Scrolling…"],
+  ["scroll_to", "Scrolling…"],
+  ["press_key", "Pressing keys…"],
+  ["close_app", "Closing the app…"],
+  ["wait", "Waiting…"],
 ]);
 
 /** Pill text for the tool Luna is using. MCP tools are named server__tool. Anything unknown reads as thinking. */

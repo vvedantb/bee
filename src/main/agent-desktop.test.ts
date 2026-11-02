@@ -3,8 +3,16 @@ import { tmpdir } from "node:os";
 import { join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { DESKTOP_ACTION_COMMANDS, READ_ONLY_COMMANDS } from "../core/agent-desktop-envelope";
-import { childEnv, createAgentDesktopActionRunner, createAgentDesktopRunner, platformBinaryNames, resolveAgentDesktop, type ExecFile } from "./agent-desktop";
+import { COMPUTER_USE_COMMANDS, DESKTOP_ACTION_COMMANDS, READ_ONLY_COMMANDS } from "../core/agent-desktop-envelope";
+import {
+  childEnv,
+  createAgentDesktopActionRunner,
+  createAgentDesktopComputerRunner,
+  createAgentDesktopRunner,
+  platformBinaryNames,
+  resolveAgentDesktop,
+  type ExecFile,
+} from "./agent-desktop";
 
 const root = new URL("../../", import.meta.url);
 const repo = (path: string) => fileURLToPath(new URL(path, root));
@@ -224,6 +232,66 @@ describe("createAgentDesktopActionRunner", () => {
   });
 });
 
+describe("createAgentDesktopComputerRunner", () => {
+  let temp: string;
+  afterEach(() => rmSync(temp, { recursive: true, force: true }));
+
+  // A fake agent-desktop that answers after delayMs, and dies like execFile when its signal aborts.
+  const make = (delayMs = 0) => {
+    temp = mkdtempSync(join(tmpdir(), "bee-ad-computer-test-"));
+    const calls: Array<{ args: string[]; env: NodeJS.ProcessEnv; killed: boolean }> = [];
+    const exec: ExecFile = (_file, args, options, callback) => {
+      const call = { args, env: options.env, killed: false };
+      calls.push(call);
+      const timer = setTimeout(() => callback(null, ENVELOPE), delayMs);
+      options.signal?.addEventListener("abort", () => {
+        clearTimeout(timer);
+        call.killed = true;
+        callback(Object.assign(new Error("aborted"), { name: "AbortError", code: "ABORT_ERR" }), "");
+      });
+    };
+    const runner = createAgentDesktopComputerRunner({ path: "/bin/agent-desktop", macHelper: null }, { exec, env: { PATH: "/bin", BEE_AI_GATEWAY_API_KEY: "vck_FAKE" }, tempDir: () => temp });
+    return { runner, calls };
+  };
+
+  it("runs observe and act commands with fixed argv, in its own state folder, without secrets", async () => {
+    const { runner, calls } = make();
+    expect((await runner.run("snapshot", ["--interactive-only", "--app=Discord"])).ok).toBe(true);
+    expect((await runner.run("type", ["@s8f3k2p9:e2", "--", "hi Sam"])).ok).toBe(true);
+    expect(calls.map((call) => call.args)).toEqual([
+      ["snapshot", "--interactive-only", "--app=Discord"],
+      ["type", "@s8f3k2p9:e2", "--", "hi Sam"],
+    ]);
+    for (const call of calls) {
+      expect(call.env.BEE_AI_GATEWAY_API_KEY).toBeUndefined();
+      expect(call.env.AGENT_DESKTOP_HOME?.startsWith(temp)).toBe(true);
+    }
+    runner.cleanup();
+  });
+
+  it("kills the command in flight on stop, and never starts one queued behind it", async () => {
+    const { runner, calls } = make(5000);
+    const stop = new AbortController();
+    const first = runner.run("snapshot", ["--app=Discord"], { signal: stop.signal });
+    const second = runner.run("click", ["@s8f3k2p9:e2"], { signal: stop.signal });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    stop.abort();
+    expect(await first).toEqual({ ok: false, code: "ABORTED" });
+    expect(await second).toEqual({ ok: false, code: "ABORTED" });
+    expect(calls.map((call) => [call.args[0], call.killed])).toEqual([["snapshot", true]]);
+  });
+
+  it("refuses clipboard, launch, mouse, batch and forced commands before any process starts", () => {
+    const { runner, calls } = make();
+    for (const command of ["clipboard-get", "clipboard-set", "launch", "mouse-click", "drag", "batch", "session", "notification-action"]) {
+      expect(() => runner.run(command as never, []), command).toThrow(/not allowed/);
+    }
+    expect(() => runner.run("press", ["cmd+q", "--app=Discord", "--force"])).toThrow(/not allowed/);
+    expect(() => runner.run("click", ["@s8f3k2p9:e2", "--headed"])).toThrow(/not allowed/);
+    expect(calls).toEqual([]);
+  });
+});
+
 describe("source scan: agent-desktop stays read-only", () => {
   const files = (dir: string): string[] =>
     readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
@@ -246,17 +314,28 @@ describe("source scan: agent-desktop stays read-only", () => {
     const commands = callers.flatMap(({ text }) => commandsIn(text));
     expect(commands.length).toBeGreaterThan(0);
     for (const command of commands) expect(READ_ONLY_COMMANDS as readonly (string | undefined)[]).toContain(command);
+    // The flag's text is written once, in the allowlists; only the computer tools pass it, by name.
     const headed = all.filter(({ text }) => text.includes('"--headed"')).map(({ path }) => fromSrc(path));
     expect(headed).toEqual(["core/agent-desktop-envelope.ts"]);
+    const headedUsers = all.filter(({ text }) => /\bHEADED_FLAG\b/.test(text)).map(({ path }) => fromSrc(path));
+    expect(headedUsers.sort()).toEqual(["core/agent-desktop-envelope.ts", "core/computer-tools.ts"]);
   });
 
-  it("keeps the desktop action runner off the meeting window reader", () => {
+  it("keeps the desktop action and computer-use runners off the meeting window reader", () => {
     const reader = readFileSync(repo("src/main/meeting-window-reader.ts"), "utf8");
     for (const name of ["AgentDesktopAction", "createAgentDesktopActionRunner", "desktop-actions", "launch", "focus-window"]) expect(reader, name).not.toContain(name);
+    expect(reader).not.toMatch(/computer|HEADED_FLAG/i);
+    for (const command of ["click", "type", "press", "set-value", "close-app", "screenshot"]) expect(reader, command).not.toContain(`"${command}"`);
+    // The reader still checks every command against the read-only list.
+    expect(readFileSync(repo("src/main/agent-desktop.ts"), "utf8")).toMatch(/createAgentDesktopRunner[^]*?queuedRunner<ReadOnlyCommand>\(binary, deps, assertReadOnly\)/);
     // index.ts hands the reader the read-only runner, and only the desktop actions get the action runner.
     const index = readFileSync(repo("src/main/index.ts"), "utf8");
     expect(index).toMatch(/createMeetingWindowReader\(\{[^}]*run: agentDesktop\?\.run/s);
     expect(index).toMatch(/createDesktopActions\(\{[^}]*run: desktopRunner\?\.run/s);
+    // Computer use gets its own runner, created only for macOS and Windows, and handed only to the direct request handler.
+    expect(index).toMatch(/const computerRunner = [^;]*createAgentDesktopComputerRunner\(agentDesktopBinary\)/);
+    expect(index).toMatch(/computer: computerRunner\s*\?\s*\{[^}]*run: computerRunner\.run/s);
+    expect(index.match(/computerRunner\.run/g)).toHaveLength(1);
   });
 
   it("calls only launch, focus-window and list commands on the desktop action path, with no shell", () => {
@@ -271,10 +350,23 @@ describe("source scan: agent-desktop stays read-only", () => {
     expect(actions).toContain("shell: false");
   });
 
-  it("never calls an input, clipboard or close command anywhere", () => {
+  it("calls input and close commands only from the computer tools, through the computer-use runner, with no shell", () => {
+    const all = sources().filter(({ path }) => fromSrc(path) !== "main/teams-detector.ts");
+    const computer = all.filter(({ text }) => /\bComputerRun\b/.test(text)).map(({ path }) => fromSrc(path));
+    expect(computer.sort()).toEqual(["core/agent-desktop-envelope.ts", "core/computer-tools.ts", "core/computer-use.ts", "core/direct-command.ts", "main/agent-desktop.ts", "main/meeting-ipc.ts"]);
+    const tools = readFileSync(repo("src/core/computer-tools.ts"), "utf8");
+    const used = new Set([...tools.matchAll(/\bexec\(\s*"([a-z-]+)"/g), ...tools.matchAll(/onRef\(\s*"([a-z-]+)"/g)].map((match) => match[1]));
+    for (const command of used) expect(COMPUTER_USE_COMMANDS as readonly (string | undefined)[], command).toContain(command);
+    for (const command of ["snapshot", "click", "type", "set-value", "press", "close-app", "screenshot"]) expect(used.has(command), command).toBe(true);
+    // No shell, no clipboard, no launch: apps open through the desktop actions.
+    expect(tools).not.toMatch(/child_process|execFile|spawn\(|shell:\s*true|"cmd(?:\.exe)?"|powershell|"\/bin\/(?:ba|z)?sh"|osascript|clipboard|"launch"/i);
+    expect(readFileSync(repo("src/main/agent-desktop.ts"), "utf8")).toMatch(/queuedRunner<ComputerUseCommand>\(binary, deps, assertComputerUse\)/);
+  });
+
+  it("never calls an input, clipboard or close command outside the computer tools", () => {
     const allowed = new Set<string | undefined>([...READ_ONLY_COMMANDS, ...DESKTOP_ACTION_COMMANDS]);
     // main/teams-detector.ts runs reg and tasklist through its own runner, not agent-desktop.
-    for (const { path, text } of sources().filter(({ path }) => fromSrc(path) !== "main/teams-detector.ts")) {
+    for (const { path, text } of sources().filter(({ path }) => !["main/teams-detector.ts", "core/computer-tools.ts"].includes(fromSrc(path)))) {
       for (const command of commandsIn(text)) expect(allowed.has(command), `${fromSrc(path)}: ${command}`).toBe(true);
     }
   });
