@@ -1,16 +1,19 @@
 // Static island states for screenshots, styled by the real styles.css (no Clerk, no store). harness-main.ts loads this
 // page once per ?shot=collapsed|thinking|expanded|meeting-card|long-tip-bottom|long-tip-scrolled-up|update-available|
-// response-folded|response-full-text|fresh-utterance and captures it; the page reports once it has rendered, with the notch's
-// measured logo and button boxes. response-full-text clicks the folded answer, and island.ts islandClick decides what opens.
+// response-folded|response-full-text|fresh-utterance|hint-quiet|hint-no-input|hint-clipping|hint-noisy and captures it; the page
+// reports once it has rendered, with the notch's measured logo and button boxes. response-full-text clicks the folded answer, and
+// island.ts islandClick decides what opens. The hint shots show each mic hint (hints.ts) alone in the body, with the mic on.
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { IconChevronDown, IconDownload, IconExternalLink, IconMicrophoneOff, IconX } from "@tabler/icons-react";
+import { IconChevronDown, IconDownload, IconExternalLink, IconMicrophone, IconMicrophoneOff, IconX } from "@tabler/icons-react";
 import { Button } from "@vvedantb/ui";
 import { isNewTurn } from "../../src/core/steering";
 import { BeeLogo } from "../../src/renderer/src/BeeLogo";
 import { followBottom } from "../../src/renderer/src/follow-bottom";
+import { HINT_TEXT, type HintId } from "../../src/renderer/src/hints";
 import { islandClick } from "../../src/renderer/src/island";
 import { NOTCH_LOGO_PX } from "../../src/renderer/src/logo";
+import { MicHint } from "../../src/renderer/src/MicHint";
 import { NOTCH_BUTTON, NOTCH_UPDATE_BUTTON } from "../../src/renderer/src/notch";
 import type { UpdateState } from "../../src/renderer/src/store";
 import { updateButton } from "../../src/renderer/src/update";
@@ -52,20 +55,34 @@ function statusButton(status: string): string {
   );
 }
 
-// The real pill (App.tsx Island): the logo at NOTCH_LOGO_PX, the update button when one is available, then the mic (off) and
-// collapse buttons as size="sm" Buttons. folded: the status is an answer folded to one line, so it is a button.
-function pill(status: string, busy: boolean, update = false, folded = false): string {
-  const mic = createElement(
+// App.tsx Island's mic button. On: the accent button with the level meter (store.ts: the frame's RMS × 4, capped at 1).
+function micButton(level: number | null) {
+  if (level === null) {
+    return createElement(
+      Button,
+      { type: "button", variant: "ghost", size: "sm", className: NOTCH_BUTTON, title: "Start microphone" },
+      createElement(IconMicrophoneOff, ICON),
+      createElement("span", { className: "mic-level", style: { transform: "scaleY(0.2)" } }),
+    );
+  }
+  return createElement(
     Button,
-    { type: "button", variant: "ghost", size: "sm", className: NOTCH_BUTTON, title: "Start microphone" },
-    createElement(IconMicrophoneOff, ICON),
-    createElement("span", { className: "mic-level", style: { transform: "scaleY(0.2)" } }),
+    { type: "button", variant: "default", size: "sm", className: "rounded-full bg-[var(--accent)] text-[var(--surface)] hover:bg-[var(--accent)]", title: "Stop microphone" },
+    createElement(IconMicrophone, ICON),
+    createElement("span", { className: "mic-level", style: { transform: `scaleY(${0.2 + level * 0.8})` } }),
   );
+}
+
+// The real pill (App.tsx Island): the logo at NOTCH_LOGO_PX, the update button when one is available, then the mic and collapse
+// buttons as size="sm" Buttons. folded: the status is an answer folded to one line, so it is a button. mic: the meter level with
+// the mic on (the logo listens), or null for off.
+function pill(status: string, busy: boolean, { update = false, folded = false, mic = null }: { update?: boolean; folded?: boolean; mic?: number | null } = {}): string {
   const chevron = createElement(Button, { type: "button", variant: "ghost", size: "sm", className: `chevron ${NOTCH_BUTTON}`, title: "Expand" }, createElement(IconChevronDown, ICON));
+  const logo = mic === null ? { size: NOTCH_LOGO_PX, busy } : { size: NOTCH_LOGO_PX, state: "listening" as const, level: mic };
   return `<header class="notch">
-    ${renderToStaticMarkup(createElement(BeeLogo, { size: NOTCH_LOGO_PX, busy }))}
+    ${renderToStaticMarkup(createElement(BeeLogo, logo))}
     ${folded ? statusButton(status) : `<span class="notch-status">${status}</span>`}
-    ${update ? updateButtonMarkup() : ""}${renderToStaticMarkup(mic)}${renderToStaticMarkup(chevron)}
+    ${update ? updateButtonMarkup() : ""}${renderToStaticMarkup(micButton(mic))}${renderToStaticMarkup(chevron)}
   </header>`;
 }
 
@@ -100,7 +117,7 @@ function tipsContent(): string {
 // The owner's case: one answer, long enough to be cut off on the pill's one line.
 const ANSWER =
   "Convex does support local deployments, per the remote docs: run npx convex dev --local to start a local backend, and keep it beside your cloud dev deployment while you test schema changes.";
-const folded = `<div class="island">${pill(ANSWER, false, false, true)}</div>`;
+const folded = `<div class="island">${pill(ANSWER, false, { folded: true })}</div>`;
 const fullText = `<div class="island open">${pill("Tips", false)}${islandBody(tipList([ANSWER]))}</div>`;
 
 // A new question after the last answer settled: a fresh turn keeps nothing, so only the new answer streams in.
@@ -110,6 +127,12 @@ const freshTips = freshTurn ? [NEW_TIP] : [ANSWER, NEW_TIP];
 const freshUtterance = `<div class="island open thinking">${pill("Thinking…", true)}${islandBody(tipList(freshTips))}</div>`;
 
 const longTip = `<div class="island open">${pill("Tips", false)}${islandBody(`${card()}${tipList(LONG_TIPS)}`)}</div>`;
+
+// A mic hint alone in the body (App.tsx IslandBody with MicHint): the pill keeps its listening text, and the meter shows the
+// level that brought the hint (store.ts meter: RMS × 4).
+const HINT_METER: Record<HintId, number> = { "no-input": 0, quiet: 0.08, clipping: 1, noisy: 0.4 };
+const hintShot = (id: HintId) =>
+  `<div class="island open">${pill("Listening for something useful…", false, { mic: HINT_METER[id] })}${islandBody(renderToStaticMarkup(createElement(MicHint, { text: HINT_TEXT[id] })))}</div>`;
 const shot = new URLSearchParams(location.search).get("shot") ?? "collapsed";
 const states: Record<string, string> = {
   collapsed: `<div class="island">${pill("Bee is ready", false)}</div>`,
@@ -118,11 +141,15 @@ const states: Record<string, string> = {
   "meeting-card": `<div class="island open">${pill("Last time", false)}${islandBody(card())}</div>`,
   "long-tip-bottom": longTip,
   "long-tip-scrolled-up": longTip,
-  "update-available": `<div class="island">${pill("Bee is ready", false, true)}</div>`,
+  "update-available": `<div class="island">${pill("Bee is ready", false, { update: true })}</div>`,
   "response-folded": folded,
   // Starts folded; the page clicks the answer below.
   "response-full-text": folded,
   "fresh-utterance": freshUtterance,
+  "hint-quiet": hintShot("quiet"),
+  "hint-no-input": hintShot("no-input"),
+  "hint-clipping": hintShot("clipping"),
+  "hint-noisy": hintShot("noisy"),
 };
 const html = states[shot];
 if (!html) throw new Error(`Unknown shot: ${shot}`);
@@ -162,6 +189,9 @@ window.addEventListener("DOMContentLoaded", () => {
   setTimeout(() => {
     const scroll = scroller ? { scrollTop: scroller.scrollTop, scrollHeight: scroller.scrollHeight, clientHeight: scroller.clientHeight } : undefined;
     const open = document.querySelector(".island-body") !== null;
-    console.log(`E2E_RESULT ${JSON.stringify({ ok: true, shot, notch, scroll, clicked, open, tips })}`);
+    // The hint line, and whether anything on the island is styled as an error.
+    const hint = document.querySelector(".island-hint")?.textContent ?? null;
+    const error = document.querySelector(".island .island-error, .island .error-text") !== null;
+    console.log(`E2E_RESULT ${JSON.stringify({ ok: true, shot, notch, scroll, clicked, open, tips, hint, error })}`);
   }, 1200);
 });

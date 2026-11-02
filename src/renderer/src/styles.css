@@ -588,6 +588,33 @@ body {
   color: var(--muted);
 }
 
+/* A mic hint (hints.ts): one calm muted line with a mic icon. Guidance, not an error, so never --danger. Clear of the dismiss button. */
+.island-hint {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0;
+  padding: 0 36px 0 0;
+  font-size: 14px;
+  line-height: 1.4;
+  color: var(--muted);
+  animation: island-rise 460ms var(--spring) backwards;
+  transition: opacity 200ms ease;
+}
+
+.island-hint:not(:first-child) {
+  margin-top: 12px;
+}
+
+.island-hint svg {
+  flex: none;
+  margin-top: 2px;
+}
+
+.island-hint.closing {
+  opacity: 0;
+}
+
 /* "Last time with these people…" at meeting start. Muted text on the island itself: no panel of its own. */
 .island-card {
   padding: 0 36px 0 0;

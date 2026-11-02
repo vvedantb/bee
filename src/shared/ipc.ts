@@ -69,6 +69,8 @@ export const settingsViewSchema = z.object({
   meetingMemoryEnabled: z.boolean(),
   // Experimental: read the meeting window (Teams, Zoom, Google Meet) with agent-desktop. Off by default.
   readMeetingWindowEnabled: z.boolean(),
+  // Mic hints (renderer/src/hints.ts): local suggestions when the mic is silent, quiet or too loud. On by default.
+  hintsEnabled: z.boolean(),
 });
 export type SettingsView = z.infer<typeof settingsViewSchema>;
 
@@ -85,6 +87,7 @@ export const settingsUpdateSchema = z.object({
   meetingCalendarEnabled: z.boolean().optional(),
   meetingMemoryEnabled: z.boolean().optional(),
   readMeetingWindowEnabled: z.boolean().optional(),
+  hintsEnabled: z.boolean().optional(),
 });
 export type SettingsUpdate = z.infer<typeof settingsUpdateSchema>;
 
