@@ -75,7 +75,7 @@ async function loadStore(runMs: number, answer?: string[]) {
     mic.onSpeechEnd?.();
     await vi.advanceTimersByTimeAsync(STT_MS);
     mic.onLine(text);
-    mic.onSettled?.();
+    mic.onSettled?.("words");
     // A new turn's run starts on the next tick.
     await vi.advanceTimersByTimeAsync(0);
   };

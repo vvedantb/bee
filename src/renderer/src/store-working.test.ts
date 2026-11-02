@@ -67,7 +67,7 @@ async function loadStore(answers: PipelineResult[]) {
   const say = (text: string) => {
     mic.onSpeechEnd?.();
     mic.onLine(text);
-    mic.onSettled?.();
+    mic.onSettled?.("words");
   };
   const emit = (tool: string, phase: "start" | "end") => activity({ runId: requests.at(-1)?.runId, tool, phase });
   const status = () => notchStatus(store.getBeeState(), true);

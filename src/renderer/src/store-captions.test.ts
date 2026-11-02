@@ -45,6 +45,7 @@ const SETTINGS: SettingsView = {
   meetingCalendarEnabled: true,
   meetingMemoryEnabled: true,
   readMeetingWindowEnabled: true,
+  hintsEnabled: false,
 };
 
 async function loadStore(settings: Partial<SettingsView> = {}) {

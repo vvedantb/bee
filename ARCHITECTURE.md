@@ -67,6 +67,7 @@ Production uses **Grok STT** (`xai/grok-stt`) through Vercel AI Gateway, batch m
 - **Order**: phrases are transcribed one at a time, so lines reach the pipeline in the order they were spoken.
 - **Output**: text is whitespace-normalised. Empty or punctuation-only results (a cough or a click) count as no words and do not run the pipeline.
 - **Errors**: a failed call returns `Speech-to-text failed: <reason>`. The mic stays on, the notch and the Live tab show the message, and it clears after the next successful phrase.
+- **Mic hints** (`renderer/src/hints.ts`, no window or React imports): with the mic on and **Settings → Mic hints** on (`hintsEnabled`, on by default), the island shows one calm muted line when the input is near silent for 25 s, the voice stays quiet or too loud for 5 s, or four phrases in a minute come back with no words. One hint at a time; it hides after 15 s and that hint waits 4 minutes before it can show again. Built from frame levels and phrase outcomes only: no audio or words are kept or logged, no AI is called, and a hint is never a mic error. Thresholds are untuned first guesses.
 
 Streaming (`experimental_streamTranscribe`) was not used. Phrase-level batch calls are simpler, and one call per phrase matches one pipeline run per line.
 

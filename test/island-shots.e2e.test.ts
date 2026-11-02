@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
+import { HINT_TEXT, type HintId } from "../src/renderer/src/hints";
 import { runHarness } from "./e2e/run";
 
 // Electron screenshots of static island states (test/e2e/island-shots.ts, real styles.css) via capturePage().
@@ -21,7 +22,12 @@ const SHOTS = [
   "response-folded",
   "response-full-text",
   "fresh-utterance",
+  "hint-quiet",
+  "hint-no-input",
+  "hint-clipping",
+  "hint-noisy",
 ];
+const HINTS: HintId[] = ["quiet", "no-input", "clipping", "noisy"];
 
 const box = z.object({ width: z.number(), height: z.number(), centerY: z.number() });
 const page = z.object({
@@ -31,6 +37,8 @@ const page = z.object({
   clicked: z.string().nullable(),
   open: z.boolean(),
   tips: z.number(),
+  hint: z.string().nullable(),
+  error: z.boolean(),
 });
 
 describe("island screenshots (Electron E2E)", () => {
@@ -58,6 +66,10 @@ describe("island screenshots (Electron E2E)", () => {
     expect(pageFor("response-full-text")).toMatchObject({ open: true, clicked: "full-text", tips: 1 });
     // A fresh question after the last answer settled shows only the new answer.
     expect(pageFor("fresh-utterance")).toMatchObject({ open: true, tips: 1 });
+
+    // Each mic hint opens the body alone, as one calm line: no tips, nothing styled as an error. Other shots show no hint.
+    for (const id of HINTS) expect(pageFor(`hint-${id}`)).toMatchObject({ open: true, tips: 0, hint: HINT_TEXT[id], error: false });
+    for (const shot of SHOTS.filter((name) => !name.startsWith("hint-"))) expect(pageFor(shot)?.hint).toBeNull();
 
     // The update button sits before the mic and collapse buttons.
     expect(pageFor("update-available")?.notch.buttons).toHaveLength(3);

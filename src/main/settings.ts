@@ -40,6 +40,8 @@ const fileSchema = z.object({
   meetingMemoryEnabled: z.boolean().default(true).catch(true),
   // Experimental: read Teams, Zoom and Google Meet windows with agent-desktop (main/meeting-window-reader.ts). Off until switched on.
   readMeetingWindowEnabled: z.boolean().default(false).catch(false),
+  // Mic hints in the island (renderer/src/hints.ts). On until switched off.
+  hintsEnabled: z.boolean().default(true).catch(true),
   // Non-secret MCP settings. A bad entry drops the list, not the whole file.
   mcpServers: z.array(mcpServerSchema).catch([]).default([]),
   // One safeStorage ciphertext (base64) for every server's secrets, as JSON keyed by server id.
@@ -89,6 +91,7 @@ export function createSettingsStore(args: {
       meetingCalendarEnabled: true,
       meetingMemoryEnabled: true,
       readMeetingWindowEnabled: false,
+      hintsEnabled: true,
       mcpServers: [],
     };
   }
@@ -357,6 +360,7 @@ export function createSettingsStore(args: {
       meetingCalendarEnabled: file.meetingCalendarEnabled,
       meetingMemoryEnabled: file.meetingMemoryEnabled,
       readMeetingWindowEnabled: file.readMeetingWindowEnabled,
+      hintsEnabled: file.hintsEnabled,
     };
   }
 
@@ -382,6 +386,7 @@ export function createSettingsStore(args: {
     if (update.meetingCalendarEnabled !== undefined) file = { ...file, meetingCalendarEnabled: update.meetingCalendarEnabled };
     if (update.meetingMemoryEnabled !== undefined) file = { ...file, meetingMemoryEnabled: update.meetingMemoryEnabled };
     if (update.readMeetingWindowEnabled !== undefined) file = { ...file, readMeetingWindowEnabled: update.readMeetingWindowEnabled };
+    if (update.hintsEnabled !== undefined) file = { ...file, hintsEnabled: update.hintsEnabled };
     if (update.fsRoots !== undefined) {
       const { roots, invalid } = normalizeFsRoots(update.fsRoots);
       if (invalid.length > 0) throw new Error(`Folders must be absolute paths: ${invalid.join(", ")}`);
