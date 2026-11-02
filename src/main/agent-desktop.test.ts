@@ -1,12 +1,13 @@
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { READ_ONLY_COMMANDS } from "../core/agent-desktop-envelope";
 import { childEnv, createAgentDesktopRunner, platformBinaryNames, resolveAgentDesktop, type ExecFile } from "./agent-desktop";
 
 const root = new URL("../../", import.meta.url);
-const repo = (path: string) => new URL(path, root).pathname;
+const repo = (path: string) => fileURLToPath(new URL(path, root));
 const ENVELOPE = '{"version":"2.5","ok":true,"command":"version","data":{"version":"1.0.2"}}';
 
 describe("platformBinaryNames", () => {
