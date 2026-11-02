@@ -41,10 +41,18 @@ function termCounts(snippet: Snippet): Map<string, number> {
   return counts;
 }
 
-/** Keyword (BM25) retrieval over note snippets. Returns only snippets with a positive score, best first. */
-export function retrieve(query: string, snippets: Snippet[], limit = 5): Retrieved[] {
+// Meeting terms (title and people, from the experimental meeting window reader) count this much of a query term.
+const BOOST_WEIGHT = 0.5;
+
+/**
+ * Keyword (BM25) retrieval over note snippets. Returns only snippets with a positive score, best first.
+ * boost: extra terms (the meeting's name and people) that lift notes the query already matches. They never retrieve a note
+ * on their own, so an unrelated line does not pull in every note that names an attendee.
+ */
+export function retrieve(query: string, snippets: Snippet[], limit = 5, boost = ""): Retrieved[] {
   const queryTerms = [...new Set(tokenize(query))];
   if (queryTerms.length === 0 || snippets.length === 0) return [];
+  const boostTerms = [...new Set(tokenize(boost))].filter((term) => !queryTerms.includes(term));
 
   const docs = snippets.map((snippet) => {
     const counts = termCounts(snippet);
@@ -55,20 +63,25 @@ export function retrieve(query: string, snippets: Snippet[], limit = 5): Retriev
   const avgLength = docs.reduce((sum, doc) => sum + doc.length, 0) / docs.length || 1;
 
   const idf = new Map<string, number>();
-  for (const term of queryTerms) {
+  for (const term of [...queryTerms, ...boostTerms]) {
     const df = docs.filter((doc) => doc.counts.has(term)).length;
     idf.set(term, Math.log(1 + (docs.length - df + 0.5) / (df + 0.5)));
   }
 
+  const bm25 = (terms: string[], counts: Map<string, number>, length: number): number => {
+    let score = 0;
+    for (const term of terms) {
+      const tf = counts.get(term) ?? 0;
+      if (tf === 0) continue;
+      score += ((idf.get(term) ?? 0) * tf * (K1 + 1)) / (tf + K1 * (1 - B + (B * length) / avgLength));
+    }
+    return score;
+  };
+
   return docs
     .map(({ snippet, counts, length }) => {
-      let score = 0;
-      for (const term of queryTerms) {
-        const tf = counts.get(term) ?? 0;
-        if (tf === 0) continue;
-        score += ((idf.get(term) ?? 0) * tf * (K1 + 1)) / (tf + K1 * (1 - B + (B * length) / avgLength));
-      }
-      return { snippet, score };
+      const score = bm25(queryTerms, counts, length);
+      return { snippet, score: score > 0 && boostTerms.length > 0 ? score + BOOST_WEIGHT * bm25(boostTerms, counts, length) : score };
     })
     .filter((result) => result.score > 0)
     .sort((a, b) => b.score - a.score)

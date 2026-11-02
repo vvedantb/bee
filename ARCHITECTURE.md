@@ -4,7 +4,8 @@ Bee is an Electron app built with electron-vite, React and TypeScript.
 
 ```
 src/
-  main/       Electron main process: notch window, tray, IPC, settings (including MCP servers), notes folder, bee:// protocol, Clerk bridge, Teams detector and sync IPC
+  main/       Electron main process: notch window, tray, IPC, settings (including MCP servers), notes folder, bee:// protocol, Clerk bridge, Teams detector and sync IPC,
+              experimental meeting window reader (agent-desktop runner)
   preload/    Sandboxed bridge: exposes window.bee (parses every response with zod) and Clerk's bridge
   renderer/   React UI: island (pill and response body; island.ts holds its pure logic), sign-in, expanded panel (Live, Settings), mic capture (mic.ts), phrase detection and WAV (speech.ts)
   shared/     IPC channel names and zod schemas, Clerk config (shared/clerk.ts)
@@ -121,6 +122,29 @@ Teams leaves the call (15 s) → controller leaves the sync; next detection → 
 - **Window**: a third size, `prompt` (480 × 330), shows the notch and the sync card without the panel.
 - **Island size**: a fourth size, `response` (480 × 360), shows the pill and the island body. `applyWindowSize` picks `expanded`, then `prompt`, then `response`, then `collapsed`.
 - **Deep links**: `bee://team/XXXX-XXXX` in `argv` (first launch, `second-instance`) or `open-url` (macOS) fills the invite code in **Settings → Team**. The user still clicks **Join team**.
+
+## Meeting window reader (experimental)
+
+Settings → Meeting context → **Experimental: read meeting window** (`readMeetingWindowEnabled`, off by default). With it on, Bee uses [agent-desktop](https://github.com/vercel-labs/agent-desktop) (npm `agent-desktop`, Apache-2.0) to read the accessibility tree of the call window on macOS and Windows. It is read-only and headless: Bee runs only `permissions`, `list-apps`, `list-windows`, `find --count` and `snapshot`, never `--headed`, never a command that clicks, types, focuses or moves anything. `assertReadOnly` (`core/agent-desktop-envelope.ts`) refuses anything else before a process starts, and a unit test scans the source for agent-desktop calls.
+
+```
+main/meeting-window-reader.ts   (no Electron imports; polled by the meeting tick, the Teams tick and meeting context)
+  permissions (macOS Accessibility) → list-apps (bundle ids, every 60 s) → list-windows (every 3 s at most)
+  → core/agent-desktop-meeting detectMeetings: Teams (isMeetingTitle, or a plain name confirmed by find --role button --name Leave --count),
+    Zoom ("Zoom Meeting", "Zoom Webinar", "Participants (N)"), Google Meet (browser window title "Meet - …")
+  → main/teams-detector withMeetingWindow: merged with the built-in Windows reading (either says in a meeting; meetings deduplicated by key)
+  Teams or Zoom call window: snapshot --compact --max-depth 25 → roster names (extractParticipants) and caption lines (extractCaptionLines)
+  → captionStep (dedupe) → bee:meeting-window:captions → store.captionLines → addLines like teammates' lines → pipeline
+runPipeline: meetingWindowBrief (name and people) joins the meeting brief; meetingTerms boosts retrieval (core/retrieve.ts)
+```
+
+- **Detection.** The built-in detector keeps running; the reader adds Teams, Zoom and Meet on macOS and Windows. `read()` never waits for agent-desktop: it returns the last reading (under 20 s old) and refreshes in the background. Meet is found only when its tab is the window's active tab (the window title is all Bee reads from a browser).
+- **Context.** Teams and Meet titles name the meeting (Zoom's never do). People come from a roster region (Participants, People, In this meeting) in the call window, cleaned of roles and headers, up to 20. Both go to Luna as two brief lines, and as `retrieve` boost terms worth half a query term: they lift notes the line already matches, never retrieve one on their own.
+- **Captions.** Bee reads the Teams or Zoom call window every 1.5 s while a captions or transcript region shows, backing off to 30 s while none does, and never faster than twice the last read took. What a window shows at first is history. A line is new once a newer line follows it or it reads the same twice; repeats (by normalised words), a line that grew (only the new words go) and a revised word in a recent line are dropped. Caption lines join the session as `Speaker: text` (or `Meeting: text`), follow the steering rules, and are never shared with a Teams sync. With the mic on, a caption that repeats one of the user's lines from the last 20 s is dropped. The mic stays the default input.
+- **macOS permission.** agent-desktop needs Accessibility for Bee. Settings shows the state from `agent-desktop permissions`, and on "needs permission" says where to turn Bee on, with **Open Accessibility settings** (`x-apple.systempreferences:…Privacy_Accessibility`). Bee checks again every 10 s; it never prompts or opens the guide itself.
+- **Fail-open.** A missing binary, spawn failure, `PERM_DENIED`, `PLATFORM_NOT_SUPPORTED`, a timeout or unreadable output logs one short warning per code and leaves the built-in detector alone. Failed reads back off to 60 s; an unavailable binary is retried after 5 minutes.
+- **Privacy.** Snapshots, captions, names and titles stay in memory. Logs carry codes and counts only (`perf meeting-window caption lines +3`). The child gets Bee's environment without secret-looking variables, and `AGENT_DESKTOP_HOME` points at a private temporary folder (mode 0700) instead of `~/.agent-desktop`, because agent-desktop keeps snapshot ref maps there; Bee deletes it when the setting goes off and at quit.
+- **Binary.** `main/agent-desktop.ts resolveAgentDesktop`: packaged, `Resources/agent-desktop/agent-desktop[.exe]` with `agent-desktop-macos-helper` beside it on macOS (`AGENT_DESKTOP_MACOS_HELPER_PATH`); in development, `node_modules/agent-desktop/bin/agent-desktop-<os>-<arch>`. `build.mac.extraResources` and `build.win.extraResources` copy only the target's own binary (and helper) per arch, plus `LICENSE` (Apache-2.0 text from `resources/licenses/agent-desktop-Apache-2.0.txt`). `build.files` keeps `node_modules/agent-desktop` out of `app.asar`.
 
 ## Processes and security
 
@@ -266,6 +290,11 @@ Defined in `src/core/summary.ts`. The system prompt asks for exactly three `##` 
 | Clerk publishable key (fallback) | `shared/clerk.ts` | vedantb.com production instance |
 | Teams detection stable / leave debounce | `core/meeting-tracker.ts` | 10 s / 15 s |
 | Teams detector poll (minimum) | `main/teams-detector.ts` | 3 s |
+| Meeting window reader: list-windows / list-apps / stale reading / permission re-check | `main/meeting-window-reader.ts` | 3 s / 60 s / 20 s / 10 s |
+| Meeting window reader: captions poll / idle backoff cap / failure backoff cap | `main/meeting-window-reader.ts` | 1.5 s / 30 s / 60 s |
+| Caption dedupe: keep / revision window / revision overlap | `core/agent-desktop-meeting.ts` | 10 min / 60 s / 0.8 (word Dice) |
+| Caption echo of an own mic line | `renderer/src/store.ts`, `core/agent-desktop-meeting.ts` | 20 s, 0.6 (word Dice) |
+| Retrieval boost weight (meeting window terms) | `core/retrieve.ts` | 0.5 of a query term |
 | Sync tick | `renderer/src/store.ts` | 2 s |
 | MCP connect and list timeout / call timeout | `core/mcp.ts` | 10 s / 15 s |
 | vmem search: connect (background) / call per source / whole enrichment | `core/vmem-history.ts`, `core/link-rank.ts` | 5 s / 1 s / 2 s |

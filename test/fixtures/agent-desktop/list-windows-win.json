@@ -1,0 +1,8 @@
+{"version":"2.5","ok":true,"command":"list-windows","data":[
+  {"id":"w-66012","title":"Meeting with Bob Jones | Microsoft Teams","app_name":"ms-teams","pid":8120,"is_focused":true,"accessible":true},
+  {"id":"w-66013","title":"Calendar | Calendar | Microsoft Teams","app_name":"ms-teams","pid":8120,"is_focused":false,"accessible":true},
+  {"id":"w-70100","title":"Zoom Meeting 40-Minutes","app_name":"Zoom","pid":9001,"is_focused":false,"accessible":true},
+  {"id":"w-80200","title":"Meet - Acme renewal and 2 more pages - Work - Microsoft​ Edge","app_name":"msedge","pid":9100,"is_focused":false,"accessible":true},
+  {"id":"w-80201","title":"Google Meet - Microsoft Edge","app_name":"msedge","pid":9100,"is_focused":false,"accessible":true},
+  {"id":"w-90300","title":"Program Manager","app_name":"explorer","pid":4000,"is_focused":false,"accessible":false}
+]}

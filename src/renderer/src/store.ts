@@ -1,5 +1,6 @@
 import { getToken } from "@clerk/electron/react";
 import { useSyncExternalStore } from "react";
+import { echoesOwnLine } from "../../core/agent-desktop-meeting";
 import { detectLinks, mergeChips, visibleChips, type LinkChip } from "../../core/link-suggest";
 import { MAX_STEERING_TIPS, isFiller, isNewTurn, isQuestion, mergeTips, recentRestarts, runDelayMs, tipCap, tipKey, waitsForRun } from "../../core/steering";
 import { mergeLines, pipelineText, summaryTranscript, type SessionLine } from "../../core/sync-lines";
@@ -11,6 +12,7 @@ import {
   type McpSetEnabled,
   type McpTestResult,
   type MeetingContextView,
+  type MeetingWindowCaptions,
   type MeetingSummaryResult,
   type PipelineResult,
   type SettingsUpdate,
@@ -122,6 +124,10 @@ const SYNC_TICK_MS = 2000;
 const MEETING_TICK_MS = 5000;
 // Lines kept, island dismissed and no new line for this long: the meeting is saved without a click.
 const DISMISS_FINALIZE_MS = 10 * 60_000;
+// With the mic on, a caption that repeats one of the user's own lines from this long ago is the same speech twice.
+const CAPTION_ECHO_MS = 20_000;
+// Caption lines with no speaker label.
+const CAPTION_SPEAKER = "Meeting";
 
 export const SAMPLE_LINES = [
   "Let's pick up the Acme renewal. They are asking for a bigger discount.",
@@ -190,6 +196,7 @@ let latestRun = 0;
 let heardPending = 0;
 let sampleIndex = 0;
 let localSeq = 0;
+let captionSeq = 0;
 let turnSeq = 0;
 let turnText = "";
 // Live steering. A turn is a line and those that interrupt its run (core/steering.ts isNewTurn); inside it a new line keeps
@@ -989,6 +996,34 @@ export const actions = {
   },
 
   /**
+   * New live caption lines from the call window (experimental meeting window reader). They join the session like teammates'
+   * lines ("Alice: …") and follow the same steering rules. They are never shared with the Teams sync. With the mic on, a caption
+   * that repeats the user's own recent line is dropped: the mic already sent it.
+   */
+  captionLines(lines: MeetingWindowCaptions["lines"]): void {
+    if (!state.settings?.readMeetingWindowEnabled) return;
+    const now = Date.now();
+    const own = state.mic.on ? state.session.lines.filter((line) => line.own && now - line.clientTs < CAPTION_ECHO_MS).map((line) => line.text) : [];
+    const fresh = lines
+      .map((line) => ({ speaker: line.speaker?.trim() || CAPTION_SPEAKER, text: line.text.trim() }))
+      .filter((line) => line.text.length > 0 && !echoesOwnLine(line.text, own))
+      .map((line): SessionLine => {
+        captionSeq += 1;
+        return { id: `caption-${captionSeq}`, own: false, speakerId: `caption:${line.speaker}`, speakerName: line.speaker, text: line.text, clientTs: now, serverTs: null };
+      });
+    if (fresh.length > 0 && addLines(fresh)) scheduleRun();
+  },
+
+  /** macOS: opens System Settings at Privacy & Security → Accessibility, so the user can allow Bee to read the meeting window. */
+  async openAccessibilitySettings(): Promise<void> {
+    try {
+      await window.bee.meetingWindow.openAccessibilitySettings();
+    } catch {
+      // The Settings line already says where to go.
+    }
+  },
+
+  /**
    * Stop the mic and write the session's summary to the notes folder. The session starts empty for the next
    * meeting straight away; on failure it is put back, ahead of any lines that arrived meanwhile.
    */
@@ -1109,3 +1144,5 @@ void actions.refreshMcp();
 void actions.checkForUpdate();
 setInterval(() => void teamsTick(), SYNC_TICK_MS);
 setInterval(() => void meetingTick(), MEETING_TICK_MS);
+// Live captions from the experimental meeting window reader. Test stubs of window.bee may leave it out.
+window.bee.meetingWindow?.onCaptions(({ lines }) => actions.captionLines(lines));

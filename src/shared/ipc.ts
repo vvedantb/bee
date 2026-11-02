@@ -35,6 +35,8 @@ export const IPC = {
   getFavicon: "bee:favicon:get",
   meetingContext: "bee:meeting:context",
   clearMeetingMemory: "bee:meeting:clear-memory",
+  meetingWindowCaptions: "bee:meeting-window:captions",
+  openAccessibilitySettings: "bee:meeting-window:open-accessibility-settings",
 };
 
 // Collapsed notch, notch plus the sync popup, notch plus the island response, or the full panel.
@@ -65,6 +67,8 @@ export const settingsViewSchema = z.object({
   meetingContextEnabled: z.boolean(),
   meetingCalendarEnabled: z.boolean(),
   meetingMemoryEnabled: z.boolean(),
+  // Experimental: read the meeting window (Teams, Zoom, Google Meet) with agent-desktop. Off by default.
+  readMeetingWindowEnabled: z.boolean(),
 });
 export type SettingsView = z.infer<typeof settingsViewSchema>;
 
@@ -80,6 +84,7 @@ export const settingsUpdateSchema = z.object({
   meetingContextEnabled: z.boolean().optional(),
   meetingCalendarEnabled: z.boolean().optional(),
   meetingMemoryEnabled: z.boolean().optional(),
+  readMeetingWindowEnabled: z.boolean().optional(),
 });
 export type SettingsUpdate = z.infer<typeof settingsUpdateSchema>;
 
@@ -147,6 +152,17 @@ export const meetingSummaryResultSchema = z.object({
 });
 export type MeetingSummaryResult = z.infer<typeof meetingSummaryResultSchema>;
 
+// Experimental meeting window reader (main/meeting-window-reader.ts). Names and words never appear here.
+// off: the setting is off. starting: first checks. ready: reading (app: the call found, if any). needs-permission: macOS
+// Accessibility is not granted. unavailable: agent-desktop is missing or cannot run here; the built-in detector carries on.
+export const meetingWindowStatusSchema = z.object({
+  state: z.enum(["off", "starting", "ready", "needs-permission", "unavailable"]),
+  app: z.enum(["teams", "zoom", "meet"]).nullable(),
+  // Live captions are visible in the call window and feed the pipeline.
+  captions: z.boolean(),
+});
+export type MeetingWindowStatus = z.infer<typeof meetingWindowStatusSchema>;
+
 // The meeting Bee detected from window titles and the local Outlook calendar (core/meeting-context.ts). Main keeps the brief
 // that goes to Luna; the renderer only sees the name and up to two island lines.
 export const meetingContextRequestSchema = z.object({ sessionToken: z.string().max(8000) });
@@ -160,8 +176,16 @@ export const meetingContextViewSchema = z.object({
   source: z.enum(["calendar", "title", "none"]),
   // "Last time with these people…" for the island at meeting start. Empty without an earlier meeting.
   card: z.array(z.string().max(200)).max(2),
+  // The experimental meeting window reader, for its Settings status line. Absent when main has no reader.
+  reader: meetingWindowStatusSchema.optional(),
 });
 export type MeetingContextView = z.infer<typeof meetingContextViewSchema>;
+
+// Main → renderer: new live caption lines from the call window. The renderer adds them like teammates' lines. Never logged.
+export const meetingWindowCaptionsSchema = z.object({
+  lines: z.array(z.object({ speaker: z.string().max(100).nullable(), text: z.string().min(1).max(2000) })).min(1).max(50),
+});
+export type MeetingWindowCaptions = z.infer<typeof meetingWindowCaptionsSchema>;
 
 export const clearMeetingMemoryResultSchema = z.object({ cleared: z.number().int().nonnegative() });
 

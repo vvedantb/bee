@@ -50,6 +50,8 @@ export async function runPipeline(args: {
   searchLocation?: SearchLocation;
   /** The brief for the meeting in progress (title, people, agenda, earlier decisions). Sent to Luna with every turn. */
   meetingBrief?: string;
+  /** The meeting's name and people from the experimental meeting window reader. Lifts notes that mention them (retrieve boost). */
+  meetingTerms?: string;
   snippets: Snippet[];
   gateway: BeeGateway | null;
   notesDir?: string;
@@ -63,7 +65,7 @@ export async function runPipeline(args: {
   signal?: AbortSignal;
 }): Promise<PipelineResult> {
   const t0 = performance.now();
-  const retrieved = retrieve(transcriptQuery(args.transcript), args.snippets, RETRIEVE_LIMIT);
+  const retrieved = retrieve(transcriptQuery(args.transcript), args.snippets, RETRIEVE_LIMIT, args.meetingTerms);
   const candidates = retrieved.map(({ snippet, score }) => ({ ...snippet, retrieveScore: score }));
   const t1 = performance.now();
   const retrieveMs = t1 - t0;

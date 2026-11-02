@@ -1,0 +1,5 @@
+{"version":"2.5","ok":true,"command":"list-windows","data":{"windows":[
+  {"id":"w-1001","title":"Chat | Priya Patel | Microsoft Teams","app_name":"Microsoft Teams","pid":1201,"is_focused":true,"accessible":true},
+  {"id":"w-2001","title":"Zoom Workplace","app_name":"zoom.us","pid":1302,"is_focused":false,"accessible":true},
+  {"id":"w-3001","title":"Google Meet - Google Chrome","app_name":"Google Chrome","pid":1403,"is_focused":false,"accessible":true}
+]}}

@@ -1,0 +1,1 @@
+{"version":"2.5","ok":true,"command":"status","data":{"permissions":{"accessibility":{"state":"not_required"},"automation":{"state":"not_required"},"screen_recording":{"state":"not_required"}},"platform":"windows","ref_count":null,"session_id":null,"snapshot_id":null,"supported_surfaces":["window","focused","sheet","menu"],"tracing":false,"version":"1.0.2"}}

@@ -38,6 +38,8 @@ const fileSchema = z.object({
   meetingContextEnabled: z.boolean().default(true).catch(true),
   meetingCalendarEnabled: z.boolean().default(true).catch(true),
   meetingMemoryEnabled: z.boolean().default(true).catch(true),
+  // Experimental: read Teams, Zoom and Google Meet windows with agent-desktop (main/meeting-window-reader.ts). Off until switched on.
+  readMeetingWindowEnabled: z.boolean().default(false).catch(false),
   // Non-secret MCP settings. A bad entry drops the list, not the whole file.
   mcpServers: z.array(mcpServerSchema).catch([]).default([]),
   // One safeStorage ciphertext (base64) for every server's secrets, as JSON keyed by server id.
@@ -86,6 +88,7 @@ export function createSettingsStore(args: {
       meetingContextEnabled: true,
       meetingCalendarEnabled: true,
       meetingMemoryEnabled: true,
+      readMeetingWindowEnabled: false,
       mcpServers: [],
     };
   }
@@ -353,6 +356,7 @@ export function createSettingsStore(args: {
       meetingContextEnabled: file.meetingContextEnabled,
       meetingCalendarEnabled: file.meetingCalendarEnabled,
       meetingMemoryEnabled: file.meetingMemoryEnabled,
+      readMeetingWindowEnabled: file.readMeetingWindowEnabled,
     };
   }
 
@@ -360,6 +364,11 @@ export function createSettingsStore(args: {
   function meetingContext(): { enabled: boolean; calendar: boolean; memory: boolean } {
     const file = read();
     return { enabled: file.meetingContextEnabled, calendar: file.meetingCalendarEnabled, memory: file.meetingMemoryEnabled };
+  }
+
+  /** The experimental meeting window reader switch, read on each poll so Settings changes apply at once. Main only. */
+  function readMeetingWindow(): boolean {
+    return read().readMeetingWindowEnabled;
   }
 
   function save(update: SettingsUpdate): SettingsView {
@@ -372,6 +381,7 @@ export function createSettingsStore(args: {
     if (update.meetingContextEnabled !== undefined) file = { ...file, meetingContextEnabled: update.meetingContextEnabled };
     if (update.meetingCalendarEnabled !== undefined) file = { ...file, meetingCalendarEnabled: update.meetingCalendarEnabled };
     if (update.meetingMemoryEnabled !== undefined) file = { ...file, meetingMemoryEnabled: update.meetingMemoryEnabled };
+    if (update.readMeetingWindowEnabled !== undefined) file = { ...file, readMeetingWindowEnabled: update.readMeetingWindowEnabled };
     if (update.fsRoots !== undefined) {
       const { roots, invalid } = normalizeFsRoots(update.fsRoots);
       if (invalid.length > 0) throw new Error(`Folders must be absolute paths: ${invalid.join(", ")}`);
@@ -394,5 +404,5 @@ export function createSettingsStore(args: {
     write({ ...read(), overlayPosition: position });
   }
 
-  return { view, save, meetingContext, overlayPosition, saveOverlayPosition, gatewayApiKey, savedGatewayApiKey, linkSettings, vmemConfig, fsRoots, mcpList, mcpSave, mcpRemove, mcpSetEnabled, mcpRecordTools, mcpConfigs, mcpSignedOut, mcpConfig, mcpOAuthStorage };
+  return { view, save, meetingContext, readMeetingWindow, overlayPosition, saveOverlayPosition, gatewayApiKey, savedGatewayApiKey, linkSettings, vmemConfig, fsRoots, mcpList, mcpSave, mcpRemove, mcpSetEnabled, mcpRecordTools, mcpConfigs, mcpSignedOut, mcpConfig, mcpOAuthStorage };
 }

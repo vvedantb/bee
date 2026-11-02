@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { mergeReadings } from "../core/agent-desktop-meeting";
 import type { DetectorReading } from "../core/sync-controller";
 import { TEAMS_IMAGES, meetingWindows, micInUseKeys, parseTasklistCsv, teamsInMeeting } from "../core/teams-heuristics";
 
@@ -34,6 +35,20 @@ export function createTeamsDetector(platform: NodeJS.Platform = process.platform
     read: () => {
       if (!last || Date.now() - last.at >= MIN_INTERVAL_MS) last = { at: Date.now(), reading: readWindows() };
       return last.reading;
+    },
+  };
+}
+
+/**
+ * The built-in detector plus the experimental meeting window reader (main/meeting-window-reader.ts). The built-in reading always
+ * runs; the reader adds Teams, Zoom and Google Meet calls on macOS and Windows when its setting is on and it can read. It never
+ * waits for agent-desktop and never throws: a null or failed reading leaves the built-in one as it is.
+ */
+export function withMeetingWindow(base: TeamsDetector, reader: { read: () => Promise<DetectorReading | null> }): TeamsDetector {
+  return {
+    read: async () => {
+      const [own, extra] = await Promise.all([base.read(), reader.read().catch(() => null)]);
+      return extra ? mergeReadings(own, extra) : own;
     },
   };
 }

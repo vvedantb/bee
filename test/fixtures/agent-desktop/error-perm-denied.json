@@ -1,0 +1,1 @@
+{"version":"2.5","ok":false,"command":"snapshot","error":{"code":"PERM_DENIED","message":"Accessibility permission not granted","suggestion":"Run agent-desktop permissions --guide","disposition":{"delivery":"not_delivered","retry":"safe"}}}
