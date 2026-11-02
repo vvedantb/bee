@@ -1,5 +1,5 @@
 // The pill's status text and logo state. No React or window here, so tests can call them.
-import { activityLabel } from "./island";
+import { activityLabel, displayTip } from "./island";
 import type { LogoState } from "./logo";
 import type { SettingsView } from "../../shared/ipc";
 import type { BeeState } from "./store";
@@ -70,7 +70,7 @@ export function notchLine(state: LineInputs, signedIn: boolean | undefined): Not
   if (state.heard) return { kind: "working", text: "Got it…" };
   if (state.mic.error) return { kind: "mic-error", text: state.mic.error };
   const tip = state.result?.tips[0];
-  if (tip) return { kind: "answer", text: tip };
+  if (tip) return { kind: "answer", text: displayTip(tip) };
   if (state.settings?.gatewayKeySource === "none") return { kind: "gateway-key", text: "Add your AI Gateway key in Settings" };
   if (state.mic.on && state.teamsAudio?.listening) return { kind: "idle", text: TEAMS_AUDIO_LABEL };
   if (state.mic.on || state.session.lines.length > 0) return { kind: "idle", text: "Listening for something useful…" };

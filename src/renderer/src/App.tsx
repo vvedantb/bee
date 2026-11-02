@@ -27,7 +27,7 @@ import { DEFAULT_MOTION_PREFERENCE, MOTION_PREFERENCES, resolveReducedMotion, ty
 import { visibleChips, type LinkChip } from "../../core/link-suggest";
 import { tipKey } from "../../core/steering";
 import type { PipelineResult, SettingsView } from "../../shared/ipc";
-import { islandClick, mcpErrorNote, timingsLabel, timingsTitle } from "./island";
+import { displayTip, islandClick, mcpErrorNote, timingsLabel, timingsTitle } from "./island";
 import { NOTCH_LOGO_PX } from "./logo";
 import { focusKeyFieldWhenReady, GATEWAY_KEY_FIELD_ID, statusClick, type StatusClick } from "./island-click";
 import { NOTCH_BUTTON, NOTCH_UPDATE_BUTTON, logoState, notchLine, workingLabel, type NotchLine } from "./notch";
@@ -52,7 +52,7 @@ function LinkChips({ chips }: { chips: LinkChip[] }) {
         <li key={chip.id} className="link-chip">
           <Button type="button" variant="link" className="h-6 gap-1.5 rounded-full py-0 pr-1 pl-2.5 text-[13px] no-underline" title={chip.url} onClick={() => void actions.openLink(chip.url)}>
             <Favicon domain={chip.domain} />
-            {chip.label}
+            <span className="link-chip-label">{chip.label}</span>
           </Button>
           <Button type="button" variant="ghost" size="icon-xs" className="size-6 rounded-full" title="Dismiss link" aria-label={`Dismiss ${chip.label}`} onClick={() => actions.dismissChip(chip.id)}>
             <IconX size={12} stroke={2} />
@@ -104,7 +104,7 @@ function IslandBody({
                 {/* Keyed by position: a streaming line grows in place instead of replaying the entrance. Kept tips are dimmed while Bee updates them. */}
                 {tips.map((tip, index) => (
                   <li key={index} className={kept.has(tipKey(tip)) ? "kept" : undefined}>
-                    {tip}
+                    {displayTip(tip)}
                     {tipSources[index] ? <span className="tip-source">{tipSources[index]}</span> : null}
                   </li>
                 ))}
@@ -309,7 +309,7 @@ function LiveTab({ state }: { state: BeeState }) {
         {result && result.tips.length > 0 ? (
           <ul className="tips">
             {result.tips.map((tip, index) => (
-              <li key={index}>{tip}</li>
+              <li key={index}>{displayTip(tip)}</li>
             ))}
           </ul>
         ) : (

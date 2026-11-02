@@ -1085,6 +1085,7 @@ html[data-motion="reduce"] .bee-logo[data-state] .bee-logo-wing {
 .link-chip {
   display: inline-flex;
   align-items: center;
+  max-width: 100%;
   border-radius: 999px;
   background: var(--surface-raised);
   gap: 2px;
@@ -1119,9 +1120,23 @@ textarea {
   font-size: 13px;
 }
 
-/* Link chips: neutral text, accent on hover and focus. */
+/* Link chips: one line each (icon, label, X), neutral text, accent on hover and focus. A long label ends in an ellipsis. */
 .link-chip > button:first-child {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  white-space: nowrap;
   color: var(--text);
+}
+
+.link-chip > button:last-child {
+  flex-shrink: 0;
+}
+
+.link-chip-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .link-chip > button:first-child:hover,

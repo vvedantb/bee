@@ -5,13 +5,14 @@
 // island.ts islandClick decides what opens. The hint shots show each mic hint (hints.ts) alone in the body, with the mic on.
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { IconChevronDown, IconDownload, IconExternalLink, IconMicrophone, IconMicrophoneOff, IconX } from "@tabler/icons-react";
+import { IconChevronDown, IconDownload, IconMicrophone, IconMicrophoneOff, IconX } from "@tabler/icons-react";
 import { Button } from "@vvedantb/ui";
 import { sourceChips, type LinkChip } from "../../src/core/link-suggest";
 import { isNewTurn } from "../../src/core/steering";
 import { BeeLogo } from "../../src/renderer/src/BeeLogo";
+import { Favicon } from "../../src/renderer/src/Favicon";
 import { HINT_TEXT, type HintId } from "../../src/renderer/src/hints";
-import { islandClick } from "../../src/renderer/src/island";
+import { displayTip, islandClick } from "../../src/renderer/src/island";
 import { NOTCH_LOGO_PX } from "../../src/renderer/src/logo";
 import { MicHint } from "../../src/renderer/src/MicHint";
 import { NOTCH_BUTTON, NOTCH_UPDATE_BUTTON } from "../../src/renderer/src/notch";
@@ -20,7 +21,6 @@ import { updateButton } from "../../src/renderer/src/update";
 import "../../src/renderer/src/styles.css";
 
 const ICON = { size: 16, stroke: 1.75 };
-const icon = (component: typeof IconX) => renderToStaticMarkup(createElement(component, ICON));
 
 const TIPS = ["Offer 15% off for a two-year term, as in the Acme pricing note [n1].", "SSO ships for enterprise in Q4 (roadmap, 12 October)."];
 const SOURCE = { title: "Acme enterprise pricing – example.com", url: "https://example.com/pricing" };
@@ -104,11 +104,29 @@ function islandBody(content: string): string {
   </div></section>`;
 }
 
-// Each tip is plain text (App.tsx IslandBody): the body is already the full text, so a tip opens nothing.
-const tipList = (tips: string[]) => `<ul class="island-tips">${tips.map((tip) => `<li>${tip}</li>`).join("")}</ul>`;
+// Each tip is plain text (App.tsx IslandBody), cites stripped as in the app: the body is already the full text, so a tip opens nothing.
+const tipList = (tips: string[]) => `<ul class="island-tips">${tips.map((tip) => `<li>${displayTip(tip)}</li>`).join("")}</ul>`;
 
+// App.tsx LinkChips: the link Button (site icon, then the label) and the ghost dismiss X. Static markup shows the globe, as the app
+// does until the favicon arrives.
 const chipItem = (chip: LinkChip) =>
-  `<li class="chip link-chip"><button type="button" class="link-chip-open" title="${chip.url}">${icon(IconExternalLink)}${chip.label}</button><button type="button" class="link-chip-dismiss" aria-label="Dismiss ${chip.label}">${icon(IconX)}</button></li>`;
+  renderToStaticMarkup(
+    createElement(
+      "li",
+      { className: "link-chip" },
+      createElement(
+        Button,
+        { type: "button", variant: "link", className: "h-6 gap-1.5 rounded-full py-0 pr-1 pl-2.5 text-[13px] no-underline", title: chip.url },
+        createElement(Favicon, { domain: chip.domain }),
+        createElement("span", { className: "link-chip-label" }, chip.label),
+      ),
+      createElement(
+        Button,
+        { type: "button", variant: "ghost", size: "icon-xs", className: "size-6 rounded-full", title: "Dismiss link", "aria-label": `Dismiss ${chip.label}` },
+        createElement(IconX, { size: 12, stroke: 2 }),
+      ),
+    ),
+  );
 
 // The search source is a chip after the tips' links (store.ts), not a separate list.
 function tipsContent(): string {

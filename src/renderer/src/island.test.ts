@@ -3,6 +3,7 @@ import {
   ISLAND_MIN_OPEN_MS,
   READ_WORDS_PER_SECOND,
   activityLabel,
+  displayTip,
   islandPhase,
   mcpErrorNote,
   islandShowsBody,
@@ -15,6 +16,20 @@ import {
 } from "./island";
 
 const empty = { tips: [], guideError: null, dismissed: false };
+
+describe("displayTip", () => {
+  it("strips note and numbered citation markers", () => {
+    expect(displayTip("Offer 15% off, as in the Acme pricing note [n1].")).toBe("Offer 15% off, as in the Acme pricing note.");
+    expect(displayTip("Per the docs [N12] and the blog [3][12], run it locally.")).toBe("Per the docs and the blog, run it locally.");
+    expect(displayTip("[1] Start with the renewal date.")).toBe("Start with the renewal date.");
+  });
+
+  it("collapses leftover spaces and keeps other brackets", () => {
+    expect(displayTip("Quote  the [n2]  two-year term.")).toBe("Quote the two-year term.");
+    expect(displayTip("Use [web] results and [note 1] as written.")).toBe("Use [web] results and [note 1] as written.");
+    expect(displayTip("SSO ships in Q4 (roadmap).")).toBe("SSO ships in Q4 (roadmap).");
+  });
+});
 
 describe("mcpErrorNote", () => {
   it("is null without errors", () => {

@@ -25,6 +25,14 @@ export function activityLabel(toolName: string | null | undefined): string {
   return split > 0 && split + 2 < toolName.length ? `Using ${toolName.slice(0, split)}…` : "Thinking…";
 }
 
+/** A tip as shown: citation markers ([n1], [1]) removed, since sources show as chips. Spaces collapse; other brackets stay. */
+export function displayTip(tip: string): string {
+  return tip
+    .replace(/\s*\[n?\d+\]/gi, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 const MCP_REASON_CHARS = 60;
 
 /** One muted line for connectors Luna could not use, e.g. "Eva unavailable: sign in again from Connectors". Null when none. */
