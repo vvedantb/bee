@@ -8,3 +8,9 @@ interface ImportMetaEnv {
 interface ImportMeta {
   readonly env: ImportMetaEnv;
 }
+
+// Vite turns `?inline` asset imports into data URLs (main: the sign-in completion page's logo and font).
+declare module "*?inline" {
+  const dataUrl: string;
+  export default dataUrl;
+}
