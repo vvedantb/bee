@@ -20,9 +20,10 @@ Download `Bee-x.y.z-arm64.dmg` (Apple Silicon) or `Bee-x.y.z.dmg` (Intel), or th
 
 - **Microphone.** macOS asks the first time Bee starts. If you decline, allow Bee under System Settings → Privacy & Security → Microphone.
 - **Screen Recording.** Only for **Settings → Hear Teams when not everyone has Bee** (off by default). macOS counts any app's sound as screen recording. Bee hears the Teams app alone and never records the screen or other apps. Bee never asks during a call: Settings shows **Open Screen Recording settings** when it needs access (see [Teams audio fallback](#teams-audio-fallback)). Without it, Bee uses your mic only.
-- **Menu bar.** Bee has no Dock icon. The tray icon is a menu bar extra: click it for Show / hide, Open notes folder and Quit.
+- **Menu bar.** Bee has no Dock icon. The tray icon is a menu bar extra: click it for Show / hide, Open notes folder, Open logs folder and Quit.
 - **Shortcut.** `Cmd+Shift+Space` shows or hides Bee (`Ctrl+Shift+Space` on Windows and Linux). If another app holds the shortcut, Bee logs a warning and carries on.
 - **Notes folder.** `~/Library/Application Support/Bee/notes`.
+- **Debug logs.** `~/Library/Application Support/Bee/logs` (see [Debug logs](#debug-logs)).
 - **Teams detector.** Windows only. On macOS use **Live → Manual test → Simulate Teams meeting**, or try **Settings → Experimental: read meeting window**.
 - **Experimental: read meeting window.** Off by default. With it on, Bee reads the Teams, Zoom or Google Meet window (its name, the people listed and live captions) through the accessibility tree, read-only. On macOS it needs Accessibility: turn on Bee under System Settings → Privacy & Security → Accessibility. Settings shows whether access is granted.
 
@@ -147,7 +148,16 @@ To check it by hand: sign in, click the mic, say "when does SSO ship for enterpr
 
 Bee checks the [latest GitHub release](https://github.com/vvedantb/bee/releases/latest) at start-up. When a newer version has an installer for your platform, a download icon shows on the notch. **Settings → Updates** shows your version, **Check for updates**, then **Download update** and **Quit & install**. On Windows, Bee downloads the NSIS installer to the temp folder, opens it and quits; the installer replaces Bee and starts it again. On macOS it opens the `.dmg`. Offline, or with no release published, Settings shows a short message and Bee carries on. The installer is unsigned, so SmartScreen may warn.
 
-The tray icon (the menu bar extra on macOS) has Show/hide, Open notes folder and Quit. The avatar in the panel's tab bar manages your account and signs you out.
+The tray icon (the menu bar extra on macOS) has Show/hide, Open notes folder, Open logs folder and Quit. The avatar in the panel's tab bar manages your account and signs you out.
+
+### Debug logs
+
+Bee keeps a detailed log of each session on your computer, so a session can be read back and debugged. The logs are in the `logs` folder beside the notes folder: `%APPDATA%\Bee\logs` on Windows, `~/Library/Application Support/Bee/logs` on macOS. Settings shows the path and has an **Open** button.
+
+- **Files.** JSON Lines, one event per line, one file per session (`bee-YYYY-MM-DD-HHmmss-<session>.jsonl`). A new file starts each day and when a file reaches 64 MB.
+- **Kept forever.** Bee never deletes, trims or overwrites a log file. Remove old files yourself if you need the space.
+- **Local only.** Logs are never uploaded. Keys, tokens and sign-in details are redacted before anything is written.
+- **Verbose debug logs** (Settings, on by default) logs everything: what Bee hears, what you ask the AI and its replies, and each step it takes on screen. Off keeps warnings and errors only.
 
 ## Teams mode
 
@@ -203,7 +213,7 @@ While it listens, **Live → Meeting** says "Listening to Teams audio for people
 
 **Fails open.** A missing helper, an old OS, no permission, Teams not running or any helper error: Settings says why, Bee carries on with your mic, and it tries again in the next call.
 
-**Privacy.** Teams audio stays in memory in Bee's main process. Each phrase goes to speech-to-text like a mic phrase, and only the text reaches the window. Logs carry codes and counts, never audio or words.
+**Privacy.** Teams audio stays in memory in Bee's main process. Each phrase goes to speech-to-text like a mic phrase, and only the text reaches the window. Console logs carry codes and counts, never audio or words. With verbose debug logs on, the text is also kept in the local [debug log](#debug-logs); audio never is.
 
 Before this release, Bee mixed all system audio into the mic. That is gone. See [ARCHITECTURE.md](ARCHITECTURE.md#teams-audio-fallback) and [native/teams-audio/README.md](native/teams-audio/README.md).
 

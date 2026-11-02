@@ -1,6 +1,7 @@
 import { getToken } from "@clerk/electron/react";
 import { useSyncExternalStore } from "react";
 import { echoesOwnLine } from "../../core/agent-desktop-meeting";
+import { debugLog, errorData } from "../../core/debug-log";
 import { detectLinks, mergeChips, sourceChips, visibleChips, type LinkChip } from "../../core/link-suggest";
 import { MAX_STEERING_TIPS, isFiller, isNewTurn, isQuestion, mergeTips, recentRestarts, runDelayMs, tipCap, tipKey, waitsForRun } from "../../core/steering";
 import { mergeLines, pipelineText, summaryTranscript, type SessionLine } from "../../core/sync-lines";
@@ -278,6 +279,7 @@ let teamsAudioTicking = false;
 let sentSize: WindowSize = "collapsed";
 let ticking = false;
 let islandHovered = false;
+let scrollLoggedAt = 0;
 // Meeting context. The detected meeting the session's lines belong to (null: none was detected, so only a click saves it),
 // and the last meeting whose card was shown.
 let sessionMeetingId: number | null = null;
@@ -354,7 +356,10 @@ function autoCollapseIsland(): void {
   // Chips can hold the body open while Luna thinks; the pill's phase then stays "thinking" and nothing collapses.
   const phase = state.busy ? "thinking" : responseOpen(state) ? "expanded" : "idle";
   const openMs = islandOpenMs(islandText(state));
-  if (shouldAutoCollapse({ phase, hovered: islandHovered, fullText: state.fullText, lastActivityAt: islandActivityAt, now: Date.now(), openMs })) void closeIsland();
+  if (shouldAutoCollapse({ phase, hovered: islandHovered, fullText: state.fullText, lastActivityAt: islandActivityAt, now: Date.now(), openMs })) {
+    debugLog.debug("ui", "auto-collapse", { openMs, idleMs: Date.now() - islandActivityAt });
+    void closeIsland();
+  }
 }
 
 async function closeIsland(): Promise<void> {
@@ -506,6 +511,7 @@ async function enrichChips(sent: LinkChip[], text: string, seq: number): Promise
   if (sent.length === 0 || !state.settings?.personalisedLinks) return;
   try {
     const reply = await window.bee.enrichLinks({ turn: text.slice(0, 4000), chips: sent });
+    debugLog.info("links", "enriched", { sent: sent.map((chip) => chip.url), kept: reply.chips.map((chip) => chip.url) });
     if (seq !== turnSeq) return;
     const sentIds = new Set(sent.map((chip) => chip.id));
     const byId = new Map(reply.chips.map((chip) => [chip.id, chip]));
@@ -637,6 +643,10 @@ async function runPipeline(): Promise<void> {
   runTips = [];
   const searched = answerSearched;
   let searchedRun = false;
+  const started = performance.now();
+  let partials = 0;
+  let firstPartialMs: number | null = null;
+  debugLog.info("ai", "run-start", { run, cancelled: previous > 0 ? previous : null, lines: transcript.length, turnLines, kept: keep, earlier, searched, fresh, restarts: restarts.length });
   // The kept tips stay on screen (dimmed, pill "Updating…"). A new turn drops the old answer.
   set({
     busy: true,
@@ -653,6 +663,7 @@ async function runPipeline(): Promise<void> {
   // The latest run owns tool events (and the run id, when sent, must match). Finishing clears the label and the calls.
   const stopActivity = window.bee.onLunaActivity(({ runId, tool, phase }) => {
     if (run !== latestRun || (runId !== undefined && runId !== run)) return;
+    debugLog.debug("ai", "tool", { run, tool, phase });
     if (phase === "start" && tool === "web_search") searchedRun = answerSearched = true;
     if (phase === "start") set({ tools: [...state.tools, tool] });
     else set({ tools: withoutOne(state.tools, tool) });
@@ -661,6 +672,11 @@ async function runPipeline(): Promise<void> {
   const stopPartial = window.bee.onLunaPartial((partial) => {
     if (run !== latestRun || (partial.runId !== undefined && partial.runId !== run)) return;
     const { tips } = partial;
+    partials += 1;
+    if (firstPartialMs === null) {
+      firstPartialMs = Math.round(performance.now() - started);
+      debugLog.info("ai", "run-first-tips", { run, ms: firstPartialMs, tips });
+    }
     runTips = tips;
     set({
       partialTips: keep.length > 0 ? mergeTips(keep, tips, cap, false) : tips,
@@ -681,7 +697,10 @@ async function runPipeline(): Promise<void> {
       ...(searched ? { searched } : {}),
       sessionToken: await sessionToken(),
     });
-    if (run !== latestRun) return;
+    if (run !== latestRun) {
+      debugLog.info("ai", "run-superseded", { run, latest: latestRun, ms: Math.round(performance.now() - started) });
+      return;
+    }
     // Another run follows (a line is in its debounce, or waits for this run): the answer is not settled yet.
     const waiting = runTimer !== undefined || deferred;
     // The run returns the full set. A tip it left out was replaced. No tips at all (NONE, an error) leaves the kept ones.
@@ -694,6 +713,22 @@ async function runPipeline(): Promise<void> {
     const added = linked.filter((chip) => !state.chips.some((known) => known.id === chip.id));
     void enrichChips(added, [turnText, ...tips].join("\n"), turnSeq);
     const chips = mergeChips(linked, sourceChips(result.sources));
+    debugLog.info("ai", "run-result", {
+      run,
+      ms: Math.round(performance.now() - started),
+      firstPartialMs,
+      partials,
+      waiting,
+      tips,
+      tipSources: shown.tipSources,
+      sources: result.sources,
+      chips: chips.map((chip) => chip.url),
+      guideError: result.guideError,
+      guideNote: result.guideNote ?? null,
+      rankError: result.rankError,
+      mcpErrors: result.mcpErrors ?? [],
+      timingsMs: result.timingsMs,
+    });
     set({
       result: shown,
       partialTips: null,
@@ -716,6 +751,7 @@ async function runPipeline(): Promise<void> {
     }
     touchIsland();
   } catch (error) {
+    debugLog.warn("ai", "run-failed", { run, latest: latestRun, ms: Math.round(performance.now() - started), error: errorData(error) });
     if (run === latestRun) {
       set({
         busy: runTimer !== undefined || deferred,
@@ -742,6 +778,9 @@ async function runPipeline(): Promise<void> {
 }
 
 /** The direct request's wait is over: lines that came meanwhile start their turn, as if they had just arrived. */
+// A meeting line that starts like the wake word ("Be careful", "B could", "Bees…", "Hey, be…"), for the debug log only.
+const NEAR_WAKE = /^\W*(?:hey\W+|hi\W+|ok\W+)?(?:b|be|bee|bea|bees|been|beep|bean|bey|bae)\b/i;
+
 function endCommandHold(): void {
   clearTimeout(commandHold);
   commandHold = undefined;
@@ -756,16 +795,21 @@ function endCommandHold(): void {
 /**
  * A mic phrase that starts with the wake word ("Bee, open Teams") is a request to the AI, not a meeting line: it never joins
  * the session, the summary, meeting memory or the Teams sync. "Bee" alone arms the next phrase. Returns true when the phrase
- * was taken. Logs never carry the words.
+ * was taken. Console lines never carry the words; the local debug log does.
  */
 function takeWakeLine(text: string): boolean {
   const now = Date.now();
-  const route = routeLine({ text, source: "mic", enabled: state.settings?.wakeWordEnabled ?? true, armed: now < wakeArmedUntil });
+  const enabled = state.settings?.wakeWordEnabled ?? true;
+  const armed = now < wakeArmedUntil;
+  const route = routeLine({ text, source: "mic", enabled, armed });
   wakeArmedUntil = route.kind === "wake" ? now + WAKE_FOLLOW_MS : 0;
+  // The local debug log keeps the words that woke Bee, and the meeting lines that nearly did (a likely miss or false trigger).
+  if (route.kind !== "meeting" || NEAR_WAKE.test(text)) debugLog.info("wake", route.kind === "meeting" ? "near-miss" : route.kind, { text, route, enabled, armed });
   if (route.kind === "meeting") return false;
   console.debug(`Bee: wake ${route.kind}`);
   // Only a tap answers a Confirm prompt. "Bee, yes, send it" leaves the prompt as it is, rather than cancelling the task.
   if (route.kind === "command" && state.computer?.confirm && isConfirmWords(route.command)) {
+    debugLog.info("wake", "confirm-words-ignored", { command: route.command, confirm: state.computer.confirm.id });
     set({ computer: { ...state.computer, step: "Tap Confirm to go ahead…" } });
     return true;
   }
@@ -781,6 +825,7 @@ function takeWakeLine(text: string): boolean {
  */
 async function stopCommand(): Promise<void> {
   const run = commandRun;
+  debugLog.info("computer", "stop", { run, computer: state.computer?.runId === run });
   if (run === null) return;
   if (state.computer?.runId === run) {
     set({ computer: { ...state.computer, step: "Stopping…", confirm: null } });
@@ -807,6 +852,8 @@ async function stopCommand(): Promise<void> {
 async function runCommand(command: string): Promise<void> {
   const previous = latestRun;
   const run = ++latestRun;
+  const started = performance.now();
+  debugLog.info("ai", "command-start", { run, command, cancelled: previous > 0 ? previous : null });
   if (previous > 0) void window.bee.cancelPipeline({ runId: previous }).catch(() => undefined);
   clearTimeout(runTimer);
   runTimer = undefined;
@@ -852,6 +899,7 @@ async function runCommand(command: string): Promise<void> {
   // Computer use: the step line, and a Confirm prompt that opens the island (the panel folds so the island shows it).
   const stopComputer = window.bee.computer.onUpdate((update) => {
     if (run !== latestRun || update.runId !== run) return;
+    debugLog.info("computer", "update", { ...update });
     const step = update.type === "step" ? update.label : (state.computer?.step ?? "");
     set({ computer: { runId: run, step, confirm: update.type === "confirm" ? update : null }, dismissed: false, islandClosing: false });
     if (update.type === "confirm" && state.expanded) void actions.setExpanded(false);
@@ -867,6 +915,7 @@ async function runCommand(command: string): Promise<void> {
       runId: run,
       sessionToken: await sessionToken(),
     });
+    debugLog.info("ai", "command-result", { run, latest: latestRun, ms: Math.round(performance.now() - started), tips: result.tips, sources: result.sources, guideError: result.guideError, timingsMs: result.timingsMs });
     if (run !== latestRun) return;
     const tipSources = withSources(state.tipSources, result);
     set({
@@ -883,6 +932,7 @@ async function runCommand(command: string): Promise<void> {
     if (result.tips.length > 0) celebrate();
     touchIsland();
   } catch (error) {
+    debugLog.warn("ai", "command-failed", { run, latest: latestRun, ms: Math.round(performance.now() - started), error: errorData(error) });
     if (run === latestRun) {
       // Electron prefixes a handler's error with "Error invoking remote method …".
       const message = error instanceof Error ? error.message.replace(/^Error invoking remote method '[^']*': (Error: )?/, "") : "";
@@ -970,7 +1020,15 @@ async function sessionToken(): Promise<string> {
 }
 
 async function transcribePhrase(audio: Uint8Array<ArrayBuffer>): Promise<TranscribeResult> {
-  return window.bee.transcribe({ audio, sessionToken: await sessionToken() });
+  const started = performance.now();
+  try {
+    const result = await window.bee.transcribe({ audio, sessionToken: await sessionToken() });
+    debugLog.info("stt", "mic-phrase", { bytes: audio.byteLength, ms: Math.round(performance.now() - started), text: result.text, error: result.error });
+    return result;
+  } catch (error) {
+    debugLog.warn("stt", "mic-phrase-failed", { bytes: audio.byteLength, ms: Math.round(performance.now() - started), error: errorData(error) });
+    throw error;
+  }
 }
 
 function setUpdate(patch: Partial<UpdateState>): void {
@@ -1022,6 +1080,7 @@ async function mcpChange(change: () => Promise<McpServerView[]>, staleTestId?: s
   } catch (error) {
     // Electron prefixes a handler's error with "Error invoking remote method …".
     const message = error instanceof Error ? error.message.replace(/^Error invoking remote method '[^']*': (Error: )?/, "") : "";
+    debugLog.warn("mcp", "change-failed", { error: errorData(error) });
     set({ mcp: { ...state.mcp, error: message || "Could not save the server" } });
     return false;
   }
@@ -1123,6 +1182,7 @@ async function teamsAudioTick(): Promise<void> {
 const phraseCallbacks = {
   // The phrase is over: show "Got it…" now, before speech-to-text. A cough never gets here.
   onSpeechEnd: () => {
+    debugLog.debug("audio", "phrase-end", { pending: heardPending + 1, busy: state.busy });
     heardPending += 1;
     // Spoken over a run: the line steers it even if the run settles before speech-to-text is done.
     if (state.busy) spokenDuringRun = true;
@@ -1169,14 +1229,20 @@ async function startMic({ transcribe, onFrame }: MicOptions): Promise<void> {
       sampleRate: capture.sampleRate,
       transcribe,
       ...phraseCallbacks,
-      onError: (error) => setMic({ error }),
+      onError: (error) => {
+        debugLog.warn("audio", "mic-error", { error });
+        setMic({ error });
+      },
     });
+    const levels = levelSummary();
     capture.start((frame) => {
       onFrame?.(frame, capture.sampleRate);
       const level = mic.push(frame);
       setMic({ level: Math.min(1, level * 4) });
       hintFrame(level, frame);
+      levels(level, frame);
     });
+    debugLog.info("audio", "mic-on", { sampleRate: capture.sampleRate });
     stopMic = () => {
       capture.stop();
       // The phrase in progress is still transcribed.
@@ -1186,8 +1252,34 @@ async function startMic({ transcribe, onFrame }: MicOptions): Promise<void> {
     // Off the critical path: Teams audio (if the fallback applies) never blocks the mic.
     void syncTeamsAudio();
   } catch (error) {
+    debugLog.error("audio", "mic-failed", { error: errorData(error) });
     setMic({ ...MIC_OFF, error: `Microphone unavailable: ${error instanceof Error ? error.message : String(error)}` });
   }
+}
+
+// One mic level line every few seconds for the debug log: enough to see silence or clipping, never the audio itself.
+const LEVEL_SUMMARY_MS = 5000;
+function levelSummary(): (level: number, frame: Float32Array) => void {
+  let since = Date.now();
+  let frames = 0;
+  let sum = 0;
+  let max = 0;
+  let peak = 0;
+  return (level, frame) => {
+    if (!debugLog.wants("debug")) return;
+    frames += 1;
+    sum += level;
+    max = Math.max(max, level);
+    peak = Math.max(peak, framePeak(frame));
+    const now = Date.now();
+    if (now - since < LEVEL_SUMMARY_MS) return;
+    debugLog.debug("audio", "levels", { frames, avg: Math.round((sum / frames) * 10_000) / 10_000, max: Math.round(max * 10_000) / 10_000, peak: Math.round(peak * 10_000) / 10_000, ms: now - since });
+    since = now;
+    frames = 0;
+    sum = 0;
+    max = 0;
+    peak = 0;
+  };
 }
 
 /**
@@ -1216,6 +1308,7 @@ export const actions = {
       void syncTeamsAudio();
       return true;
     } catch (error) {
+      debugLog.warn("settings", "save-failed", { keys: Object.keys(update), error: errorData(error) });
       set({ error: error instanceof Error ? error.message : "Could not save settings" });
       return false;
     }
@@ -1261,6 +1354,7 @@ export const actions = {
     setMcpTest(id, { busy: true, result: null });
     try {
       const result = await window.bee.mcp.test(id);
+      debugLog.info("mcp", "test", { id, ok: result.ok, tools: result.tools?.length ?? 0, error: result.error ?? null });
       setMcpTest(id, { busy: false, result });
       await actions.refreshMcp();
     } catch (error) {
@@ -1270,6 +1364,7 @@ export const actions = {
 
   /** Close the island body without closing the window. A mic hint closes with it, and its cooldown starts (hints.ts). */
   dismissIsland(): Promise<void> {
+    debugLog.info("ui", "dismiss", { confirm: state.computer?.confirm?.id ?? null, hint: state.hint?.id ?? null });
     // Closing a Confirm prompt is Cancel.
     if (state.computer?.confirm) return actions.answerConfirm(false);
     if (!state.hint) return closeIsland();
@@ -1283,6 +1378,7 @@ export const actions = {
   /** Hide one chip for this turn. The island closes when nothing else is left to show. */
   dismissChip(id: string): void {
     if (state.dismissedChipIds.includes(id)) return;
+    debugLog.info("ui", "chip-dismissed", { id });
     set({ dismissedChipIds: [...state.dismissedChipIds, id] });
     touchIsland();
     void applyWindowSize();
@@ -1290,6 +1386,7 @@ export const actions = {
 
   /** Open a chip's link in the default browser. Only called from a click; main validates the URL. */
   async openLink(url: string): Promise<void> {
+    debugLog.info("ui", "link-opened", { url });
     try {
       await window.bee.openExternalUrl(url);
     } catch {
@@ -1300,6 +1397,7 @@ export const actions = {
   /** The one-line answer in the pill was clicked: show it in full in the island itself (never the panel) until the user closes it. */
   openFullText(): void {
     if (!answerFolded(state) || state.expanded) return;
+    debugLog.info("ui", "full-text");
     clearTimeout(islandTimer);
     set({ fullText: true, dismissed: false, islandClosing: false });
     void applyWindowSize();
@@ -1307,16 +1405,24 @@ export const actions = {
 
   /** The user clicked outside the island (the window's clear area, or another app took focus): an answer open in full folds back. */
   clickedOutside(): void {
+    debugLog.debug("ui", "clicked-outside", { fullText: state.fullText });
     if (state.fullText) void closeIsland();
   },
 
   /** Scrolling the body is reading it: restart the clock. */
   islandScrolled(): void {
+    // At most one log line a second: a scroll fires on every frame.
+    const now = Date.now();
+    if (now - scrollLoggedAt >= 1000) {
+      scrollLoggedAt = now;
+      debugLog.debug("ui", "scroll", { hovered: islandHovered });
+    }
     if (!islandHovered) touchIsland();
   },
 
   /** The pointer on the island holds the body open; leaving restarts the clock. */
   setIslandHover(hovered: boolean): void {
+    if (hovered !== islandHovered) debugLog.debug("ui", "hover", { hovered });
     islandHovered = hovered;
     touchIsland();
   },
@@ -1361,6 +1467,7 @@ export const actions = {
   simulateLine(line: string, source: "typed" | "mic" = "typed"): void {
     const text = line.trim();
     if (!text) return;
+    if (source === "typed") debugLog.info("meeting", "typed-line", { text });
     if (source === "mic" && takeWakeLine(text)) return;
     localSeq += 1;
     const own: SessionLine = {
@@ -1393,13 +1500,14 @@ export const actions = {
         captionSeq += 1;
         return { id: `caption-${captionSeq}`, own: false, speakerId: `caption:${line.speaker}`, speakerName: line.speaker, text: line.text, clientTs: now, serverTs: null };
       });
+    debugLog.debug("meeting", "captions", { lines: lines.length, fresh: fresh.map((line) => `${line.speakerName}: ${line.text}`) });
     if (fresh.length > 0 && addLines(fresh)) scheduleRun();
   },
 
   /**
    * Phrases heard from the Teams app (Teams audio fallback). They join the session as "Meeting: …" and follow the same steering
    * rules as captions. They are never shared with the Teams sync. A phrase that repeats a line Bee already has from the last
-   * 20 s (the user's own, a teammate's from their Bee, a caption) is dropped. Logs carry counts only.
+   * 20 s (the user's own, a teammate's from their Bee, a caption) is dropped. Console lines carry counts only.
    */
   teamsAudioLines(texts: string[]): void {
     if (!state.settings?.teamsAudioFallbackEnabled) return;
@@ -1428,6 +1536,7 @@ export const actions = {
     const computer = state.computer;
     const confirm = computer?.confirm;
     if (!computer || !confirm) return;
+    debugLog.info("computer", "confirm-tap", { runId: computer.runId, id: confirm.id, kind: confirm.kind, confirmed });
     set({ computer: { ...computer, step: confirmed ? computer.step : "Stopping…", confirm: null } });
     void applyWindowSize();
     try {
@@ -1472,6 +1581,7 @@ export const actions = {
   async endMeeting(options: { auto?: boolean } = {}): Promise<void> {
     const ended = state.session;
     if (ended.lines.length === 0 || state.summary.saving) return;
+    debugLog.info("meeting", "end", { auto: options.auto ?? false, lines: ended.lines.length, tips: ended.tips.length, meetingId: sessionMeetingId });
     // An automatic save leaves the mic alone: the next meeting may be starting. It is not retried if it fails.
     if (stopMic && !options.auto) actions.stopMic(null);
     const meetingId = sessionMeetingId;
@@ -1503,6 +1613,7 @@ export const actions = {
           tips: mergeUnique(ended.tips, now.tips, SESSION_LIST_MAX),
         },
       });
+      debugLog.warn("meeting", "summary-failed", { auto: options.auto ?? false, error: errorData(error) });
       setSummary({ saving: false, error: error instanceof Error ? error.message : "Could not save the summary" });
     }
   },
@@ -1536,6 +1647,7 @@ export const actions = {
 
   stopMic(error: string | null): void {
     const stop = stopMic;
+    if (stop) debugLog.info("audio", "mic-off", { error });
     stopMic = null;
     stop?.();
     set({ mic: { ...MIC_OFF, error } });
@@ -1571,10 +1683,13 @@ export const actions = {
     set({ teamsBusy: true, teamsError: null });
     try {
       const result = await window.bee.teams.act({ ...action, sessionToken: await sessionToken() });
+      // The action type only: names and invite codes stay out of the log.
+      debugLog.info("teams", "action", { type: action.type, error: result.error, room: result.view.room?.id ?? null });
       set({ teamsBusy: false, teamsError: result.error, inviteOpen: action.type === "startSync" ? !result.error : state.inviteOpen });
       setTeams(result.view);
       return result.error === null;
     } catch (error) {
+      debugLog.warn("teams", "action-failed", { type: action.type, error: errorData(error) });
       set({ teamsBusy: false, teamsError: error instanceof Error ? error.message : "Teams action failed" });
       return false;
     }

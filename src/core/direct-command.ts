@@ -5,6 +5,7 @@ import type { ComputerRun } from "./agent-desktop-envelope";
 import { COMPUTER_MAX_STEPS, createRunControl, stopLine, type ComputerPlatform, type RunControl } from "./computer-control";
 import { computerTools, type ConfirmRequest } from "./computer-tools";
 import { computerAccess, runComputerUse, wantsComputerUse } from "./computer-use";
+import { debugLog, errorData } from "./debug-log";
 import { GUIDE_MODEL, NO_GATEWAY_KEY, type BeeGateway } from "./gateway";
 import type { McpTools } from "./mcp";
 import { routeCommand, type DesktopActionResult, type DesktopActions } from "./desktop-actions";
@@ -96,8 +97,10 @@ async function runComputerCommand(args: {
   // The first step line shows the island's Stop button at once, before the access check.
   host.onStep?.("Starting…");
   try {
+    debugLog.info("computer", "run-start", { platform: host.platform, maxSteps, maxMs: host.maxMs ?? null, askFirst: host.askFirst(), command: args.command });
     if (host.platform === "mac") {
       const access = await computerAccess(host.run, control.signal);
+      debugLog.info("computer", "access", access);
       if (control.reason()) return lineResult(stopLine(control.reason() ?? "user", { platform: host.platform }));
       if (access.accessibility === "denied") {
         console.debug("perf computer access=denied");
@@ -124,6 +127,7 @@ async function runComputerCommand(args: {
       maxSteps,
     });
     const guide = performance.now() - started;
+    debugLog.info("computer", "run-end", { ...outcome, reason: control.reason(), declined: control.declined(), ms: Math.round(guide) });
     if (outcome.error) return { ...lineResult(outcome.line, { guide, lunaTotal: guide }), tips: [], tipSources: [], guideError: outcome.line };
     return lineResult(outcome.line, { guide, lunaTotal: guide });
   } finally {
@@ -154,6 +158,7 @@ export async function runDirectCommand(args: {
 }): Promise<PipelineResult> {
   const command = args.command.replace(/\s+/g, " ").trim();
   const route = routeCommand(command);
+  debugLog.info("ai", "command-route", { command, route, computer: Boolean(args.computer), desktop: Boolean(args.actions), wantsComputer: wantsComputerUse(command) });
   if (route.kind !== "ai" && args.actions) {
     const tool = FAST_TOOL[route.kind];
     const actions = args.actions;
@@ -161,11 +166,13 @@ export async function runDirectCommand(args: {
     let result: DesktopActionResult;
     try {
       result = await (route.kind === "open-url" ? actions.openUrl(route.url) : route.kind === "open-app" ? actions.openApp(route.name) : actions.focusWindow({ app: route.name }));
-    } catch {
+    } catch (error) {
+      debugLog.warn("desktop", "action-failed", { route, error: errorData(error) });
       result = { ok: false, message: "That desktop action failed" };
     } finally {
       args.onActivity?.({ tool, phase: "end" });
     }
+    debugLog.info("desktop", "fast-action", { route, result });
     console.debug(`perf command fast ${route.kind} ok=${result.ok ? 1 : 0}`);
     return { notes: [], rankSource: "fallback", rankError: null, tips: [result.message], tipSources: [null], sources: [], guideError: null, timingsMs: timings() };
   }
@@ -204,6 +211,7 @@ export async function runDirectCommand(args: {
   const tools = args.actions
     ? {
         ...desktopTools(args.actions, (line) => {
+          debugLog.info("desktop", "action-line", { line });
           actionLines.push(line);
           emit();
         }),
@@ -213,6 +221,7 @@ export async function runDirectCommand(args: {
                 description: "Do the request on screen, step by step: click, type, send, close or change things in other apps. Call it once, with nothing else.",
                 inputSchema: z.object({}),
                 execute: async () => {
+                  debugLog.info("ai", "computer-handover", { command });
                   handOver.abort();
                   return "Bee is doing it on screen.";
                 },

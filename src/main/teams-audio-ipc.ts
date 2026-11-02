@@ -1,4 +1,5 @@
 import { ipcMain, shell } from "electron";
+import { debugLog } from "../core/debug-log";
 import { IPC, teamsAudioStartRequestSchema, teamsAudioStatusRequestSchema, type TeamsAudioStartResult, type TeamsAudioStatus } from "../shared/ipc";
 import { assertSignedIn } from "./auth";
 import { teamsAudioAllowed } from "./teams-audio";
@@ -18,22 +19,38 @@ export function registerTeamsAudioIpc(args: {
   capture: TeamsAudioCapture;
   isMac: boolean;
 }): void {
+  // Polled every few seconds: only a changed status is logged.
+  let lastStatus = "";
   ipcMain.handle(IPC.teamsAudioStatus, async (_event, payload) => {
     assertSignedIn(teamsAudioStatusRequestSchema.parse(payload).sessionToken);
     const status = await args.status();
+    const seen = JSON.stringify(status);
+    if (seen !== lastStatus) {
+      lastStatus = seen;
+      debugLog.info("teams-audio", "status", { ...status, enabled: args.enabled(), running: args.capture.running() });
+    }
     args.capture.touch();
-    if (args.capture.running() && !teamsAudioAllowed(status, args.enabled())) args.capture.stop("policy");
+    if (args.capture.running() && !teamsAudioAllowed(status, args.enabled())) {
+      debugLog.info("teams-audio", "stop", { reason: "policy" });
+      args.capture.stop("policy");
+    }
     return status;
   });
 
   ipcMain.handle(IPC.teamsAudioStart, async (_event, payload): Promise<TeamsAudioStartResult> => {
     assertSignedIn(teamsAudioStartRequestSchema.parse(payload).sessionToken);
     const status = await args.status();
-    if (!teamsAudioAllowed(status, args.enabled())) return { ok: false, failure: "refused" };
-    return args.capture.start();
+    if (!teamsAudioAllowed(status, args.enabled())) {
+      debugLog.info("teams-audio", "start", { ok: false, failure: "refused", status });
+      return { ok: false, failure: "refused" };
+    }
+    const result = await args.capture.start();
+    debugLog.info("teams-audio", "start", result);
+    return result;
   });
 
   ipcMain.handle(IPC.teamsAudioStop, () => {
+    debugLog.info("teams-audio", "stop", { reason: "renderer" });
     args.capture.stop("renderer");
   });
 

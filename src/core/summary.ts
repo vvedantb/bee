@@ -1,4 +1,5 @@
 import { generateText, type LanguageModel, type SystemModelMessage, type UserModelMessage } from "ai";
+import { debugLog, errorData, modelName, msSince, onceText } from "./debug-log";
 import { ANTHROPIC_CACHE, guideProviderOptions } from "./gateway";
 
 const SUMMARY_TIMEOUT_MS = 60_000;
@@ -155,10 +156,13 @@ export async function generateMeetingSummary(
   args: SummaryInput & { model: LanguageModel; when?: Date; timeoutMs?: number },
 ): Promise<{ markdown: string; usedLlm: boolean; error: string | null }> {
   const when = args.when ?? new Date();
+  const started = performance.now();
   try {
+    const prompt = buildSummaryPrompt(args);
+    debugLog.info("ai", "summary-request", { model: modelName(args.model), system: onceText(prompt.system), prompt: prompt.prompt });
     const result = await generateText({
       model: args.model,
-      ...summaryRequest(buildSummaryPrompt(args)),
+      ...summaryRequest(prompt),
       maxOutputTokens: 2000,
       maxRetries: 1,
       abortSignal: AbortSignal.timeout(args.timeoutMs ?? SUMMARY_TIMEOUT_MS),
@@ -166,10 +170,12 @@ export async function generateMeetingSummary(
       // Thinking off: a structured extraction gains nothing from it, and reasoning would eat the output budget.
       providerOptions: guideProviderOptions("flex", { web: false }),
     });
+    debugLog.info("ai", "summary-response", { ms: msSince(started), finishReason: result.finishReason, text: result.text, usage: result.totalUsage });
     const body = parseSummaryMarkdown(result.text);
     if (!body) throw new Error("reply did not have the expected sections");
     return { markdown: assemble(when, body, args), usedLlm: true, error: null };
   } catch (error) {
+    debugLog.warn("ai", "summary-failed", { ms: msSince(started), error: errorData(error) });
     return {
       markdown: buildLocalSummary({ ...args, when }),
       usedLlm: false,

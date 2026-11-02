@@ -1,4 +1,5 @@
 import { NoTranscriptGeneratedError, experimental_transcribe, type TranscriptionModel } from "ai";
+import { debugLog, errorData, modelName, msSince } from "./debug-log";
 import { gatewayTier } from "./gateway";
 
 const STT_TIMEOUT_MS = 20_000;
@@ -10,8 +11,12 @@ export async function transcribeSpeech(args: {
   model: TranscriptionModel;
   audio: Uint8Array;
   timeoutMs?: number;
+  /** Which capture the phrase came from, for the local debug log only. */
+  source?: "mic" | "teams-audio";
 }): Promise<TranscribeOutcome> {
   const started = performance.now();
+  const about = { source: args.source ?? null, model: modelName(args.model), bytes: args.audio.byteLength };
+  debugLog.debug("stt", "request", about);
   try {
     const result = await experimental_transcribe({
       model: args.model,
@@ -24,9 +29,15 @@ export async function transcribeSpeech(args: {
     console.debug(`perf stt ${Math.round(performance.now() - started)}ms`);
     const text = result.text.replace(/\s+/g, " ").trim();
     // Punctuation-only output ("." or "…") is what STT returns for a cough or a click.
-    return { text: /\p{L}|\p{N}/u.test(text) ? text : null, error: null };
+    const words = /\p{L}|\p{N}/u.test(text);
+    debugLog.info("stt", "result", { ...about, ms: msSince(started), text, words, language: result.language ?? null, seconds: result.durationInSeconds ?? null });
+    return { text: words ? text : null, error: null };
   } catch (error) {
-    if (NoTranscriptGeneratedError.isInstance(error)) return { text: null, error: null };
+    if (NoTranscriptGeneratedError.isInstance(error)) {
+      debugLog.info("stt", "result", { ...about, ms: msSince(started), text: null, words: false });
+      return { text: null, error: null };
+    }
+    debugLog.warn("stt", "failed", { ...about, ms: msSince(started), error: errorData(error) });
     return { text: null, error: `Speech-to-text failed: ${error instanceof Error ? error.message : String(error)}` };
   }
 }

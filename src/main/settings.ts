@@ -50,6 +50,8 @@ const fileSchema = z.object({
   // "Ask before sending or deleting" (core/computer-gate.ts): computer use waits for a Confirm tap before it sends, deletes, buys
   // or submits. On until switched off; a bad stored value reads as on, the safe side.
   askBeforeSendingEnabled: z.boolean().default(true).catch(true),
+  // Verbose debug logs (main/debug-log.ts), on this computer only. On until switched off, for now; off keeps warnings and errors.
+  verboseLogging: z.boolean().default(true).catch(true),
   // Non-secret MCP settings. A bad entry drops the list, not the whole file.
   mcpServers: z.array(mcpServerSchema).catch([]).default([]),
   // One safeStorage ciphertext (base64) for every server's secrets, as JSON keyed by server id.
@@ -76,6 +78,8 @@ function storageMode(): SettingsView["secretStorage"] {
 export function createSettingsStore(args: {
   userDataDir: string;
   notesDir: string;
+  /** The local debug log folder, shown in Settings like notesDir. */
+  logsDir: string;
   envGatewayKey: string | undefined;
 }) {
   const path = join(args.userDataDir, "settings.json");
@@ -103,6 +107,7 @@ export function createSettingsStore(args: {
       hintsEnabled: true,
       wakeWordEnabled: true,
       askBeforeSendingEnabled: true,
+      verboseLogging: true,
       mcpServers: [],
     };
   }
@@ -366,6 +371,7 @@ export function createSettingsStore(args: {
       motionPreference: file.motionPreference,
       secretStorage: storageMode(),
       notesDir: args.notesDir,
+      logsDir: args.logsDir,
       fsRoots: read().fsRoots,
       meetingContextEnabled: file.meetingContextEnabled,
       meetingCalendarEnabled: file.meetingCalendarEnabled,
@@ -375,6 +381,7 @@ export function createSettingsStore(args: {
       hintsEnabled: file.hintsEnabled,
       wakeWordEnabled: file.wakeWordEnabled,
       askBeforeSendingEnabled: file.askBeforeSendingEnabled,
+      verboseLogging: file.verboseLogging,
     };
   }
 
@@ -404,6 +411,11 @@ export function createSettingsStore(args: {
     return read().askBeforeSendingEnabled;
   }
 
+  /** The verbose debug log switch, for the logger at start-up. Saving it updates the logger at once (index.ts). Main only. */
+  function verboseLogging(): boolean {
+    return read().verboseLogging;
+  }
+
   function save(update: SettingsUpdate): SettingsView {
     let file = read();
     if (update.gatewayApiKey !== undefined) file = setSecret(file, "gatewayApiKey", update.gatewayApiKey);
@@ -419,6 +431,7 @@ export function createSettingsStore(args: {
     if (update.hintsEnabled !== undefined) file = { ...file, hintsEnabled: update.hintsEnabled };
     if (update.wakeWordEnabled !== undefined) file = { ...file, wakeWordEnabled: update.wakeWordEnabled };
     if (update.askBeforeSendingEnabled !== undefined) file = { ...file, askBeforeSendingEnabled: update.askBeforeSendingEnabled };
+    if (update.verboseLogging !== undefined) file = { ...file, verboseLogging: update.verboseLogging };
     if (update.fsRoots !== undefined) {
       const { roots, invalid } = normalizeFsRoots(update.fsRoots);
       if (invalid.length > 0) throw new Error(`Folders must be absolute paths: ${invalid.join(", ")}`);
@@ -441,5 +454,5 @@ export function createSettingsStore(args: {
     write({ ...read(), overlayPosition: position });
   }
 
-  return { view, save, meetingContext, readMeetingWindow, teamsAudioFallback, wakeWord, askBeforeSending, overlayPosition, saveOverlayPosition, gatewayApiKey, savedGatewayApiKey, linkSettings, vmemConfig, fsRoots, mcpList, mcpSave, mcpRemove, mcpSetEnabled, mcpRecordTools, mcpConfigs, mcpSignedOut, mcpConfig, mcpOAuthStorage };
+  return { view, save, meetingContext, readMeetingWindow, teamsAudioFallback, wakeWord, askBeforeSending, verboseLogging, overlayPosition, saveOverlayPosition, gatewayApiKey, savedGatewayApiKey, linkSettings, vmemConfig, fsRoots, mcpList, mcpSave, mcpRemove, mcpSetEnabled, mcpRecordTools, mcpConfigs, mcpSignedOut, mcpConfig, mcpOAuthStorage };
 }

@@ -17,7 +17,7 @@ vi.mock("electron", () => ({
 const { createSettingsStore } = await import("./settings");
 
 let dir: string;
-const create = () => createSettingsStore({ userDataDir: dir, notesDir: join(dir, "notes"), envGatewayKey: undefined });
+const create = () => createSettingsStore({ userDataDir: dir, notesDir: join(dir, "notes"), logsDir: join(dir, "logs"), envGatewayKey: undefined });
 
 beforeEach(() => {
   crypto.on = false;
@@ -572,8 +572,39 @@ describe("settings ask before sending or deleting", () => {
   });
 });
 
+describe("settings verbose debug logs", () => {
+  it("is on by default, in the view and for main, and the view names the logs folder", () => {
+    const store = create();
+    expect(store.view().verboseLogging).toBe(true);
+    expect(store.verboseLogging()).toBe(true);
+    expect(store.view().logsDir).toBe(join(dir, "logs"));
+  });
+
+  it("round-trips through settings.json, survives unrelated saves, and applies to main at once", () => {
+    const store = create();
+    expect(store.save({ verboseLogging: false }).verboseLogging).toBe(false);
+    expect(JSON.parse(readFileSync(join(dir, "settings.json"), "utf8")).verboseLogging).toBe(false);
+    expect(store.verboseLogging()).toBe(false);
+    store.save({ hintsEnabled: false });
+    expect(create().view().verboseLogging).toBe(false);
+    store.save({ verboseLogging: true });
+    expect(create().verboseLogging()).toBe(true);
+  });
+
+  it("stays on for an older settings file without it, and reads a bad stored value as on", async () => {
+    writeFileSync(join(dir, "settings.json"), JSON.stringify({ meetingMode: true }));
+    expect(create().view()).toMatchObject({ meetingMode: true, verboseLogging: true });
+    writeFileSync(join(dir, "settings.json"), JSON.stringify({ verboseLogging: "no" }));
+    expect(create().verboseLogging()).toBe(true);
+    const { settingsUpdateSchema, settingsViewSchema } = await import("../shared/ipc");
+    expect(() => settingsUpdateSchema.parse({ verboseLogging: "off" })).toThrow();
+    expect(settingsUpdateSchema.parse({ verboseLogging: false })).toEqual({ verboseLogging: false });
+    expect(settingsViewSchema.parse(create().view())).toMatchObject({ verboseLogging: true, logsDir: join(dir, "logs") });
+  });
+});
+
 describe("settings savedGatewayApiKey", () => {
-  const withEnv = () => createSettingsStore({ userDataDir: dir, notesDir: join(dir, "notes"), envGatewayKey: "env-key-FAKE" });
+  const withEnv = () => createSettingsStore({ userDataDir: dir, notesDir: join(dir, "notes"), logsDir: join(dir, "logs"), envGatewayKey: "env-key-FAKE" });
 
   for (const encrypted of [false, true]) {
     it(`returns the saved key, not the env key (${encrypted ? "encrypted" : "memory"} mode)`, () => {

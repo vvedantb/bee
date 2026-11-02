@@ -18,7 +18,7 @@ import { withoutSecrets, type AgentDesktopActionRun } from "./agent-desktop";
 // ("Bee, open Teams"). No Electron imports: index.ts passes shell.openExternal and shell.openPath. Nothing here runs a shell.
 // Processes start with execFile and fixed arguments: macOS /usr/bin/open -a <a checked app name>, and agent-desktop through its
 // own action runner (launch, focus-window, list-apps only). Windows apps open by a fixed URI, a Start menu shortcut or a fixed
-// system exe. Logs carry codes only, never names.
+// system exe. Console lines carry codes only, never names.
 
 export type DesktopActionDeps = {
   platform: NodeJS.Platform;

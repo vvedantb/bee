@@ -2,6 +2,7 @@ import { isStepCount, streamText, type FinishReason, type LanguageModel, type La
 import { z } from "zod";
 import { TIP_SOURCE_MAX_CHARS, clampTip } from "../shared/ipc";
 import { withTimeout } from "./abort";
+import { debugLog, errorData, modelName, msSince, onceText, stepData } from "./debug-log";
 import { ANTHROPIC_CACHE, guideProviderOptions } from "./gateway";
 import type { Snippet } from "./notes";
 import { MAX_TIPS, tipCap, tipKey } from "./steering";
@@ -949,13 +950,31 @@ export async function guideWithLuna(args: {
     reported.add(key);
     args.onActivity?.({ tool, phase });
   };
+  let attempts = 0;
   const run = async () => {
     const prompt = buildLunaPrompt({ ...args, web, ...mcpServers(args.connectedServers ?? [], args.unavailableServers ?? [], extra, dropped.length > 0) });
     const abortSignal = withTimeout(args.signal, args.timeoutMs ?? LUNA_TIMEOUT_MS);
+    const tools = lunaTools({ notesDir: args.notesDir, extraRoots: args.extraRoots, extra, web, location: searchOptions ? args.searchLocation : undefined, desktop: args.desktopTools });
+    attempts += 1;
+    // The whole prompt, on this computer only. The system prompt barely changes, so its text is written once per session.
+    debugLog.info("ai", "luna-request", {
+      attempt: attempts,
+      model: modelName(args.model),
+      kind: args.command ? "command" : "tips",
+      web,
+      searchOptions,
+      maxTips,
+      tools: Object.keys(tools),
+      dropped,
+      system: onceText(prompt.system),
+      context: prompt.context,
+      transcript: prompt.transcript,
+      tail: prompt.tail,
+    });
     const result = streamText({
       model: args.model,
       ...lunaRequest(prompt),
-      tools: lunaTools({ notesDir: args.notesDir, extraRoots: args.extraRoots, extra, web, location: searchOptions ? args.searchLocation : undefined, desktop: args.desktopTools }),
+      tools,
       stopWhen: isStepCount(MAX_STEPS),
       // Local tools report around their execution. Provider tools (web_search) report from the stream below.
       // A finished step reports any call that was missed, so every start gets an end.
@@ -963,6 +982,7 @@ export async function guideWithLuna(args: {
       onToolExecutionEnd: ({ toolCall }) => report(toolCall.toolCallId, toolCall.toolName, "end"),
       onStepFinish: (step) => {
         for (const call of step.toolCalls) report(call.toolCallId, call.toolName, "end");
+        debugLog.debug("ai", "luna-step", { ms: msSince(startedAt), ...stepData(step) });
       },
       // Errors arrive as stream parts and are thrown below, so the schema retry sees them.
       onError: () => undefined,
@@ -1039,12 +1059,23 @@ export async function guideWithLuna(args: {
       // Cost was incurred even when the run gave no answer.
       args.onFinish?.({ usage: result.usage, providerMetadata: result.providerMetadata });
       const done = { usage: result.usage, finishReason: result.finishReason, empty: result.text.trim() === "" };
+      debugLog.info("ai", "luna-response", {
+        attempt: attempts,
+        ms: msSince(startedAt),
+        firstTokenMs: firstTokenMs === null ? null : Math.round(firstTokenMs),
+        finishReason: result.finishReason,
+        text: result.text,
+        usage: result.usage,
+        sources: result.sources,
+        cost: result.providerMetadata?.gateway ?? null,
+      });
       // No answer text is a failure, not "no tips" (that is a literal NONE). Not retried: it would double latency and cost.
       if (done.empty) return { tips: [], tipSources: [], sources: [], error: `AI guidance failed: ${emptyReason(done)}`, skipped: skipped(), empty: true, ...timings(done) };
       return { ...tipFields(fresh(parseLunaTips(result.text, maxTips))), sources: sourcesFromGenerateResult(result), error: null, skipped: skipped(), ...timings(done) };
     } catch (error) {
       // Match on the whole text so a tool named late in a long error is still found. Show the short one.
       const message = errorText(error, Number.POSITIVE_INFINITY);
+      debugLog.warn("ai", "luna-error", { attempt: attempts, ms: msSince(startedAt), aborted: args.signal?.aborted ?? false, error: errorData(error), message });
       if (!args.signal?.aborted && web && SEARCH_OPTION_ERROR.test(message)) {
         console.warn(searchOptions ? "Bee: retrying Luna without web_search options after the provider rejected them" : "Bee: retrying Luna without web_search after it rejected a search option");
         if (searchOptions) searchOptions = false;

@@ -2,6 +2,7 @@ import { experimental_evaluate, type Experimental_EvaluationModel, type Experime
 import { FLEX_PROVIDER_OPTIONS } from "./gateway";
 import type { Snippet } from "./notes";
 import { withTimeout } from "./abort";
+import { debugLog, errorData, modelName, msSince } from "./debug-log";
 
 /**
  * Jev prompt format
@@ -104,8 +105,10 @@ export async function rankWithJev<T extends Snippet>(args: {
   signal?: AbortSignal;
 }): Promise<RankOutcome<T>> {
   if (args.candidates.length === 0) return { ranked: [], source: "jev", error: null };
+  const started = performance.now();
   try {
     const request = buildJevRequest(args.transcript, args.candidates);
+    debugLog.debug("ai", "jev-request", { model: modelName(args.model), transcript: request.state.transcript, notes: args.candidates.map((note) => note.title) });
     const result = await experimental_evaluate({
       model: args.model,
       state: request.state,
@@ -116,9 +119,11 @@ export async function rankWithJev<T extends Snippet>(args: {
       providerOptions: FLEX_PROVIDER_OPTIONS,
     });
     const { ranked, scoredCount } = parseJevRanking(args.candidates, result.answers);
+    debugLog.info("ai", "jev-response", { ms: msSince(started), answers: result.answers, scored: scoredCount, order: ranked.map((item) => ({ title: item.candidate.title, score: item.jevScore })) });
     if (scoredCount === 0) return fallback(args.candidates, "Jev returned no usable scores");
     return { ranked, source: "jev", error: null };
   } catch (error) {
+    debugLog.warn("ai", "jev-failed", { ms: msSince(started), aborted: args.signal?.aborted ?? false, error: errorData(error) });
     return fallback(args.candidates, `Jev ranking failed: ${error instanceof Error ? error.message : String(error)}`);
   }
 }

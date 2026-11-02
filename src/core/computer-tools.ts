@@ -4,6 +4,7 @@ import { HEADED_FLAG, REF_PATTERN, parseApps, parseWindows, type AgentDesktopRes
 import { awaitAnswer, CONFIRM_TIMEOUT_MS, type ComputerPlatform, type IrreversibleKind, type RunControl } from "./computer-control";
 import { EFFECTS, confirmDetail, confirmQuestion, keysLabel, needsConfirm, shellElement, shortName, type Effect, type Element, type GateAction } from "./computer-gate";
 import { APP_NAME_MAX, WINDOW_TITLE_MAX, appKey, isBlockedApp, type DesktopActionResult, type DesktopActions } from "./desktop-actions";
+import { debugLog, msSince } from "./debug-log";
 import type { LunaToolActivity } from "./luna";
 
 // The AI's computer tools, for a direct request only ("Bee, send Sam a message in Discord"): never in a meeting tip turn. They
@@ -251,7 +252,9 @@ export function computerTools(deps: ComputerToolDeps) {
 
   /** One agent-desktop command for this run. A permission refusal (other than Screen Recording) ends the run. */
   const exec = async (command: ComputerUseCommand, args: string[], timeoutMs: number): Promise<AgentDesktopResult> => {
+    const started = performance.now();
     const result = await deps.run(command, args, { timeoutMs, signal: control.signal });
+    debugLog.debug("computer", "exec", { command, args, ok: result.ok, code: result.ok ? null : result.code, ms: msSince(started) });
     if (!result.ok) {
       console.debug(`computer ${command} ${result.code}`);
       if (result.code === "PERM_DENIED" && command !== "screenshot") control.stop("permission");
@@ -265,7 +268,12 @@ export function computerTools(deps: ComputerToolDeps) {
    */
   const step = <T extends string | ScreenshotOutput>(name: string, label: string, work: () => Promise<T>, gate?: () => GateAction): Promise<T | string> =>
     serial(async () => {
-      if (!control.step()) return STOPPED;
+      if (!control.step()) {
+        debugLog.info("computer", "step-refused", { tool: name, reason: control.reason(), steps: control.steps() });
+        return STOPPED;
+      }
+      const started = performance.now();
+      debugLog.info("computer", "step", { n: control.steps(), tool: name, label, app: currentApp });
       deps.onStep?.(clip(label, 60));
       deps.onActivity?.({ tool: name, phase: "start" });
       try {
@@ -275,7 +283,9 @@ export function computerTools(deps: ComputerToolDeps) {
           if (kind) {
             deps.onStep?.(CONFIRM_LABEL);
             const request: ConfirmRequest = { kind, question: confirmQuestion(kind), detail: confirmDetail(action, currentApp) };
+            debugLog.info("computer", "confirm-needed", { tool: name, kind, request, action });
             const confirmed = await control.paused(() => awaitAnswer((signal) => deps.confirm(request, signal), control.signal, deps.confirmTimeoutMs ?? CONFIRM_TIMEOUT_MS));
+            debugLog.info("computer", "confirm-result", { tool: name, kind, confirmed, reason: control.reason() });
             if (!confirmed) {
               control.stop("declined", kind);
               return STOPPED;
@@ -285,8 +295,11 @@ export function computerTools(deps: ComputerToolDeps) {
           }
         }
         if (control.reason()) return STOPPED;
-        return await work();
-      } catch {
+        const output = await work();
+        debugLog.debug("computer", "step-done", { n: control.steps(), tool: name, ms: msSince(started), output });
+        return output;
+      } catch (error) {
+        debugLog.warn("computer", "step-failed", { n: control.steps(), tool: name, ms: msSince(started), reason: control.reason(), error: error instanceof Error ? error.message : String(error) });
         return control.reason() ? STOPPED : "Error: that step failed. Look again before trying something else.";
       } finally {
         deps.onActivity?.({ tool: name, phase: "end" });

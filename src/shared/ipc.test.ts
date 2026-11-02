@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   COMMAND_MAX_CHARS,
   COMPUTER_LINE_MAX,
+  DEBUG_BATCH_MAX,
+  IPC,
   TIP_MAX_CHARS,
   clampTip,
   commandRequestSchema,
@@ -9,6 +11,8 @@ import {
   computerAccessSchema,
   computerAnswerSchema,
   computerUpdateSchema,
+  debugLogBatchSchema,
+  debugLogEventSchema,
   lunaActivitySchema,
   lunaPartialSchema,
   meetingSummaryRequestSchema,
@@ -93,3 +97,41 @@ describe("computer use over IPC", () => {
   });
 });
 
+
+describe("debug log IPC", () => {
+  it("has its own channels, distinct from every other", () => {
+    expect(IPC.debugLog).toBe("bee:debug:log");
+    expect(IPC.openLogsFolder).toBe("bee:logs:open-folder");
+    const channels = Object.values(IPC);
+    expect(new Set(channels).size).toBe(channels.length);
+  });
+
+  it("takes an event with a time, a level, short names and any data", () => {
+    const event = { ts: 1_700_000_000_000, level: "info", category: "teams-audio", event: "run-start.v2", data: { lines: ["a"], nested: { n: 1 } } };
+    expect(debugLogEventSchema.parse(event)).toEqual(event);
+    expect(debugLogEventSchema.parse({ ts: 1, level: "error", category: "renderer", event: "unhandled-rejection" })).toEqual({ ts: 1, level: "error", category: "renderer", event: "unhandled-rejection" });
+  });
+
+  it("rejects unknown levels, odd names, a missing time and data that is not an object", () => {
+    const base = { ts: 1, level: "info", category: "ui", event: "scroll" };
+    for (const bad of [
+      { ...base, level: "trace" },
+      { ...base, category: "UI" },
+      { ...base, category: "a".repeat(41) },
+      { ...base, event: "has space" },
+      { ...base, event: "e".repeat(81) },
+      { ...base, ts: Number.NaN },
+      { level: "info", category: "ui", event: "scroll" },
+      { ...base, data: "text" },
+    ]) {
+      expect(debugLogEventSchema.safeParse(bad).success, JSON.stringify(bad)).toBe(false);
+    }
+  });
+
+  it("caps a batch at DEBUG_BATCH_MAX events and needs at least one", () => {
+    const one = { ts: 1, level: "info", category: "ui", event: "x" };
+    expect(debugLogBatchSchema.safeParse({ events: Array(DEBUG_BATCH_MAX).fill(one) }).success).toBe(true);
+    expect(debugLogBatchSchema.safeParse({ events: Array(DEBUG_BATCH_MAX + 1).fill(one) }).success).toBe(false);
+    expect(debugLogBatchSchema.safeParse({ events: [] }).success).toBe(false);
+  });
+});
