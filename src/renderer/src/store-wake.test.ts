@@ -53,6 +53,7 @@ const SETTINGS: SettingsView = {
   motionPreference: "on",
   secretStorage: "os",
   notesDir: "/notes",
+  logsDir: "/logs",
   fsRoots: [],
   meetingContextEnabled: false,
   meetingCalendarEnabled: false,
@@ -62,6 +63,7 @@ const SETTINGS: SettingsView = {
   hintsEnabled: false,
   wakeWordEnabled: true,
   askBeforeSendingEnabled: true,
+  verboseLogging: true,
 };
 
 // In a sync, so a shared phrase would reach window.bee.teams.publish.

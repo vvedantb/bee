@@ -34,6 +34,7 @@ import {
   type CommandStop,
   type ComputerAnswer,
   type ComputerUpdate,
+  type DebugLogBatch,
   type EnrichLinksRequest,
   type LunaActivity,
   type LunaPartial,
@@ -51,6 +52,53 @@ import {
   type TranscribeRequest,
   type WindowSize,
 } from "../shared/ipc";
+
+// One failure report per method and message a minute; repeats in between are counted into the next one.
+const FAILURE_REPEAT_MS = 60_000;
+const failures = new Map<string, { at: number; repeats: number }>();
+
+/** Tells the local debug log that a call failed: main threw, or its reply failed the schema. Never the call's arguments. */
+function reportFailure(method: string, error: unknown, started: number): void {
+  const message = error instanceof Error ? error.message : String(error);
+  const key = `${method}\n${message}`;
+  const now = Date.now();
+  const seen = failures.get(key);
+  if (seen && now - seen.at < FAILURE_REPEAT_MS) {
+    seen.repeats += 1;
+    return;
+  }
+  // Messages that differ every time (ids, times) must not grow the map for ever.
+  if (failures.size >= 200) failures.clear();
+  failures.set(key, { at: now, repeats: 0 });
+  const data = { method, ms: Math.round(performance.now() - started), name: error instanceof Error ? error.name : typeof error, message, repeats: seen?.repeats ?? 0 };
+  try {
+    ipcRenderer.send(IPC.debugLog, { events: [{ ts: now, level: "warn", category: "ipc", event: "call-failed", data }] } satisfies DebugLogBatch);
+  } catch {
+    // Logging never breaks the call it watches.
+  }
+}
+
+/** Wraps every method so a rejected call is reported (reportFailure) and then rejects as before. */
+function withFailureReports<T extends Record<string, unknown>>(target: T, path = ""): T {
+  for (const [key, value] of Object.entries(target)) {
+    const method = path ? `${path}.${key}` : key;
+    if (typeof value === "function") {
+      (target as Record<string, unknown>)[key] = (...args: unknown[]) => {
+        const started = performance.now();
+        const result: unknown = value(...args);
+        return result instanceof Promise
+          ? result.catch((error: unknown) => {
+              reportFailure(method, error, started);
+              throw error;
+            })
+          : result;
+      };
+    } else if (value && typeof value === "object") {
+      withFailureReports(value as Record<string, unknown>, method);
+    }
+  }
+  return target;
+}
 
 // The only surface the renderer can reach. Every response is parsed before it crosses the bridge.
 const api = {
@@ -107,6 +155,14 @@ const api = {
   },
   openNotesFolder: async () => {
     z.string().parse(await ipcRenderer.invoke(IPC.openNotesFolder));
+  },
+  // The local debug log folder, beside the notes folder.
+  openLogsFolder: async () => {
+    z.string().parse(await ipcRenderer.invoke(IPC.openLogsFolder));
+  },
+  // Debug log events for main to redact and write on this computer (renderer/src/debug-log.ts). Fire and forget.
+  debugLog: (batch: DebugLogBatch) => {
+    ipcRenderer.send(IPC.debugLog, batch);
   },
   checkForUpdate: async () => updateCheckSchema.parse(await ipcRenderer.invoke(IPC.checkForUpdate)),
   downloadUpdate: async () => updateActionSchema.parse(await ipcRenderer.invoke(IPC.downloadUpdate)),
@@ -207,6 +263,6 @@ const api = {
 
 export type BeeApi = typeof api;
 
-contextBridge.exposeInMainWorld("bee", api);
+contextBridge.exposeInMainWorld("bee", withFailureReports(api));
 // Clerk's token cache and OAuth transport, used by @clerk/electron/react.
 exposeClerkBridge();

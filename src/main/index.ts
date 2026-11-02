@@ -1,12 +1,14 @@
 import { createClerkBridge } from "@clerk/electron";
 import { storage } from "@clerk/electron/storage";
 import { BrowserWindow, Menu, Tray, app, globalShortcut, ipcMain, nativeImage, screen, session, shell, systemPreferences } from "electron";
+import { randomUUID } from "node:crypto";
 import { release } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { RENDERER_HOST, RENDERER_SCHEME, RENDERER_URL } from "../shared/clerk";
 import { displayMatching, placeInWorkArea, restoreOverlayBounds, scaleSize, type DisplayInfo } from "../core/interface-scale";
 import { IPC, TEAMS_AUDIO_LINE_MAX, settingsUpdateSchema, windowSizeSchema, type MeetingWindowCaptions, type TeamsAudioEnded, type TeamsAudioLines, type WindowSize } from "../shared/ipc";
+import { debugLog, errorData, msSince, setDebugSink, teeConsole } from "../core/debug-log";
 import { NO_GATEWAY_KEY, STT_MODEL, createBeeGateway } from "../core/gateway";
 import { teamsAudioOsSupported, teamsAudioPlatform } from "../core/teams-audio";
 import { transcribeSpeech } from "../core/transcribe";
@@ -15,6 +17,8 @@ import { createMeetingContext } from "../core/meeting-context";
 import { createMeetingMemoryStore } from "../core/meeting-memory";
 import { searchMcpNotes } from "../core/meeting-search";
 import { createVmemSearch } from "../core/vmem-history";
+import { createDebugLog, settingsChange, type DebugLogWriter } from "./debug-log";
+import { registerDebugLogIpc } from "./debug-log-ipc";
 import { createAgentDesktopActionRunner, createAgentDesktopComputerRunner, createAgentDesktopRunner, resolveAgentDesktop } from "./agent-desktop";
 import { bringToFront, registerClerkOAuthIpc } from "./clerk-oauth-ipc";
 import { createDesktopActions, windowsStartMenuDirs } from "./desktop-actions";
@@ -78,7 +82,9 @@ function resizeOverlay(window: BrowserWindow, size: { width: number; height: num
   const current = window.getBounds();
   const display = displayMatching(current, displayInfos()) ?? displayInfos().find((item) => item.id === screen.getPrimaryDisplay().id);
   if (!display) return;
-  window.setBounds(placeInWorkArea({ size, current, area: display.workArea, margin: TOP_MARGIN }));
+  const bounds = placeInWorkArea({ size, current, area: display.workArea, margin: TOP_MARGIN });
+  window.setBounds(bounds);
+  debugLog.debug("window", "bounds", { mode: windowSize, scale: interfaceScale, bounds, displayId: display.id });
   rememberPosition(window);
 }
 
@@ -90,6 +96,7 @@ function applyInterfaceScale(scale: number): void {
 }
 
 function applyMeetingMode(window: BrowserWindow, meetingMode: boolean): void {
+  debugLog.debug("window", "meeting-mode", { meetingMode });
   // Meeting mode hides the overlay from screen sharing and lifts it above full-screen apps.
   window.setContentProtection(meetingMode);
   window.setAlwaysOnTop(true, meetingMode ? "screen-saver" : "floating");
@@ -134,6 +141,7 @@ function createWindow(meetingMode: boolean, scale: number): BrowserWindow {
   if (process.platform === "linux") window.on("move", () => rememberPosition(window));
   else window.on("moved", () => rememberPosition(window));
   window.once("ready-to-show", () => window.show());
+  watchWindow(window);
   // Links in Clerk's UI (terms, help) open in the browser; the overlay never opens windows.
   window.webContents.setWindowOpenHandler(({ url }) => {
     if (url.startsWith("https://")) void shell.openExternal(url);
@@ -144,8 +152,24 @@ function createWindow(meetingMode: boolean, scale: number): BrowserWindow {
   return window;
 }
 
+/** The overlay's own events for the debug log: focus, visibility, failed loads and preload errors (crashes: startDebugLog). */
+function watchWindow(window: BrowserWindow): void {
+  window.on("focus", () => debugLog.debug("window", "focus"));
+  window.on("blur", () => debugLog.debug("window", "blur"));
+  window.on("show", () => debugLog.debug("window", "show"));
+  window.on("hide", () => debugLog.debug("window", "hide"));
+  window.on("closed", () => debugLog.info("window", "closed"));
+  window.on("unresponsive", () => debugLog.warn("window", "unresponsive"));
+  window.on("responsive", () => debugLog.info("window", "responsive"));
+  const contents = window.webContents;
+  contents.on("did-fail-load", (_event, code, description, url, isMainFrame) => debugLog.error("window", "load-failed", { code, description, url, isMainFrame }));
+  contents.on("preload-error", (_event, preloadPath, error) => debugLog.error("window", "preload-error", { preloadPath, error: errorData(error) }));
+  contents.on("did-finish-load", () => debugLog.info("window", "loaded"));
+}
+
 function toggleWindow(): void {
   if (!win) return;
+  debugLog.info("window", "toggle", { visible: !win.isVisible() });
   if (win.isVisible()) win.hide();
   else win.show();
 }
@@ -158,7 +182,7 @@ function registerToggleShortcut(): void {
   }
 }
 
-function createTray(notesDir: string): void {
+function createTray(notesDir: string, logsDir: string): void {
   try {
     // macOS: a black-and-alpha template the menu bar tints to match light and dark; the @2x sibling loads with it.
     const icon = nativeImage.createFromPath(join(app.getAppPath(), isMac ? "resources/trayTemplate.png" : "resources/tray.png"));
@@ -169,6 +193,7 @@ function createTray(notesDir: string): void {
       Menu.buildFromTemplate([
         { label: "Show / hide Bee", click: toggleWindow },
         { label: "Open notes folder", click: () => void shell.openPath(notesDir) },
+        { label: "Open logs folder", click: () => void shell.openPath(logsDir) },
         { type: "separator" },
         { label: "Quit Bee", role: "quit" },
       ]),
@@ -179,6 +204,33 @@ function createTray(notesDir: string): void {
     // Some Linux desktops (and Xvfb) have no system tray. The overlay still works.
     console.warn("Bee: tray unavailable:", error);
   }
+}
+
+/**
+ * The local debug log (main/debug-log.ts): JSON Lines in <userData>/logs, beside the notes folder. It stays on this computer,
+ * is never uploaded, and Bee never deletes its files. Core, main and (through IPC) the renderer all write to it.
+ */
+function startDebugLog(logsDir: string, verbose: boolean): DebugLogWriter {
+  const writer = createDebugLog({
+    dir: logsDir,
+    sessionId: randomUUID(),
+    verbose,
+    header: () => ({ version: app.getVersion(), platform: process.platform, release: release(), arch: process.arch, electron: process.versions.electron }),
+    // Called once until a write works again, so this warning cannot loop through the console tee.
+    onError: (error) => console.warn("Bee: debug log write failed:", error),
+  });
+  setDebugSink(writer);
+  teeConsole(console);
+  // An error about to crash main is logged and written at once. A monitor leaves Electron's own handling as it was.
+  process.on("uncaughtExceptionMonitor", (error, origin) => {
+    debugLog.error("app", "uncaught-exception", { origin, error: errorData(error) });
+    writer.flushSync();
+  });
+  process.on("exit", () => writer.flushSync());
+  app.on("render-process-gone", (_event, _contents, details) => debugLog.error("app", "render-process-gone", { ...details }));
+  app.on("child-process-gone", (_event, details) => debugLog.error("app", "child-process-gone", { ...details }));
+  app.on("before-quit", () => debugLog.info("app", "before-quit"));
+  return writer;
 }
 
 // Before whenReady: registers the bee:// scheme, Clerk's token and OAuth IPC, and the single-instance lock. Bee then
@@ -207,11 +259,14 @@ if (clerk.isPrimaryInstance) {
 
   // Also bee://renderer/ from Return to Bee on that page, on Windows and Linux.
   app.on("second-instance", (_event, argv) => {
+    // Invite links carry a team code: only whether one came is logged.
+    debugLog.info("app", "second-instance", { args: argv.length, invite: inviteFromArgv(argv) !== null });
     bringToFront(win);
     receiveInvite(inviteFromArgv(argv));
   });
   // macOS delivers deep links as open-url.
   app.on("open-url", (event, url) => {
+    debugLog.info("app", "open-url", { kind: /^bee:\/\/team\//i.test(url) ? "invite" : /^bee:\/\/renderer/i.test(url) ? "renderer" : "other" });
     if (/^bee:\/\/team\//i.test(url)) {
       event.preventDefault();
       receiveInvite(url);
@@ -234,22 +289,50 @@ if (clerk.isPrimaryInstance) {
 
     const userDataDir = app.getPath("userData");
     const notesDir = join(userDataDir, "notes");
+    const logsDir = join(userDataDir, "logs");
     ensureNotesDir(notesDir);
     settings = createSettingsStore({
       userDataDir,
       notesDir,
+      logsDir,
       envGatewayKey: process.env.BEE_AI_GATEWAY_API_KEY,
     });
+    const debug = startDebugLog(logsDir, settings.verboseLogging());
+    // Always written, verbose or not, so every session leaves one line saying what ran.
+    debug.write({ level: "info", category: "app", event: "start", data: {
+      version: app.getVersion(),
+      packaged: app.isPackaged,
+      platform: process.platform,
+      release: release(),
+      arch: process.arch,
+      electron: process.versions.electron,
+      chrome: process.versions.chrome,
+      node: process.versions.node,
+      locale: app.getLocale(),
+      systemLocale: app.getSystemLocale(),
+      pid: process.pid,
+      userDataDir,
+      notesDir,
+      logsDir,
+      verbose: debug.verbose(),
+      settings: settings.view(),
+    } });
+    registerDebugLogIpc({ writer: debug, logsDir });
 
     // Menu bar app: no Dock icon.
     if (isMac) {
       app.dock?.hide();
-      systemPreferences.askForMediaAccess("microphone").catch((error) => console.warn("Bee: microphone access request failed:", error));
+      systemPreferences
+        .askForMediaAccess("microphone")
+        .then((granted) => debugLog.info("audio", "mic-access", { granted }))
+        .catch((error) => console.warn("Bee: microphone access request failed:", error));
     }
 
     // Microphone only; every other permission, screen capture included, is denied.
     session.defaultSession.setPermissionRequestHandler((_contents, permission, callback) => {
-      callback(isPermissionAllowed(permission));
+      const allowed = isPermissionAllowed(permission);
+      debugLog.info("app", "permission-request", { permission, allowed });
+      callback(allowed);
     });
 
     // getDisplayMedia is always refused. Its only audio here is 'loopback' (all system audio), which Bee never captures; the
@@ -294,7 +377,12 @@ if (clerk.isPrimaryInstance) {
     ipcMain.handle(IPC.getSettings, () => settings.view());
 
     ipcMain.handle(IPC.saveSettings, (_event, payload) => {
-      const view = settings.save(settingsUpdateSchema.parse(payload));
+      const update = settingsUpdateSchema.parse(payload);
+      const before = settings.view();
+      const view = settings.save(update);
+      // Applies at once. Always written, so a log that goes quiet says why.
+      debug.setVerbose(view.verboseLogging);
+      debug.write({ level: "info", category: "settings", event: "changed", data: settingsChange(update, before, view) });
       // Switching the meeting window reader on checks access at once; switching it off stops it at once.
       void meetingWindow.read();
       if (win) applyMeetingMode(win, view.meetingMode);
@@ -361,15 +449,22 @@ if (clerk.isPrimaryInstance) {
     const sendToOverlay = (channel: string, payload: unknown): void => {
       if (win && !win.isDestroyed()) win.webContents.send(channel, payload);
     };
+    debugLog.info("teams-audio", "helper", { found: teamsAudioHelper !== null, path: teamsAudioHelper });
     const teamsAudioCapture = createTeamsAudioCapture({
       helperPath: () => teamsAudioHelper,
       transcribe: (audio) => {
         const apiKey = settings.gatewayApiKey();
         if (!apiKey) return Promise.resolve({ text: null, error: NO_GATEWAY_KEY });
-        return transcribeSpeech({ model: createBeeGateway(apiKey).transcription(STT_MODEL), audio });
+        return transcribeSpeech({ model: createBeeGateway(apiKey).transcription(STT_MODEL), audio, source: "teams-audio" });
       },
-      onLines: (id, lines) => sendToOverlay(IPC.teamsAudioLines, { id, lines: lines.map((line) => line.slice(0, TEAMS_AUDIO_LINE_MAX)) } satisfies TeamsAudioLines),
-      onEnded: (id, failure) => sendToOverlay(IPC.teamsAudioEnded, { id, failure } satisfies TeamsAudioEnded),
+      onLines: (id, lines) => {
+        debugLog.info("teams-audio", "lines", { id, lines });
+        sendToOverlay(IPC.teamsAudioLines, { id, lines: lines.map((line) => line.slice(0, TEAMS_AUDIO_LINE_MAX)) } satisfies TeamsAudioLines);
+      },
+      onEnded: (id, failure) => {
+        debugLog.info("teams-audio", "ended", { id, failure });
+        sendToOverlay(IPC.teamsAudioEnded, { id, failure } satisfies TeamsAudioEnded);
+      },
     });
     app.on("will-quit", () => teamsAudioCapture.stop());
     const teamsAudioStatus = createTeamsAudioStatus({
@@ -384,19 +479,30 @@ if (clerk.isPrimaryInstance) {
 
     ipcMain.handle(IPC.setWindowSize, (_event, payload) => {
       windowSize = windowSizeSchema.parse(payload);
+      debugLog.debug("window", "size", { mode: windowSize });
       if (win) resizeOverlay(win, scaleSize(SIZES[windowSize], interfaceScale));
     });
 
     ipcMain.handle(IPC.openNotesFolder, () => shell.openPath(notesDir));
 
     const updater = createUpdater();
-    ipcMain.handle(IPC.checkForUpdate, () => updater.check());
+    ipcMain.handle(IPC.checkForUpdate, async () => {
+      const started = performance.now();
+      const check = await updater.check();
+      debugLog.info("update", "check", { ...check, ms: msSince(started) });
+      return check;
+    });
     ipcMain.handle(IPC.downloadUpdate, () => updater.download());
     ipcMain.handle(IPC.installUpdate, () => updater.install());
 
     win = createWindow(settings.view().meetingMode, settings.view().interfaceScale);
-    createTray(notesDir);
+    createTray(notesDir, logsDir);
     registerToggleShortcut();
+    // Last of the will-quit handlers, so what the others log is written too.
+    app.on("will-quit", () => {
+      debugLog.info("app", "will-quit");
+      debug.flushSync();
+    });
 
     // macOS: re-create the overlay if it is gone, otherwise show it.
     app.on("activate", () => {

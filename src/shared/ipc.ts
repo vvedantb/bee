@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { DEBUG_LEVELS } from "../core/debug-log";
 import { INTERFACE_SCALES } from "../core/interface-scale";
 import { MOTION_PREFERENCES } from "../core/motion-preference";
 import { TEAMS_AUDIO_FAILURES } from "../core/teams-audio-protocol";
@@ -16,6 +17,8 @@ export const IPC = {
   openMeetingSummary: "bee:meeting:open-summary",
   setWindowSize: "bee:window:set-size",
   openNotesFolder: "bee:notes:open-folder",
+  openLogsFolder: "bee:logs:open-folder",
+  debugLog: "bee:debug:log",
   checkForUpdate: "bee:update:check",
   downloadUpdate: "bee:update:download",
   installUpdate: "bee:update:install",
@@ -73,6 +76,8 @@ export const settingsViewSchema = z.object({
   motionPreference: motionPreferenceSchema,
   secretStorage: secretStorageSchema,
   notesDir: z.string(),
+  // The local debug log folder (main/debug-log.ts), beside the notes folder. Logs stay on this computer and are never deleted.
+  logsDir: z.string(),
   fsRoots: z.array(z.string()),
   // Meeting context (core/meeting-context.ts). All on by default. Calendar and memory only matter while the master switch is on.
   meetingContextEnabled: z.boolean(),
@@ -91,6 +96,9 @@ export const settingsViewSchema = z.object({
   // "Ask before sending or deleting" (core/computer-gate.ts): computer use waits for a Confirm tap in the island before it
   // sends, deletes, buys or submits a form. On by default.
   askBeforeSendingEnabled: z.boolean(),
+  // Verbose debug logs (main/debug-log.ts): every event of a session, prompts and replies included, on this computer only. Off
+  // keeps warnings and errors. On by default for now.
+  verboseLogging: z.boolean(),
 });
 export type SettingsView = z.infer<typeof settingsViewSchema>;
 
@@ -111,8 +119,25 @@ export const settingsUpdateSchema = z.object({
   hintsEnabled: z.boolean().optional(),
   wakeWordEnabled: z.boolean().optional(),
   askBeforeSendingEnabled: z.boolean().optional(),
+  verboseLogging: z.boolean().optional(),
 });
 export type SettingsUpdate = z.infer<typeof settingsUpdateSchema>;
+
+// Renderer → main: a batch of debug log events (renderer/src/debug-log.ts), fire and forget. Main redacts each one and writes it
+// to the local log (main/debug-log.ts); nothing is uploaded. Names are short codes; data is any JSON, capped in size by main.
+export const DEBUG_BATCH_MAX = 200;
+export const debugLogEventSchema = z.object({
+  // When it happened in the renderer, ms since the epoch.
+  ts: z.number().finite(),
+  level: z.enum(DEBUG_LEVELS),
+  category: z.string().regex(/^[a-z][a-z0-9-]{0,39}$/),
+  event: z.string().regex(/^[a-z][a-z0-9._-]{0,79}$/i),
+  data: z.record(z.string(), z.unknown()).optional(),
+});
+export type DebugLogEvent = z.infer<typeof debugLogEventSchema>;
+// Each event is checked on its own (debugLogEventSchema), so one bad event does not drop the rest of its batch.
+export const debugLogBatchSchema = z.object({ events: z.array(z.unknown()).min(1).max(DEBUG_BATCH_MAX) });
+export type DebugLogBatch = { events: DebugLogEvent[] };
 
 // On request only, to Bee's own window: the saved Gateway key (never the env key), or null when none is saved.
 export const revealGatewayKeyResultSchema = z.string().max(500).nullable();
@@ -171,7 +196,7 @@ export type CommandStop = z.infer<typeof commandStopSchema>;
 
 // Main → renderer while computer use runs (core/computer-use.ts): the step in progress as one short line ("Clicking Send…"),
 // or a Confirm prompt before a send, delete, purchase or form (core/computer-gate.ts). Lines describe the user's own screen
-// to the user; they are never logged.
+// to the user; they never go to the console (the local debug log keeps them, main/debug-log.ts).
 export const COMPUTER_LINE_MAX = 120;
 export const computerUpdateSchema = z.discriminatedUnion("type", [
   z.object({ runId: runIdSchema, type: z.literal("step"), label: z.string().max(COMPUTER_LINE_MAX) }),
@@ -256,7 +281,8 @@ export const meetingContextViewSchema = z.object({
 });
 export type MeetingContextView = z.infer<typeof meetingContextViewSchema>;
 
-// Main → renderer: new live caption lines from the call window. The renderer adds them like teammates' lines. Never logged.
+// Main → renderer: new live caption lines from the call window. The renderer adds them like teammates' lines. Never in
+// console output; the local debug log keeps them.
 export const meetingWindowCaptionsSchema = z.object({
   lines: z.array(z.object({ speaker: z.string().max(100).nullable(), text: z.string().min(1).max(2000) })).min(1).max(50),
 });
@@ -291,7 +317,8 @@ export const teamsAudioStartResultSchema = z.discriminatedUnion("ok", [
   z.object({ ok: z.literal(false), failure: teamsAudioFailureSchema }),
 ]);
 export type TeamsAudioStartResult = z.infer<typeof teamsAudioStartResultSchema>;
-// Main → renderer: phrases heard in the Teams app, as text. The renderer adds them as "Meeting" lines. Never logged or shared.
+// Main → renderer: phrases heard in the Teams app, as text. The renderer adds them as "Meeting" lines. Never shared or
+// in console output; the local debug log keeps them.
 export const TEAMS_AUDIO_LINE_MAX = 2000;
 export const teamsAudioLinesSchema = z.object({
   id: z.number().int().positive(),

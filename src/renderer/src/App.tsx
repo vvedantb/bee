@@ -19,6 +19,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import { BeeLogo } from "./BeeLogo";
 import { Favicon } from "./Favicon";
 import { Connectors } from "./Connectors";
+import { logSignIn } from "./debug-log";
 import { MeetingContextSection } from "./MeetingContextSection";
 import { MicHint } from "./MicHint";
 import { SecretField } from "./SecretField";
@@ -542,6 +543,12 @@ function SettingsTab({ state, settings }: { state: BeeState; settings: SettingsV
             Open
           </Button>
         </p>
+        <p className="muted">
+          Debug logs: <code>{settings.logsDir}</code>{" "}
+          <Button type="button" variant="link" size="sm" className="h-auto p-0" onClick={() => void window.bee.openLogsFolder()}>
+            Open
+          </Button>
+        </p>
         {error ? <p className="error">{error}</p> : null}
         <div className="row">
           <Button type="submit" size="sm">
@@ -590,6 +597,13 @@ function SettingsTab({ state, settings }: { state: BeeState; settings: SettingsV
         onCheckedChange={(askBeforeSendingEnabled) => void actions.saveSettings({ askBeforeSendingEnabled })}
       />
       <ComputerAccessSection access={state.computerAccess} />
+      <SettingRow
+        id="verbose-logging"
+        label="Verbose debug logs"
+        description="Keep a detailed log of each session on this computer, including what you ask the AI and its replies. Never uploaded. Off keeps warnings and errors only."
+        checked={settings.verboseLogging}
+        onCheckedChange={(verboseLogging) => void actions.saveSettings({ verboseLogging })}
+      />
 
       <div className="flex flex-col gap-1">
         Interface size
@@ -684,9 +698,18 @@ function useMotionAttribute(preference: MotionPreference): void {
   }, [preference]);
 }
 
+/** Sign-in changes for the local debug log: signed in or out and a one-way user tag, never a token (debug-log.ts logSignIn). */
+function useSignInLog(): void {
+  const { isLoaded, isSignedIn, userId } = useAuth();
+  useEffect(() => {
+    if (isLoaded) void logSignIn(isSignedIn === true, userId);
+  }, [isLoaded, isSignedIn, userId]);
+}
+
 export function App() {
   const state = useBee();
   useMotionAttribute(state.settings?.motionPreference ?? DEFAULT_MOTION_PREFERENCE);
+  useSignInLog();
   return (
     // A press on the shell itself is on the window's clear area, outside the island: an answer open in full folds back.
     <div

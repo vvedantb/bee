@@ -2,6 +2,8 @@
 // stop (the user said "Bee, stop", pressed Stop, cancelled a confirm, or a newer request came). Pure: timers only, no Electron
 // or OS, so tests drive it with fake timers.
 
+import { debugLog } from "./debug-log";
+
 /** Why a run ended early. user: Stop, "Bee, stop" or a newer request. declined: the user did not confirm an action. */
 export type StopReason = "user" | "steps" | "time" | "permission" | "declined";
 
@@ -53,6 +55,7 @@ export function createRunControl(args: { maxSteps?: number; maxMs?: number; sign
 
   const stop = (why: StopReason, kind?: IrreversibleKind) => {
     if (reason) return;
+    debugLog.info("computer", "stopped", { reason: why, declined: kind ?? null, steps: count });
     reason = why;
     declined = why === "declined" ? (kind ?? null) : null;
     clearTimeout(timer);

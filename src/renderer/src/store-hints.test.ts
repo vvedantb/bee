@@ -33,6 +33,7 @@ const SETTINGS: SettingsView = {
   motionPreference: "on",
   secretStorage: "os",
   notesDir: "/notes",
+  logsDir: "/logs",
   fsRoots: [],
   meetingContextEnabled: false,
   meetingCalendarEnabled: false,
@@ -42,6 +43,7 @@ const SETTINGS: SettingsView = {
   hintsEnabled: true,
   wakeWordEnabled: true,
   askBeforeSendingEnabled: true,
+  verboseLogging: true,
 };
 
 async function loadStore(settings: Partial<SettingsView> = {}) {

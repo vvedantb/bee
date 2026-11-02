@@ -4,6 +4,7 @@ import { meetingTerms, meetingWindowBrief, type MeetingWindowContext } from "../
 import type { ComputerRun } from "../core/agent-desktop-envelope";
 import type { ComputerPlatform, RunControl } from "../core/computer-control";
 import { computerAccess } from "../core/computer-use";
+import { debugLog, errorData, msSince } from "../core/debug-log";
 import type { DesktopActions } from "../core/desktop-actions";
 import { runDirectCommand, type ComputerHost } from "../core/direct-command";
 import { loadMcpTools, type McpPool, type McpServerConfig } from "../core/mcp";
@@ -80,6 +81,7 @@ export function registerMeetingIpc(args: { notesDir: string; fsRoots: () => stri
       run: computer.run,
       askFirst: computer.askFirst,
       onStep: (label) => {
+        debugLog.info("computer", "step-line", { runId, label });
         if (runId !== undefined) send({ runId, type: "step", label: label.slice(0, COMPUTER_LINE_MAX) });
       },
       // Settled by the island's Confirm or Cancel (computerAnswer), or false once the run stops or the wait times out.
@@ -87,13 +89,17 @@ export function registerMeetingIpc(args: { notesDir: string; fsRoots: () => stri
         new Promise((resolve) => {
           if (runId === undefined || key === null) return resolve(false);
           const id = ++confirmSeq;
-          const settle = (confirmed: boolean) => {
+          const asked = performance.now();
+          const settle = (confirmed: boolean, how: "answer" | "closed") => {
             if (!confirms.has(id)) return;
             confirms.delete(id);
+            debugLog.info("computer", "confirm-settled", { runId, id, confirmed, how, waitedMs: msSince(asked) });
             resolve(confirmed);
           };
-          confirms.set(id, { runId: key, resolve: settle });
-          signal.addEventListener("abort", () => settle(false), { once: true });
+          confirms.set(id, { runId: key, resolve: (confirmed) => settle(confirmed, "answer") });
+          // A stop, the 60 s timeout or a newer request: the prompt closes as Cancel.
+          signal.addEventListener("abort", () => settle(false, "closed"), { once: true });
+          debugLog.info("computer", "confirm-asked", { runId, id, ...request });
           send({ runId, type: "confirm", id, kind: request.kind, question: request.question.slice(0, COMPUTER_LINE_MAX), detail: request.detail.slice(0, COMPUTER_LINE_MAX) });
         }),
       onControl: (control) => {
@@ -129,9 +135,15 @@ export function registerMeetingIpc(args: { notesDir: string; fsRoots: () => stri
     const request = transcribeRequestSchema.parse(payload);
     assertSignedIn(request.sessionToken);
     const apiKey = args.gatewayApiKey();
-    if (!apiKey) return { text: null, error: NO_GATEWAY_KEY };
-    return transcribeSpeech({ model: createGateway(apiKey).transcription(STT_MODEL), audio: request.audio });
+    if (!apiKey) {
+      debugLog.warn("stt", "no-key", { source: "mic" });
+      return { text: null, error: NO_GATEWAY_KEY };
+    }
+    return transcribeSpeech({ model: createGateway(apiKey).transcription(STT_MODEL), audio: request.audio, source: "mic" });
   });
+
+  // The meeting context poll runs every few seconds: only a changed view is logged.
+  let lastContext = "";
 
   // The renderer polls this every few seconds. Main steps detection (title and calendar reads are throttled inside). The poll also
   // keeps the meeting window reader going when meeting context is off; it never waits for it.
@@ -140,13 +152,21 @@ export function registerMeetingIpc(args: { notesDir: string; fsRoots: () => stri
     assertSignedIn(request.sessionToken);
     void args.meetingWindow?.read().catch(() => null);
     const view = await args.meeting.tick();
-    return args.meetingWindow ? { ...view, reader: args.meetingWindow.status() } : view;
+    const result = args.meetingWindow ? { ...view, reader: args.meetingWindow.status() } : view;
+    const seen = JSON.stringify(result);
+    if (seen !== lastContext) {
+      lastContext = seen;
+      debugLog.info("meeting", "context", { ...result, brief: args.meeting.brief() ?? null });
+    }
+    return result;
   });
 
   ipcMain.handle(IPC.clearMeetingMemory, (_event, payload) => {
     const request = meetingContextRequestSchema.parse(payload);
     assertSignedIn(request.sessionToken);
-    return { cleared: args.meeting.clearMemory() };
+    const cleared = args.meeting.clearMemory();
+    debugLog.info("meeting", "memory-cleared", { cleared });
+    return { cleared };
   });
 
   ipcMain.handle(IPC.runPipeline, async (event, payload) => {
@@ -158,10 +178,24 @@ export function registerMeetingIpc(args: { notesDir: string; fsRoots: () => stri
     const snippets = loadSnippets(args.notesDir);
     const loadNotes = performance.now() - loadStarted;
     console.debug(`perf load-notes ${Math.round(loadNotes)}ms`);
-    // Names only, from the call window, when the experimental reader is on. Counts are all that is logged.
+    // Names only, from the call window, when the experimental reader is on. Counts are all that goes to the console.
     const windowContext = args.meetingWindow?.context() ?? null;
     if (windowContext) console.debug(`perf meeting-window title=${windowContext.title ? 1 : 0} people=${windowContext.participants.length}`);
     const meetingBrief = [args.meeting.brief(), meetingWindowBrief(windowContext)].filter((part) => part && part.trim()).join("\n") || undefined;
+    const started = performance.now();
+    debugLog.info("ai", "pipeline-start", {
+      runId: request.runId,
+      transcript: request.transcript,
+      turnLines: request.turnLines,
+      shown: request.shown,
+      earlier: request.earlier,
+      searched: request.searched,
+      notes: snippets.length,
+      loadNotesMs: Math.round(loadNotes * 10) / 10,
+      meetingBrief: meetingBrief ?? null,
+      meetingWindow: windowContext,
+      hasKey: Boolean(apiKey),
+    });
     try {
       const result = await runPipeline({
         transcript: request.transcript,
@@ -187,18 +221,26 @@ export function registerMeetingIpc(args: { notesDir: string; fsRoots: () => stri
           if (!controller.signal.aborted && !event.sender.isDestroyed()) event.sender.send(IPC.lunaPartial, { runId: request.runId, ...partial } satisfies LunaPartial);
         },
       });
+      debugLog.info("ai", "pipeline-done", { runId: request.runId, ms: msSince(started), cancelled: controller.signal.aborted, ...result });
       return { ...result, timingsMs: { ...result.timingsMs, loadNotes } };
+    } catch (error) {
+      debugLog.error("ai", "pipeline-failed", { runId: request.runId, ms: msSince(started), cancelled: controller.signal.aborted, error: errorData(error) });
+      throw error;
     } finally {
       done();
     }
   });
 
   // A direct request ("Bee, open Teams", core/direct-command.ts): the reply and desktop action lines for the island. Never a
-  // meeting line. The renderer sends one only with the wake word setting on; main checks it again. The request is never logged.
+  // meeting line. The renderer sends one only with the wake word setting on; main checks it again. The request never goes to the console
+  // (the local debug log keeps it).
   ipcMain.handle(IPC.runCommand, async (event, payload) => {
     const request = commandRequestSchema.parse(payload);
     assertSignedIn(request.sessionToken);
-    if (args.wakeWordEnabled && !args.wakeWordEnabled()) throw new Error("Talking to Bee by name is off in Settings.");
+    if (args.wakeWordEnabled && !args.wakeWordEnabled()) {
+      debugLog.warn("ai", "command-refused", { runId: request.runId, command: request.command, reason: "wake word off" });
+      throw new Error("Talking to Bee by name is off in Settings.");
+    }
     const apiKey = args.gatewayApiKey();
     const { controller, done } = track(request.runId);
     const windowContext = args.meetingWindow?.context() ?? null;
@@ -206,8 +248,18 @@ export function registerMeetingIpc(args: { notesDir: string; fsRoots: () => stri
     const key = request.runId === undefined ? null : String(request.runId);
     const computer = args.computer ? computerHost(args.computer, event.sender, request.runId) : null;
     if (computer) computerRuns += 1;
+    const started = performance.now();
+    debugLog.info("ai", "command-start", {
+      runId: request.runId,
+      command: request.command,
+      transcript: request.transcript,
+      meetingBrief: meetingBrief ?? null,
+      hasKey: Boolean(apiKey),
+      desktop: Boolean(args.desktop),
+      computer: computer ? computer.platform : null,
+    });
     try {
-      return await runDirectCommand({
+      const result = await runDirectCommand({
         command: request.command,
         transcript: request.transcript,
         meetingBrief,
@@ -228,6 +280,11 @@ export function registerMeetingIpc(args: { notesDir: string; fsRoots: () => stri
           if (!controller.signal.aborted && !event.sender.isDestroyed()) event.sender.send(IPC.lunaPartial, { runId: request.runId, ...partial } satisfies LunaPartial);
         },
       });
+      debugLog.info("ai", "command-done", { runId: request.runId, ms: msSince(started), cancelled: controller.signal.aborted, ...result });
+      return result;
+    } catch (error) {
+      debugLog.error("ai", "command-failed", { runId: request.runId, ms: msSince(started), error: errorData(error) });
+      throw error;
     } finally {
       done();
       if (computer) {
@@ -243,6 +300,7 @@ export function registerMeetingIpc(args: { notesDir: string; fsRoots: () => stri
   ipcMain.handle(IPC.stopCommand, (_event, payload) => {
     const key = String(commandStopSchema.parse(payload).runId);
     const control = controls.get(key);
+    debugLog.info("computer", "stop-requested", { runId: key, computer: Boolean(control), running: runs.has(key) });
     if (control) control.stop("user");
     else runs.get(key)?.abort();
   });
@@ -251,7 +309,9 @@ export function registerMeetingIpc(args: { notesDir: string; fsRoots: () => stri
   ipcMain.handle(IPC.computerAnswer, (_event, payload) => {
     const answer = computerAnswerSchema.parse(payload);
     const pending = confirms.get(answer.id);
-    if (pending && pending.runId === String(answer.runId)) pending.resolve(answer.confirmed);
+    const open = pending !== undefined && pending.runId === String(answer.runId);
+    debugLog.info("computer", "answer", { ...answer, open });
+    if (open) pending.resolve(answer.confirmed);
   });
 
   // Settings: may computer use run here, and has macOS allowed Bee Accessibility and Screen Recording. Fails open as unknown.
@@ -260,8 +320,11 @@ export function registerMeetingIpc(args: { notesDir: string; fsRoots: () => stri
     const platform = args.computer.platform;
     computerRuns += 1;
     try {
-      return { supported: true, platform, ...(await computerAccess(args.computer.run)) };
-    } catch {
+      const access = await computerAccess(args.computer.run);
+      debugLog.info("computer", "access", { platform, ...access });
+      return { supported: true, platform, ...access };
+    } catch (error) {
+      debugLog.warn("computer", "access-failed", { platform, error: errorData(error) });
       return { supported: true, platform, accessibility: "unknown", screenRecording: "unknown" };
     } finally {
       computerRuns -= 1;
@@ -272,6 +335,7 @@ export function registerMeetingIpc(args: { notesDir: string; fsRoots: () => stri
   // Cancels Jev and Luna for a superseded run. A tool call that has started is left to finish (it may be a write).
   ipcMain.handle(IPC.cancelPipeline, (_event, payload) => {
     const { runId } = pipelineCancelSchema.parse(payload);
+    debugLog.info("ai", "cancel", { runId, running: runs.has(String(runId)) });
     runs.get(String(runId))?.abort();
   });
 
@@ -281,10 +345,13 @@ export function registerMeetingIpc(args: { notesDir: string; fsRoots: () => stri
     assertSignedIn(sessionToken);
     const when = new Date();
     const apiKey = args.gatewayApiKey();
+    const started = performance.now();
+    debugLog.info("meeting", "summary-start", { lines: input.transcript.length, notesCited: input.notesCited.length, tips: input.tips.length, meetingId: input.meetingId, hasKey: Boolean(apiKey) });
     const summary = apiKey
       ? await generateMeetingSummary({ ...input, model: createGateway(apiKey).languageModel(GUIDE_MODEL), when })
       : { markdown: buildLocalSummary({ ...input, when }), usedLlm: false, error: NO_GATEWAY_KEY };
     const path = writeMeetingSummaryFile(args.notesDir, summary.markdown, when);
+    debugLog.info("meeting", "summary-written", { path, usedLlm: summary.usedLlm, error: summary.error, ms: msSince(started), markdown: summary.markdown });
     // Structured fields go to meeting memory too (when it is on and the meeting has a name). Failing to save never loses the note.
     try {
       const remembered = args.meeting.remember({ meetingId: input.meetingId, summaryMarkdown: summary.markdown, usedLlm: summary.usedLlm, tips: input.tips });

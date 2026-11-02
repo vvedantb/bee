@@ -15,8 +15,8 @@ import { withoutSecrets } from "./agent-desktop";
 
 // Main side of the Teams audio fallback: starts the native helper (main/teams-audio-helper.ts), reads its 16 kHz PCM from
 // stdout, cuts it into phrases (core/speech.ts, the mic's segmenter) and sends each phrase to speech-to-text. Only the text
-// leaves this file, to the renderer. Audio stays in memory and is dropped once transcribed. Logs carry codes and counts only:
-// never samples, never words, never the helper's own stderr text. No Electron imports, so tests inject the process.
+// leaves this file, to the renderer. Audio stays in memory and is dropped once transcribed. Console lines carry codes and counts
+// only: never samples, never words, never the helper's own stderr text. No Electron imports, so tests inject the process.
 
 /** The subset of ChildProcess this file uses, so tests can pass a fake. */
 export interface HelperProcess {

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { debugLog } from "../core/debug-log";
 import { CLERK_PUBLISHABLE_KEY, frontendApiHost } from "../shared/clerk";
 
 const claimsSchema = z.object({ iss: z.string(), sub: z.string().min(1), exp: z.number() });
@@ -13,6 +14,9 @@ export const CLERK_ISSUER = `https://${frontendApiHost(CLERK_PUBLISHABLE_KEY)}`;
 export function assertSignedIn(sessionToken: string, nowMs = Date.now()): void {
   const claims = readClaims(sessionToken);
   if (!claims || claims.iss !== CLERK_ISSUER || claims.exp * 1000 <= nowMs) {
+    // Why only, for the local debug log. Never the token or its claims.
+    const reason = !claims ? (sessionToken ? "unreadable" : "missing") : claims.iss !== CLERK_ISSUER ? "issuer" : "expired";
+    debugLog.warn("auth", "session-rejected", { reason, ...(claims && reason === "expired" ? { expiredSecondsAgo: Math.round(nowMs / 1000 - claims.exp) } : {}) });
     throw new Error("Sign in to Bee to get guidance.");
   }
 }

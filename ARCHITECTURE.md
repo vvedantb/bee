@@ -4,7 +4,7 @@ Bee is an Electron app built with electron-vite, React and TypeScript.
 
 ```
 src/
-  main/       Electron main process: notch window, tray, IPC, settings (including MCP servers), notes folder, bee:// protocol, Clerk bridge, Teams detector and sync IPC,
+  main/       Electron main process: notch window, tray, IPC, settings (including MCP servers), notes folder, local debug log, bee:// protocol, Clerk bridge, Teams detector and sync IPC,
               experimental meeting window reader (agent-desktop runner), Teams audio helper process and its speech-to-text
   preload/    Sandboxed bridge: exposes window.bee (parses every response with zod) and Clerk's bridge
   renderer/   React UI: island (pill and response body; island.ts holds its pure logic), sign-in, expanded panel (Live, Settings), mic capture (mic.ts)
@@ -142,6 +142,19 @@ direct request → core/direct-command: wantsComputerUse(command), or Luna calls
 4. **Quit & install** opens the file with `shell.openPath` and quits. The one-click NSIS installer replaces Bee and relaunches it. On Linux Bee shows the file in its folder instead.
 
 Failures (offline, HTTP errors, no release, no asset) come back as values and show in Settings. A 404 means no release is published. The renderer never sees a download path.
+
+## Debug log
+
+A detailed record of each session, kept on this computer for debugging. It is never uploaded, and Bee never deletes a log file. `core/debug-log.ts` (pure: the sink, `debugLog`, helpers), `core/debug-redact.ts`, `main/debug-log.ts` (the writer), `main/debug-log-ipc.ts`, `renderer/src/debug-log.ts`.
+
+- **Where.** `<userData>/logs`, beside `notes`: `%APPDATA%\Bee\logs` on Windows, `~/Library/Application Support/Bee/logs` on macOS. Settings shows the path with **Open** (`bee:logs:open-folder`); the tray has **Open logs folder**.
+- **Format.** JSON Lines: `ts` (ISO), `seq`, `session`, `src` (`main` or `renderer`), `level` (`debug`, `info`, `warn`, `error`), `category`, `event`, `data`. One file per session, `bee-YYYY-MM-DD-HHmmss-<session>.jsonl` in local time. Each file starts with `log/file-opened`: app version, platform, part number and the previous file.
+- **Files are kept.** A new file starts when the local day changes or the current one passes 64 MB. Files open with `ax` (append, only if new), so an existing file is never reopened, emptied or replaced. There is no retention, size budget or cleanup. A test checks the writer has no delete or truncate call.
+- **Writing.** `debugLog.info(category, event, data)` from core, main or the renderer; with no sink (tests, scripts) it does nothing and it never throws. In main, `write()` redacts, serialises and queues; a 1 s timer or a 256 KB queue writes the batch in one async call. `will-quit`, process exit and an uncaught exception (`uncaughtExceptionMonitor`, which leaves Electron's handling unchanged) write the rest synchronously. The renderer batches events (1 s, or 200) and sends them with `ipcRenderer.send` on `bee:debug:log`; main checks each one with zod and writes it as `src: "renderer"`. An event over 1 MB keeps its names and a 16 KB preview.
+- **Redaction** (`core/debug-redact.ts`), in the renderer before IPC and again in main before writing. Fields named like secrets (token, apiKey, authorization, password, secret, cookie, cipher, and the `env`, `headers` and `auth` subtrees) lose their text; numbers and booleans stay, so token counts and sign-in flags remain. Text that looks like a key (`vck_…`, `sk-…`, JWTs, `Bearer …`, `code`, `state` or `token` in a URL) is replaced anywhere, prompts and notes included. Base64 images, audio bytes and data URLs become a placeholder. Settings changes log the keys sent and the new non-secret values; the Gateway key only as set or cleared. Sign-in logs signed in or out and a one-way tag of the user id, never a token or the id.
+- **Verbose** (Settings → **Verbose debug logs**, `verboseLogging`, on by default). On keeps everything; off keeps warnings and errors. A change applies at once in both processes. Settings changes are always written, so a log that goes quiet says why.
+- **What is logged.** Start (version, OS, Electron), quit, crashes, failed loads and preload errors; window focus, show, hide and bounds; sign-in state; mic on and off, errors, a level summary every 5 s and phrase ends; speech-to-text requests, text and latency (mic and Teams audio); Teams audio status, start, stop, lines and end; wake word routes with the words that triggered them, and meeting lines that nearly did (`wake/near-miss`); every pipeline run and direct request with timings; Luna's full prompt (the system prompt in full once per session, then by hash), each model step with its tool calls, inputs and results, the reply and token usage; Jev scores; summaries; computer use: each step, agent-desktop command and result code, Confirm asked and answered, Stop, and why the run ended; island and panel state changes, scroll, hover, links and chips; renderer errors and unhandled rejections; any bridge call that fails (method and message, never its arguments). Console output in both processes is copied in as `console/*`.
+- **Console and debug log.** Where this document says logs carry codes and counts only, it means console output. The debug log is separate: it keeps the words, prompts and screen text above, on this computer only.
 
 ## Teams mode
 

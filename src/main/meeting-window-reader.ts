@@ -19,7 +19,7 @@ import type { AgentDesktopRun } from "./agent-desktop";
 // Experimental: "read meeting window" (Settings, off by default). With the setting on, Bee lists windows with agent-desktop to
 // find a Teams, Zoom or Google Meet call on macOS and Windows, reads the Teams or Zoom call window's people and live captions,
 // and hands new caption lines to the renderer. Read-only and headless: only list-apps, list-windows, find --count, snapshot
-// and permissions run. Everything stays in memory. Logs carry codes and counts only. Any failure falls back to the built-in
+// and permissions run. Everything stays in memory. Console lines carry codes and counts only. Any failure falls back to the built-in
 // detector (main/teams-detector.ts), which keeps running beside it.
 
 export const READER_TIMING = {
