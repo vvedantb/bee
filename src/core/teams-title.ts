@@ -31,6 +31,12 @@ const GENERIC_NAME = /^(meet now|meeting|call|new meeting|teams meeting|microsof
 const PERSON = /^(?:meeting|call|chat)\s+with\s+(.+)$/i;
 const MAX_NAME = 200;
 
+/** A window title Teams wrote: the bare app name, or anything ending in "| Microsoft Teams" (classic and work or school too). */
+export function isTeamsWindowTitle(title: string): boolean {
+  const cleaned = title.replace(/[‎‏]/g, "").trim();
+  return APP_ONLY.test(cleaned) || (APP_SUFFIX.test(cleaned) && cleaned.replace(APP_SUFFIX, "").trim().length > 0);
+}
+
 /** The meeting name in one Teams window title, or null for tabs, the bare app title and empty titles. */
 export function parseTeamsTitle(title: string): TeamsTitle | null {
   const cleaned = title.replace(/[‎‏]/g, "").trim();

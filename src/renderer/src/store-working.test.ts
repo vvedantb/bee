@@ -9,8 +9,7 @@ type MicArgs = Parameters<typeof startMicSession>[0];
 const micSessions: MicArgs[] = [];
 vi.mock("@clerk/electron/react", () => ({ getToken: async () => "token" }));
 vi.mock("./mic", () => ({
-  openMic: async () => ({ sampleRate: 48_000, start: () => undefined, attachExtra: () => undefined, stop: () => undefined }),
-  openSystemAudio: async () => null,
+  openMic: async () => ({ sampleRate: 48_000, start: () => undefined, stop: () => undefined }),
 }));
 vi.mock("./speech", () => ({
   startMicSession: (args: MicArgs) => {

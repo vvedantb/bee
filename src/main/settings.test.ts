@@ -431,6 +431,35 @@ describe("settings read meeting window (experimental)", () => {
   });
 });
 
+describe("settings Teams audio fallback", () => {
+  it("is on by default and in the view", () => {
+    const store = create();
+    expect(store.view().teamsAudioFallbackEnabled).toBe(true);
+    expect(store.teamsAudioFallback()).toBe(true);
+  });
+
+  it("round-trips through settings.json and survives unrelated saves", () => {
+    const store = create();
+    expect(store.save({ teamsAudioFallbackEnabled: false }).teamsAudioFallbackEnabled).toBe(false);
+    expect(JSON.parse(readFileSync(join(dir, "settings.json"), "utf8")).teamsAudioFallbackEnabled).toBe(false);
+    store.save({ readMeetingWindowEnabled: true });
+    expect(create().teamsAudioFallback()).toBe(false);
+    store.save({ teamsAudioFallbackEnabled: true });
+    expect(create().teamsAudioFallback()).toBe(true);
+  });
+
+  it("reads a bad stored value as the default, on", () => {
+    writeFileSync(join(dir, "settings.json"), JSON.stringify({ teamsAudioFallbackEnabled: "no" }));
+    expect(create().teamsAudioFallback()).toBe(true);
+  });
+
+  it("rejects a non-boolean update at the IPC schema", async () => {
+    const { settingsUpdateSchema } = await import("../shared/ipc");
+    expect(() => settingsUpdateSchema.parse({ teamsAudioFallbackEnabled: "off" })).toThrow();
+    expect(settingsUpdateSchema.parse({ teamsAudioFallbackEnabled: false })).toEqual({ teamsAudioFallbackEnabled: false });
+  });
+});
+
 describe("settings savedGatewayApiKey", () => {
   const withEnv = () => createSettingsStore({ userDataDir: dir, notesDir: join(dir, "notes"), envGatewayKey: "env-key-FAKE" });
 

@@ -1,17 +1,18 @@
 import { createClerkBridge } from "@clerk/electron";
 import { storage } from "@clerk/electron/storage";
-import { BrowserWindow, Menu, Tray, app, desktopCapturer, globalShortcut, ipcMain, nativeImage, screen, session, shell, systemPreferences } from "electron";
+import { BrowserWindow, Menu, Tray, app, globalShortcut, ipcMain, nativeImage, screen, session, shell, systemPreferences } from "electron";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { RENDERER_HOST, RENDERER_SCHEME, RENDERER_URL } from "../shared/clerk";
 import { displayMatching, placeInWorkArea, restoreOverlayBounds, scaleSize, type DisplayInfo } from "../core/interface-scale";
-import { IPC, settingsUpdateSchema, windowSizeSchema, type MeetingWindowCaptions, type WindowSize } from "../shared/ipc";
+import { IPC, settingsUpdateSchema, teamsAudioStatusRequestSchema, windowSizeSchema, type MeetingWindowCaptions, type WindowSize } from "../shared/ipc";
 import { createMcpPool } from "../core/mcp";
 import { createMeetingContext } from "../core/meeting-context";
 import { createMeetingMemoryStore } from "../core/meeting-memory";
 import { searchMcpNotes } from "../core/meeting-search";
 import { createVmemSearch } from "../core/vmem-history";
 import { createAgentDesktopRunner, resolveAgentDesktop } from "./agent-desktop";
+import { assertSignedIn } from "./auth";
 import { registerFaviconIpc } from "./favicon-ipc";
 import { registerGatewayKeyIpc } from "./gateway-key-ipc";
 import { registerLinkIpc } from "./link-ipc";
@@ -22,8 +23,9 @@ import { registerMeetingIpc } from "./meeting-ipc";
 import { ensureNotesDir } from "./notes";
 import { handleRendererProtocol } from "./renderer-protocol";
 import { createSettingsStore, type SettingsStore } from "./settings";
-import { findSystemAudioSource, isPermissionAllowed } from "./system-audio";
+import { isPermissionAllowed } from "./system-audio";
 import { createMeetingWindowReader } from "./meeting-window-reader";
+import { createTeamsAudioStatus } from "./teams-audio";
 import { createTeamsDetector, withMeetingWindow } from "./teams-detector";
 import { inviteFromArgv, registerTeamsIpc, relayUrlFromEnv } from "./teams-sync";
 import { createUpdater } from "./updater";
@@ -226,28 +228,14 @@ if (clerk.isPrimaryInstance) {
       systemPreferences.askForMediaAccess("microphone").catch((error) => console.warn("Bee: microphone access request failed:", error));
     }
 
-    // Microphone and screen capture only; every other permission is denied.
+    // Microphone only; every other permission, screen capture included, is denied.
     session.defaultSession.setPermissionRequestHandler((_contents, permission, callback) => {
       callback(isPermissionAllowed(permission));
     });
 
-    // getDisplayMedia without a picker: first screen plus loopback audio. Any failure leaves the renderer to use the mic alone.
-    session.defaultSession.setDisplayMediaRequestHandler((_request, callback) => {
-      void (async () => {
-        try {
-          const [screen] = await desktopCapturer.getSources({ types: ["screen"] });
-          if (!screen) return callback({});
-          try {
-            callback({ video: screen, audio: "loopback" });
-          } catch {
-            callback({ video: screen });
-          }
-        } catch (error) {
-          console.warn("Bee: system audio unavailable:", error);
-          callback({});
-        }
-      })();
-    });
+    // getDisplayMedia is always refused. Its only audio here is 'loopback' (all system audio), which Bee never captures; the
+    // Teams audio fallback needs a Teams-only path (core/teams-audio.ts, ARCHITECTURE.md). The mic is unaffected.
+    session.defaultSession.setDisplayMediaRequestHandler((_request, callback) => callback({}));
 
     // Experimental meeting window reader (Settings, off by default): agent-desktop, read-only and headless. Missing binary or
     // any failure leaves the built-in detector on its own.
@@ -292,7 +280,8 @@ if (clerk.isPrimaryInstance) {
     registerLinkIpc(settings, vmemSearch);
     registerFaviconIpc();
     // One detector for the Teams sync popup and for meeting context, so the in-call reading is shared and cached.
-    const detector = withMeetingWindow(createTeamsDetector(), meetingWindow);
+    const teamsDetector = createTeamsDetector();
+    const detector = withMeetingWindow(teamsDetector, meetingWindow);
     // Which meeting the user is in: window titles and the classic Outlook calendar (Windows), saved meetings, connected tools.
     // The brief is built here in main and sent to Luna; saved meetings stay in meeting-memory.json in the user data folder.
     const teamsTitles = createWindowTitleReader();
@@ -314,12 +303,23 @@ if (clerk.isPrimaryInstance) {
     if (pendingInvite) teams.setPendingInvite(pendingInvite);
     pendingInvite = null;
 
+    // Teams audio fallback status: platform support, a Teams call (Teams' own detector and reader only, never Zoom or Meet) and
+    // whether everyone in it has Bee in this sync. Codes only; names stay here.
+    const teamsAudioStatus = createTeamsAudioStatus({
+      enabled: settings.teamsAudioFallback,
+      readTeamsDetector: teamsDetector.read,
+      reader: meetingWindow,
+      syncView: teams.view,
+    });
+    ipcMain.handle(IPC.teamsAudioStatus, (_event, payload) => {
+      assertSignedIn(teamsAudioStatusRequestSchema.parse(payload).sessionToken);
+      return teamsAudioStatus();
+    });
+
     ipcMain.handle(IPC.setWindowSize, (_event, payload) => {
       windowSize = windowSizeSchema.parse(payload);
       if (win) resizeOverlay(win, scaleSize(SIZES[windowSize], interfaceScale));
     });
-
-    ipcMain.handle(IPC.systemAudioSource, () => findSystemAudioSource());
 
     ipcMain.handle(IPC.openNotesFolder, () => shell.openPath(notesDir));
 

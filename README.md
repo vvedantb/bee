@@ -18,7 +18,7 @@ npm run dist:win
 Download `Bee-x.y.z-arm64.dmg` (Apple Silicon) or `Bee-x.y.z.dmg` (Intel), or the matching `-mac.zip` from [Releases](https://github.com/vvedantb/bee/releases). Open the dmg and drag Bee to Applications. Builds are not signed or notarised yet, so Gatekeeper will warn: right-click Bee, choose **Open**, then confirm.
 
 - **Microphone.** macOS asks the first time Bee starts. If you decline, allow Bee under System Settings → Privacy & Security → Microphone.
-- **Screen Recording.** Only needed if system (meeting) audio capture is used. It is best-effort: Bee always keeps the microphone as the main input, and carries on without system audio if it is unavailable.
+- **Screen Recording.** Not needed. Bee does not capture the screen or system audio. **Settings → Hear Teams when not everyone has Bee** says that it is not available on this Mac yet (see [Teams audio fallback](#teams-audio-fallback)).
 - **Menu bar.** Bee has no Dock icon. The tray icon is a menu bar extra: click it for Show / hide, Open notes folder and Quit.
 - **Shortcut.** `Cmd+Shift+Space` shows or hides Bee (`Ctrl+Shift+Space` on Windows and Linux). If another app holds the shortcut, Bee logs a warning and carries on.
 - **Notes folder.** `~/Library/Application Support/Bee/notes`.
@@ -118,7 +118,7 @@ It fails open. The whole step has a 2 second limit. With the switch off or the G
 
 Bee transcribes with **Grok STT** (`xai/grok-stt`) through Vercel AI Gateway, using the same Gateway key as the AI and Jev.
 
-1. The mic is captured with Web Audio. A simple level detector cuts the audio into phrases: speech, then 0.8 s of silence, up to 15 s per phrase. Blips under 0.3 s are dropped without a Gateway call. The mic is primary; system audio is mixed in when loopback or ScreenCaptureKit works.
+1. The mic is captured with Web Audio. A simple level detector cuts the audio into phrases: speech, then 0.8 s of silence, up to 15 s per phrase. Blips under 0.3 s are dropped without a Gateway call. Bee records the mic only. It never mixes in system audio.
 2. Each phrase is sent to the main process as a 16 kHz mono WAV. Main calls Grok STT (flex tier) and returns the text.
 3. The text joins a short internal buffer (the last 8 lines), and the pipeline runs. The words are never shown on screen.
 
@@ -164,6 +164,17 @@ Teams mode lets teammates who are in the same Microsoft Teams meeting pool what 
 
 If the relay cannot be reached, Bee says "Bee is working solo" and carries on with your own lines only.
 
+### Teams audio fallback
+
+**Settings → Meeting context → Hear Teams when not everyone has Bee** (on by default). The idea: when some people in a Teams call have no Bee, Bee hears the Teams app itself, so their words reach the AI too. It listens only when all of these hold:
+
+- you are in a Teams call (never Zoom or Google Meet) and your Bee mic is on;
+- someone may not be covered: you are not in a sync, or Bee cannot see the call's people list (see **Experimental: read meeting window**), or someone on that list is not in your sync.
+
+What it hears joins your transcript as "Meeting: …". It is never shared with the sync. A phrase that repeats one of your lines, a teammate's or a caption from the last 20 seconds is dropped.
+
+**It does not listen on any platform yet.** Bee hears the Teams app alone or nothing. It never records all system audio. Electron, the framework Bee is built on, can only capture all system audio, and Bee adds no native module. So Settings says "not available" on Windows, macOS and Linux, and Bee uses your mic only. Before this release, Bee mixed all system audio into the mic. That is gone. See [ARCHITECTURE.md](ARCHITECTURE.md#teams-audio-fallback) for what a Teams-only capture would need.
+
 ### Mute gating
 
 Teams' own mute state cannot be read without the Teams local API, which Bee does not use. Sharing is therefore gated on Bee's side: only while the Bee mic is on, only after you joined a sync, and never while **Pause sharing** is on. Muting in Teams alone does not stop Bee from sharing; turn off the Bee mic or pause sharing as well.
@@ -185,7 +196,7 @@ To show full names without typing them, add a `name` claim to the Clerk session 
 - **Detection false positives and misses.** The Windows heuristic can fire on a Teams call that is not a meeting, or on another app's title that mentions a call inside Teams. It can miss new Teams builds with different window titles. It has not yet been tested on a real Windows machine. Back-to-back meetings with no gap look like one meeting.
 - **Presence privacy.** Everyone on your team can see when your Bee reports "in a meeting", even if you never join a sync. Consider this before rolling out, and consider a privacy review.
 - **Partial summaries.** Only Bee members who joined the sync are captured. Other attendees, and anyone with the Bee mic off, are missing from every summary.
-- **Consent.** Each person's summary contains colleagues' words, stored on each device. Tell participants, and get a privacy or legal review before wide use.
+- **Consent.** Each person's summary contains colleagues' words, stored on each device. Tell participants, and get a privacy or legal review before wide use. Once the Teams audio fallback can listen, it will send the words of people who do not use Bee to speech-to-text: review that, and its default, before it ships.
 - **Wrong-room clicks.** A person can join the wrong sync by clicking the wrong button. Names are shown before joining, and **Leave sync** is one click. There is no "Remove" for uninvited joiners yet.
 - **No Microsoft IDs.** Bee has no Microsoft meeting id, so it cannot match a meeting to a sync by itself. It lists concurrent desktop meeting windows (by title) and equally ranked live syncs, and you pick. The session stays bound to that choice until it ends. Syncs are grouped only by who clicked. Two meeting windows with the same title count as one. A mic-only call with no meeting window is treated as one unnamed meeting.
 - **Display names.** Without a `name` claim, a user can type any name for themselves when joining the team. They cannot change anyone else's.

@@ -61,7 +61,8 @@ End meeting & save summary (Live tab)
 
 Production uses **Grok STT** (`xai/grok-stt`) through Vercel AI Gateway, batch mode (`experimental_transcribe`). The Gateway model list names it `spacexai/grok-stt`; on 26 September 2026 both ids returned the same transcript, and Bee uses `xai/grok-stt`. Bee does not use the Web Speech API: in Electron it could not reach Google's speech service and failed with `network`.
 
-- **Capture** (`renderer/src/mic.ts`): mono `getUserMedia` with echo cancellation and noise suppression, into a `ScriptProcessorNode`. No AudioWorklet, so no extra module under the CSP. Frames are about 85 ms at 48 kHz and also drive the level meter. The mic is primary; system audio (`openSystemAudio`, via `getDisplayMedia`) is mixed in when loopback or ScreenCaptureKit works, and its failure never blocks the mic.
+- **Capture** (`renderer/src/mic.ts`): mono `getUserMedia` with echo cancellation and noise suppression, into a `ScriptProcessorNode`. No AudioWorklet, so no extra module under the CSP. Frames are about 85 ms at 48 kHz and also drive the level meter. The mic is the only stream, and nothing is mixed into it. Bee used to mix in screen plus `loopback` audio (all system audio) through `getDisplayMedia`; that is removed.
+- **Who Bee hears**: the user's mic (above; shared with a Teams sync); teammates' own Bees through the relay (`teamsTick` → `addLines`, see [Teams mode](#teams-mode)); live captions read from the call window ([meeting window reader](#meeting-window-reader-experimental), never shared); and the [Teams audio fallback](#teams-audio-fallback), which does not listen on any platform in this build (never shared). Captions and Teams audio join the session as `Speaker: text` or `Meeting: text`.
 - **Phrases** (`renderer/src/speech.ts`, no window or React imports): a frame at or above RMS 0.01 counts as speech. A phrase starts with 300 ms of pre-roll and ends after 800 ms of silence, or at 15 s. Phrases with under 300 ms of speech are dropped. On mic off, the phrase in progress is still sent.
 - **Upload**: each phrase is encoded as 16 kHz 16-bit mono WAV (about 32 KB a second) and sent over IPC. Main rejects payloads over 2 MB.
 - **Order**: phrases are transcribed one at a time, so lines reach the pipeline in the order they were spoken.
@@ -74,7 +75,7 @@ Streaming (`experimental_streamTranscribe`) was not used. Phrase-level batch cal
 
 - **Overlay.** On macOS the window is a `panel` and stays visible on all workspaces and over full-screen apps. The Dock icon is hidden (`app.dock.hide()` and `LSUIElement`). The tray is a template-image menu bar extra; it has no click handler, so it does not fight its menu. Windows and Linux keep click-to-toggle.
 - **Shortcut.** `CommandOrControl+Shift+Space` toggles the window through `globalShortcut`. Failure to register is logged. It is released on `will-quit`.
-- **Audio.** The mic (`getUserMedia`) is the only capture path in use. Main asks for microphone access at start-up on macOS, allows only `media` and `display-capture` permissions, and `main/system-audio.ts` probes `desktopCapturer` for a screen source over IPC (`bee:audio:system-source`). Mixing system audio into capture is not built; the probe degrades to null on any failure.
+- **Audio.** The mic (`getUserMedia`) is the only capture. Main asks for microphone access at start-up on macOS and allows only the `media` permission. `getDisplayMedia` is always refused, so Bee never asks for Screen Recording. The Teams audio fallback is not available on macOS: app-filtered audio (ScreenCaptureKit, Core Audio process taps) needs native code. Settings says so.
 - **Packaging.** `build.mac` makes separate arm64 (Apple Silicon) and x64 (Intel) dmg and zip files with hardened runtime and the plists in `resources/entitlements.mac*.plist`. Unsigned by default.
 
 ## Updates
@@ -117,6 +118,7 @@ Teams leaves the call (15 s) → controller leaves the sync; next detection → 
 - **Merge**: another room started within 30 s of mine by a teammate in a meeting. Each room votes (`POST …/merge`); when both have voted, the later room's members move to the earlier room and the later room is marked `mergedInto`.
 - **Clocks**: every relay response carries `serverNow`. The client keeps the lowest-round-trip offset of the last 8 calls. It publishes `spokenAt` in server time and converts teammates' phrases back to its own clock, so lines merge in spoken order.
 - **Share gate** (`core/sync-lines.ts shouldShare`): mic phrases only, only in a sync the user joined, never while **Pause sharing** is on. Teams' own mute is not readable without the Teams local API, so it is not used.
+- **People without Bee.** A sync carries only Bee members' own mic phrases. Others are heard only through live captions (meeting window reader) or the [Teams audio fallback](#teams-audio-fallback), which uses the sync's members and the call window's roster to decide whether anyone is missing. Neither is ever published to the sync.
 - **Fail-open**: relay errors never throw into the UI. Unreachable, 401 or 5xx shows "Bee is working solo" and the local pipeline carries on; 403/404 on a room ends the sync locally.
 - **Main holds the relay connection**, so the renderer CSP stays closed to the relay host. The renderer passes a fresh Clerk token with each call; main checks it with `assertSignedIn` and the relay verifies it properly.
 - **Window**: a third size, `prompt` (480 × 330), shows the notch and the sync card without the panel.
@@ -146,6 +148,48 @@ runPipeline: meetingWindowBrief (name and people) joins the meeting brief; meeti
 - **Privacy.** Snapshots, captions, names and titles stay in memory. Logs carry codes and counts only (`perf meeting-window caption lines +3`). The child gets Bee's environment without secret-looking variables, and `AGENT_DESKTOP_HOME` points at a private temporary folder (mode 0700) instead of `~/.agent-desktop`, because agent-desktop keeps snapshot ref maps there; Bee deletes it when the setting goes off and at quit.
 - **Binary.** `main/agent-desktop.ts resolveAgentDesktop`: packaged, `Resources/agent-desktop/agent-desktop[.exe]` with `agent-desktop-macos-helper` beside it on macOS (`AGENT_DESKTOP_MACOS_HELPER_PATH`); in development, `node_modules/agent-desktop/bin/agent-desktop-<os>-<arch>`. `build.mac.extraResources` and `build.win.extraResources` copy only the target's own binary (and helper) per arch, plus `LICENSE` (Apache-2.0 text from `resources/licenses/agent-desktop-Apache-2.0.txt`). `build.files` keeps `node_modules/agent-desktop` out of `app.asar`.
 
+## Teams audio fallback
+
+Settings → Meeting context → **Hear Teams when not everyone has Bee** (`teamsAudioFallbackEnabled`, **on by default**). With the mic on in a Teams call where someone may not have Bee, Bee would hear the Teams app's audio and transcribe it like the mic. It hears **the Teams app alone or nothing**: never the screen's or all system audio. **No platform listens in this build** (see Platforms).
+
+Why on by default: Bee used to mix all system audio into the mic whenever the mic was on. That was wrong, and it is removed. The fallback keeps the old aim (hear the rest of the call) but only for Teams, only while someone may not be covered, and only where a Teams-only capture exists. Off would match `readMeetingWindowEnabled`'s privacy default; review the default (and consent: it sends the words of people without Bee to speech-to-text) before a capture path ships.
+
+```
+renderer store: meeting tick (5 s) → window.bee.teamsAudio.status(token) → main/teams-audio.ts createTeamsAudioStatus
+  setting off, or no Teams-only capture on this platform → { supported: false, reason } and nothing else runs
+  else: teamsCall = built-in Windows Teams detector || meeting window reader's call is Teams || simulated Teams meeting
+        coverage  = core/teams-audio teamsAudioCoverage(sync room members, the user, the Teams call window roster)
+  → { platform, supported, reason, teamsCall, coverage }   codes only; names stay in main
+store teamsAudioNow → core/teams-audio teamsAudioPlan(setting, supported, teamsCall, mic on, coverage)
+  "listen" → renderer/teams-audio.ts openTeamsAudio() → its own startMicSession (segmenter → STT), beside the mic
+  → actions.teamsAudioLines → teamsAudioEcho dedupe → addLines as "Meeting: …" → pipeline; never teams.publish
+  anything else (mic off, call over, covered, setting off) → stop
+```
+
+- **When.** `teamsAudioPlan`: setting on, platform supported, a Teams call, mic on, and coverage not `covered`. Zoom and Google Meet never count.
+- **Coverage** (`teamsAudioCoverage`). Not in a sync: `uncovered`. In a sync with no Teams roster from the meeting window reader (reader off, or no people region), or a roster at the reader's 20-name cap (it may be cut off): `unknown`. Otherwise `covered` when every roster name but the user's matches a sync member (`namesMatch`: every word of the shorter name matches its own word of the longer one, in any order, an initial matching a word it starts, at least one whole word; accents and punctuation ignored). Uncovered and unknown both listen. A user whose Teams name differs from their Bee display name reads as someone without Bee, so Bee listens.
+- **Separate stream.** Teams audio never goes into the mic's frames. It gets its own segmenter and speech-to-text queue (`startMicSession`), shows no "Got it…", and its speech-to-text errors are not shown (the mic shows the same ones).
+- **Dedupe** (`core/teams-audio.ts`, word Dice 0.6 via `echoesOwnLine`, 20 s). A Teams-audio phrase that repeats a recent own line, teammate line or caption is dropped. A teammate or caption line that arrives later and repeats a recent Teams-audio line replaces it in the session (it names the speaker) and starts no turn of its own. Teams-audio lines are never published to the sync.
+- **Indicator.** While Bee hears Teams, the pill says "Listening to you and Teams audio…" when idle (`notch.ts`), and Live → Meeting says "Listening to Teams audio for people without Bee." Settings shows a status line (`teams-audio-message.ts`): not available (per platform), waiting, covered, listening, or could not hear Teams.
+- **Fail-open.** A capture that will not open, or whose source ends (Teams closed), stops and is not retried until the plan leaves "listen" (call over, mic off). The mic, the sync and the pipeline never wait for it. Main's status never throws: a detector or sync failure reads as no call.
+- **Privacy.** Audio stays in memory, as for the mic. Logs carry codes and counts only (`teams-audio open=0`, `teams-audio lines +1 echo 0`).
+
+**Platforms.**
+
+| Platform | This build | Why |
+| --- | --- | --- |
+| Windows | Does not listen; Settings says not available | Electron 44 `setDisplayMediaRequestHandler` audio is `'loopback'` or `'loopbackWithMute'`: all system audio. Window capture through `getUserMedia` (`chromeMediaSource: 'desktop'` with a `window:` id) may attach audio, but nothing tells Bee whether that audio is Teams' alone or the system's, so Bee does not use it. |
+| macOS | Does not listen; "not available on this Mac yet" | App-filtered audio (ScreenCaptureKit `SCContentFilter` with `capturesAudio`, or Core Audio process taps on macOS 14.4+) is not exposed by Electron and needs native code. |
+| Linux | Does not listen; "not available on Linux" | No fallback planned. |
+
+`core/teams-audio.ts TEAMS_APP_AUDIO` is the switch: a platform is supported only once it has a Teams-only capture path. Options, none taken here (Bee adds no npm packages or native modules):
+
+1. **Electron `audio: 'application'`** ([electron/electron#54628](https://github.com/electron/electron/issues/54628)). The display-media handler would answer a Teams audio request with the Teams window (`main/system-audio.ts pickTeamsWindowSource`: a call window first, then a named meeting, a chat, any Teams window; never a screen) and application audio. `openTeamsAudio` would call `getDisplayMedia` and keep the audio track. desktopCapturer names windows by title only, so the path must also confirm the window's process is Teams (`ms-teams.exe`, `Teams.exe`, not a browser showing Teams).
+2. **An in-repo Windows helper.** WASAPI process loopback (`ActivateAudioInterfaceAsync` with `AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS`, `PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE` on the Teams process id; Windows 10 build 20348 or Windows 11), streaming PCM to main and on to `openTeamsAudio`. Needs signing and packaging like agent-desktop.
+3. **An in-repo macOS helper.** ScreenCaptureKit with a filter that includes only the Teams app (macOS 13+, Screen Recording permission), or a Core Audio process tap (macOS 14.4+, audio capture permission). Settings would then need a permission state like the meeting window reader's.
+
+Each needs a check on a real Teams call: that the audio is Teams' alone (play other audio during the test), that the user's own voice is absent or deduped, and the coverage roster against real Teams names.
+
 ## Processes and security
 
 - The window is frameless, transparent, always on top and skipped from the taskbar. On first run it sits at the top centre of the primary display's work area. After that it keeps its position: each resize grows in place on the display the window is on, shifting only to stay inside that display's work area, and the last `{ x, y, displayId }` is saved in `settings.json` (main only) and restored at start-up. If that display is gone, it returns to the primary top centre. The maths is in `core/interface-scale.ts`. It resizes between 480 × 64 px (collapsed), 480 × 330 px (notch and Teams sync card), 480 × 360 px (notch and island response) and 480 × 640 px (expanded).
@@ -153,7 +197,7 @@ runPipeline: meetingWindowBrief (name and people) joins the meeting brief; meeti
 - The renderer is served from `bee://renderer/` by `protocol.handle` (`main/renderer-protocol.ts`), not `file://`, so Clerk sees a stable origin. In development the handler proxies to the Vite dev server. Paths outside `out/renderer` return 404.
 - The same handler sends the content security policy as a response header. Fonts are bundled (Instrument Sans woff2 in `renderer/src/fonts`), so `default-src 'self'` covers them and no font hosts are allowed. Remote scripts are allowed only from the Clerk Frontend API host (derived from the publishable key: `clerk.vedantb.com`) and `challenges.cloudflare.com` (bot protection). Images are allowed from `img.clerk.com`.
 - Links opened from the renderer are denied; `https://` links (Clerk terms, help) open in the system browser.
-- Only the `media` permission (microphone) is granted.
+- Only the `media` permission (microphone) is granted. `display-capture` is denied and `setDisplayMediaRequestHandler` always refuses, so no page in Bee can capture the screen or all system audio.
 - All IPC input is validated with zod in main. All IPC output is validated with zod in preload.
 - Secrets are encrypted with `safeStorage` before they are written. If encryption is unavailable, they stay in memory for the session.
 
@@ -294,6 +338,8 @@ Defined in `src/core/summary.ts`. The system prompt asks for exactly three `##` 
 | Meeting window reader: captions poll / idle backoff cap / failure backoff cap | `main/meeting-window-reader.ts` | 1.5 s / 30 s / 60 s |
 | Caption dedupe: keep / revision window / revision overlap | `core/agent-desktop-meeting.ts` | 10 min / 60 s / 0.8 (word Dice) |
 | Caption echo of an own mic line | `renderer/src/store.ts`, `core/agent-desktop-meeting.ts` | 20 s, 0.6 (word Dice) |
+| Teams audio echo (own, teammate or caption line) / replacement by a later line | `core/teams-audio.ts` | 20 s, 0.6 (word Dice) |
+| Teams audio status poll | `renderer/src/store.ts` | 5 s (with the meeting tick) |
 | Retrieval boost weight (meeting window terms) | `core/retrieve.ts` | 0.5 of a query term |
 | Sync tick | `renderer/src/store.ts` | 2 s |
 | MCP connect and list timeout / call timeout | `core/mcp.ts` | 10 s / 15 s |
@@ -322,7 +368,7 @@ Saved secrets show as a disabled field reading `•••••••• (saved)
 
 ## Not yet built
 
-System audio capture. Mixing system audio into the mic stream is not built; only the `desktopCapturer` probe exists.
+Teams audio capture. The fallback's setting, status, coverage, plan, dedupe and UI are built and tested, but no platform has a Teams-only capture path, so it never listens (see [Teams audio fallback](#teams-audio-fallback)). All-system audio capture is removed on purpose.
 
 ## CI
 

@@ -40,6 +40,9 @@ const fileSchema = z.object({
   meetingMemoryEnabled: z.boolean().default(true).catch(true),
   // Experimental: read Teams, Zoom and Google Meet windows with agent-desktop (main/meeting-window-reader.ts). Off until switched on.
   readMeetingWindowEnabled: z.boolean().default(false).catch(false),
+  // Teams audio fallback (core/teams-audio.ts). On until switched off: Bee used to mix all system audio into the mic whenever
+  // the mic was on; this keeps that "hear the call" intent but only for the Teams app, only when someone may not have Bee.
+  teamsAudioFallbackEnabled: z.boolean().default(true).catch(true),
   // Non-secret MCP settings. A bad entry drops the list, not the whole file.
   mcpServers: z.array(mcpServerSchema).catch([]).default([]),
   // One safeStorage ciphertext (base64) for every server's secrets, as JSON keyed by server id.
@@ -89,6 +92,7 @@ export function createSettingsStore(args: {
       meetingCalendarEnabled: true,
       meetingMemoryEnabled: true,
       readMeetingWindowEnabled: false,
+      teamsAudioFallbackEnabled: true,
       mcpServers: [],
     };
   }
@@ -357,6 +361,7 @@ export function createSettingsStore(args: {
       meetingCalendarEnabled: file.meetingCalendarEnabled,
       meetingMemoryEnabled: file.meetingMemoryEnabled,
       readMeetingWindowEnabled: file.readMeetingWindowEnabled,
+      teamsAudioFallbackEnabled: file.teamsAudioFallbackEnabled,
     };
   }
 
@@ -371,6 +376,11 @@ export function createSettingsStore(args: {
     return read().readMeetingWindowEnabled;
   }
 
+  /** The Teams audio fallback switch, read on each status poll so Settings changes apply at once. Main only. */
+  function teamsAudioFallback(): boolean {
+    return read().teamsAudioFallbackEnabled;
+  }
+
   function save(update: SettingsUpdate): SettingsView {
     let file = read();
     if (update.gatewayApiKey !== undefined) file = setSecret(file, "gatewayApiKey", update.gatewayApiKey);
@@ -382,6 +392,7 @@ export function createSettingsStore(args: {
     if (update.meetingCalendarEnabled !== undefined) file = { ...file, meetingCalendarEnabled: update.meetingCalendarEnabled };
     if (update.meetingMemoryEnabled !== undefined) file = { ...file, meetingMemoryEnabled: update.meetingMemoryEnabled };
     if (update.readMeetingWindowEnabled !== undefined) file = { ...file, readMeetingWindowEnabled: update.readMeetingWindowEnabled };
+    if (update.teamsAudioFallbackEnabled !== undefined) file = { ...file, teamsAudioFallbackEnabled: update.teamsAudioFallbackEnabled };
     if (update.fsRoots !== undefined) {
       const { roots, invalid } = normalizeFsRoots(update.fsRoots);
       if (invalid.length > 0) throw new Error(`Folders must be absolute paths: ${invalid.join(", ")}`);
@@ -404,5 +415,5 @@ export function createSettingsStore(args: {
     write({ ...read(), overlayPosition: position });
   }
 
-  return { view, save, meetingContext, readMeetingWindow, overlayPosition, saveOverlayPosition, gatewayApiKey, savedGatewayApiKey, linkSettings, vmemConfig, fsRoots, mcpList, mcpSave, mcpRemove, mcpSetEnabled, mcpRecordTools, mcpConfigs, mcpSignedOut, mcpConfig, mcpOAuthStorage };
+  return { view, save, meetingContext, readMeetingWindow, teamsAudioFallback, overlayPosition, saveOverlayPosition, gatewayApiKey, savedGatewayApiKey, linkSettings, vmemConfig, fsRoots, mcpList, mcpSave, mcpRemove, mcpSetEnabled, mcpRecordTools, mcpConfigs, mcpSignedOut, mcpConfig, mcpOAuthStorage };
 }

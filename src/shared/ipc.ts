@@ -23,7 +23,6 @@ export const IPC = {
   lunaActivity: "bee:luna:activity",
   lunaPartial: "bee:luna:partial",
   cancelPipeline: "bee:pipeline:cancel",
-  systemAudioSource: "bee:audio:system-source",
   mcpList: "bee:mcp:list",
   mcpSave: "bee:mcp:save",
   mcpRemove: "bee:mcp:remove",
@@ -37,6 +36,7 @@ export const IPC = {
   clearMeetingMemory: "bee:meeting:clear-memory",
   meetingWindowCaptions: "bee:meeting-window:captions",
   openAccessibilitySettings: "bee:meeting-window:open-accessibility-settings",
+  teamsAudioStatus: "bee:teams-audio:status",
 };
 
 // Collapsed notch, notch plus the sync popup, notch plus the island response, or the full panel.
@@ -69,6 +69,9 @@ export const settingsViewSchema = z.object({
   meetingMemoryEnabled: z.boolean(),
   // Experimental: read the meeting window (Teams, Zoom, Google Meet) with agent-desktop. Off by default.
   readMeetingWindowEnabled: z.boolean(),
+  // Teams audio fallback: with the mic on in a Teams call where someone may not have Bee, hear the Teams app alone (never all
+  // system audio). On by default; only platforms with a Teams-only capture path listen (core/teams-audio.ts).
+  teamsAudioFallbackEnabled: z.boolean(),
 });
 export type SettingsView = z.infer<typeof settingsViewSchema>;
 
@@ -85,6 +88,7 @@ export const settingsUpdateSchema = z.object({
   meetingCalendarEnabled: z.boolean().optional(),
   meetingMemoryEnabled: z.boolean().optional(),
   readMeetingWindowEnabled: z.boolean().optional(),
+  teamsAudioFallbackEnabled: z.boolean().optional(),
 });
 export type SettingsUpdate = z.infer<typeof settingsUpdateSchema>;
 
@@ -186,6 +190,22 @@ export const meetingWindowCaptionsSchema = z.object({
   lines: z.array(z.object({ speaker: z.string().max(100).nullable(), text: z.string().min(1).max(2000) })).min(1).max(50),
 });
 export type MeetingWindowCaptions = z.infer<typeof meetingWindowCaptionsSchema>;
+
+// Teams audio fallback (core/teams-audio.ts, main/teams-audio.ts). Codes only: never names, titles, audio or words. Whether
+// Bee is listening now is the renderer's (store.ts), which runs the capture.
+export const teamsAudioStatusRequestSchema = z.object({ sessionToken: z.string().max(8000) });
+export const teamsAudioStatusSchema = z.object({
+  platform: z.enum(["windows", "mac", "linux", "other"]),
+  // This build can capture the Teams app's audio alone here. Bee never captures all system audio instead.
+  supported: z.boolean(),
+  // Why not: unsupported-platform (Linux and others, no fallback), needs-app-audio (Windows and macOS need a per-app path).
+  reason: z.enum(["unsupported-platform", "needs-app-audio"]).nullable(),
+  // A Teams call now: the built-in Windows detector, the meeting window reader on a Teams call, or a simulated Teams meeting.
+  teamsCall: z.boolean(),
+  // covered: everyone in the call has Bee in this sync, so Bee does not listen. uncovered or unknown: Bee listens.
+  coverage: z.enum(["covered", "uncovered", "unknown"]),
+});
+export type TeamsAudioStatus = z.infer<typeof teamsAudioStatusSchema>;
 
 export const clearMeetingMemoryResultSchema = z.object({ cleared: z.number().int().nonnegative() });
 

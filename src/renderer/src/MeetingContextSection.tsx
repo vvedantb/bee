@@ -3,12 +3,13 @@ import { Button } from "@vvedantb/ui";
 import { useState } from "react";
 import type { MeetingWindowStatus, SettingsUpdate, SettingsView } from "../../shared/ipc";
 import { SettingRow } from "./SettingRow";
+import { teamsAudioMessage, type TeamsAudioView } from "./teams-audio-message";
 
 // Settings → Meeting context. Presentational: it takes the saved switches and callbacks, so the screenshot page can render it
 // without the store or Electron.
 
 export type MeetingContextSettings = Pick<SettingsView, "meetingContextEnabled" | "meetingCalendarEnabled" | "meetingMemoryEnabled"> &
-  Partial<Pick<SettingsView, "readMeetingWindowEnabled">>;
+  Partial<Pick<SettingsView, "readMeetingWindowEnabled" | "teamsAudioFallbackEnabled">>;
 
 function clearMessage(count: number): string {
   return count === 0 ? "No saved meeting notes to clear." : `Cleared ${count} saved meeting ${count === 1 ? "note" : "notes"}.`;
@@ -36,6 +37,7 @@ export function MeetingContextSection({
   onClear,
   reader,
   onOpenAccessibility,
+  teamsAudio,
 }: {
   settings: MeetingContextSettings;
   onChange: (update: SettingsUpdate) => void;
@@ -45,12 +47,16 @@ export function MeetingContextSection({
   reader?: MeetingWindowStatus;
   /** macOS: opens Privacy & Security → Accessibility. */
   onOpenAccessibility?: () => void;
+  /** The Teams audio fallback's state, from the store. */
+  teamsAudio?: TeamsAudioView;
 }) {
   // A second click confirms: the first only arms the button.
   const [step, setStep] = useState<"idle" | "confirm" | "busy">("idle");
   const [message, setMessage] = useState<string | null>(null);
   const on = settings.meetingContextEnabled;
   const windowMessage = meetingWindowMessage(settings.readMeetingWindowEnabled ? (reader ?? { state: "starting", app: null, captions: false }) : undefined);
+  const audioOn = settings.teamsAudioFallbackEnabled ?? false;
+  const audioMessage = audioOn ? teamsAudioMessage(teamsAudio) : null;
 
   async function clear(): Promise<void> {
     if (step === "idle") {
@@ -118,6 +124,18 @@ export function MeetingContextSection({
             Open Accessibility settings
           </Button>
         </div>
+      ) : null}
+      <SettingRow
+        id="teams-audio-fallback"
+        label="Hear Teams when not everyone has Bee"
+        description="With your mic on in a Teams call, Bee hears the Teams app only. Never all system audio."
+        checked={audioOn}
+        onCheckedChange={(teamsAudioFallbackEnabled) => onChange({ teamsAudioFallbackEnabled })}
+      />
+      {audioMessage ? (
+        <p className="muted" role="status">
+          {audioMessage}
+        </p>
       ) : null}
     </section>
   );

@@ -51,9 +51,13 @@ export type NotchStatusKind = "loading" | "sign-in" | "working" | "mic-error" | 
 
 export type NotchLine = { kind: NotchStatusKind; text: string };
 
+/** The pill while the mic is on and Bee also hears the Teams app (Teams audio fallback). */
+export const TEAMS_AUDIO_LABEL = "Listening to you and Teams audio…";
+
 type LineInputs = Pick<BeeState, "busy" | "revising" | "tools" | "question" | "heard" | "mic" | "result"> & {
   settings: Pick<SettingsView, "gatewayKeySource" | "meetingMode"> | null;
   session: Pick<BeeState["session"], "lines">;
+  teamsAudio?: Pick<BeeState["teamsAudio"], "listening">;
 };
 
 /** The pill's status text and what it is about. */
@@ -68,6 +72,7 @@ export function notchLine(state: LineInputs, signedIn: boolean | undefined): Not
   const tip = state.result?.tips[0];
   if (tip) return { kind: "answer", text: tip };
   if (state.settings?.gatewayKeySource === "none") return { kind: "gateway-key", text: "Add your AI Gateway key in Settings" };
+  if (state.mic.on && state.teamsAudio?.listening) return { kind: "idle", text: TEAMS_AUDIO_LABEL };
   if (state.mic.on || state.session.lines.length > 0) return { kind: "idle", text: "Listening for something useful…" };
   return { kind: "idle", text: state.settings?.meetingMode ? "Meeting mode on" : "Bee is ready" };
 }

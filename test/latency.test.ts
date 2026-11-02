@@ -42,8 +42,7 @@ async function setup() {
   let activityListener: (activity: LunaActivity) => void = () => undefined;
 
   vi.doMock("../src/renderer/src/mic", () => ({
-    openMic: async () => ({ sampleRate: RATE, start: (cb: typeof onFrame) => (onFrame = cb), attachExtra: () => undefined, stop: () => undefined }),
-    openSystemAudio: async () => null,
+    openMic: async () => ({ sampleRate: RATE, start: (cb: typeof onFrame) => (onFrame = cb), stop: () => undefined }),
   }));
   vi.stubGlobal("window", {
     bee: {

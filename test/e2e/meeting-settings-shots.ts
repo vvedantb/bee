@@ -4,15 +4,24 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MeetingContextSection } from "../../src/renderer/src/MeetingContextSection";
+import type { TeamsAudioView } from "../../src/renderer/src/teams-audio-message";
 import "../../src/renderer/src/styles.css";
 import { panelPage } from "./panel-shot";
 
-function section(settings: { meetingContextEnabled: boolean; meetingCalendarEnabled: boolean; meetingMemoryEnabled: boolean }): string {
-  return renderToStaticMarkup(createElement(MeetingContextSection, { settings, onChange: () => undefined, onClear: async () => 0 }));
+// The Teams audio fallback as this build shows it on a Mac: on by default, not available.
+const teamsAudio: TeamsAudioView = {
+  status: { platform: "mac", supported: false, reason: "needs-app-audio", teamsCall: false, coverage: "unknown" },
+  plan: "unavailable",
+  listening: false,
+  failed: false,
+};
+
+function section(settings: { meetingContextEnabled: boolean; meetingCalendarEnabled: boolean; meetingMemoryEnabled: boolean; teamsAudioFallbackEnabled: boolean }): string {
+  return renderToStaticMarkup(createElement(MeetingContextSection, { settings, onChange: () => undefined, onClear: async () => 0, teamsAudio }));
 }
 
 const shot = new URLSearchParams(location.search).get("shot") ?? "settings-meeting-context";
-const on = { meetingContextEnabled: true, meetingCalendarEnabled: true, meetingMemoryEnabled: true };
+const on = { meetingContextEnabled: true, meetingCalendarEnabled: true, meetingMemoryEnabled: true, teamsAudioFallbackEnabled: true };
 const states: Record<string, string> = {
   "settings-meeting-context": panelPage("settings", section(on)),
   "settings-meeting-context-off": panelPage("settings", section({ ...on, meetingContextEnabled: false })),

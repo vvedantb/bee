@@ -19,6 +19,7 @@ import {
   revealGatewayKeyResultSchema,
   settingsViewSchema,
   teamsActionResultSchema,
+  teamsAudioStatusSchema,
   teamsPublishResultSchema,
   teamsTickResultSchema,
   transcribeResultSchema,
@@ -76,8 +77,6 @@ const api = {
   checkForUpdate: async () => updateCheckSchema.parse(await ipcRenderer.invoke(IPC.checkForUpdate)),
   downloadUpdate: async () => updateActionSchema.parse(await ipcRenderer.invoke(IPC.downloadUpdate)),
   installUpdate: async () => updateActionSchema.parse(await ipcRenderer.invoke(IPC.installUpdate)),
-  // A screen source id when system audio may be capturable, else null. The mic path never depends on it.
-  systemAudioSource: async () => z.string().nullable().parse(await ipcRenderer.invoke(IPC.systemAudioSource)),
   // Tool calls starting and ending while a run is in flight. Returns the unsubscribe function.
   onLunaActivity: (listener: (activity: LunaActivity) => void): (() => void) => {
     const handler = (_event: unknown, payload: unknown) => {
@@ -130,6 +129,10 @@ const api = {
     openAccessibilitySettings: async () => {
       z.void().parse(await ipcRenderer.invoke(IPC.openAccessibilitySettings));
     },
+  },
+  // Teams audio fallback: platform support, a Teams call and coverage, as codes. The renderer decides to listen.
+  teamsAudio: {
+    status: async (sessionToken: string) => teamsAudioStatusSchema.parse(await ipcRenderer.invoke(IPC.teamsAudioStatus, { sessionToken })),
   },
   teams: {
     tick: async (sessionToken: string) => teamsTickResultSchema.parse(await ipcRenderer.invoke(IPC.teamsTick, { sessionToken })),
