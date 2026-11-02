@@ -1,7 +1,7 @@
 import { startLoopback as start, type Loopback } from "@vvedantb/server";
 
 // The redirect target for MCP sign-in: a one-shot HTTP server on 127.0.0.1 with a random port, from @vvedantb/server.
-// Not bee://, which Clerk and Teams invites use.
+// Not bee://, which Teams invites use, and not Clerk sign-in's fixed port (clerk-oauth-loopback.ts).
 
 export { LOOPBACK_PATH, LOOPBACK_TIMEOUT_MS, type Loopback } from "@vvedantb/server";
 

@@ -201,17 +201,24 @@ Bee uses [`@clerk/electron`](https://www.npmjs.com/package/@clerk/electron) with
 | Publishable key | `pk_live_Y2xlcmsudmVkYW50Yi5jb20k` (override with `VITE_CLERK_PUBLISHABLE_KEY` at build time) |
 | Frontend API host | `clerk.vedantb.com` |
 | Renderer origin | `bee://renderer` (Bee loads `bee://renderer/`, not `file://`) |
-| OAuth redirect | `bee://renderer/` |
+| OAuth redirect | `http://127.0.0.1:45789/sso-callback` (Bee's sign-in page on this computer) |
+| Return to Bee link | `bee://renderer/` |
 
 One-off setup in the [Clerk Dashboard](https://dashboard.clerk.com) for the vedantb.com instance:
 
 1. **Native applications → enable Native API.** Without it, Clerk rejects Bee with "Production Keys are only allowed for domain vedantb.com" and the panel shows "Sign-in could not load".
-2. **Allowlist the redirect URLs** `bee://renderer` and `bee://renderer/*` (Native applications → allowlist for mobile SSO redirect).
+2. **Allowlist the redirect URLs** (Native applications → Allowlist for mobile SSO redirect):
+   - Add exactly `http://127.0.0.1:45789/sso-callback`. Do this before you release a build with the loopback redirect, or social sign-in will fail. The trailing-slash form (`…/sso-callback/`) is not needed: Bee always sends the URL without it.
+   - Keep `bee://renderer` and `bee://renderer/*`. Bee still uses them as its app origin and for the **Return to Bee** link.
 3. Turn on the sign-in methods you want (email, Google and so on) under **User & authentication**.
 
 Clerk session tokens are stored by the main process, encrypted with `safeStorage`. Without an OS keyring they are not saved, so you sign in again after each restart.
 
-Social sign-in opens the system browser and returns through the `bee://` deep link. The installer registers the `bee` scheme. In `npm run dev` on Windows, the scheme is registered to the bare Electron binary, so social sign-in may not return to the app; use email sign-in in development, or test social sign-in with a packaged build.
+Social sign-in (Google, for example) opens the system browser. When it ends, the browser comes back to a small server that Bee runs on `127.0.0.1:45789` only while a sign-in is waiting (`src/main/clerk-oauth-loopback.ts`). The tab then shows Bee's own page: **Signed in to Bee**, **Almost done** (finish in Bee), **Sign-in was cancelled** or **Sign-in did not finish**, each with a **Return to Bee** button. Bee comes to the front as soon as the browser reaches that page. A sign-in waits up to 3 minutes, and only one runs at a time. If another app is using port 45789, social sign-in fails and Bee logs `Bee could not start sign-in: port 45789 is in use.`; email sign-in still works.
+
+The browser does not return through `bee://renderer/`: a browser cannot show a `bee://` link as a page, so the tab would stay on the provider's sign-in page.
+
+The installer registers the `bee` scheme for **Return to Bee** and team invites. Social sign-in no longer depends on the scheme to finish. In `npm run dev` on Windows, the scheme points at the bare Electron binary, so **Return to Bee** may not open the app there.
 
 ## Settings and secrets
 
