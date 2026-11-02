@@ -1,6 +1,6 @@
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { READ_ONLY_COMMANDS } from "../core/agent-desktop-envelope";
@@ -138,7 +138,10 @@ describe("createAgentDesktopRunner", () => {
     expect(call?.env.SECRET_KEY).toBeUndefined();
     const home = call?.env.AGENT_DESKTOP_HOME ?? "";
     expect(home.startsWith(temp)).toBe(true);
-    expect(statSync(home).mode & 0o077).toBe(0);
+    expect(statSync(home).isDirectory()).toBe(true);
+    // POSIX only: Windows has no mode bits (Node reports 0o666 for any writable entry); there the folder is private
+    // through the per-user ACL it inherits from %TEMP%.
+    if (process.platform !== "win32") expect(statSync(home).mode & 0o077).toBe(0);
     runner.cleanup();
     expect(existsSync(home)).toBe(false);
   });
@@ -185,15 +188,18 @@ describe("source scan: agent-desktop stays read-only", () => {
       return /\.(ts|tsx)$/.test(entry.name) && !/\.test\.tsx?$/.test(entry.name) ? [path] : [];
     });
 
+  // Path under src/ with "/" separators on every OS (Windows paths use "\").
+  const fromSrc = (path: string) => relative(repo("src"), path).split(sep).join("/");
+
   it("calls only read-only commands and never asks for --headed", () => {
     const sources = files(repo("src")).map((path) => ({ path, text: readFileSync(path, "utf8") }));
     // Every agent-desktop call goes through an AgentDesktopRun (main/teams-detector.ts has its own run for reg and tasklist).
     const callers = sources.filter(({ text }) => text.includes("AgentDesktopRun"));
-    expect(callers.map(({ path }) => path.slice(repo("src/").length)).sort()).toEqual(["main/agent-desktop.ts", "main/index.ts", "main/meeting-window-reader.ts"]);
+    expect(callers.map(({ path }) => fromSrc(path)).sort()).toEqual(["main/agent-desktop.ts", "main/index.ts", "main/meeting-window-reader.ts"]);
     const commands = callers.flatMap(({ text }) => [...text.matchAll(/\brun\(\s*"([a-z-]+)"/g)].map((match) => match[1]));
     expect(commands.length).toBeGreaterThan(0);
     for (const command of commands) expect(READ_ONLY_COMMANDS as readonly (string | undefined)[]).toContain(command);
-    const headed = sources.filter(({ text }) => text.includes('"--headed"')).map(({ path }) => path.slice(repo("src/").length));
+    const headed = sources.filter(({ text }) => text.includes('"--headed"')).map(({ path }) => fromSrc(path));
     expect(headed).toEqual(["core/agent-desktop-envelope.ts"]);
   });
 });
