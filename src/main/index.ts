@@ -1,11 +1,15 @@
 import { createClerkBridge } from "@clerk/electron";
 import { storage } from "@clerk/electron/storage";
-import { BrowserWindow, Menu, Tray, app, desktopCapturer, globalShortcut, ipcMain, nativeImage, screen, session, shell, systemPreferences } from "electron";
+import { BrowserWindow, Menu, Tray, app, globalShortcut, ipcMain, nativeImage, screen, session, shell, systemPreferences } from "electron";
+import { release } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { RENDERER_HOST, RENDERER_SCHEME, RENDERER_URL } from "../shared/clerk";
 import { displayMatching, placeInWorkArea, restoreOverlayBounds, scaleSize, type DisplayInfo } from "../core/interface-scale";
-import { IPC, settingsUpdateSchema, windowSizeSchema, type MeetingWindowCaptions, type WindowSize } from "../shared/ipc";
+import { IPC, TEAMS_AUDIO_LINE_MAX, settingsUpdateSchema, windowSizeSchema, type MeetingWindowCaptions, type TeamsAudioEnded, type TeamsAudioLines, type WindowSize } from "../shared/ipc";
+import { NO_GATEWAY_KEY, STT_MODEL, createBeeGateway } from "../core/gateway";
+import { teamsAudioOsSupported, teamsAudioPlatform } from "../core/teams-audio";
+import { transcribeSpeech } from "../core/transcribe";
 import { createMcpPool } from "../core/mcp";
 import { createMeetingContext } from "../core/meeting-context";
 import { createMeetingMemoryStore } from "../core/meeting-memory";
@@ -23,8 +27,12 @@ import { registerMeetingIpc } from "./meeting-ipc";
 import { ensureNotesDir } from "./notes";
 import { handleRendererProtocol } from "./renderer-protocol";
 import { createSettingsStore, type SettingsStore } from "./settings";
-import { findSystemAudioSource, isPermissionAllowed } from "./system-audio";
+import { isPermissionAllowed } from "./system-audio";
 import { createMeetingWindowReader } from "./meeting-window-reader";
+import { createTeamsAudioStatus } from "./teams-audio";
+import { createTeamsAudioCapture } from "./teams-audio-capture";
+import { resolveTeamsAudioHelper } from "./teams-audio-helper";
+import { registerTeamsAudioIpc } from "./teams-audio-ipc";
 import { createTeamsDetector, withMeetingWindow } from "./teams-detector";
 import { inviteFromArgv, registerTeamsIpc, relayUrlFromEnv } from "./teams-sync";
 import { createUpdater } from "./updater";
@@ -238,28 +246,14 @@ if (clerk.isPrimaryInstance) {
       systemPreferences.askForMediaAccess("microphone").catch((error) => console.warn("Bee: microphone access request failed:", error));
     }
 
-    // Microphone and screen capture only; every other permission is denied.
+    // Microphone only; every other permission, screen capture included, is denied.
     session.defaultSession.setPermissionRequestHandler((_contents, permission, callback) => {
       callback(isPermissionAllowed(permission));
     });
 
-    // getDisplayMedia without a picker: first screen plus loopback audio. Any failure leaves the renderer to use the mic alone.
-    session.defaultSession.setDisplayMediaRequestHandler((_request, callback) => {
-      void (async () => {
-        try {
-          const [screen] = await desktopCapturer.getSources({ types: ["screen"] });
-          if (!screen) return callback({});
-          try {
-            callback({ video: screen, audio: "loopback" });
-          } catch {
-            callback({ video: screen });
-          }
-        } catch (error) {
-          console.warn("Bee: system audio unavailable:", error);
-          callback({});
-        }
-      })();
-    });
+    // getDisplayMedia is always refused. Its only audio here is 'loopback' (all system audio), which Bee never captures; the
+    // Teams audio fallback uses the native helper instead (main/teams-audio-capture.ts, ARCHITECTURE.md). The mic is unaffected.
+    session.defaultSession.setDisplayMediaRequestHandler((_request, callback) => callback({}));
 
     // Experimental meeting window reader (Settings, off by default): agent-desktop, read-only and headless. Missing binary or
     // any failure leaves the built-in detector on its own.
@@ -304,7 +298,8 @@ if (clerk.isPrimaryInstance) {
     registerLinkIpc(settings, vmemSearch);
     registerFaviconIpc();
     // One detector for the Teams sync popup and for meeting context, so the in-call reading is shared and cached.
-    const detector = withMeetingWindow(createTeamsDetector(), meetingWindow);
+    const teamsDetector = createTeamsDetector();
+    const detector = withMeetingWindow(teamsDetector, meetingWindow);
     // Which meeting the user is in: window titles and the classic Outlook calendar (Windows), saved meetings, connected tools.
     // The brief is built here in main and sent to Luna; saved meetings stay in meeting-memory.json in the user data folder.
     const teamsTitles = createWindowTitleReader();
@@ -326,12 +321,38 @@ if (clerk.isPrimaryInstance) {
     if (pendingInvite) teams.setPendingInvite(pendingInvite);
     pendingInvite = null;
 
+    // Teams audio fallback: the native helper hears the Teams app alone (process loopback on Windows, ScreenCaptureKit on
+    // macOS); main reads its PCM, runs speech-to-text and sends text lines to the renderer. Status carries codes only; names
+    // stay here. A missing helper, an old OS or a denied permission reads as not available, and the mic carries on.
+    const teamsAudioHelper = resolveTeamsAudioHelper({ packaged: app.isPackaged, resourcesPath: process.resourcesPath, appPath: app.getAppPath() });
+    const sendToOverlay = (channel: string, payload: unknown): void => {
+      if (win && !win.isDestroyed()) win.webContents.send(channel, payload);
+    };
+    const teamsAudioCapture = createTeamsAudioCapture({
+      helperPath: () => teamsAudioHelper,
+      transcribe: (audio) => {
+        const apiKey = settings.gatewayApiKey();
+        if (!apiKey) return Promise.resolve({ text: null, error: NO_GATEWAY_KEY });
+        return transcribeSpeech({ model: createBeeGateway(apiKey).transcription(STT_MODEL), audio });
+      },
+      onLines: (id, lines) => sendToOverlay(IPC.teamsAudioLines, { id, lines: lines.map((line) => line.slice(0, TEAMS_AUDIO_LINE_MAX)) } satisfies TeamsAudioLines),
+      onEnded: (id, failure) => sendToOverlay(IPC.teamsAudioEnded, { id, failure } satisfies TeamsAudioEnded),
+    });
+    app.on("will-quit", () => teamsAudioCapture.stop());
+    const teamsAudioStatus = createTeamsAudioStatus({
+      enabled: settings.teamsAudioFallback,
+      readTeamsDetector: teamsDetector.read,
+      reader: meetingWindow,
+      syncView: teams.view,
+      host: { osSupported: teamsAudioOsSupported(teamsAudioPlatform(process.platform), release()), helperFound: teamsAudioHelper !== null },
+      permission: teamsAudioCapture.permission,
+    });
+    registerTeamsAudioIpc({ status: teamsAudioStatus, enabled: settings.teamsAudioFallback, capture: teamsAudioCapture, isMac });
+
     ipcMain.handle(IPC.setWindowSize, (_event, payload) => {
       windowSize = windowSizeSchema.parse(payload);
       if (win) resizeOverlay(win, scaleSize(SIZES[windowSize], interfaceScale));
     });
-
-    ipcMain.handle(IPC.systemAudioSource, () => findSystemAudioSource());
 
     ipcMain.handle(IPC.openNotesFolder, () => shell.openPath(notesDir));
 

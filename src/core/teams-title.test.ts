@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { currentTeamsTitle, isTeamsMeetingRow, parseTeamsTitle, parseWindowNameLines, parseWindowTitleJson } from "./teams-title";
+import { currentTeamsTitle, isTeamsMeetingRow, isTeamsWindowTitle, parseTeamsTitle, parseWindowNameLines, parseWindowTitleJson } from "./teams-title";
 
 describe("parseTeamsTitle", () => {
   it("reads the name from new Teams titles", () => {
@@ -78,5 +78,19 @@ describe("window reader output", () => {
       "Weekly Sync | Microsoft Teams",
       "Chat | Microsoft Teams",
     ]);
+  });
+});
+
+describe("isTeamsWindowTitle", () => {
+  it("accepts titles Teams writes: the bare app name, or a page ending in the app name", () => {
+    for (const title of ["Microsoft Teams", "Microsoft Teams (work or school)", "Meeting with Alice | Microsoft Teams", "Weekly Sync | Chat | Microsoft Teams", "Meeting – Microsoft Teams classic"]) {
+      expect(isTeamsWindowTitle(title)).toBe(true);
+    }
+  });
+
+  it("rejects other apps' titles that only mention Teams, and an empty page", () => {
+    for (const title of ["Microsoft Teams pricing - Google Chrome", "Notes about Microsoft Teams.txt - Notepad", "| Microsoft Teams", "", "Zoom Meeting"]) {
+      expect(isTeamsWindowTitle(title)).toBe(false);
+    }
   });
 });

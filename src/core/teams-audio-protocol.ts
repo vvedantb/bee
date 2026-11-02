@@ -1,0 +1,127 @@
+// The Teams audio helper protocol (native/teams-audio/README.md): what the in-repo native helpers write and how Bee reads it.
+// Pure: no Electron, no child processes, so tests drive it with bytes. The helpers (C++ on Windows, Swift on macOS) carry
+// their own copies of these values; core/teams-audio-protocol.test.ts checks the sources agree with this file.
+
+/** Bumped when the stdout, stderr or exit-code contract changes. The helpers print it for --version. */
+export const TEAMS_AUDIO_PROTOCOL = 1;
+
+/** stdout: raw PCM, no header. 16 kHz mono signed 16-bit little-endian, the rate speech-to-text gets (core/speech.ts). */
+export const HELPER_SAMPLE_RATE = 16_000;
+export const HELPER_CHANNELS = 1;
+export const HELPER_BYTES_PER_SAMPLE = 2;
+
+/** Bee cuts the stream into frames of this many samples (100 ms) for the phrase segmenter. */
+export const HELPER_FRAME_SAMPLES = 1_600;
+
+/**
+ * stderr: one `status=<code>` line per state change, optionally followed by ` hr=0x…` (Windows) or ` err=<n>` (macOS). Codes
+ * only: never audio, names, titles or words. Bee reads the code and drops the rest.
+ */
+export const HELPER_STATUSES = ["ready", "denied", "granted", "no-teams", "unsupported", "failed", "stopped"] as const;
+export type HelperStatus = (typeof HELPER_STATUSES)[number];
+
+/** Exit codes. 0 is a clean stop (stdin closed, a signal, or stdout closed). Anything else is a failure. */
+export const HELPER_EXIT = {
+  ok: 0,
+  usage: 2,
+  unsupported: 3,
+  denied: 4,
+  noTeams: 5,
+  failed: 6,
+} as const;
+
+/**
+ * Why a Teams audio capture did not start or stopped by itself. missing: no helper in this install. unsupported: the OS refused
+ * per-app capture (too old). denied: macOS Screen Recording is off for Bee (Windows: the audio service refused). no-teams: the
+ * Teams desktop app is not running. failed: anything else. refused: main's own check said Bee should not listen now.
+ */
+export const TEAMS_AUDIO_FAILURES = ["missing", "unsupported", "denied", "no-teams", "failed", "refused"] as const;
+export type TeamsAudioFailure = (typeof TEAMS_AUDIO_FAILURES)[number];
+
+/** Teams desktop apps on Windows, by image name (lower case). The helper includes each one's process tree. */
+export const TEAMS_WINDOWS_IMAGES = ["ms-teams.exe", "teams.exe"] as const;
+/** Teams desktop apps on macOS, by bundle id: new Teams, then classic. Their helper apps (`<id>.…`) are Teams too. */
+export const TEAMS_MAC_BUNDLE_IDS = ["com.microsoft.teams2", "com.microsoft.teams"] as const;
+/** Bee's own bundle id (package.json build.appId). Never captured. */
+export const BEE_BUNDLE_ID = "app.bee.desktop";
+
+/** Whether a macOS bundle id is a Teams app or one of its helpers ("com.microsoft.teams2.helper"). Never Bee. */
+export function isTeamsBundleId(bundleId: string): boolean {
+  const id = bundleId.toLowerCase();
+  if (id === BEE_BUNDLE_ID || id.startsWith(`${BEE_BUNDLE_ID}.`)) return false;
+  return TEAMS_MAC_BUNDLE_IDS.some((teams) => id === teams || id.startsWith(`${teams}.`));
+}
+
+/** Whether a Windows image name ("C:\\…\\ms-teams.exe" or "MS-Teams.exe") is a Teams desktop app. */
+export function isTeamsImage(image: string): boolean {
+  const name = image.split(/[\\/]/).pop()?.toLowerCase() ?? "";
+  return (TEAMS_WINDOWS_IMAGES as readonly string[]).includes(name);
+}
+
+/** The status code on one stderr line, or null for anything else (Bee never logs the line itself). */
+export function parseHelperStatus(line: string): HelperStatus | null {
+  const match = /^status=([a-z-]+)(?:\s|$)/.exec(line.trim());
+  const code = match?.[1];
+  return code && (HELPER_STATUSES as readonly string[]).includes(code) ? (code as HelperStatus) : null;
+}
+
+/** What a helper's exit means. null: a clean stop. A crash or an unknown code is "failed". */
+export function helperExitFailure(code: number | null, signal: string | null = null): TeamsAudioFailure | null {
+  if (code === HELPER_EXIT.ok && !signal) return null;
+  if (code === HELPER_EXIT.unsupported) return "unsupported";
+  if (code === HELPER_EXIT.denied) return "denied";
+  if (code === HELPER_EXIT.noTeams) return "no-teams";
+  return "failed";
+}
+
+/** A failure the helper reported on stderr before it exited. Other codes are not failures. */
+export function statusFailure(status: HelperStatus): TeamsAudioFailure | null {
+  if (status === "denied" || status === "no-teams" || status === "unsupported" || status === "failed") return status;
+  return null;
+}
+
+/**
+ * Turns stdout chunks into fixed float frames in [-1, 1). A chunk may split a sample or a frame anywhere; the tail waits for
+ * the next chunk. Nothing is kept beyond one frame.
+ */
+export function createPcmFramer(frameSamples: number = HELPER_FRAME_SAMPLES) {
+  const frameBytes = frameSamples * HELPER_BYTES_PER_SAMPLE;
+  let pending = new Uint8Array(frameBytes);
+  let filled = 0;
+
+  const decode = (bytes: Uint8Array): Float32Array => {
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    const out = new Float32Array(bytes.byteLength / HELPER_BYTES_PER_SAMPLE);
+    for (let index = 0; index < out.length; index += 1) out[index] = view.getInt16(index * HELPER_BYTES_PER_SAMPLE, true) / 32768;
+    return out;
+  };
+
+  return {
+    push(chunk: Uint8Array): Float32Array[] {
+      const frames: Float32Array[] = [];
+      let offset = 0;
+      while (offset < chunk.byteLength) {
+        const take = Math.min(frameBytes - filled, chunk.byteLength - offset);
+        pending.set(chunk.subarray(offset, offset + take), filled);
+        filled += take;
+        offset += take;
+        if (filled === frameBytes) {
+          frames.push(decode(pending));
+          pending = new Uint8Array(frameBytes);
+          filled = 0;
+        }
+      }
+      return frames;
+    },
+    /** Bytes waiting for the rest of their frame. */
+    pendingBytes: (): number => filled,
+    /** Drops a partial frame (the stream stopped). */
+    reset(): void {
+      pending = new Uint8Array(frameBytes);
+      filled = 0;
+    },
+  };
+}
+
+/** Milliseconds of audio in a number of samples at the helper rate. */
+export const helperSamplesMs = (samples: number): number => (samples * 1000) / HELPER_SAMPLE_RATE;

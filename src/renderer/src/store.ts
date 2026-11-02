@@ -4,6 +4,8 @@ import { echoesOwnLine } from "../../core/agent-desktop-meeting";
 import { detectLinks, mergeChips, visibleChips, type LinkChip } from "../../core/link-suggest";
 import { MAX_STEERING_TIPS, isFiller, isNewTurn, isQuestion, mergeTips, recentRestarts, runDelayMs, tipCap, tipKey, waitsForRun } from "../../core/steering";
 import { mergeLines, pipelineText, summaryTranscript, type SessionLine } from "../../core/sync-lines";
+import { TEAMS_AUDIO_SPEAKER, TEAMS_AUDIO_SPEAKER_ID, teamsAudioEcho, teamsAudioPlan, teamsAudioReplaced, type TeamsAudioPlan } from "../../core/teams-audio";
+import type { TeamsAudioFailure } from "../../core/teams-audio-protocol";
 import {
   SESSION_TRANSCRIPT_MAX,
   clampTip,
@@ -18,6 +20,7 @@ import {
   type SettingsUpdate,
   type SettingsView,
   type TeamsActionInput,
+  type TeamsAudioStatus,
   type TeamsView,
   type TranscribeResult,
   type UpdateCheck,
@@ -26,9 +29,10 @@ import {
 import { HINT_SHOW_MS, createHintDetector, type Hint, type HintId } from "./hints";
 import { islandOpenMs, islandShowsBody, shouldAutoCollapse, shouldShowResponse } from "./island";
 import { LOGO_DONE_MS } from "./logo";
-import { openMic, openSystemAudio } from "./mic";
+import { openMic } from "./mic";
 import { motionReduced } from "./motion";
 import { framePeak, startMicSession, type PhraseOutcome } from "./speech";
+import { openTeamsAudio } from "./teams-audio";
 import { downloadUpdate, installUpdate, updateNow } from "./update";
 
 export type Tab = "live" | "connectors" | "settings";
@@ -112,6 +116,10 @@ export type BeeState = {
   teamsError: string | null;
   // The invite step shows after starting a sync, until Done.
   inviteOpen: boolean;
+  // Teams audio fallback (core/teams-audio.ts): main's status (support, Teams call, coverage; codes only, null until the first
+  // poll), and whether Bee hears the Teams app now. failed: the capture would not open or ended in this call; Bee carries on
+  // with the mic and tries again in the next call. failure: why (core/teams-audio-protocol.ts), for the Settings line.
+  teamsAudio: { status: TeamsAudioStatus | null; listening: boolean; failed: boolean; failure: TeamsAudioFailure | null };
 };
 
 const PIPELINE_WINDOW = 8;
@@ -175,6 +183,7 @@ let state: BeeState = {
   teamsBusy: false,
   teamsError: null,
   inviteOpen: false,
+  teamsAudio: { status: null, listening: false, failed: false, failure: null },
 };
 const listeners = new Set<() => void>();
 
@@ -204,6 +213,7 @@ let heardPending = 0;
 let sampleIndex = 0;
 let localSeq = 0;
 let captionSeq = 0;
+let teamsAudioSeq = 0;
 let turnSeq = 0;
 let turnText = "";
 // Live steering. A turn is a line and those that interrupt its run (core/steering.ts isNewTurn); inside it a new line keeps
@@ -237,6 +247,10 @@ let runKept: string[] = [];
 let runTips: string[] = [];
 let restarts: number[] = [];
 let stopMic: (() => void) | null = null;
+// The Teams audio capture while it runs, and guards while it opens and while main is asked for its status.
+let stopTeamsAudio: (() => void) | null = null;
+let teamsAudioOpening = false;
+let teamsAudioTicking = false;
 let sentSize: WindowSize = "collapsed";
 let ticking = false;
 let islandHovered = false;
@@ -420,13 +434,19 @@ function selfName(): string {
  * transcript. Returns true when a run should follow.
  */
 function addLines(lines: SessionLine[]): boolean {
-  const before = state.session.lines;
-  if (before.length === 0) sessionMeetingId = state.meeting?.active ? state.meeting.id : null;
+  const current = state.session.lines;
+  if (current.length === 0) sessionMeetingId = state.meeting?.active ? state.meeting.id : null;
+  // A teammate's or caption line that repeats a recent Teams-audio line replaces it: it names the speaker. Its words are
+  // already in, so it starts no turn of its own.
+  const replaced = teamsAudioReplaced(current, lines);
+  const gone = new Set(replaced.map((entry) => entry.id));
+  const replacing = new Set(replaced.map((entry) => entry.by));
+  const before = gone.size > 0 ? current.filter((line) => !gone.has(line.id)) : current;
   const merged = mergeLines(before, lines, SESSION_TRANSCRIPT_MAX);
   set({ session: { ...state.session, lines: merged } });
   // Lines already seen start no turn.
   if (merged === before) return false;
-  const content = lines.filter((line) => !isFiller(line.text));
+  const content = lines.filter((line) => !isFiller(line.text) && !replacing.has(line.id));
   if (content.length === 0) return false;
   startTurn(content);
   return true;
@@ -800,6 +820,98 @@ async function mcpChange(change: () => Promise<McpServerView[]>, staleTestId?: s
   }
 }
 
+function setTeamsAudio(patch: Partial<BeeState["teamsAudio"]>): void {
+  set({ teamsAudio: { ...state.teamsAudio, ...patch } });
+}
+
+/** What the Teams audio fallback should do now, from the setting, main's status and the mic. */
+export function teamsAudioNow(current: Pick<BeeState, "settings" | "teamsAudio" | "mic">): TeamsAudioPlan {
+  const status = current.teamsAudio.status;
+  return teamsAudioPlan({
+    enabled: current.settings?.teamsAudioFallbackEnabled ?? false,
+    supported: status?.supported ?? false,
+    teamsCall: status?.teamsCall ?? false,
+    micOn: current.mic.on,
+    coverage: status?.coverage ?? "unknown",
+  });
+}
+
+function endTeamsAudio(): void {
+  const stop = stopTeamsAudio;
+  stopTeamsAudio = null;
+  stop?.();
+  if (state.teamsAudio.listening) setTeamsAudio({ listening: false });
+}
+
+/**
+ * Starts or stops Teams audio to match teamsAudioNow. It runs beside the mic, never mixed into it: main runs the Teams-only
+ * helper with its own phrase segmenter and speech-to-text, and sends back text. Its lines are never shared with the sync. Any
+ * failure leaves the mic, the sync and the pipeline alone.
+ */
+async function syncTeamsAudio(): Promise<void> {
+  if (teamsAudioNow(state) !== "listen") {
+    endTeamsAudio();
+    // The call ended or the mic went off: the next call tries again.
+    if (state.teamsAudio.failed) setTeamsAudio({ failed: false, failure: null });
+    return;
+  }
+  if (stopTeamsAudio || teamsAudioOpening || state.teamsAudio.failed) return;
+  teamsAudioOpening = true;
+  try {
+    const token = await getToken().catch(() => null);
+    if (!token) return;
+    const opened = await openTeamsAudio(token);
+    if (!opened.capture) {
+      // Main saw no reason to listen now (its status moved on): no failure, the next tick decides again.
+      if (opened.failure === "refused") return;
+      setTeamsAudio({ failed: true, failure: opened.failure });
+      console.debug(`teams-audio open=0 ${opened.failure}`);
+      return;
+    }
+    const capture = opened.capture;
+    // The mic may have gone off, or the call ended, while it opened.
+    if (teamsAudioNow(state) !== "listen") {
+      capture.stop();
+      return;
+    }
+    stopTeamsAudio = () => capture.stop();
+    setTeamsAudio({ listening: true, failed: false, failure: null });
+    console.debug("teams-audio open=1");
+    capture.start(
+      (texts) => actions.teamsAudioLines(texts),
+      (failure) => {
+        // Stopped by main: a failure (Teams closed, permission) is not retried in this call; a plain stop may restart.
+        endTeamsAudio();
+        if (failure) setTeamsAudio({ failed: true, failure });
+        console.debug(`teams-audio end ${failure ?? "stopped"}`);
+      },
+    );
+  } catch {
+    endTeamsAudio();
+    setTeamsAudio({ failed: true, failure: "failed" });
+    console.debug("teams-audio open=0 failed");
+  } finally {
+    teamsAudioOpening = false;
+  }
+}
+
+/** Main's Teams audio status, on the meeting tick, then start or stop to match. Signed out: no status, so no Teams audio. */
+async function teamsAudioTick(): Promise<void> {
+  if (teamsAudioTicking) return;
+  teamsAudioTicking = true;
+  try {
+    const token = await getToken().catch(() => null);
+    // Test stubs of window.bee may leave teamsAudio out.
+    const status = token ? await window.bee.teamsAudio?.status(token) : null;
+    setTeamsAudio({ status: status ?? null });
+  } catch {
+    // Main failed this tick; the last status stands until the next one.
+  } finally {
+    teamsAudioTicking = false;
+  }
+  await syncTeamsAudio();
+}
+
 /** What speech-to-text calls for each spoken phrase, in this order. Shared by the mic and the E2E mic (startTestMic). */
 const phraseCallbacks = {
   // The phrase is over: show "Got it…" now, before speech-to-text. A cough never gets here.
@@ -839,12 +951,11 @@ export function startTestMic(): { phrase: (text: string) => void } {
 
 type MicOptions = {
   transcribe: (audio: Uint8Array<ArrayBuffer>) => Promise<TranscribeResult>;
-  systemAudio: boolean;
   onFrame?: (frame: Float32Array, sampleRate: number) => void;
 };
 
-/** toggleMic's mic on. onFrame sees each frame just before the segmenter does. */
-async function startMic({ transcribe, systemAudio, onFrame }: MicOptions): Promise<void> {
+/** toggleMic's mic on: the mic alone, never system audio. onFrame sees each frame just before the segmenter does. */
+async function startMic({ transcribe, onFrame }: MicOptions): Promise<void> {
   try {
     const capture = await openMic();
     const mic = startMicSession({
@@ -859,32 +970,25 @@ async function startMic({ transcribe, systemAudio, onFrame }: MicOptions): Promi
       setMic({ level: Math.min(1, level * 4) });
       hintFrame(level, frame);
     });
-    let micOn = true;
     stopMic = () => {
-      micOn = false;
       capture.stop();
       // The phrase in progress is still transcribed.
       void mic.stop();
     };
     set({ mic: { on: true, level: 0, error: null } });
-    if (!systemAudio) return;
-    // Best effort and off the critical path: the Screen Recording prompt never blocks the mic.
-    void openSystemAudio().then((extra) => {
-      if (!extra) return;
-      if (micOn) capture.attachExtra(extra);
-      else for (const track of extra.getTracks()) track.stop();
-    });
+    // Off the critical path: Teams audio (if the fallback applies) never blocks the mic.
+    void syncTeamsAudio();
   } catch (error) {
     setMic({ ...MIC_OFF, error: `Microphone unavailable: ${error instanceof Error ? error.message : String(error)}` });
   }
 }
 
 /**
- * E2E only (test/e2e/mic-latency-page.ts): the real mic, segmenter and phrase callbacks, with no system audio. The page wraps
- * transcribe and sees each frame, so it can time every STT call against the audio clock. actions.stopMic turns it off.
+ * E2E only (test/e2e/mic-latency-page.ts): the real mic, segmenter and phrase callbacks. The page wraps transcribe and sees
+ * each frame, so it can time every STT call against the audio clock. actions.stopMic turns it off.
  */
 export function startTestMicCapture(args: { transcribe: MicOptions["transcribe"]; onFrame: NonNullable<MicOptions["onFrame"]> }): Promise<void> {
-  return startMic({ ...args, systemAudio: false });
+  return startMic(args);
 }
 
 /** E2E only: pipeline runs started since load, superseded ones included. */
@@ -901,6 +1005,8 @@ export const actions = {
   async saveSettings(update: SettingsUpdate): Promise<boolean> {
     try {
       set({ settings: await window.bee.saveSettings(update), error: null });
+      // Switching the Teams audio fallback off stops it at once.
+      void syncTeamsAudio();
       return true;
     } catch (error) {
       set({ error: error instanceof Error ? error.message : "Could not save settings" });
@@ -1079,6 +1185,25 @@ export const actions = {
     if (fresh.length > 0 && addLines(fresh)) scheduleRun();
   },
 
+  /**
+   * Phrases heard from the Teams app (Teams audio fallback). They join the session as "Meeting: …" and follow the same steering
+   * rules as captions. They are never shared with the Teams sync. A phrase that repeats a line Bee already has from the last
+   * 20 s (the user's own, a teammate's from their Bee, a caption) is dropped. Logs carry counts only.
+   */
+  teamsAudioLines(texts: string[]): void {
+    if (!state.settings?.teamsAudioFallbackEnabled) return;
+    const now = Date.now();
+    const fresh = texts
+      .map((text) => text.trim())
+      .filter((text) => text.length > 0 && !teamsAudioEcho(text, state.session.lines, now))
+      .map((text): SessionLine => {
+        teamsAudioSeq += 1;
+        return { id: `teams-audio-${teamsAudioSeq}`, own: false, speakerId: TEAMS_AUDIO_SPEAKER_ID, speakerName: TEAMS_AUDIO_SPEAKER, text, clientTs: now, serverTs: null };
+      });
+    console.debug(`teams-audio lines +${fresh.length} echo ${texts.length - fresh.length}`);
+    if (fresh.length > 0 && addLines(fresh)) scheduleRun();
+  },
+
   /** macOS: opens System Settings at Privacy & Security → Accessibility, so the user can allow Bee to read the meeting window. */
   async openAccessibilitySettings(): Promise<void> {
     try {
@@ -1086,6 +1211,16 @@ export const actions = {
     } catch {
       // The Settings line already says where to go.
     }
+  },
+
+  /** macOS: asks for Screen Recording for the Teams audio helper, then lets the next tick try Teams audio again. */
+  async openScreenRecordingSettings(): Promise<void> {
+    try {
+      await window.bee.teamsAudio.openScreenRecordingSettings();
+    } catch {
+      // The Settings line already says where to go.
+    }
+    if (state.teamsAudio.failure === "denied") setTeamsAudio({ failed: false, failure: null });
   },
 
   /**
@@ -1152,7 +1287,7 @@ export const actions = {
       actions.stopMic(null);
       return;
     }
-    await startMic({ transcribe: transcribePhrase, systemAudio: true });
+    await startMic({ transcribe: transcribePhrase });
   },
 
   stopMic(error: string | null): void {
@@ -1160,6 +1295,8 @@ export const actions = {
     stopMic = null;
     stop?.();
     set({ mic: { ...MIC_OFF, error } });
+    // Teams audio only runs while the mic is on.
+    void syncTeamsAudio();
     // Hints are about the mic: they go with it, and the levels heard are forgotten.
     hintDetector.clear();
     void hideHint();
@@ -1211,6 +1348,9 @@ void actions.refreshMcp();
 // Quiet check at start-up; the notch shows an update button only when one is available.
 void actions.checkForUpdate();
 setInterval(() => void teamsTick(), SYNC_TICK_MS);
-setInterval(() => void meetingTick(), MEETING_TICK_MS);
+setInterval(() => {
+  void meetingTick();
+  void teamsAudioTick();
+}, MEETING_TICK_MS);
 // Live captions from the experimental meeting window reader. Test stubs of window.bee may leave it out.
 window.bee.meetingWindow?.onCaptions(({ lines }) => actions.captionLines(lines));

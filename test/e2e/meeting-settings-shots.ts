@@ -4,15 +4,26 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MeetingContextSection } from "../../src/renderer/src/MeetingContextSection";
+import type { TeamsAudioView } from "../../src/renderer/src/teams-audio-message";
 import "../../src/renderer/src/styles.css";
 import { panelPage } from "./panel-shot";
 
-function section(settings: { meetingContextEnabled: boolean; meetingCalendarEnabled: boolean; meetingMemoryEnabled: boolean }): string {
-  return renderToStaticMarkup(createElement(MeetingContextSection, { settings, onChange: () => undefined, onClear: async () => 0 }));
+// The Teams audio fallback on a Mac where Screen Recording is still off for Bee: switched on (it is off by default), with the
+// button that asks.
+const teamsAudio: TeamsAudioView = {
+  status: { platform: "mac", supported: true, reason: null, teamsCall: false, coverage: "unknown", permission: "denied" },
+  plan: "waiting",
+  listening: false,
+  failed: false,
+  failure: null,
+};
+
+function section(settings: { meetingContextEnabled: boolean; meetingCalendarEnabled: boolean; meetingMemoryEnabled: boolean; teamsAudioFallbackEnabled: boolean }): string {
+  return renderToStaticMarkup(createElement(MeetingContextSection, { settings, onChange: () => undefined, onClear: async () => 0, teamsAudio, onOpenScreenRecording: () => undefined }));
 }
 
 const shot = new URLSearchParams(location.search).get("shot") ?? "settings-meeting-context";
-const on = { meetingContextEnabled: true, meetingCalendarEnabled: true, meetingMemoryEnabled: true };
+const on = { meetingContextEnabled: true, meetingCalendarEnabled: true, meetingMemoryEnabled: true, teamsAudioFallbackEnabled: true };
 const states: Record<string, string> = {
   "settings-meeting-context": panelPage("settings", section(on)),
   "settings-meeting-context-off": panelPage("settings", section({ ...on, meetingContextEnabled: false })),

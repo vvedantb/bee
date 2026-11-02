@@ -19,6 +19,10 @@ import {
   revealGatewayKeyResultSchema,
   settingsViewSchema,
   teamsActionResultSchema,
+  teamsAudioEndedSchema,
+  teamsAudioLinesSchema,
+  teamsAudioStartResultSchema,
+  teamsAudioStatusSchema,
   teamsPublishResultSchema,
   teamsTickResultSchema,
   transcribeResultSchema,
@@ -35,6 +39,8 @@ import {
   type PipelineRequest,
   type SettingsUpdate,
   type TeamsAction,
+  type TeamsAudioEnded,
+  type TeamsAudioLines,
   type TeamsPublishRequest,
   type TranscribeRequest,
   type WindowSize,
@@ -76,8 +82,6 @@ const api = {
   checkForUpdate: async () => updateCheckSchema.parse(await ipcRenderer.invoke(IPC.checkForUpdate)),
   downloadUpdate: async () => updateActionSchema.parse(await ipcRenderer.invoke(IPC.downloadUpdate)),
   installUpdate: async () => updateActionSchema.parse(await ipcRenderer.invoke(IPC.installUpdate)),
-  // A screen source id when system audio may be capturable, else null. The mic path never depends on it.
-  systemAudioSource: async () => z.string().nullable().parse(await ipcRenderer.invoke(IPC.systemAudioSource)),
   // Tool calls starting and ending while a run is in flight. Returns the unsubscribe function.
   onLunaActivity: (listener: (activity: LunaActivity) => void): (() => void) => {
     const handler = (_event: unknown, payload: unknown) => {
@@ -129,6 +133,39 @@ const api = {
     },
     openAccessibilitySettings: async () => {
       z.void().parse(await ipcRenderer.invoke(IPC.openAccessibilitySettings));
+    },
+  },
+  // Teams audio fallback: platform support, a Teams call and coverage, as codes. The renderer decides to listen; main runs the
+  // helper and speech-to-text, and sends back text lines only (never audio).
+  teamsAudio: {
+    status: async (sessionToken: string) => teamsAudioStatusSchema.parse(await ipcRenderer.invoke(IPC.teamsAudioStatus, { sessionToken })),
+    start: async (sessionToken: string) => teamsAudioStartResultSchema.parse(await ipcRenderer.invoke(IPC.teamsAudioStart, { sessionToken })),
+    stop: async () => {
+      z.void().parse(await ipcRenderer.invoke(IPC.teamsAudioStop));
+    },
+    onLines: (listener: (lines: TeamsAudioLines) => void): (() => void) => {
+      const handler = (_event: unknown, payload: unknown) => {
+        const parsed = teamsAudioLinesSchema.safeParse(payload);
+        if (parsed.success) listener(parsed.data);
+      };
+      ipcRenderer.on(IPC.teamsAudioLines, handler);
+      return () => {
+        ipcRenderer.removeListener(IPC.teamsAudioLines, handler);
+      };
+    },
+    onEnded: (listener: (ended: TeamsAudioEnded) => void): (() => void) => {
+      const handler = (_event: unknown, payload: unknown) => {
+        const parsed = teamsAudioEndedSchema.safeParse(payload);
+        if (parsed.success) listener(parsed.data);
+      };
+      ipcRenderer.on(IPC.teamsAudioEnded, handler);
+      return () => {
+        ipcRenderer.removeListener(IPC.teamsAudioEnded, handler);
+      };
+    },
+    // macOS: asks for Screen Recording once, then opens Privacy & Security → Screen Recording.
+    openScreenRecordingSettings: async () => {
+      z.void().parse(await ipcRenderer.invoke(IPC.openScreenRecordingSettings));
     },
   },
   teams: {

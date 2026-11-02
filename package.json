@@ -16,6 +16,8 @@
     "test": "vitest run",
     "landing:build": "npm --prefix landing run build",
     "icons": "node scripts/make-icons.mjs",
+    "build:teams-audio:win": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-teams-audio-windows.ps1",
+    "build:teams-audio:mac": "bash scripts/build-teams-audio-macos.sh",
     "test:gateway": "vitest run --config vitest.gateway.config.ts",
     "test:e2e": "electron-vite build && vitest run --config vitest.e2e.config.ts",
     "test:replay": "electron-vite build && BEE_E2E_MODE=replay vitest run --config vitest.e2e.config.ts test/conversation-live.e2e.test.ts",
@@ -134,6 +136,10 @@
         {
           "from": "resources/licenses/agent-desktop-Apache-2.0.txt",
           "to": "agent-desktop/LICENSE"
+        },
+        {
+          "from": "native/teams-audio/dist/win32-${arch}/teams-audio-helper.exe",
+          "to": "teams-audio/teams-audio-helper.exe"
         }
       ]
     },
@@ -174,6 +180,10 @@
         {
           "from": "resources/licenses/agent-desktop-Apache-2.0.txt",
           "to": "agent-desktop/LICENSE"
+        },
+        {
+          "from": "native/teams-audio/dist/darwin-${arch}/teams-audio-helper",
+          "to": "teams-audio/teams-audio-helper"
         }
       ],
       "hardenedRuntime": true,
@@ -184,8 +194,8 @@
       "extendInfo": {
         "LSUIElement": true,
         "NSMicrophoneUsageDescription": "Bee listens to your microphone during meetings to transcribe speech and suggest tips. Audio is sent only for transcription.",
-        "NSAudioCaptureUsageDescription": "Bee can capture meeting audio to transcribe it. This is optional.",
-        "NSScreenCaptureUsageDescription": "Bee can capture system (meeting) audio, which macOS counts as screen recording. This is optional."
+        "NSAudioCaptureUsageDescription": "Bee can hear the Microsoft Teams app, and only Teams, during a call when someone in it does not have Bee, to transcribe it. Optional; turn it off in Settings.",
+        "NSScreenCaptureUsageDescription": "Bee hears the Microsoft Teams app's sound, and only Teams, during a call when someone in it does not have Bee. macOS counts app audio as Screen Recording. Bee never records your screen or other apps."
       }
     },
     "linux": {

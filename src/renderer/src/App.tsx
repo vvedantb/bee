@@ -32,8 +32,9 @@ import { bodyFollowsNewest, islandClick, mcpErrorNote, timingsLabel, timingsTitl
 import { NOTCH_LOGO_PX } from "./logo";
 import { focusKeyFieldWhenReady, GATEWAY_KEY_FIELD_ID, statusClick, type StatusClick } from "./island-click";
 import { NOTCH_BUTTON, NOTCH_UPDATE_BUTTON, logoState, notchLine, workingLabel, type NotchLine } from "./notch";
-import { actions, answerFolded, displayResult, islandOpen, responseOpen, useBee, type BeeState, type SummaryState, type UpdateState } from "./store";
+import { actions, answerFolded, displayResult, islandOpen, responseOpen, teamsAudioNow, useBee, type BeeState, type SummaryState, type UpdateState } from "./store";
 import { SyncCard, SyncSection, TeamSection, syncedWith } from "./Teams";
+import { TEAMS_AUDIO_LISTENING } from "./teams-audio-message";
 import { updateButton } from "./update";
 
 const ICON = { size: 16, stroke: 1.75 };
@@ -281,11 +282,16 @@ function summaryLabel(summary: SummaryState, lineCount: number): string {
   return "Saves decisions, action items and notes cited to your notes folder, so Bee can recall them next time.";
 }
 
-// The spoken lines are sent to main for the summary but never shown here.
-function MeetingSection({ summary, lineCount }: { summary: SummaryState; lineCount: number }) {
+// The spoken lines are sent to main for the summary but never shown here. teamsAudio: Bee hears the Teams app now.
+function MeetingSection({ summary, lineCount, teamsAudio }: { summary: SummaryState; lineCount: number; teamsAudio: boolean }) {
   return (
     <section>
       <h2>Meeting</h2>
+      {teamsAudio ? (
+        <p className="muted" role="status">
+          {TEAMS_AUDIO_LISTENING}
+        </p>
+      ) : null}
       <div className="row actions">
         <Button type="button" size="sm" disabled={lineCount === 0 || summary.saving} onClick={() => void actions.endMeeting()}>
           <IconNotebook {...ICON} /> End meeting &amp; save summary
@@ -355,7 +361,7 @@ function LiveTab({ state }: { state: BeeState }) {
 
       <SyncSection state={state} />
 
-      <MeetingSection summary={state.summary} lineCount={state.session.lines.length} />
+      <MeetingSection summary={state.summary} lineCount={state.session.lines.length} teamsAudio={state.teamsAudio.listening} />
 
       <section>
         <h2>
@@ -572,6 +578,8 @@ function SettingsTab({ state, settings }: { state: BeeState; settings: SettingsV
         onClear={() => actions.clearMeetingMemory()}
         reader={state.meeting?.reader}
         onOpenAccessibility={() => void actions.openAccessibilitySettings()}
+        teamsAudio={{ ...state.teamsAudio, plan: teamsAudioNow(state) }}
+        onOpenScreenRecording={() => void actions.openScreenRecordingSettings()}
       />
 
       <TeamSection state={state} />

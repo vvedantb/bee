@@ -62,13 +62,20 @@ const MAX_BUFFER = 16 * 1024 * 1024;
 // XAUTHORITY or KEYBOARD settings stay.
 const SECRET_ENV = /(^|_)(API_?KEY|KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?)(_|$)/i;
 
-/** Bee's environment without secrets or another agent-desktop session, plus Bee's private state folder and the macOS helper. */
-export function childEnv(base: NodeJS.ProcessEnv, home: string, macHelper: string | null): NodeJS.ProcessEnv {
+/** Bee's environment without secret-looking variables, for any helper process Bee starts. */
+export function withoutSecrets(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const [name, value] of Object.entries(base)) {
-    if (value === undefined || SECRET_ENV.test(name) || name.startsWith("AGENT_DESKTOP_")) continue;
+    if (value === undefined || SECRET_ENV.test(name)) continue;
     env[name] = value;
   }
+  return env;
+}
+
+/** Bee's environment without secrets or another agent-desktop session, plus Bee's private state folder and the macOS helper. */
+export function childEnv(base: NodeJS.ProcessEnv, home: string, macHelper: string | null): NodeJS.ProcessEnv {
+  const env = withoutSecrets(base);
+  for (const name of Object.keys(env)) if (name.startsWith("AGENT_DESKTOP_")) delete env[name];
   env.AGENT_DESKTOP_HOME = home;
   if (macHelper) env.AGENT_DESKTOP_MACOS_HELPER_PATH = macHelper;
   return env;

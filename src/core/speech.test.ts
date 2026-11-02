@@ -1,7 +1,7 @@
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
-import { readWav, speechSpans } from "../../../test/helpers/wav";
-import { transcribeRequestSchema, type TranscribeResult } from "../../shared/ipc";
+import { readWav, speechSpans } from "../../test/helpers/wav";
+import { transcribeRequestSchema, type TranscribeResult } from "../shared/ipc";
 import { END_SILENCE_MS, MAX_PHRASE_MS, MIN_SPEECH_MS, WAV_SAMPLE_RATE, createSegmenter, encodeWav, frameLevel, startMicSession } from "./speech";
 
 const RATE = 48_000;
@@ -74,7 +74,7 @@ describe("createSegmenter", () => {
 
 // The live mic E2E fixture (espeak-ng): "what's in the news in London today", 2.5 s of silence, "why are there tube closures".
 // Its samples go through the segmenter frame by frame, as the store's mic does, at the file's rate and resampled to 48 kHz.
-const FIXTURE = fileURLToPath(new URL("../../../test/fixtures/london-tube-question.wav", import.meta.url));
+const FIXTURE = fileURLToPath(new URL("../../test/fixtures/london-tube-question.wav", import.meta.url));
 // A sample at or above this is speech; a quieter gap this long separates phrases.
 const SAMPLE_LEVEL = 0.001;
 const GAP_S = 0.5;

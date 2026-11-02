@@ -12,12 +12,10 @@ vi.mock("./mic", () => ({
     start: (listener: (frame: Float32Array) => void) => {
       onFrame = listener;
     },
-    attachExtra: () => undefined,
     stop: () => {
       onFrame = null;
     },
   }),
-  openSystemAudio: async () => null,
 }));
 
 // 4096 samples at 48 kHz (mic.ts).
@@ -40,6 +38,7 @@ const SETTINGS: SettingsView = {
   meetingCalendarEnabled: false,
   meetingMemoryEnabled: false,
   readMeetingWindowEnabled: false,
+  teamsAudioFallbackEnabled: false,
   hintsEnabled: true,
 };
 
