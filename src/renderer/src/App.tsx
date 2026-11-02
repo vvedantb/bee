@@ -549,6 +549,7 @@ function SettingsTab({ state, settings }: { state: BeeState; settings: SettingsV
         reader={state.meeting?.reader}
         onOpenAccessibility={() => void actions.openAccessibilitySettings()}
         teamsAudio={{ ...state.teamsAudio, plan: teamsAudioNow(state) }}
+        onOpenScreenRecording={() => void actions.openScreenRecordingSettings()}
       />
 
       <TeamSection state={state} />

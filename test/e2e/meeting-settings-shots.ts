@@ -8,16 +8,17 @@ import type { TeamsAudioView } from "../../src/renderer/src/teams-audio-message"
 import "../../src/renderer/src/styles.css";
 import { panelPage } from "./panel-shot";
 
-// The Teams audio fallback as this build shows it on a Mac: on by default, not available.
+// The Teams audio fallback on a Mac where Screen Recording is still off for Bee: on by default, with the button that asks.
 const teamsAudio: TeamsAudioView = {
-  status: { platform: "mac", supported: false, reason: "needs-app-audio", teamsCall: false, coverage: "unknown" },
-  plan: "unavailable",
+  status: { platform: "mac", supported: true, reason: null, teamsCall: false, coverage: "unknown", permission: "denied" },
+  plan: "waiting",
   listening: false,
   failed: false,
+  failure: null,
 };
 
 function section(settings: { meetingContextEnabled: boolean; meetingCalendarEnabled: boolean; meetingMemoryEnabled: boolean; teamsAudioFallbackEnabled: boolean }): string {
-  return renderToStaticMarkup(createElement(MeetingContextSection, { settings, onChange: () => undefined, onClear: async () => 0, teamsAudio }));
+  return renderToStaticMarkup(createElement(MeetingContextSection, { settings, onChange: () => undefined, onClear: async () => 0, teamsAudio, onOpenScreenRecording: () => undefined }));
 }
 
 const shot = new URLSearchParams(location.search).get("shot") ?? "settings-meeting-context";

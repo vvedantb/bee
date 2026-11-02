@@ -5,7 +5,8 @@ on:
   push:
 
 jobs:
-  # Catches Windows-only test failures (path separators, POSIX mode bits) on PRs, not only in the release run.
+  # Catches Windows-only test failures (path separators, POSIX mode bits) on PRs, not only in the release run. Also builds the
+  # Teams audio helper (native/teams-audio/windows) and checks the unpacked app carries it.
   windows:
     runs-on: windows-latest
     steps:
@@ -15,8 +16,28 @@ jobs:
           node-version: "22"
           cache: npm
       - run: npm ci
+      # Fails the job if the helper does not compile or does not answer --version (which never opens audio).
+      - name: Build Teams audio helper
+        run: npm run build:teams-audio:win
+      - name: Check Teams audio helper
+        shell: pwsh
+        run: |
+          $helper = "native/teams-audio/dist/win32-x64/teams-audio-helper.exe"
+          if (-not (Test-Path $helper)) { throw "Teams audio helper missing: $helper" }
       - run: npm run typecheck
       - run: npm test
+      - run: npx electron-vite build
+      - name: Package Windows (unpacked, unsigned)
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: npx electron-builder --win dir --x64 --publish never
+      - name: Check packaged Teams audio helper
+        shell: pwsh
+        run: |
+          $helper = "release/win-unpacked/resources/teams-audio/teams-audio-helper.exe"
+          if (-not (Test-Path $helper)) { throw "Teams audio helper not packaged: $helper" }
+          $version = & $helper --version
+          if ($LASTEXITCODE -ne 0 -or "$version" -ne "teams-audio-helper protocol=1") { throw "Packaged Teams audio helper --version failed: $version" }
 
   macos:
     runs-on: macos-latest
@@ -27,6 +48,14 @@ jobs:
           node-version: "22"
           cache: npm
       - run: npm ci
+      # Fails the job if either helper does not compile, is the wrong architecture or does not answer --version.
+      - name: Build Teams audio helpers (arm64 + x64)
+        run: npm run build:teams-audio:mac
+      - name: Check Teams audio helpers
+        run: |
+          for arch in arm64 x64; do
+            test -f "native/teams-audio/dist/darwin-$arch/teams-audio-helper" || { echo "Teams audio helper missing: $arch"; exit 1; }
+          done
       - run: npm test
       # Typecheck runs inside build.
       - run: npm run build
@@ -39,6 +68,18 @@ jobs:
         run: npx electron-builder --mac dmg zip --arm64 --x64 --publish never
       - name: Check app.asar modules
         run: node scripts/check-asar-modules.mjs release/mac-arm64/Bee.app/Contents/Resources/app.asar
+      - name: Check packaged Teams audio helpers
+        run: |
+          check() {
+            helper="$1/Contents/Resources/teams-audio/teams-audio-helper"
+            test -f "$helper" || { echo "Teams audio helper not packaged: $helper"; exit 1; }
+            arch="$(lipo -archs "$helper")"
+            [ "$arch" = "$2" ] || { echo "$helper is $arch, expected $2"; exit 1; }
+          }
+          check release/mac-arm64/Bee.app arm64
+          check release/mac/Bee.app x86_64
+          version="$(release/mac-arm64/Bee.app/Contents/Resources/teams-audio/teams-audio-helper --version)"
+          [ "$version" = "teams-audio-helper protocol=1" ] || { echo "Packaged Teams audio helper --version failed: $version"; exit 1; }
       - name: Smoke test packaged app
         run: |
           # macOS has no timeout command: kill the app after 30 s.

@@ -61,15 +61,18 @@ describe("package.json packaging", () => {
   const build = JSON.parse(readFileSync(repo("package.json"), "utf8")).build;
   const expand = (path: string, arch: string) => path.replace("${arch}", arch);
 
+  // The Teams audio helper's entries (teams-audio/…) are built in CI, not installed by npm: main/teams-audio-helper.test.ts.
+  const agentDesktop = (entries: Array<{ from: string; to: string }>) => entries.filter((entry) => entry.to.startsWith("agent-desktop/"));
+
   it("copies only the target's own binary (and macOS helper) into Resources/agent-desktop, with its Apache-2.0 LICENSE", () => {
-    expect(build.mac.extraResources.map((entry: { to: string }) => entry.to)).toEqual([
+    expect(agentDesktop(build.mac.extraResources).map((entry) => entry.to)).toEqual([
       "agent-desktop/agent-desktop",
       "agent-desktop/agent-desktop-macos-helper",
       "agent-desktop/LICENSE",
     ]);
-    expect(build.win.extraResources.map((entry: { to: string }) => entry.to)).toEqual(["agent-desktop/agent-desktop.exe", "agent-desktop/LICENSE"]);
-    for (const arch of ["arm64", "x64"]) for (const entry of build.mac.extraResources) expect(existsSync(repo(expand(entry.from, arch))), expand(entry.from, arch)).toBe(true);
-    for (const entry of build.win.extraResources) expect(existsSync(repo(expand(entry.from, "x64"))), entry.from).toBe(true);
+    expect(agentDesktop(build.win.extraResources).map((entry) => entry.to)).toEqual(["agent-desktop/agent-desktop.exe", "agent-desktop/LICENSE"]);
+    for (const arch of ["arm64", "x64"]) for (const entry of agentDesktop(build.mac.extraResources)) expect(existsSync(repo(expand(entry.from, arch))), expand(entry.from, arch)).toBe(true);
+    for (const entry of agentDesktop(build.win.extraResources)) expect(existsSync(repo(expand(entry.from, "x64"))), entry.from).toBe(true);
   });
 
   it("keeps every OS's binaries out of app.asar", () => {

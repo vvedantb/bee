@@ -10,7 +10,7 @@ import {
   type TeamsView,
 } from "../../shared/ipc";
 import type { startMicSession } from "./speech";
-import type { TeamsAudioCapture } from "./teams-audio";
+import type { TeamsAudioCapture, TeamsAudioOpen } from "./teams-audio";
 
 // The Teams audio fallback in the store: lines from the Teams app join the session like captions, are deduped against speech
 // Bee already has, and are never shared. The capture runs beside the mic, never in it. Preload (window.bee), Clerk, the mic,
@@ -19,7 +19,7 @@ type MicArgs = Parameters<typeof startMicSession>[0];
 
 const sessions: MicArgs[] = [];
 const capture = vi.hoisted(() => ({
-  open: async (): Promise<TeamsAudioCapture | null> => null,
+  open: async (): Promise<TeamsAudioOpen> => ({ capture: null, failure: "failed" }),
   opened: 0,
   stopped: 0,
 }));
@@ -84,23 +84,26 @@ const VIEW: TeamsView = {
   shareMuted: false,
 };
 
-// What a platform with a Teams-only capture path would report in a Teams call where someone may not have Bee.
-const LISTEN: TeamsAudioStatus = { platform: "windows", supported: true, reason: null, teamsCall: true, coverage: "uncovered" };
-// What this build reports on Windows: no Teams-only capture path.
-const THIS_BUILD: TeamsAudioStatus = { platform: "windows", supported: false, reason: "needs-app-audio", teamsCall: false, coverage: "unknown" };
+// What Windows reports with the helper installed, in a Teams call where someone may not have Bee.
+const LISTEN: TeamsAudioStatus = { platform: "windows", supported: true, reason: null, teamsCall: true, coverage: "uncovered", permission: "not-needed" };
+// What a copy of Bee without the helper reports: no Teams-only capture here.
+const NO_HELPER: TeamsAudioStatus = { platform: "windows", supported: false, reason: "helper-missing", teamsCall: false, coverage: "unknown", permission: "not-needed" };
 
+/** A capture main started: lines() delivers text as main would, end() stops it from main's side. */
 function fakeCapture() {
-  let onEnd: () => void = () => undefined;
+  let onLines: (texts: string[]) => void = () => undefined;
+  let onEnd: Parameters<TeamsAudioCapture["start"]>[1] = () => undefined;
   const source: TeamsAudioCapture = {
-    sampleRate: 48_000,
-    start: (_onFrame, end) => {
+    start: (lines, end) => {
+      onLines = lines;
       onEnd = end;
     },
     stop: () => {
       capture.stopped += 1;
     },
   };
-  return { source, end: () => onEnd() };
+  const opened: TeamsAudioOpen = { capture: source, failure: null };
+  return { opened, lines: (texts: string[]) => onLines(texts), end: (failure: Parameters<typeof onEnd>[0] = "no-teams") => onEnd(failure) };
 }
 
 async function loadStore(options: { settings?: Partial<SettingsView>; status?: TeamsAudioStatus } = {}) {
@@ -108,7 +111,7 @@ async function loadStore(options: { settings?: Partial<SettingsView>; status?: T
   const published: string[] = [];
   let teammates: TeamsTickResult["lines"] = [];
   let captions: (payload: MeetingWindowCaptions) => void = () => undefined;
-  const audio = { status: options.status ?? LISTEN };
+  const audio = { status: options.status ?? LISTEN, screenRecordingAsked: 0 };
   let settings = { ...SETTINGS, ...options.settings };
   vi.stubGlobal("window", {
     bee: {
@@ -138,7 +141,12 @@ async function loadStore(options: { settings?: Partial<SettingsView>; status?: T
           return () => undefined;
         },
       },
-      teamsAudio: { status: async () => audio.status },
+      teamsAudio: {
+        status: async () => audio.status,
+        openScreenRecordingSettings: async () => {
+          audio.screenRecordingAsked += 1;
+        },
+      },
     },
   });
   const store = await import("./store");
@@ -167,7 +175,7 @@ describe("store: Teams audio lines", () => {
     vi.useFakeTimers();
     vi.resetModules();
     sessions.length = 0;
-    capture.open = async () => null;
+    capture.open = async () => ({ capture: null, failure: "failed" });
     capture.opened = 0;
     capture.stopped = 0;
   });
@@ -178,7 +186,7 @@ describe("store: Teams audio lines", () => {
   });
 
   it("runs the pipeline on Teams audio as an unnamed speaker, and never shares it with the sync", async () => {
-    const { store, requests, published, heard } = await loadStore({ status: THIS_BUILD });
+    const { store, requests, published, heard } = await loadStore({ status: NO_HELPER });
     await heard("When does SSO ship for enterprise customers?");
     expect(requests.at(-1)?.transcript).toEqual(["Meeting: When does SSO ship for enterprise customers?"]);
     expect(store.getBeeState().session.lines.map((line) => [line.own, line.speakerId])).toEqual([[false, "teams-audio"]]);
@@ -193,7 +201,7 @@ describe("store: Teams audio lines", () => {
   });
 
   it("drops Teams audio that repeats the user's own line, a teammate's Bee line or a caption", async () => {
-    const { store, heard, teammate, caption, said } = await loadStore({ status: THIS_BUILD });
+    const { store, heard, teammate, caption, said } = await loadStore({ status: NO_HELPER });
     await store.actions.toggleMic();
     sessions.at(-1)?.onLine("we can offer fifteen percent off this quarter");
     await vi.advanceTimersByTimeAsync(1000);
@@ -212,7 +220,7 @@ describe("store: Teams audio lines", () => {
   });
 
   it("lets a later teammate or caption line replace a Teams audio line, without a second run", async () => {
-    const { requests, heard, teammate, caption, said } = await loadStore({ status: THIS_BUILD });
+    const { requests, heard, teammate, caption, said } = await loadStore({ status: NO_HELPER });
     const spokenAt = Date.now();
     await heard("Does that include the support plan?");
     await heard("Let us check the roadmap first.");
@@ -229,7 +237,7 @@ describe("store: Teams audio capture", () => {
     vi.useFakeTimers();
     vi.resetModules();
     sessions.length = 0;
-    capture.open = async () => null;
+    capture.open = async () => ({ capture: null, failure: "failed" });
     capture.opened = 0;
     capture.stopped = 0;
   });
@@ -239,27 +247,27 @@ describe("store: Teams audio capture", () => {
     vi.unstubAllGlobals();
   });
 
-  it("never opens a capture in this build, where no platform can hear Teams alone", async () => {
-    const { store, poll } = await loadStore({ status: THIS_BUILD });
+  it("never opens a capture where Bee cannot hear Teams alone (here: no helper installed)", async () => {
+    const { store, poll } = await loadStore({ status: NO_HELPER });
     await store.actions.toggleMic();
     await poll();
     expect(capture.opened).toBe(0);
-    expect(store.getBeeState().teamsAudio).toEqual({ status: THIS_BUILD, listening: false, failed: false });
+    expect(store.getBeeState().teamsAudio).toEqual({ status: NO_HELPER, listening: false, failed: false, failure: null });
     expect(store.teamsAudioNow(store.getBeeState())).toBe("unavailable");
     expect(sessions).toHaveLength(1);
   });
 
-  it("listens beside the mic, in its own speech session, and stops when the mic goes off", async () => {
+  it("listens beside the mic: main sends text, never audio, and it stops when the mic goes off", async () => {
     const fake = fakeCapture();
-    capture.open = async () => fake.source;
+    capture.open = async () => fake.opened;
     const { store, poll, published, said } = await loadStore();
     await store.actions.toggleMic();
     await poll();
     expect(capture.opened).toBe(1);
     expect(store.getBeeState().teamsAudio.listening).toBe(true);
-    // One session for the mic, one for Teams audio: frames are never mixed.
-    expect(sessions).toHaveLength(2);
-    sessions[1]?.onLine("Can you send the contract today?");
+    // Only the mic has a speech session here: Teams audio is segmented and transcribed in main, never mixed into the mic.
+    expect(sessions).toHaveLength(1);
+    fake.lines(["Can you send the contract today?"]);
     await vi.advanceTimersByTimeAsync(1000);
     expect(said()).toEqual(["Meeting: Can you send the contract today?"]);
     expect(published).toEqual([]);
@@ -271,7 +279,7 @@ describe("store: Teams audio capture", () => {
 
   it("does not listen until the mic is on, or while everyone has Bee, and stops when the setting goes off", async () => {
     const fake = fakeCapture();
-    capture.open = async () => fake.source;
+    capture.open = async () => fake.opened;
     const { store, poll, audio } = await loadStore({ status: { ...LISTEN, coverage: "covered" } });
     await poll();
     expect(capture.opened).toBe(0);
@@ -290,7 +298,7 @@ describe("store: Teams audio capture", () => {
 
   it("fails open: a capture that will not open leaves the mic on and is not retried until the next call", async () => {
     capture.open = async () => {
-      throw new Error("no audio track");
+      throw new Error("no handler");
     };
     const { store, poll, audio } = await loadStore();
     await store.actions.toggleMic();
@@ -298,26 +306,79 @@ describe("store: Teams audio capture", () => {
     await poll();
     expect(capture.opened).toBe(1);
     expect(store.getBeeState().mic.on).toBe(true);
-    expect(store.getBeeState().teamsAudio).toMatchObject({ listening: false, failed: true });
+    expect(store.getBeeState().teamsAudio).toMatchObject({ listening: false, failed: true, failure: "failed" });
     audio.status = { ...LISTEN, teamsCall: false };
     await poll();
-    expect(store.getBeeState().teamsAudio.failed).toBe(false);
+    expect(store.getBeeState().teamsAudio).toMatchObject({ failed: false, failure: null });
     audio.status = LISTEN;
     await poll();
     expect(capture.opened).toBe(2);
   });
 
-  it("stops and does not reopen in this call when the source ends (Teams closed)", async () => {
-    const fake = fakeCapture();
-    capture.open = async () => fake.source;
+  it("keeps main's reason when the helper will not start (no Teams app, denied, unsupported, missing)", async () => {
+    for (const failure of ["no-teams", "denied", "unsupported", "missing"] as const) {
+      vi.resetModules();
+      capture.opened = 0;
+      capture.open = async () => ({ capture: null, failure });
+      const { store, poll } = await loadStore();
+      await store.actions.toggleMic();
+      await poll();
+      await poll();
+      expect(capture.opened).toBe(1);
+      expect(store.getBeeState().teamsAudio).toMatchObject({ listening: false, failed: true, failure });
+      expect(store.getBeeState().mic.on).toBe(true);
+      store.actions.stopMic(null);
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("does not count main refusing to start (its status moved on) as a failure, and asks again on the next poll", async () => {
+    capture.open = async () => ({ capture: null, failure: "refused" });
     const { store, poll } = await loadStore();
     await store.actions.toggleMic();
     await poll();
-    fake.end();
-    expect(store.getBeeState().teamsAudio).toMatchObject({ listening: false, failed: true });
+    expect(store.getBeeState().teamsAudio).toMatchObject({ listening: false, failed: false, failure: null });
+    await poll();
+    expect(capture.opened).toBe(2);
+  });
+
+  it("stops and does not reopen in this call when the helper fails (Teams closed)", async () => {
+    const fake = fakeCapture();
+    capture.open = async () => fake.opened;
+    const { store, poll } = await loadStore();
+    await store.actions.toggleMic();
+    await poll();
+    fake.end("no-teams");
+    expect(store.getBeeState().teamsAudio).toMatchObject({ listening: false, failed: true, failure: "no-teams" });
     expect(capture.stopped).toBe(1);
     await poll();
     expect(capture.opened).toBe(1);
     expect(store.getBeeState().mic.on).toBe(true);
+  });
+
+  it("may start again after main stops it without a failure", async () => {
+    const fake = fakeCapture();
+    capture.open = async () => fake.opened;
+    const { store, poll } = await loadStore();
+    await store.actions.toggleMic();
+    await poll();
+    fake.end(null);
+    expect(store.getBeeState().teamsAudio).toMatchObject({ listening: false, failed: false });
+    await poll();
+    expect(capture.opened).toBe(2);
+    expect(store.getBeeState().teamsAudio.listening).toBe(true);
+  });
+
+  it("macOS: asking for Screen Recording clears a denied capture so the next poll tries again", async () => {
+    capture.open = async () => ({ capture: null, failure: "denied" });
+    const { store, poll, audio } = await loadStore({ status: { ...LISTEN, platform: "mac", permission: "unknown" } });
+    await store.actions.toggleMic();
+    await poll();
+    expect(store.getBeeState().teamsAudio).toMatchObject({ failed: true, failure: "denied" });
+    await store.actions.openScreenRecordingSettings();
+    expect(audio.screenRecordingAsked).toBe(1);
+    expect(store.getBeeState().teamsAudio).toMatchObject({ failed: false, failure: null });
+    await poll();
+    expect(capture.opened).toBe(2);
   });
 });

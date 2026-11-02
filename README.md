@@ -9,6 +9,7 @@
 **From source:**
 ```powershell
 npm install
+npm run build:teams-audio:win   # Teams audio helper; needs Visual Studio 2022 (C++ workload) and CMake
 npm run dist:win
 # outputs under release/
 ```
@@ -18,7 +19,7 @@ npm run dist:win
 Download `Bee-x.y.z-arm64.dmg` (Apple Silicon) or `Bee-x.y.z.dmg` (Intel), or the matching `-mac.zip` from [Releases](https://github.com/vvedantb/bee/releases). Open the dmg and drag Bee to Applications. Builds are not signed or notarised yet, so Gatekeeper will warn: right-click Bee, choose **Open**, then confirm.
 
 - **Microphone.** macOS asks the first time Bee starts. If you decline, allow Bee under System Settings → Privacy & Security → Microphone.
-- **Screen Recording.** Not needed. Bee does not capture the screen or system audio. **Settings → Hear Teams when not everyone has Bee** says that it is not available on this Mac yet (see [Teams audio fallback](#teams-audio-fallback)).
+- **Screen Recording.** Only for **Settings → Hear Teams when not everyone has Bee** (on by default). macOS counts any app's sound as screen recording. Bee hears the Teams app alone and never records the screen or other apps. Bee never asks during a call: Settings shows **Open Screen Recording settings** when it needs access (see [Teams audio fallback](#teams-audio-fallback)). Without it, Bee uses your mic only.
 - **Menu bar.** Bee has no Dock icon. The tray icon is a menu bar extra: click it for Show / hide, Open notes folder and Quit.
 - **Shortcut.** `Cmd+Shift+Space` shows or hides Bee (`Ctrl+Shift+Space` on Windows and Linux). If another app holds the shortcut, Bee logs a warning and carries on.
 - **Notes folder.** `~/Library/Application Support/Bee/notes`.
@@ -28,6 +29,7 @@ Download `Bee-x.y.z-arm64.dmg` (Apple Silicon) or `Bee-x.y.z.dmg` (Intel), or th
 **From source:**
 ```bash
 npm install
+npm run build:teams-audio:mac   # Teams audio helper for arm64 and x64; needs Xcode with the macOS 13 SDK or later
 npm run dist:mac
 # outputs under release/ (dmg and zip, one each for arm64 and x64)
 ```
@@ -118,7 +120,7 @@ It fails open. The whole step has a 2 second limit. With the switch off or the G
 
 Bee transcribes with **Grok STT** (`xai/grok-stt`) through Vercel AI Gateway, using the same Gateway key as the AI and Jev.
 
-1. The mic is captured with Web Audio. A simple level detector cuts the audio into phrases: speech, then 0.8 s of silence, up to 15 s per phrase. Blips under 0.3 s are dropped without a Gateway call. Bee records the mic only. It never mixes in system audio.
+1. The mic is captured with Web Audio. A simple level detector cuts the audio into phrases: speech, then 0.8 s of silence, up to 15 s per phrase. Blips under 0.3 s are dropped without a Gateway call. Bee never mixes system audio into the mic. The [Teams audio fallback](#teams-audio-fallback) is a separate stream of the Teams app alone.
 2. Each phrase is sent to the main process as a 16 kHz mono WAV. Main calls Grok STT (flex tier) and returns the text.
 3. The text joins a short internal buffer (the last 8 lines), and the pipeline runs. The words are never shown on screen.
 
@@ -173,7 +175,24 @@ If the relay cannot be reached, Bee says "Bee is working solo" and carries on wi
 
 What it hears joins your transcript as "Meeting: …". It is never shared with the sync. A phrase that repeats one of your lines, a teammate's or a caption from the last 20 seconds is dropped.
 
-**It does not listen on any platform yet.** Bee hears the Teams app alone or nothing. It never records all system audio. Electron, the framework Bee is built on, can only capture all system audio, and Bee adds no native module. So Settings says "not available" on Windows, macOS and Linux, and Bee uses your mic only. Before this release, Bee mixed all system audio into the mic. That is gone. See [ARCHITECTURE.md](ARCHITECTURE.md#teams-audio-fallback) for what a Teams-only capture would need.
+While it listens, **Live → Meeting** says "Listening to Teams audio for people without Bee."
+
+**Teams only, never all system audio.** A small helper program that ships inside Bee captures the Teams desktop app alone (source in `native/teams-audio`). If it cannot keep to Teams, it does not start.
+
+| | Windows | macOS |
+| --- | --- | --- |
+| Needs | Windows 10 version 2004 (build 19041) or later. Microsoft documents the API from build 20348 (Windows 11 and Windows Server 2022). If an older Windows 10 build refuses, Settings says so. | macOS 13 or later |
+| Permission | None | Screen Recording ("Screen & System Audio Recording" on macOS 15) |
+| Hears | The Teams app (`ms-teams.exe` or `Teams.exe`) and the programs it runs, such as its web view. If Teams has started anything else, such as a browser opened from a link, Bee stops listening rather than hear it. | The Teams app and its helper apps |
+| Never | Other apps, the rest of the system, Teams in a browser | Other apps, the screen, Teams in a browser |
+
+**macOS permission.** macOS files any app's sound under Screen Recording. Bee never asks during a call. When it needs access, Settings says so and shows **Open Screen Recording settings**. That button asks macOS once (its own prompt), then opens System Settings → Privacy & Security → Screen Recording. Turn on Bee. If Bee still cannot hear Teams, quit and reopen Bee. Unsigned builds may need this again after an update, because macOS ties the permission to the app's signature. On macOS 15, macOS may also ask from time to time whether Bee may keep access.
+
+**Fails open.** A missing helper, an old OS, no permission, Teams not running or any helper error: Settings says why, Bee carries on with your mic, and it tries again in the next call.
+
+**Privacy.** Teams audio stays in memory in Bee's main process. Each phrase goes to speech-to-text like a mic phrase, and only the text reaches the window. Logs carry codes and counts, never audio or words.
+
+Before this release, Bee mixed all system audio into the mic. That is gone. See [ARCHITECTURE.md](ARCHITECTURE.md#teams-audio-fallback) and [native/teams-audio/README.md](native/teams-audio/README.md).
 
 ### Mute gating
 
@@ -196,7 +215,7 @@ To show full names without typing them, add a `name` claim to the Clerk session 
 - **Detection false positives and misses.** The Windows heuristic can fire on a Teams call that is not a meeting, or on another app's title that mentions a call inside Teams. It can miss new Teams builds with different window titles. It has not yet been tested on a real Windows machine. Back-to-back meetings with no gap look like one meeting.
 - **Presence privacy.** Everyone on your team can see when your Bee reports "in a meeting", even if you never join a sync. Consider this before rolling out, and consider a privacy review.
 - **Partial summaries.** Only Bee members who joined the sync are captured. Other attendees, and anyone with the Bee mic off, are missing from every summary.
-- **Consent.** Each person's summary contains colleagues' words, stored on each device. Tell participants, and get a privacy or legal review before wide use. Once the Teams audio fallback can listen, it will send the words of people who do not use Bee to speech-to-text: review that, and its default, before it ships.
+- **Consent.** Each person's summary contains colleagues' words, stored on each device. Tell participants, and get a privacy or legal review before wide use. The Teams audio fallback sends the words of people who do not use Bee to speech-to-text, and it is on by default. Review that, and its default, before wide use. Anyone can turn it off in Settings.
 - **Wrong-room clicks.** A person can join the wrong sync by clicking the wrong button. Names are shown before joining, and **Leave sync** is one click. There is no "Remove" for uninvited joiners yet.
 - **No Microsoft IDs.** Bee has no Microsoft meeting id, so it cannot match a meeting to a sync by itself. It lists concurrent desktop meeting windows (by title) and equally ranked live syncs, and you pick. The session stays bound to that choice until it ends. Syncs are grouped only by who clicked. Two meeting windows with the same title count as one. A mic-only call with no meeting window is treated as one unnamed meeting.
 - **Display names.** Without a `name` claim, a user can type any name for themselves when joining the team. They cannot change anyone else's.
@@ -246,6 +265,8 @@ npm run test:gateway   # live smoke test against Vercel AI Gateway (needs BEE_AI
 npm run test:e2e       # Electron E2E: fake mic → Grok STT → Jev → AI, meeting summary files, Teams sync (needs BEE_AI_GATEWAY_API_KEY; xvfb-run on Linux)
 npm run relay:mock     # in-memory relay on http://127.0.0.1:8787 for local Teams mode
 npm run typecheck
+npm run build:teams-audio:win   # Teams audio helper (Windows only; needs Visual Studio 2022 C++ and CMake)
+npm run build:teams-audio:mac   # Teams audio helpers (macOS only; needs Xcode)
 ```
 
 `test:gateway` makes eight calls:
@@ -282,6 +303,7 @@ Unit tests cover the relay (JWT signature, issuer, expiry and `azp` checks; team
 - **Gateway key.** Create one in the Vercel dashboard (AI Gateway → API keys).
 - **Clerk.** Enable Native API and allowlist `bee://renderer` / `bee://renderer/*`. See [Sign-in (Clerk)](#sign-in-clerk).
 - **Electron binary.** `npm install` does not download Electron itself. It downloads on first `npm run dev` or `npm start`. On a restricted network, allow `github.com` downloads or set `ELECTRON_MIRROR`.
+- **Teams audio fallback.** Not yet tested on a real Teams call. CI builds both helpers and checks they are packaged and answer `--version`; it cannot join a call. Before release, check on a packaged build on Windows 11, Windows 10 22H2 and macOS 13 or later: the other side of a Teams call is heard; music from another app is not; your own voice is dropped or deduped; and on macOS the Screen Recording steps work.
 - **Speech-to-text on Windows.** Not yet tested on a real Windows machine with a microphone. The full path was checked in Electron on Linux with a fake microphone and live Grok STT. The speech threshold (about −40 dBFS) is fixed and not tuned; a very quiet mic may never start a phrase.
 - **Microphone.** Windows asks for microphone permission the first time you click **Mic**. If it is blocked, allow desktop apps under Settings → Privacy & security → Microphone.
 - **Code signing.** Not configured. Add a certificate to `build.win` in `package.json` before distributing.

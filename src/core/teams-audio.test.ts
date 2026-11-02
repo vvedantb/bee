@@ -5,9 +5,11 @@ import {
   TEAMS_AUDIO_ECHO_MS,
   TEAMS_AUDIO_SPEAKER,
   TEAMS_AUDIO_SPEAKER_ID,
+  TEAMS_APP_AUDIO,
   namesMatch,
   teamsAudioCoverage,
   teamsAudioEcho,
+  teamsAudioOsSupported,
   teamsAudioPlan,
   teamsAudioPlatform,
   teamsAudioReplaced,
@@ -31,17 +33,41 @@ describe("teamsAudioSupport", () => {
     expect(teamsAudioPlatform("freebsd")).toBe("other");
   });
 
-  it("has no Teams-only capture path in this build, so no platform listens", () => {
-    expect(teamsAudioSupport("windows")).toEqual({ supported: false, reason: "needs-app-audio" });
-    expect(teamsAudioSupport("mac")).toEqual({ supported: false, reason: "needs-app-audio" });
+  it("has a Teams-only capture path on Windows and macOS in this build, and none on Linux", () => {
+    expect(TEAMS_APP_AUDIO).toEqual({ windows: true, mac: true });
+    expect(teamsAudioSupport("windows")).toEqual({ supported: true, reason: null });
+    expect(teamsAudioSupport("mac")).toEqual({ supported: true, reason: null });
     expect(teamsAudioSupport("linux")).toEqual({ supported: false, reason: "unsupported-platform" });
     expect(teamsAudioSupport("other")).toEqual({ supported: false, reason: "unsupported-platform" });
   });
 
-  it("supports a platform only once it has a per-app path, and never Linux", () => {
+  it("supports a platform only with a per-app path, and never Linux", () => {
     expect(teamsAudioSupport("windows", { windows: true, mac: false })).toEqual({ supported: true, reason: null });
     expect(teamsAudioSupport("mac", { windows: true, mac: false })).toEqual({ supported: false, reason: "needs-app-audio" });
     expect(teamsAudioSupport("linux", { windows: true, mac: true })).toEqual({ supported: false, reason: "unsupported-platform" });
+  });
+
+  it("reports an OS below the floor first, then a missing helper", () => {
+    const host = (osSupported: boolean, helperFound: boolean) => ({ osSupported, helperFound });
+    expect(teamsAudioSupport("windows", undefined, host(true, true))).toEqual({ supported: true, reason: null });
+    expect(teamsAudioSupport("windows", undefined, host(false, false))).toEqual({ supported: false, reason: "os-too-old" });
+    expect(teamsAudioSupport("mac", undefined, host(true, false))).toEqual({ supported: false, reason: "helper-missing" });
+    // Linux stays unsupported whatever the host says.
+    expect(teamsAudioSupport("linux", undefined, host(true, true))).toEqual({ supported: false, reason: "unsupported-platform" });
+    expect(teamsAudioSupport("mac", { windows: true, mac: false }, host(false, false))).toEqual({ supported: false, reason: "needs-app-audio" });
+  });
+
+  it("checks the OS floor from os.release(): Windows 10 build 19041, macOS 13 (Darwin 22)", () => {
+    expect(teamsAudioOsSupported("windows", "10.0.19041")).toBe(true);
+    expect(teamsAudioOsSupported("windows", "10.0.22631")).toBe(true);
+    expect(teamsAudioOsSupported("windows", "10.0.19045")).toBe(true);
+    expect(teamsAudioOsSupported("windows", "10.0.18363")).toBe(false);
+    expect(teamsAudioOsSupported("windows", "6.3.9600")).toBe(false);
+    expect(teamsAudioOsSupported("windows", "")).toBe(false);
+    expect(teamsAudioOsSupported("mac", "22.1.0")).toBe(true);
+    expect(teamsAudioOsSupported("mac", "24.6.0")).toBe(true);
+    expect(teamsAudioOsSupported("mac", "21.6.0")).toBe(false);
+    expect(teamsAudioOsSupported("linux", "6.12.0")).toBe(false);
   });
 });
 

@@ -13,3 +13,6 @@ coverage/
 *.key
 secrets/
 landing/tsconfig.tsbuildinfo
+
+# Teams audio helper build folders (native/teams-audio/dist is covered by dist/ above)
+native/teams-audio/build/

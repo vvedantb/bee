@@ -1,5 +1,6 @@
-// Bee never captures the screen or all system audio. The mic is primary; the Teams audio fallback may only ever capture the
-// Teams app, and needs a per-app path Electron 44 does not have (see ARCHITECTURE.md). This picks Teams' window, never a screen.
+// Bee never captures the screen or all system audio. The mic is primary; the Teams audio fallback captures the Teams app alone
+// through the native helper (main/teams-audio-capture.ts), not Electron. This picks Teams' window, never a screen, for a future
+// Electron `audio: 'application'` path (see ARCHITECTURE.md); nothing captures with it today.
 import { desktopCapturer } from "electron";
 import { isMeetingTitle } from "../core/teams-heuristics";
 import { isTeamsWindowTitle, parseTeamsTitle } from "../core/teams-title";

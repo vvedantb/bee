@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { MeetingWindowContext } from "../core/agent-desktop-meeting";
 import type { DetectorReading } from "../core/sync-controller";
-import { teamsAudioStatusSchema, type MeetingWindowStatus, type TeamsView } from "../shared/ipc";
-import { createTeamsAudioStatus } from "./teams-audio";
+import { teamsAudioStatusSchema, type MeetingWindowStatus, type TeamsAudioStatus, type TeamsView } from "../shared/ipc";
+import { createTeamsAudioStatus, teamsAudioAllowed } from "./teams-audio";
 
 const ME = { userId: "u-me", displayName: "Me Myself" };
 const BOB = { userId: "u-bob", displayName: "Bob Jones" };
@@ -55,16 +55,18 @@ function setup(over: {
 }
 
 describe("createTeamsAudioStatus", () => {
-  it("reports the real build as unsupported on every platform, and runs no detector", async () => {
-    for (const [platform, name, reason] of [
-      ["win32", "windows", "needs-app-audio"],
-      ["darwin", "mac", "needs-app-audio"],
-      ["linux", "linux", "unsupported-platform"],
+  it("supports Windows and macOS in this build with the helper installed, never Linux, and runs no detector on Linux", async () => {
+    const host = { osSupported: true, helperFound: true };
+    for (const [platform, name, supported, reason, permission] of [
+      ["win32", "windows", true, null, "not-needed"],
+      ["darwin", "mac", true, null, "unknown"],
+      ["linux", "linux", false, "unsupported-platform", "not-needed"],
     ] as const) {
       let reads = 0;
       const status = createTeamsAudioStatus({
         enabled: () => true,
         platform,
+        host,
         readTeamsDetector: async () => {
           reads += 1;
           return inCall;
@@ -72,14 +74,51 @@ describe("createTeamsAudioStatus", () => {
         reader: { status: () => ({ state: "ready", app: "teams", captions: false }), context: () => null },
         syncView: () => view(),
       });
-      expect(await status()).toEqual({ platform: name, supported: false, reason, teamsCall: false, coverage: "unknown" });
+      expect(teamsAudioStatusSchema.parse(await status())).toEqual({ platform: name, supported, reason, teamsCall: supported, coverage: supported ? "uncovered" : "unknown", permission });
+      expect(reads).toBe(supported ? 1 : 0);
+    }
+  });
+
+  it("reports a missing helper or an old OS as unsupported, and runs no detector", async () => {
+    for (const [host, reason] of [
+      [{ osSupported: true, helperFound: false }, "helper-missing"],
+      [{ osSupported: false, helperFound: true }, "os-too-old"],
+    ] as const) {
+      let reads = 0;
+      const status = createTeamsAudioStatus({
+        enabled: () => true,
+        platform: "darwin",
+        host,
+        readTeamsDetector: async () => {
+          reads += 1;
+          return inCall;
+        },
+        reader: { status: () => readerOff, context: () => null },
+        syncView: () => view(),
+      });
+      expect(await status()).toEqual({ platform: "mac", supported: false, reason, teamsCall: false, coverage: "unknown", permission: "not-needed" });
       expect(reads).toBe(0);
     }
   });
 
+  it("passes on macOS Screen Recording as the last capture found it", async () => {
+    let permission: "unknown" | "granted" | "denied" = "denied";
+    const status = createTeamsAudioStatus({
+      enabled: () => true,
+      platform: "darwin",
+      readTeamsDetector: async () => notInCall,
+      reader: { status: () => readerOff, context: () => null },
+      syncView: () => view(),
+      permission: () => permission,
+    });
+    expect((await status()).permission).toBe("denied");
+    permission = "granted";
+    expect((await status()).permission).toBe("granted");
+  });
+
   it("does nothing while the setting is off", async () => {
     const { status, reads } = setup({ enabled: false });
-    expect(await status()).toEqual({ platform: "windows", supported: true, reason: null, teamsCall: false, coverage: "unknown" });
+    expect(await status()).toEqual({ platform: "windows", supported: true, reason: null, teamsCall: false, coverage: "unknown", permission: "not-needed" });
     expect(reads()).toBe(0);
   });
 
@@ -116,6 +155,19 @@ describe("createTeamsAudioStatus", () => {
         throw new Error("no sync");
       },
     });
-    expect(await broken()).toEqual({ platform: "windows", supported: true, reason: null, teamsCall: false, coverage: "unknown" });
+    expect(await broken()).toEqual({ platform: "windows", supported: true, reason: null, teamsCall: false, coverage: "unknown", permission: "not-needed" });
+  });
+});
+
+describe("teamsAudioAllowed", () => {
+  const listen: TeamsAudioStatus = { platform: "windows", supported: true, reason: null, teamsCall: true, coverage: "uncovered", permission: "not-needed" };
+
+  it("lets main start the helper only with the setting on, a supported platform, a Teams call and someone maybe without Bee", () => {
+    expect(teamsAudioAllowed(listen, true)).toBe(true);
+    expect(teamsAudioAllowed({ ...listen, coverage: "unknown" }, true)).toBe(true);
+    expect(teamsAudioAllowed(listen, false)).toBe(false);
+    expect(teamsAudioAllowed({ ...listen, supported: false, reason: "helper-missing" }, true)).toBe(false);
+    expect(teamsAudioAllowed({ ...listen, teamsCall: false }, true)).toBe(false);
+    expect(teamsAudioAllowed({ ...listen, coverage: "covered" }, true)).toBe(false);
   });
 });

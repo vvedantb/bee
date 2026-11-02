@@ -19,6 +19,9 @@ import {
   revealGatewayKeyResultSchema,
   settingsViewSchema,
   teamsActionResultSchema,
+  teamsAudioEndedSchema,
+  teamsAudioLinesSchema,
+  teamsAudioStartResultSchema,
   teamsAudioStatusSchema,
   teamsPublishResultSchema,
   teamsTickResultSchema,
@@ -36,6 +39,8 @@ import {
   type PipelineRequest,
   type SettingsUpdate,
   type TeamsAction,
+  type TeamsAudioEnded,
+  type TeamsAudioLines,
   type TeamsPublishRequest,
   type TranscribeRequest,
   type WindowSize,
@@ -130,9 +135,38 @@ const api = {
       z.void().parse(await ipcRenderer.invoke(IPC.openAccessibilitySettings));
     },
   },
-  // Teams audio fallback: platform support, a Teams call and coverage, as codes. The renderer decides to listen.
+  // Teams audio fallback: platform support, a Teams call and coverage, as codes. The renderer decides to listen; main runs the
+  // helper and speech-to-text, and sends back text lines only (never audio).
   teamsAudio: {
     status: async (sessionToken: string) => teamsAudioStatusSchema.parse(await ipcRenderer.invoke(IPC.teamsAudioStatus, { sessionToken })),
+    start: async (sessionToken: string) => teamsAudioStartResultSchema.parse(await ipcRenderer.invoke(IPC.teamsAudioStart, { sessionToken })),
+    stop: async () => {
+      z.void().parse(await ipcRenderer.invoke(IPC.teamsAudioStop));
+    },
+    onLines: (listener: (lines: TeamsAudioLines) => void): (() => void) => {
+      const handler = (_event: unknown, payload: unknown) => {
+        const parsed = teamsAudioLinesSchema.safeParse(payload);
+        if (parsed.success) listener(parsed.data);
+      };
+      ipcRenderer.on(IPC.teamsAudioLines, handler);
+      return () => {
+        ipcRenderer.removeListener(IPC.teamsAudioLines, handler);
+      };
+    },
+    onEnded: (listener: (ended: TeamsAudioEnded) => void): (() => void) => {
+      const handler = (_event: unknown, payload: unknown) => {
+        const parsed = teamsAudioEndedSchema.safeParse(payload);
+        if (parsed.success) listener(parsed.data);
+      };
+      ipcRenderer.on(IPC.teamsAudioEnded, handler);
+      return () => {
+        ipcRenderer.removeListener(IPC.teamsAudioEnded, handler);
+      };
+    },
+    // macOS: asks for Screen Recording once, then opens Privacy & Security → Screen Recording.
+    openScreenRecordingSettings: async () => {
+      z.void().parse(await ipcRenderer.invoke(IPC.openScreenRecordingSettings));
+    },
   },
   teams: {
     tick: async (sessionToken: string) => teamsTickResultSchema.parse(await ipcRenderer.invoke(IPC.teamsTick, { sessionToken })),

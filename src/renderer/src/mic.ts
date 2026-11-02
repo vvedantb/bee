@@ -1,6 +1,6 @@
 // Web Audio capture: mono float frames from the default microphone. Separate from the store so the E2E harness
 // (test/e2e) drives the same code with Chromium's fake audio device. The mic only: Bee never mixes in system audio. Other
-// people in a Teams call come from the Teams audio fallback (teams-audio.ts), a separate stream that is never mixed in here.
+// people in a Teams call come from the Teams audio fallback (main runs it and sends text), a stream never mixed in here.
 
 // About 85 ms at 48 kHz, which also paces the level meter.
 const FRAME_SAMPLES = 4096;

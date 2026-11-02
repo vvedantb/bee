@@ -24,6 +24,9 @@ jobs:
           node-version: "22"
           cache: npm
       - run: npm ci
+      # The Teams audio helper (native/teams-audio/windows). Fails the release if it does not compile or answer --version.
+      - name: Build Teams audio helper
+        run: npm run build:teams-audio:win
       - run: npm test
       - run: npm run build
         env:
@@ -33,6 +36,14 @@ jobs:
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
         run: npx electron-builder --win nsis zip --x64 --publish never
+      # electron-builder skips a missing extraResources file, so check the helper made it into the app.
+      - name: Check packaged Teams audio helper
+        shell: pwsh
+        run: |
+          $helper = "release/win-unpacked/resources/teams-audio/teams-audio-helper.exe"
+          if (-not (Test-Path $helper)) { throw "Teams audio helper not packaged: $helper" }
+          $version = & $helper --version
+          if ($LASTEXITCODE -ne 0 -or "$version" -ne "teams-audio-helper protocol=1") { throw "Packaged Teams audio helper --version failed: $version" }
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -52,6 +63,9 @@ jobs:
           node-version: "22"
           cache: npm
       - run: npm ci
+      # The Teams audio helpers (native/teams-audio/macos), arm64 and x64. Fails the release if either does not compile.
+      - name: Build Teams audio helpers (arm64 + x64)
+        run: npm run build:teams-audio:mac
       - run: npm test
       - run: npm run build
         env:
@@ -61,6 +75,16 @@ jobs:
           # Unsigned by default. Set CSC_LINK, CSC_KEY_PASSWORD and the Apple notarisation secrets to sign.
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
         run: npx electron-builder --mac dmg zip --arm64 --x64 --publish never
+      - name: Check packaged Teams audio helpers
+        run: |
+          check() {
+            helper="$1/Contents/Resources/teams-audio/teams-audio-helper"
+            test -f "$helper" || { echo "Teams audio helper not packaged: $helper"; exit 1; }
+            arch="$(lipo -archs "$helper")"
+            [ "$arch" = "$2" ] || { echo "$helper is $arch, expected $2"; exit 1; }
+          }
+          check release/mac-arm64/Bee.app arm64
+          check release/mac/Bee.app x86_64
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:

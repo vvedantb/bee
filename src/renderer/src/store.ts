@@ -5,6 +5,7 @@ import { detectLinks, mergeChips, visibleChips, type LinkChip } from "../../core
 import { MAX_STEERING_TIPS, isFiller, isNewTurn, isQuestion, mergeTips, recentRestarts, runDelayMs, tipCap, tipKey, waitsForRun } from "../../core/steering";
 import { mergeLines, pipelineText, summaryTranscript, type SessionLine } from "../../core/sync-lines";
 import { TEAMS_AUDIO_SPEAKER, TEAMS_AUDIO_SPEAKER_ID, teamsAudioEcho, teamsAudioPlan, teamsAudioReplaced, type TeamsAudioPlan } from "../../core/teams-audio";
+import type { TeamsAudioFailure } from "../../core/teams-audio-protocol";
 import {
   SESSION_TRANSCRIPT_MAX,
   clampTip,
@@ -112,8 +113,8 @@ export type BeeState = {
   inviteOpen: boolean;
   // Teams audio fallback (core/teams-audio.ts): main's status (support, Teams call, coverage; codes only, null until the first
   // poll), and whether Bee hears the Teams app now. failed: the capture would not open or ended in this call; Bee carries on
-  // with the mic and tries again in the next call.
-  teamsAudio: { status: TeamsAudioStatus | null; listening: boolean; failed: boolean };
+  // with the mic and tries again in the next call. failure: why (core/teams-audio-protocol.ts), for the Settings line.
+  teamsAudio: { status: TeamsAudioStatus | null; listening: boolean; failed: boolean; failure: TeamsAudioFailure | null };
 };
 
 const PIPELINE_WINDOW = 8;
@@ -175,7 +176,7 @@ let state: BeeState = {
   teamsBusy: false,
   teamsError: null,
   inviteOpen: false,
-  teamsAudio: { status: null, listening: false, failed: false },
+  teamsAudio: { status: null, listening: false, failed: false, failure: null },
 };
 const listeners = new Set<() => void>();
 
@@ -787,56 +788,52 @@ function endTeamsAudio(): void {
 }
 
 /**
- * Starts or stops Teams audio to match teamsAudioNow. It runs beside the mic, never mixed into it: its own phrase segmenter and
- * speech-to-text, and its lines are never shared with the sync. Any failure leaves the mic, the sync and the pipeline alone.
+ * Starts or stops Teams audio to match teamsAudioNow. It runs beside the mic, never mixed into it: main runs the Teams-only
+ * helper with its own phrase segmenter and speech-to-text, and sends back text. Its lines are never shared with the sync. Any
+ * failure leaves the mic, the sync and the pipeline alone.
  */
 async function syncTeamsAudio(): Promise<void> {
   if (teamsAudioNow(state) !== "listen") {
     endTeamsAudio();
     // The call ended or the mic went off: the next call tries again.
-    if (state.teamsAudio.failed) setTeamsAudio({ failed: false });
+    if (state.teamsAudio.failed) setTeamsAudio({ failed: false, failure: null });
     return;
   }
   if (stopTeamsAudio || teamsAudioOpening || state.teamsAudio.failed) return;
   teamsAudioOpening = true;
   try {
-    const capture = await openTeamsAudio();
-    if (!capture) {
-      setTeamsAudio({ failed: true });
-      console.debug("teams-audio open=0");
+    const token = await getToken().catch(() => null);
+    if (!token) return;
+    const opened = await openTeamsAudio(token);
+    if (!opened.capture) {
+      // Main saw no reason to listen now (its status moved on): no failure, the next tick decides again.
+      if (opened.failure === "refused") return;
+      setTeamsAudio({ failed: true, failure: opened.failure });
+      console.debug(`teams-audio open=0 ${opened.failure}`);
       return;
     }
+    const capture = opened.capture;
     // The mic may have gone off, or the call ended, while it opened.
     if (teamsAudioNow(state) !== "listen") {
       capture.stop();
       return;
     }
-    const heard = startMicSession({
-      sampleRate: capture.sampleRate,
-      transcribe: transcribePhrase,
-      onLine: (text) => actions.teamsAudioLines([text]),
-      // The mic already shows speech-to-text trouble; it is not shown twice.
-      onError: () => undefined,
-    });
-    stopTeamsAudio = () => {
-      capture.stop();
-      // The phrase in progress is still transcribed.
-      void heard.stop();
-    };
-    setTeamsAudio({ listening: true });
+    stopTeamsAudio = () => capture.stop();
+    setTeamsAudio({ listening: true, failed: false, failure: null });
     console.debug("teams-audio open=1");
     capture.start(
-      (frame) => void heard.push(frame),
-      () => {
-        // The source went away (Teams closed): stop, and do not reopen in this call.
+      (texts) => actions.teamsAudioLines(texts),
+      (failure) => {
+        // Stopped by main: a failure (Teams closed, permission) is not retried in this call; a plain stop may restart.
         endTeamsAudio();
-        setTeamsAudio({ failed: true });
+        if (failure) setTeamsAudio({ failed: true, failure });
+        console.debug(`teams-audio end ${failure ?? "stopped"}`);
       },
     );
   } catch {
     endTeamsAudio();
-    setTeamsAudio({ failed: true });
-    console.debug("teams-audio open=0");
+    setTeamsAudio({ failed: true, failure: "failed" });
+    console.debug("teams-audio open=0 failed");
   } finally {
     teamsAudioOpening = false;
   }
@@ -1149,6 +1146,16 @@ export const actions = {
     } catch {
       // The Settings line already says where to go.
     }
+  },
+
+  /** macOS: asks for Screen Recording for the Teams audio helper, then lets the next tick try Teams audio again. */
+  async openScreenRecordingSettings(): Promise<void> {
+    try {
+      await window.bee.teamsAudio.openScreenRecordingSettings();
+    } catch {
+      // The Settings line already says where to go.
+    }
+    if (state.teamsAudio.failure === "denied") setTeamsAudio({ failed: false, failure: null });
   },
 
   /**

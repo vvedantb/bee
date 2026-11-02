@@ -3,7 +3,7 @@ import { Button } from "@vvedantb/ui";
 import { useState } from "react";
 import type { MeetingWindowStatus, SettingsUpdate, SettingsView } from "../../shared/ipc";
 import { SettingRow } from "./SettingRow";
-import { teamsAudioMessage, type TeamsAudioView } from "./teams-audio-message";
+import { teamsAudioMessage, teamsAudioNeedsScreenRecording, type TeamsAudioView } from "./teams-audio-message";
 
 // Settings → Meeting context. Presentational: it takes the saved switches and callbacks, so the screenshot page can render it
 // without the store or Electron.
@@ -38,6 +38,7 @@ export function MeetingContextSection({
   reader,
   onOpenAccessibility,
   teamsAudio,
+  onOpenScreenRecording,
 }: {
   settings: MeetingContextSettings;
   onChange: (update: SettingsUpdate) => void;
@@ -49,6 +50,8 @@ export function MeetingContextSection({
   onOpenAccessibility?: () => void;
   /** The Teams audio fallback's state, from the store. */
   teamsAudio?: TeamsAudioView;
+  /** macOS: asks for Screen Recording for the Teams audio helper and opens its pane. */
+  onOpenScreenRecording?: () => void;
 }) {
   // A second click confirms: the first only arms the button.
   const [step, setStep] = useState<"idle" | "confirm" | "busy">("idle");
@@ -57,6 +60,7 @@ export function MeetingContextSection({
   const windowMessage = meetingWindowMessage(settings.readMeetingWindowEnabled ? (reader ?? { state: "starting", app: null, captions: false }) : undefined);
   const audioOn = settings.teamsAudioFallbackEnabled ?? false;
   const audioMessage = audioOn ? teamsAudioMessage(teamsAudio) : null;
+  const needsScreenRecording = audioOn && teamsAudioNeedsScreenRecording(teamsAudio);
 
   async function clear(): Promise<void> {
     if (step === "idle") {
@@ -133,9 +137,16 @@ export function MeetingContextSection({
         onCheckedChange={(teamsAudioFallbackEnabled) => onChange({ teamsAudioFallbackEnabled })}
       />
       {audioMessage ? (
-        <p className="muted" role="status">
+        <p className={needsScreenRecording ? "error" : "muted"} role="status">
           {audioMessage}
         </p>
+      ) : null}
+      {needsScreenRecording && onOpenScreenRecording ? (
+        <div className="row actions">
+          <Button type="button" variant="secondary" size="sm" onClick={onOpenScreenRecording}>
+            Open Screen Recording settings
+          </Button>
+        </div>
       ) : null}
     </section>
   );

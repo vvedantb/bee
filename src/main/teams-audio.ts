@@ -1,11 +1,13 @@
 import type { MeetingWindowContext } from "../core/agent-desktop-meeting";
 import type { DetectorReading } from "../core/sync-controller";
-import { teamsAudioCoverage, teamsAudioPlatform, teamsAudioSupport, type TeamsAudioSupport } from "../core/teams-audio";
+import { teamsAudioCoverage, teamsAudioPlan, teamsAudioPlatform, teamsAudioSupport, type TeamsAudioHost, type TeamsAudioSupport } from "../core/teams-audio";
 import type { MeetingWindowStatus, TeamsAudioStatus, TeamsView } from "../shared/ipc";
+import type { TeamsAudioPermission } from "./teams-audio-capture";
 
-// Teams audio fallback status for the renderer: can this build hear the Teams app alone here, is a Teams call on, and does
-// everyone in it have Bee in this sync. Names stay in main; the reply carries codes only. No Electron imports, so tests inject
-// everything. The renderer decides to listen (core/teams-audio.ts teamsAudioPlan) and runs the capture.
+// Teams audio fallback status for the renderer: can this build hear the Teams app alone here (platform, OS floor, helper
+// installed), is a Teams call on, and does everyone in it have Bee in this sync. Names stay in main; the reply carries codes
+// only. No Electron imports, so tests inject everything. The renderer decides to listen (core/teams-audio.ts teamsAudioPlan)
+// and asks main to start the helper (main/teams-audio-capture.ts); main checks again with teamsAudioAllowed.
 
 export function createTeamsAudioStatus(deps: {
   enabled: () => boolean;
@@ -18,11 +20,17 @@ export function createTeamsAudioStatus(deps: {
   platform?: string;
   /** Tests only: which platforms have a Teams-only capture path. */
   appAudio?: Parameters<typeof teamsAudioSupport>[1];
+  /** The OS floor and whether the helper is installed. Absent: only the build is checked. */
+  host?: TeamsAudioHost;
+  /** macOS Screen Recording, as the last capture found it (main/teams-audio-capture.ts). */
+  permission?: () => TeamsAudioPermission;
 }): () => Promise<TeamsAudioStatus> {
   const platform = teamsAudioPlatform(deps.platform ?? process.platform);
-  const support: TeamsAudioSupport = teamsAudioSupport(platform, deps.appAudio);
+  const support: TeamsAudioSupport = teamsAudioSupport(platform, deps.appAudio, deps.host);
   return async () => {
-    const base: TeamsAudioStatus = { platform, ...support, teamsCall: false, coverage: "unknown" };
+    // Only macOS asks for a permission (Screen Recording); Windows process loopback needs none.
+    const permission = platform === "mac" && support.supported ? (deps.permission?.() ?? "unknown") : "not-needed";
+    const base: TeamsAudioStatus = { platform, ...support, teamsCall: false, coverage: "unknown", permission };
     // Off, or no Teams-only capture here: nothing to detect, so nothing runs.
     if (!deps.enabled() || !support.supported) return base;
     try {
@@ -44,4 +52,13 @@ export function createTeamsAudioStatus(deps: {
       return base;
     }
   };
+}
+
+/**
+ * Main's own check before it starts the helper, and on every status poll while it runs: the setting is on, the platform is
+ * supported, a Teams call is on and someone may not have Bee. The mic is the renderer's to know; it asks only with the mic on
+ * and stops the capture when the mic goes off.
+ */
+export function teamsAudioAllowed(status: TeamsAudioStatus, enabled: boolean): boolean {
+  return teamsAudioPlan({ enabled, supported: status.supported, teamsCall: status.teamsCall, micOn: true, coverage: status.coverage }) === "listen";
 }
