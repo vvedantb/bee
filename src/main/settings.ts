@@ -40,9 +40,9 @@ const fileSchema = z.object({
   meetingMemoryEnabled: z.boolean().default(true).catch(true),
   // Experimental: read Teams, Zoom and Google Meet windows with agent-desktop (main/meeting-window-reader.ts). Off until switched on.
   readMeetingWindowEnabled: z.boolean().default(false).catch(false),
-  // Teams audio fallback (core/teams-audio.ts). On until switched off: Bee used to mix all system audio into the mic whenever
-  // the mic was on; this keeps that "hear the call" intent but only for the Teams app, only when someone may not have Bee.
-  teamsAudioFallbackEnabled: z.boolean().default(true).catch(true),
+  // Teams audio fallback (core/teams-audio.ts). Off until switched on, like readMeetingWindowEnabled: it sends the words of
+  // people without Bee to speech-to-text. When on, it hears the Teams app alone, only when someone may not have Bee.
+  teamsAudioFallbackEnabled: z.boolean().default(false).catch(false),
   // Mic hints in the island (renderer/src/hints.ts). On until switched off.
   hintsEnabled: z.boolean().default(true).catch(true),
   // Non-secret MCP settings. A bad entry drops the list, not the whole file.
@@ -94,7 +94,7 @@ export function createSettingsStore(args: {
       meetingCalendarEnabled: true,
       meetingMemoryEnabled: true,
       readMeetingWindowEnabled: false,
-      teamsAudioFallbackEnabled: true,
+      teamsAudioFallbackEnabled: false,
       hintsEnabled: true,
       mcpServers: [],
     };

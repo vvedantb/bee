@@ -432,25 +432,30 @@ describe("settings read meeting window (experimental)", () => {
 });
 
 describe("settings Teams audio fallback", () => {
-  it("is on by default and in the view", () => {
+  it("is off by default and in the view", () => {
     const store = create();
-    expect(store.view().teamsAudioFallbackEnabled).toBe(true);
-    expect(store.teamsAudioFallback()).toBe(true);
+    expect(store.view().teamsAudioFallbackEnabled).toBe(false);
+    expect(store.teamsAudioFallback()).toBe(false);
+  });
+
+  it("is off when settings.json exists without the key", () => {
+    writeFileSync(join(dir, "settings.json"), JSON.stringify({ meetingMode: true }));
+    expect(create().teamsAudioFallback()).toBe(false);
   });
 
   it("round-trips through settings.json and survives unrelated saves", () => {
     const store = create();
-    expect(store.save({ teamsAudioFallbackEnabled: false }).teamsAudioFallbackEnabled).toBe(false);
-    expect(JSON.parse(readFileSync(join(dir, "settings.json"), "utf8")).teamsAudioFallbackEnabled).toBe(false);
+    expect(store.save({ teamsAudioFallbackEnabled: true }).teamsAudioFallbackEnabled).toBe(true);
+    expect(JSON.parse(readFileSync(join(dir, "settings.json"), "utf8")).teamsAudioFallbackEnabled).toBe(true);
     store.save({ readMeetingWindowEnabled: true });
-    expect(create().teamsAudioFallback()).toBe(false);
-    store.save({ teamsAudioFallbackEnabled: true });
     expect(create().teamsAudioFallback()).toBe(true);
+    store.save({ teamsAudioFallbackEnabled: false });
+    expect(create().teamsAudioFallback()).toBe(false);
   });
 
-  it("reads a bad stored value as the default, on", () => {
-    writeFileSync(join(dir, "settings.json"), JSON.stringify({ teamsAudioFallbackEnabled: "no" }));
-    expect(create().teamsAudioFallback()).toBe(true);
+  it("reads a bad stored value as the default, off", () => {
+    writeFileSync(join(dir, "settings.json"), JSON.stringify({ teamsAudioFallbackEnabled: "yes" }));
+    expect(create().teamsAudioFallback()).toBe(false);
   });
 
   it("rejects a non-boolean update at the IPC schema", async () => {

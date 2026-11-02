@@ -76,7 +76,7 @@ export const settingsViewSchema = z.object({
   // Experimental: read the meeting window (Teams, Zoom, Google Meet) with agent-desktop. Off by default.
   readMeetingWindowEnabled: z.boolean(),
   // Teams audio fallback: with the mic on in a Teams call where someone may not have Bee, hear the Teams app alone (never all
-  // system audio). On by default; only platforms with a Teams-only capture path listen (core/teams-audio.ts).
+  // system audio). Off by default; only platforms with a Teams-only capture path listen (core/teams-audio.ts).
   teamsAudioFallbackEnabled: z.boolean(),
   // Mic hints (renderer/src/hints.ts): local suggestions when the mic is silent, quiet or too loud. On by default.
   hintsEnabled: z.boolean(),

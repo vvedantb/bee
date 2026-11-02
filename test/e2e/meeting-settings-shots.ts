@@ -8,7 +8,8 @@ import type { TeamsAudioView } from "../../src/renderer/src/teams-audio-message"
 import "../../src/renderer/src/styles.css";
 import { panelPage } from "./panel-shot";
 
-// The Teams audio fallback on a Mac where Screen Recording is still off for Bee: on by default, with the button that asks.
+// The Teams audio fallback on a Mac where Screen Recording is still off for Bee: switched on (it is off by default), with the
+// button that asks.
 const teamsAudio: TeamsAudioView = {
   status: { platform: "mac", supported: true, reason: null, teamsCall: false, coverage: "unknown", permission: "denied" },
   plan: "waiting",

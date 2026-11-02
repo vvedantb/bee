@@ -19,7 +19,7 @@ npm run dist:win
 Download `Bee-x.y.z-arm64.dmg` (Apple Silicon) or `Bee-x.y.z.dmg` (Intel), or the matching `-mac.zip` from [Releases](https://github.com/vvedantb/bee/releases). Open the dmg and drag Bee to Applications. Builds are not signed or notarised yet, so Gatekeeper will warn: right-click Bee, choose **Open**, then confirm.
 
 - **Microphone.** macOS asks the first time Bee starts. If you decline, allow Bee under System Settings → Privacy & Security → Microphone.
-- **Screen Recording.** Only for **Settings → Hear Teams when not everyone has Bee** (on by default). macOS counts any app's sound as screen recording. Bee hears the Teams app alone and never records the screen or other apps. Bee never asks during a call: Settings shows **Open Screen Recording settings** when it needs access (see [Teams audio fallback](#teams-audio-fallback)). Without it, Bee uses your mic only.
+- **Screen Recording.** Only for **Settings → Hear Teams when not everyone has Bee** (off by default). macOS counts any app's sound as screen recording. Bee hears the Teams app alone and never records the screen or other apps. Bee never asks during a call: Settings shows **Open Screen Recording settings** when it needs access (see [Teams audio fallback](#teams-audio-fallback)). Without it, Bee uses your mic only.
 - **Menu bar.** Bee has no Dock icon. The tray icon is a menu bar extra: click it for Show / hide, Open notes folder and Quit.
 - **Shortcut.** `Cmd+Shift+Space` shows or hides Bee (`Ctrl+Shift+Space` on Windows and Linux). If another app holds the shortcut, Bee logs a warning and carries on.
 - **Notes folder.** `~/Library/Application Support/Bee/notes`.
@@ -168,7 +168,7 @@ If the relay cannot be reached, Bee says "Bee is working solo" and carries on wi
 
 ### Teams audio fallback
 
-**Settings → Meeting context → Hear Teams when not everyone has Bee** (on by default). The idea: when some people in a Teams call have no Bee, Bee hears the Teams app itself, so their words reach the AI too. It listens only when all of these hold:
+**Settings → Meeting context → Hear Teams when not everyone has Bee** (off by default). The idea: when some people in a Teams call have no Bee, Bee hears the Teams app itself, so their words reach the AI too. It listens only when all of these hold:
 
 - you are in a Teams call (never Zoom or Google Meet) and your Bee mic is on;
 - someone may not be covered: you are not in a sync, or Bee cannot see the call's people list (see **Experimental: read meeting window**), or someone on that list is not in your sync.
@@ -215,7 +215,7 @@ To show full names without typing them, add a `name` claim to the Clerk session 
 - **Detection false positives and misses.** The Windows heuristic can fire on a Teams call that is not a meeting, or on another app's title that mentions a call inside Teams. It can miss new Teams builds with different window titles. It has not yet been tested on a real Windows machine. Back-to-back meetings with no gap look like one meeting.
 - **Presence privacy.** Everyone on your team can see when your Bee reports "in a meeting", even if you never join a sync. Consider this before rolling out, and consider a privacy review.
 - **Partial summaries.** Only Bee members who joined the sync are captured. Other attendees, and anyone with the Bee mic off, are missing from every summary.
-- **Consent.** Each person's summary contains colleagues' words, stored on each device. Tell participants, and get a privacy or legal review before wide use. The Teams audio fallback sends the words of people who do not use Bee to speech-to-text, and it is on by default. Review that, and its default, before wide use. Anyone can turn it off in Settings.
+- **Consent.** Each person's summary contains colleagues' words, stored on each device. Tell participants, and get a privacy or legal review before wide use. The Teams audio fallback sends the words of people who do not use Bee to speech-to-text. It is off by default; review it before anyone turns it on, and before wide use. Anyone can turn it on or off in Settings.
 - **Wrong-room clicks.** A person can join the wrong sync by clicking the wrong button. Names are shown before joining, and **Leave sync** is one click. There is no "Remove" for uninvited joiners yet.
 - **No Microsoft IDs.** Bee has no Microsoft meeting id, so it cannot match a meeting to a sync by itself. It lists concurrent desktop meeting windows (by title) and equally ranked live syncs, and you pick. The session stays bound to that choice until it ends. Syncs are grouped only by who clicked. Two meeting windows with the same title count as one. A mic-only call with no meeting window is treated as one unnamed meeting.
 - **Display names.** Without a `name` claim, a user can type any name for themselves when joining the team. They cannot change anyone else's.

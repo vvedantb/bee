@@ -153,9 +153,9 @@ runPipeline: meetingWindowBrief (name and people) joins the meeting brief; meeti
 
 ## Teams audio fallback
 
-Settings → Meeting context → **Hear Teams when not everyone has Bee** (`teamsAudioFallbackEnabled`, **on by default**). With the mic on in a Teams call where someone may not have Bee, Bee hears the Teams app's audio and transcribes it like the mic. It hears **the Teams app alone or nothing**: never the screen's or all system audio. Windows and macOS listen through an in-repo native helper (`native/teams-audio`); Linux does not.
+Settings → Meeting context → **Hear Teams when not everyone has Bee** (`teamsAudioFallbackEnabled`, **off by default**). With the mic on in a Teams call where someone may not have Bee, Bee hears the Teams app's audio and transcribes it like the mic. It hears **the Teams app alone or nothing**: never the screen's or all system audio. Windows and macOS listen through an in-repo native helper (`native/teams-audio`); Linux does not.
 
-Why on by default: Bee used to mix all system audio into the mic whenever the mic was on. That was wrong, and it is removed. The fallback keeps the old aim (hear the rest of the call) but only for Teams, only while someone may not be covered, and only through a Teams-only capture. Off would match `readMeetingWindowEnabled`'s privacy default. It sends the words of people without Bee to speech-to-text, so the default and consent need a privacy (and, for wide use, legal) review.
+Why off by default: it sends the words of people without Bee to speech-to-text, so it matches `readMeetingWindowEnabled`'s privacy default and waits for the user to switch it on. Bee used to mix all system audio into the mic whenever the mic was on. That was wrong, and it is removed. When on, the fallback keeps the old aim (hear the rest of the call) but only for Teams, only while someone may not be covered, and only through a Teams-only capture. Consent still needs a privacy (and, for wide use, legal) review.
 
 ```
 renderer store: meeting tick (5 s) → window.bee.teamsAudio.status(token) → main/teams-audio-ipc.ts
