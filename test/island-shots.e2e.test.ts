@@ -16,8 +16,8 @@ const SHOTS = [
   "thinking",
   "expanded",
   "meeting-card",
-  "long-tip-bottom",
-  "long-tip-scrolled-up",
+  "long-tip-top",
+  "long-tip-scrolled",
   "update-available",
   "response-folded",
   "response-full-text",
@@ -75,11 +75,13 @@ describe("island screenshots (Electron E2E)", () => {
     expect(pageFor("update-available")?.notch.buttons).toHaveLength(3);
 
     const scroll = (shot: string) => z.object({ scrollTop: z.number(), scrollHeight: z.number(), clientHeight: z.number() }).parse(report.pages.find((item) => item.shot === shot)?.scroll);
-    const bottom = scroll("long-tip-bottom");
-    expect(bottom.scrollHeight).toBeGreaterThan(bottom.clientHeight);
-    expect(bottom.scrollHeight - bottom.clientHeight - bottom.scrollTop).toBeLessThanOrEqual(1);
-    const up = scroll("long-tip-scrolled-up");
-    expect(up.scrollTop).toBeGreaterThan(0);
-    expect(up.scrollTop).toBeLessThan(up.scrollHeight - up.clientHeight - 24);
+    // A long answer opens at its first line and stays there: the body never jumps to the end.
+    const top = scroll("long-tip-top");
+    expect(top.scrollHeight).toBeGreaterThan(top.clientHeight);
+    expect(top.scrollTop).toBeLessThanOrEqual(1);
+    // The user's own scroll stays where they leave it.
+    const scrolled = scroll("long-tip-scrolled");
+    expect(scrolled.scrollTop).toBeGreaterThan(0);
+    expect(scrolled.scrollTop).toBeLessThan(scrolled.scrollHeight - scrolled.clientHeight - 24);
   });
 });

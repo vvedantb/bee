@@ -1,25 +1,35 @@
 import { describe, expect, it } from "vitest";
 import {
-  FOLLOW_SLACK_PX,
   ISLAND_MIN_OPEN_MS,
   READ_WORDS_PER_SECOND,
   activityLabel,
-  bodyFollowsNewest,
+  displayTip,
   islandPhase,
-  keepFollowing,
   mcpErrorNote,
   islandShowsBody,
   islandClick,
   islandOpenMs,
-  nearBottom,
   shouldAutoCollapse,
   shouldShowResponse,
   timingsLabel,
   timingsTitle,
 } from "./island";
 
-const empty = { tips: [], sources: [], guideError: null, dismissed: false };
-const source = { title: "Example", url: "https://example.com/" };
+const empty = { tips: [], guideError: null, dismissed: false };
+
+describe("displayTip", () => {
+  it("strips note and numbered citation markers", () => {
+    expect(displayTip("Offer 15% off, as in the Acme pricing note [n1].")).toBe("Offer 15% off, as in the Acme pricing note.");
+    expect(displayTip("Per the docs [N12] and the blog [3][12], run it locally.")).toBe("Per the docs and the blog, run it locally.");
+    expect(displayTip("[1] Start with the renewal date.")).toBe("Start with the renewal date.");
+  });
+
+  it("collapses leftover spaces and keeps other brackets", () => {
+    expect(displayTip("Quote  the [n2]  two-year term.")).toBe("Quote the two-year term.");
+    expect(displayTip("Use [web] results and [note 1] as written.")).toBe("Use [web] results and [note 1] as written.");
+    expect(displayTip("SSO ships in Q4 (roadmap).")).toBe("SSO ships in Q4 (roadmap).");
+  });
+});
 
 describe("mcpErrorNote", () => {
   it("is null without errors", () => {
@@ -81,9 +91,8 @@ describe("shouldShowResponse", () => {
     expect(shouldShowResponse(empty)).toBe(false);
   });
 
-  it("is true for tips, sources only, or a guide error", () => {
+  it("is true for tips or a guide error", () => {
     expect(shouldShowResponse({ ...empty, tips: ["Say yes"] })).toBe(true);
-    expect(shouldShowResponse({ ...empty, sources: [source] })).toBe(true);
     expect(shouldShowResponse({ ...empty, guideError: "AI guidance failed: timeout" })).toBe(true);
   });
 
@@ -110,10 +119,6 @@ describe("islandPhase", () => {
 
   it("is expanded with tips", () => {
     expect(islandPhase({ ...empty, tips: ["Say yes"], busy: false })).toBe("expanded");
-  });
-
-  it("is expanded with sources only", () => {
-    expect(islandPhase({ ...empty, sources: [source], busy: false })).toBe("expanded");
   });
 
   it("is expanded with link chips only", () => {
@@ -145,8 +150,7 @@ describe("islandShowsBody", () => {
 
   it("stays closed while busy with nothing to show", () => {
     expect(islandShowsBody({ ...empty, busy: true })).toBe(false);
-    // Sources or an error alone are stale detail, not an answer to keep on screen.
-    expect(islandShowsBody({ ...empty, sources: [source], busy: true })).toBe(false);
+    // An error alone is stale detail, not an answer to keep on screen.
     expect(islandShowsBody({ ...empty, guideError: "AI guidance failed: x", busy: true })).toBe(false);
   });
 
@@ -273,47 +277,5 @@ describe("meeting card", () => {
   it("stays on screen while Luna thinks, unless dismissed", () => {
     expect(islandShowsBody({ ...empty, cardLines: 2, busy: true })).toBe(true);
     expect(islandShowsBody({ ...empty, cardLines: 2, busy: true, dismissed: true })).toBe(false);
-  });
-});
-
-// A 300 px tall body over 1000 px of tips: the bottom is at scrollTop 700.
-const at = (scrollTop: number) => ({ scrollTop, scrollHeight: 1000, clientHeight: 300 });
-
-describe("bodyFollowsNewest", () => {
-  it("pins the newest line only in an answer that opened on its own, never in the full text the user opened", () => {
-    expect(bodyFollowsNewest(false)).toBe(true);
-    expect(bodyFollowsNewest(true)).toBe(false);
-  });
-});
-
-describe("nearBottom", () => {
-  it("counts the last FOLLOW_SLACK_PX as the bottom", () => {
-    expect(nearBottom(at(700))).toBe(true);
-    expect(nearBottom(at(700 - FOLLOW_SLACK_PX))).toBe(true);
-    expect(nearBottom(at(700 - FOLLOW_SLACK_PX - 1))).toBe(false);
-    expect(nearBottom(at(0))).toBe(false);
-  });
-
-  it("is at the bottom when the content fits", () => {
-    expect(nearBottom({ scrollTop: 0, scrollHeight: 200, clientHeight: 300 })).toBe(true);
-  });
-});
-
-describe("keepFollowing", () => {
-  it("pauses when the user scrolls up away from the bottom", () => {
-    expect(keepFollowing(true, 700, at(500))).toBe(false);
-  });
-
-  it("keeps following while Bee's smooth scroll moves down towards the bottom", () => {
-    expect(keepFollowing(true, 300, at(450))).toBe(true);
-  });
-
-  it("stays paused while the user scrolls down short of the bottom, and resumes near it", () => {
-    expect(keepFollowing(false, 300, at(450))).toBe(false);
-    expect(keepFollowing(false, 450, at(690))).toBe(true);
-  });
-
-  it("keeps following when shorter content pulls the scroll position up to the new bottom", () => {
-    expect(keepFollowing(true, 700, { scrollTop: 400, scrollHeight: 700, clientHeight: 300 })).toBe(true);
   });
 });

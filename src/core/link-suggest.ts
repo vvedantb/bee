@@ -116,6 +116,11 @@ export function mergeChips(existing: readonly LinkChip[], incoming: readonly Lin
   return merged;
 }
 
+/** Chips for Luna's search sources: the page each one cites, deduped by domain and capped like any chips. Unsafe URLs drop. */
+export function sourceChips(sources: ReadonlyArray<{ url: string }>): LinkChip[] {
+  return mergeChips([], sources.flatMap((source) => chipFor(source.url) ?? []));
+}
+
 /** The chips still on screen this turn. */
 export function visibleChips(chips: readonly LinkChip[], dismissedIds: readonly string[]): LinkChip[] {
   return chips.filter((chip) => !dismissedIds.includes(chip.id)).slice(0, MAX_CHIPS);

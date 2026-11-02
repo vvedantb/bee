@@ -1,17 +1,18 @@
 // Static island states for screenshots, styled by the real styles.css (no Clerk, no store). harness-main.ts loads this
-// page once per ?shot=collapsed|thinking|expanded|meeting-card|long-tip-bottom|long-tip-scrolled-up|update-available|
+// page once per ?shot=collapsed|thinking|expanded|meeting-card|long-tip-top|long-tip-scrolled|update-available|
 // response-folded|response-full-text|fresh-utterance|hint-quiet|hint-no-input|hint-clipping|hint-noisy and captures it; the page
 // reports once it has rendered, with the notch's measured logo and button boxes. response-full-text clicks the folded answer, and
 // island.ts islandClick decides what opens. The hint shots show each mic hint (hints.ts) alone in the body, with the mic on.
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { IconChevronDown, IconDownload, IconExternalLink, IconMicrophone, IconMicrophoneOff, IconX } from "@tabler/icons-react";
+import { IconChevronDown, IconDownload, IconMicrophone, IconMicrophoneOff, IconX } from "@tabler/icons-react";
 import { Button } from "@vvedantb/ui";
+import { sourceChips, type LinkChip } from "../../src/core/link-suggest";
 import { isNewTurn } from "../../src/core/steering";
 import { BeeLogo } from "../../src/renderer/src/BeeLogo";
-import { followBottom } from "../../src/renderer/src/follow-bottom";
+import { Favicon } from "../../src/renderer/src/Favicon";
 import { HINT_TEXT, type HintId } from "../../src/renderer/src/hints";
-import { islandClick } from "../../src/renderer/src/island";
+import { displayTip, islandClick } from "../../src/renderer/src/island";
 import { NOTCH_LOGO_PX } from "../../src/renderer/src/logo";
 import { MicHint } from "../../src/renderer/src/MicHint";
 import { NOTCH_BUTTON, NOTCH_UPDATE_BUTTON } from "../../src/renderer/src/notch";
@@ -20,7 +21,6 @@ import { updateButton } from "../../src/renderer/src/update";
 import "../../src/renderer/src/styles.css";
 
 const ICON = { size: 16, stroke: 1.75 };
-const icon = (component: typeof IconX) => renderToStaticMarkup(createElement(component, ICON));
 
 const TIPS = ["Offer 15% off for a two-year term, as in the Acme pricing note [n1].", "SSO ships for enterprise in Q4 (roadmap, 12 October)."];
 const SOURCE = { title: "Acme enterprise pricing – example.com", url: "https://example.com/pricing" };
@@ -104,14 +104,35 @@ function islandBody(content: string): string {
   </div></section>`;
 }
 
-// Each tip is plain text (App.tsx IslandBody): the body is already the full text, so a tip opens nothing.
-const tipList = (tips: string[]) => `<ul class="island-tips">${tips.map((tip) => `<li>${tip}</li>`).join("")}</ul>`;
+// Each tip is plain text (App.tsx IslandBody), cites stripped as in the app: the body is already the full text, so a tip opens nothing.
+const tipList = (tips: string[]) => `<ul class="island-tips">${tips.map((tip) => `<li>${displayTip(tip)}</li>`).join("")}</ul>`;
 
+// App.tsx LinkChips: the link Button (site icon, then the label) and the ghost dismiss X. Static markup shows the globe, as the app
+// does until the favicon arrives.
+const chipItem = (chip: LinkChip) =>
+  renderToStaticMarkup(
+    createElement(
+      "li",
+      { className: "link-chip" },
+      createElement(
+        Button,
+        { type: "button", variant: "link", className: "h-6 gap-1.5 rounded-full py-0 pr-1 pl-2.5 text-[13px] no-underline", title: chip.url },
+        createElement(Favicon, { domain: chip.domain }),
+        createElement("span", { className: "link-chip-label" }, chip.label),
+      ),
+      createElement(
+        Button,
+        { type: "button", variant: "ghost", size: "icon-xs", className: "size-6 rounded-full", title: "Dismiss link", "aria-label": `Dismiss ${chip.label}` },
+        createElement(IconX, { size: 12, stroke: 2 }),
+      ),
+    ),
+  );
+
+// The search source is a chip after the tips' links (store.ts), not a separate list.
 function tipsContent(): string {
-  const chips = `<ul class="link-chips" aria-label="Suggested links"><li class="chip link-chip"><button type="button" class="link-chip-open" title="https://convex.dev/">${icon(IconExternalLink)}convex.dev</button><button type="button" class="link-chip-dismiss" aria-label="Dismiss convex.dev">${icon(IconX)}</button></li></ul>`;
+  const chips: LinkChip[] = [{ id: "convex.dev", domain: "convex.dev", url: "https://convex.dev/", label: "convex.dev" }, ...sourceChips([SOURCE])];
   return `${tipList(TIPS)}
-    ${chips}
-    <div class="island-sources"><h3>Sources</h3><ul><li><a href="${SOURCE.url}">${SOURCE.title}</a></li></ul></div>`;
+    <ul class="link-chips" aria-label="Suggested links">${chips.map(chipItem).join("")}</ul>`;
 }
 
 // The owner's case: one answer, long enough to be cut off on the pill's one line.
@@ -139,8 +160,8 @@ const states: Record<string, string> = {
   thinking: `<div class="island thinking">${pill("The AI is searching the web…", true)}</div>`,
   expanded: `<div class="island open">${pill("Tips", false)}${islandBody(tipsContent())}</div>`,
   "meeting-card": `<div class="island open">${pill("Last time", false)}${islandBody(card())}</div>`,
-  "long-tip-bottom": longTip,
-  "long-tip-scrolled-up": longTip,
+  "long-tip-top": longTip,
+  "long-tip-scrolled": longTip,
   "update-available": `<div class="island">${pill("Bee is ready", false, { update: true })}</div>`,
   "response-folded": folded,
   // Starts folded; the page clicks the answer below.
@@ -175,17 +196,16 @@ window.addEventListener("DOMContentLoaded", () => {
   if (shot === "response-full-text") status?.click();
   // Offscreen Electron windows may not advance CSS animations; show the settled end state.
   document.head.insertAdjacentHTML("beforeend", "<style>*, *::before, *::after { animation: none !important; transition: none !important; }</style>");
-  // The real teleprompter: pinned to the newest line. The scrolled-up shot then scrolls up part-way, as a user would.
+  // Answers open at the top and never scroll by themselves (App.tsx IslandBody). The scrolled shot scrolls part-way, as a user would.
   const scroller = document.querySelector<HTMLElement>(".island-scroll");
   const tips = document.querySelectorAll(".island-tips li").length;
-  followBottom(scroller);
-  if (scroller && shot === "long-tip-scrolled-up") {
+  if (scroller && shot === "long-tip-scrolled") {
     setTimeout(() => scroller.scrollTo({ top: (scroller.scrollHeight - scroller.clientHeight) * 0.4, behavior: "instant" }), 800);
   }
   const logo = document.querySelector(".notch .bee-logo");
   const buttons = [...document.querySelectorAll(".notch button")];
   const notch = logo ? { logo: box(logo), buttons: buttons.map(box) } : undefined;
-  // Let the open animation and the smooth scroll settle before the harness captures.
+  // Let the open animation and the scroll settle before the harness captures.
   setTimeout(() => {
     const scroll = scroller ? { scrollTop: scroller.scrollTop, scrollHeight: scroller.scrollHeight, clientHeight: scroller.clientHeight } : undefined;
     const open = document.querySelector(".island-body") !== null;
