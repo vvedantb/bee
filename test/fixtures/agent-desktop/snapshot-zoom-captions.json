@@ -1,0 +1,68 @@
+{
+ "version": "2.5",
+ "ok": true,
+ "command": "snapshot",
+ "data": {
+  "app": "zoom.us",
+  "window": {
+   "id": "w-2002",
+   "title": "Zoom Meeting"
+  },
+  "snapshot_id": "s3",
+  "ref_count": 6,
+  "complete": true,
+  "tree": {
+   "role": "window",
+   "name": "Zoom Meeting",
+   "children": [
+    {
+     "role": "group",
+     "name": "Participants (3)",
+     "children": [
+      {
+       "role": "list",
+       "children": [
+        {
+         "role": "row",
+         "name": "Dana Wu (Host, me)"
+        },
+        {
+         "role": "row",
+         "name": "Eli Brown"
+        },
+        {
+         "role": "row",
+         "name": "Fatima Khan, Computer audio muted"
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "role": "group",
+     "name": "Captions",
+     "children": [
+      {
+       "role": "text",
+       "name": "Eli Brown: Can we confirm the SSO date?"
+      },
+      {
+       "role": "text",
+       "name": "Dana Wu: SSO ships in March."
+      }
+     ]
+    },
+    {
+     "role": "button",
+     "name": "Show Captions",
+     "ref_id": "@s3:e1"
+    },
+    {
+     "role": "button",
+     "name": "Leave",
+     "ref_id": "@s3:e2"
+    }
+   ]
+  }
+ }
+}

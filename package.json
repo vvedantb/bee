@@ -30,6 +30,7 @@
     "@clerk/electron": "^0.0.47",
     "@modelcontextprotocol/sdk": "^1.32.1",
     "@vvedantb/server": "^0.7.1",
+    "agent-desktop": "^1.0.2",
     "ai": "^7.0.116",
     "electron-store": "^8.2.0",
     "zod": "^4.6.5"
@@ -84,6 +85,7 @@
       "resources/**",
       "!resources/icon{,-mac}.{png,icns,ico}",
       "package.json",
+      "!node_modules/agent-desktop{,/**}",
       "!node_modules/esbuild{,/**}",
       "!node_modules/@esbuild{,/**}",
       "!node_modules/vite{,/**}",
@@ -123,7 +125,17 @@
           ]
         }
       ],
-      "icon": "resources/icon.ico"
+      "icon": "resources/icon.ico",
+      "extraResources": [
+        {
+          "from": "node_modules/agent-desktop/bin/agent-desktop-win32-${arch}.exe",
+          "to": "agent-desktop/agent-desktop.exe"
+        },
+        {
+          "from": "resources/licenses/agent-desktop-Apache-2.0.txt",
+          "to": "agent-desktop/LICENSE"
+        }
+      ]
     },
     "nsis": {
       "artifactName": "Bee-Setup-${version}.${ext}",
@@ -150,6 +162,20 @@
       ],
       "category": "public.app-category.productivity",
       "icon": "resources/icon.icns",
+      "extraResources": [
+        {
+          "from": "node_modules/agent-desktop/bin/agent-desktop-darwin-${arch}",
+          "to": "agent-desktop/agent-desktop"
+        },
+        {
+          "from": "node_modules/agent-desktop/bin/agent-desktop-macos-helper-darwin-${arch}",
+          "to": "agent-desktop/agent-desktop-macos-helper"
+        },
+        {
+          "from": "resources/licenses/agent-desktop-Apache-2.0.txt",
+          "to": "agent-desktop/LICENSE"
+        }
+      ],
       "hardenedRuntime": true,
       "notarize": false,
       "gatekeeperAssess": false,

@@ -1,5 +1,6 @@
 import { app, ipcMain, shell } from "electron";
 import { z } from "zod";
+import { meetingTerms, meetingWindowBrief, type MeetingWindowContext } from "../core/agent-desktop-meeting";
 import { loadMcpTools, type McpPool, type McpServerConfig } from "../core/mcp";
 import type { MeetingContext } from "../core/meeting-context";
 import { GUIDE_MODEL, NO_GATEWAY_KEY, STT_MODEL, createBeeGateway, type BeeGateway } from "../core/gateway";
@@ -17,6 +18,7 @@ import {
   type LunaActivity,
   type LunaPartial,
   type MeetingSummaryResult,
+  type MeetingWindowStatus,
 } from "../shared/ipc";
 import { assertSignedIn } from "./auth";
 import { isNotePath, loadSnippets, writeMeetingSummaryFile } from "./notes";
@@ -33,6 +35,8 @@ export function registerMeetingIpc(args: { notesDir: string; fsRoots: () => stri
   mcpPool: McpPool;
   /** Which meeting the user is in, its brief for Luna, and the saved meetings. */
   meeting: MeetingContext;
+  /** Experimental meeting window reader: the call's name and people (retrieval boost and brief) and its Settings status. */
+  meetingWindow?: { read: () => Promise<unknown>; context: () => MeetingWindowContext | null; status: () => MeetingWindowStatus };
   gatewayApiKey: () => string | undefined;
   /** Builds the Gateway models from the key. Defaults to the real Gateway; the E2E harness records or replays them. */
   gateway?: (apiKey: string) => BeeGateway }): void {
@@ -48,11 +52,14 @@ export function registerMeetingIpc(args: { notesDir: string; fsRoots: () => stri
     return transcribeSpeech({ model: createGateway(apiKey).transcription(STT_MODEL), audio: request.audio });
   });
 
-  // The renderer polls this every few seconds. Main steps detection (title and calendar reads are throttled inside).
-  ipcMain.handle(IPC.meetingContext, (_event, payload) => {
+  // The renderer polls this every few seconds. Main steps detection (title and calendar reads are throttled inside). The poll also
+  // keeps the meeting window reader going when meeting context is off; it never waits for it.
+  ipcMain.handle(IPC.meetingContext, async (_event, payload) => {
     const request = meetingContextRequestSchema.parse(payload);
     assertSignedIn(request.sessionToken);
-    return args.meeting.tick();
+    void args.meetingWindow?.read().catch(() => null);
+    const view = await args.meeting.tick();
+    return args.meetingWindow ? { ...view, reader: args.meetingWindow.status() } : view;
   });
 
   ipcMain.handle(IPC.clearMeetingMemory, (_event, payload) => {
@@ -75,6 +82,10 @@ export function registerMeetingIpc(args: { notesDir: string; fsRoots: () => stri
     const snippets = loadSnippets(args.notesDir);
     const loadNotes = performance.now() - loadStarted;
     console.debug(`perf load-notes ${Math.round(loadNotes)}ms`);
+    // Names only, from the call window, when the experimental reader is on. Counts are all that is logged.
+    const windowContext = args.meetingWindow?.context() ?? null;
+    if (windowContext) console.debug(`perf meeting-window title=${windowContext.title ? 1 : 0} people=${windowContext.participants.length}`);
+    const meetingBrief = [args.meeting.brief(), meetingWindowBrief(windowContext)].filter((part) => part && part.trim()).join("\n") || undefined;
     try {
       const result = await runPipeline({
         transcript: request.transcript,
@@ -84,7 +95,8 @@ export function registerMeetingIpc(args: { notesDir: string; fsRoots: () => stri
         searched: request.searched,
         // Read per run, so a time zone change while travelling applies at once.
         searchLocation: searchLocation({ timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone, locale: app.getSystemLocale() }),
-        meetingBrief: args.meeting.brief(),
+        meetingBrief,
+        meetingTerms: meetingTerms(windowContext) || undefined,
         snippets,
         gateway: apiKey ? createGateway(apiKey) : null,
         notesDir: args.notesDir,

@@ -5,12 +5,13 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { RENDERER_HOST, RENDERER_SCHEME, RENDERER_URL } from "../shared/clerk";
 import { displayMatching, placeInWorkArea, restoreOverlayBounds, scaleSize, type DisplayInfo } from "../core/interface-scale";
-import { IPC, settingsUpdateSchema, windowSizeSchema, type WindowSize } from "../shared/ipc";
+import { IPC, settingsUpdateSchema, windowSizeSchema, type MeetingWindowCaptions, type WindowSize } from "../shared/ipc";
 import { createMcpPool } from "../core/mcp";
 import { createMeetingContext } from "../core/meeting-context";
 import { createMeetingMemoryStore } from "../core/meeting-memory";
 import { searchMcpNotes } from "../core/meeting-search";
 import { createVmemSearch } from "../core/vmem-history";
+import { createAgentDesktopRunner, resolveAgentDesktop } from "./agent-desktop";
 import { registerFaviconIpc } from "./favicon-ipc";
 import { registerGatewayKeyIpc } from "./gateway-key-ipc";
 import { registerLinkIpc } from "./link-ipc";
@@ -22,7 +23,8 @@ import { ensureNotesDir } from "./notes";
 import { handleRendererProtocol } from "./renderer-protocol";
 import { createSettingsStore, type SettingsStore } from "./settings";
 import { findSystemAudioSource, isPermissionAllowed } from "./system-audio";
-import { createTeamsDetector } from "./teams-detector";
+import { createMeetingWindowReader } from "./meeting-window-reader";
+import { createTeamsDetector, withMeetingWindow } from "./teams-detector";
 import { inviteFromArgv, registerTeamsIpc, relayUrlFromEnv } from "./teams-sync";
 import { createUpdater } from "./updater";
 
@@ -38,6 +40,8 @@ const SIZES: Record<WindowSize, { width: number; height: number }> = {
 const TOP_MARGIN = 8;
 const isMac = process.platform === "darwin";
 const TOGGLE_SHORTCUT = "CommandOrControl+Shift+Space";
+// System Settings → Privacy & Security → Accessibility, for the experimental meeting window reader.
+const MAC_ACCESSIBILITY_SETTINGS = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility";
 
 const outDir = fileURLToPath(new URL(".", import.meta.url));
 
@@ -245,10 +249,29 @@ if (clerk.isPrimaryInstance) {
       })();
     });
 
+    // Experimental meeting window reader (Settings, off by default): agent-desktop, read-only and headless. Missing binary or
+    // any failure leaves the built-in detector on its own.
+    const agentDesktopBinary = resolveAgentDesktop({ packaged: app.isPackaged, resourcesPath: process.resourcesPath, appPath: app.getAppPath() });
+    const agentDesktop = agentDesktopBinary ? createAgentDesktopRunner(agentDesktopBinary) : null;
+    const meetingWindow = createMeetingWindowReader({
+      enabled: settings.readMeetingWindow,
+      run: agentDesktop?.run ?? null,
+      onCaptions: (lines) => {
+        if (win && !win.isDestroyed()) win.webContents.send(IPC.meetingWindowCaptions, { lines } satisfies MeetingWindowCaptions);
+      },
+      onIdle: () => agentDesktop?.cleanup(),
+    });
+    app.on("will-quit", () => meetingWindow.stop());
+    ipcMain.handle(IPC.openAccessibilitySettings, async () => {
+      if (isMac) await shell.openExternal(MAC_ACCESSIBILITY_SETTINGS);
+    });
+
     ipcMain.handle(IPC.getSettings, () => settings.view());
 
     ipcMain.handle(IPC.saveSettings, (_event, payload) => {
       const view = settings.save(settingsUpdateSchema.parse(payload));
+      // Switching the meeting window reader on checks access at once; switching it off stops it at once.
+      void meetingWindow.read();
       if (win) applyMeetingMode(win, view.meetingMode);
       applyInterfaceScale(view.interfaceScale);
       return view;
@@ -269,12 +292,14 @@ if (clerk.isPrimaryInstance) {
     registerLinkIpc(settings, vmemSearch);
     registerFaviconIpc();
     // One detector for the Teams sync popup and for meeting context, so the in-call reading is shared and cached.
-    const detector = createTeamsDetector();
+    const detector = withMeetingWindow(createTeamsDetector(), meetingWindow);
     // Which meeting the user is in: window titles and the classic Outlook calendar (Windows), saved meetings, connected tools.
     // The brief is built here in main and sent to Luna; saved meetings stay in meeting-memory.json in the user data folder.
+    const teamsTitles = createWindowTitleReader();
     const meeting = createMeetingContext({
       inCall: async () => (await detector.read()).inMeeting,
-      titles: createWindowTitleReader(),
+      // While the call the meeting window reader sees is Zoom or Google Meet, an open Teams window does not name it.
+      titles: { read: async () => (["zoom", "meet"].includes(meetingWindow.status().app ?? "") ? [] : teamsTitles.read()) },
       calendar: createCalendarReader(),
       memory: createMeetingMemoryStore({ path: join(userDataDir, "meeting-memory.json") }),
       searchNotes: (query) => searchMcpNotes({ configs: settings.mcpConfigs(), pool: mcpPool, query }),
@@ -282,7 +307,7 @@ if (clerk.isPrimaryInstance) {
       // macOS has no in-call detector, so it reads Teams window names on its own schedule.
       pollTitlesWhenIdle: isMac,
     });
-    registerMeetingIpc({ notesDir, fsRoots: settings.fsRoots, mcpConfigs: settings.mcpConfigs, mcpSignedOut: settings.mcpSignedOut, mcpPool, meeting, gatewayApiKey: settings.gatewayApiKey });
+    registerMeetingIpc({ notesDir, fsRoots: settings.fsRoots, mcpConfigs: settings.mcpConfigs, mcpSignedOut: settings.mcpSignedOut, mcpPool, meeting, meetingWindow, gatewayApiKey: settings.gatewayApiKey });
 
     const teams = registerTeamsIpc({ relayUrl: relayUrlFromEnv(process.env.BEE_RELAY_URL || import.meta.env.MAIN_VITE_BEE_RELAY_URL), detector });
     onInvite = (link) => teams.setPendingInvite(link);

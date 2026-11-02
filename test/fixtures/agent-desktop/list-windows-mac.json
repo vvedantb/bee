@@ -1,0 +1,10 @@
+{"version":"2.5","ok":true,"command":"list-windows","data":{"windows":[
+  {"id":"w-1001","title":"Chat | Priya Patel | Microsoft Teams","app_name":"Microsoft Teams","pid":1201,"bounds":{"x":0,"y":25,"width":1280,"height":800},"is_focused":false,"accessible":true},
+  {"id":"w-1002","title":"Acme renewal | Microsoft Teams","app_name":"Microsoft Teams","pid":1201,"bounds":{"x":100,"y":80,"width":1024,"height":700},"is_focused":false,"accessible":true},
+  {"id":"w-2001","title":"Zoom Workplace","app_name":"zoom.us","pid":1302,"bounds":{"x":200,"y":120,"width":900,"height":600},"is_focused":false,"accessible":true},
+  {"id":"w-2002","title":"Zoom Meeting","app_name":"zoom.us","pid":1302,"bounds":{"x":0,"y":25,"width":1440,"height":875},"is_focused":true,"accessible":true},
+  {"id":"w-3001","title":"Meet - abc-defg-hij - Google Chrome - Work","app_name":"Google Chrome","pid":1403,"bounds":{"x":0,"y":25,"width":1440,"height":875},"is_focused":false,"accessible":true},
+  {"id":"w-3002","title":"Inbox (3) - Gmail - Google Chrome","app_name":"Google Chrome","pid":1403,"bounds":{"x":0,"y":25,"width":1440,"height":875},"is_focused":false,"accessible":true},
+  {"id":"w-4001","title":"Downloads","app_name":"Finder","pid":512,"bounds":{"x":40,"y":60,"width":800,"height":500},"is_focused":false,"accessible":true},
+  {"id":"w-5001","title":"Weekly meeting notes - Slack","app_name":"Slack","pid":1504,"bounds":{"x":40,"y":60,"width":800,"height":500},"is_focused":false,"accessible":true}
+]}}

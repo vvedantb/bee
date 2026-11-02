@@ -62,3 +62,28 @@ describe("transcriptQuery", () => {
     expect(transcriptQuery([])).toBe("");
   });
 });
+
+describe("retrieve boost (meeting window title and people)", () => {
+  const notes = [
+    { id: "a#0", title: "Call notes", text: "Sam asked about the discount for the renewal." },
+    { id: "b#0", title: "Call notes", text: "Priya Patel asked about the discount for the renewal." },
+    { id: "c#0", title: "Priya Patel", text: "Priya prefers short agendas and written follow-ups." },
+    { id: "d#0", title: "Roadmap", text: "SSO ships in March for enterprise customers." },
+  ];
+
+  it("lifts a note that mentions the people in the meeting above an equal match", () => {
+    expect(retrieve("what discount on the renewal", notes)[0]?.snippet.id).toBe("a#0");
+    const boosted = retrieve("what discount on the renewal", notes, 5, "Acme renewal Priya Patel Bob Jones");
+    expect(boosted[0]?.snippet.id).toBe("b#0");
+  });
+
+  it("never retrieves a note on the boost alone", () => {
+    const boosted = retrieve("what discount on the renewal", notes, 5, "Priya Patel");
+    expect(boosted.map((result) => result.snippet.id)).not.toContain("c#0");
+    expect(retrieve("where is lunch today", notes, 5, "Priya Patel")).toEqual([]);
+  });
+
+  it("leaves results unchanged without boost terms", () => {
+    expect(retrieve("discount renewal", notes, 5, "")).toEqual(retrieve("discount renewal", notes));
+  });
+});

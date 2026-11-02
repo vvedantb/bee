@@ -540,6 +540,8 @@ function SettingsTab({ state, settings }: { state: BeeState; settings: SettingsV
         settings={settings}
         onChange={(update) => void actions.saveSettings(update)}
         onClear={() => actions.clearMeetingMemory()}
+        reader={state.meeting?.reader}
+        onOpenAccessibility={() => void actions.openAccessibilitySettings()}
       />
 
       <TeamSection state={state} />

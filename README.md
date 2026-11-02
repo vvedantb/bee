@@ -22,7 +22,8 @@ Download `Bee-x.y.z-arm64.dmg` (Apple Silicon) or `Bee-x.y.z.dmg` (Intel), or th
 - **Menu bar.** Bee has no Dock icon. The tray icon is a menu bar extra: click it for Show / hide, Open notes folder and Quit.
 - **Shortcut.** `Cmd+Shift+Space` shows or hides Bee (`Ctrl+Shift+Space` on Windows and Linux). If another app holds the shortcut, Bee logs a warning and carries on.
 - **Notes folder.** `~/Library/Application Support/Bee/notes`.
-- **Teams detector.** Windows only. On macOS use **Live → Manual test → Simulate Teams meeting**.
+- **Teams detector.** Windows only. On macOS use **Live → Manual test → Simulate Teams meeting**, or try **Settings → Experimental: read meeting window**.
+- **Experimental: read meeting window.** Off by default. With it on, Bee reads the Teams, Zoom or Google Meet window (its name, the people listed and live captions) through the accessibility tree, read-only. On macOS it needs Accessibility: turn on Bee under System Settings → Privacy & Security → Accessibility. Settings shows whether access is granted.
 
 **From source:**
 ```bash
@@ -280,4 +281,4 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for how the parts fit together, including
 
 ## Licence
 
-MIT. See [LICENSE](LICENSE). Instrument Sans is bundled under the SIL Open Font License 1.1 (`src/renderer/src/fonts/OFL.txt`).
+MIT. See [LICENSE](LICENSE). Instrument Sans is bundled under the SIL Open Font License 1.1 (`src/renderer/src/fonts/OFL.txt`). The experimental meeting window reader ships [agent-desktop](https://github.com/vercel-labs/agent-desktop) (Apache-2.0); its license is at `resources/licenses/agent-desktop-Apache-2.0.txt` and, in packaged builds, beside the binary under `Resources/agent-desktop/LICENSE`.

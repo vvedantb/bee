@@ -1,0 +1,222 @@
+{
+ "version": "2.5",
+ "ok": true,
+ "command": "snapshot",
+ "data": {
+  "app": "Microsoft Teams",
+  "window": {
+   "id": "w-1002",
+   "title": "Acme renewal | Microsoft Teams"
+  },
+  "snapshot_id": "s1",
+  "ref_count": 15,
+  "complete": true,
+  "tree": {
+   "role": "window",
+   "name": "Acme renewal | Microsoft Teams",
+   "children": [
+    {
+     "role": "group",
+     "children": [
+      {
+       "role": "group",
+       "children": [
+        {
+         "role": "webarea",
+         "name": "Acme renewal | Microsoft Teams",
+         "children": [
+          {
+           "role": "toolbar",
+           "name": "Meeting controls",
+           "children": [
+            {
+             "role": "button",
+             "name": "Chat",
+             "ref_id": "@s1:e1"
+            },
+            {
+             "role": "button",
+             "name": "People",
+             "ref_id": "@s1:e2"
+            },
+            {
+             "role": "button",
+             "name": "Raise",
+             "ref_id": "@s1:e3"
+            },
+            {
+             "role": "button",
+             "name": "Camera",
+             "ref_id": "@s1:e4"
+            },
+            {
+             "role": "button",
+             "name": "Mic",
+             "ref_id": "@s1:e5"
+            },
+            {
+             "role": "button",
+             "name": "Share",
+             "ref_id": "@s1:e6"
+            },
+            {
+             "role": "button",
+             "name": "More",
+             "ref_id": "@s1:e7"
+            },
+            {
+             "role": "button",
+             "name": "Leave (⌘+Shift+H)",
+             "ref_id": "@s1:e8"
+            }
+           ]
+          },
+          {
+           "role": "group",
+           "name": "Video gallery",
+           "children": [
+            {
+             "role": "group",
+             "name": "Priya Patel, video is off"
+            },
+            {
+             "role": "group",
+             "name": "Bob Jones, video is on"
+            }
+           ]
+          },
+          {
+           "role": "group",
+           "name": "Participants",
+           "children": [
+            {
+             "role": "text",
+             "name": "Participants"
+            },
+            {
+             "role": "searchfield",
+             "name": "Search for participants",
+             "ref_id": "@s1:e9"
+            },
+            {
+             "role": "tree",
+             "name": "In this meeting (3)",
+             "children": [
+              {
+               "role": "treeitem",
+               "name": "In this meeting (3)",
+               "ref_id": "@s1:e10"
+              },
+              {
+               "role": "treeitem",
+               "name": "Priya Patel, Organizer, Muted",
+               "ref_id": "@s1:e11"
+              },
+              {
+               "role": "treeitem",
+               "name": "Bob Jones (Guest)",
+               "ref_id": "@s1:e12"
+              },
+              {
+               "role": "treeitem",
+               "name": "Sam Lee (You)",
+               "ref_id": "@s1:e13"
+              },
+              {
+               "role": "treeitem",
+               "name": "Invited (1)",
+               "ref_id": "@s1:e14"
+              },
+              {
+               "role": "treeitem",
+               "name": "Priya Patel, Organizer, Muted",
+               "ref_id": "@s1:e15"
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "role": "group",
+           "name": "Live captions",
+           "children": [
+            {
+             "role": "list",
+             "children": [
+              {
+               "role": "listitem",
+               "children": [
+                {
+                 "role": "group",
+                 "children": [
+                  {
+                   "role": "image"
+                  },
+                  {
+                   "role": "text",
+                   "name": "Priya Patel"
+                  },
+                  {
+                   "role": "text",
+                   "name": "Let's pick up the Acme renewal."
+                  }
+                 ]
+                }
+               ]
+              },
+              {
+               "role": "listitem",
+               "children": [
+                {
+                 "role": "group",
+                 "children": [
+                  {
+                   "role": "image"
+                  },
+                  {
+                   "role": "text",
+                   "name": "Bob Jones"
+                  },
+                  {
+                   "role": "text",
+                   "name": "They want twenty percent off if they sign this week."
+                  }
+                 ]
+                }
+               ]
+              },
+              {
+               "role": "listitem",
+               "children": [
+                {
+                 "role": "group",
+                 "children": [
+                  {
+                   "role": "image"
+                  },
+                  {
+                   "role": "text",
+                   "name": "Priya Patel"
+                  },
+                  {
+                   "role": "text",
+                   "name": "When does SSO ship for enterprise"
+                  }
+                 ]
+                }
+               ]
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  }
+ }
+}

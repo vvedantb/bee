@@ -10,6 +10,7 @@ import {
   clearMeetingMemoryResultSchema,
   copyGatewayKeyResultSchema,
   meetingContextViewSchema,
+  meetingWindowCaptionsSchema,
   mcpListSchema,
   mcpTestResultSchema,
   meetingSummaryResultSchema,
@@ -29,6 +30,7 @@ import {
   type McpSave,
   type McpSetEnabled,
   type MeetingSummaryRequest,
+  type MeetingWindowCaptions,
   type PipelineCancel,
   type PipelineRequest,
   type SettingsUpdate,
@@ -112,6 +114,22 @@ const api = {
   meeting: {
     context: async (sessionToken: string) => meetingContextViewSchema.parse(await ipcRenderer.invoke(IPC.meetingContext, { sessionToken })),
     clearMemory: async (sessionToken: string) => clearMeetingMemoryResultSchema.parse(await ipcRenderer.invoke(IPC.clearMeetingMemory, { sessionToken })),
+  },
+  // Experimental meeting window reader: new live caption lines from the call window, and the macOS Accessibility pane.
+  meetingWindow: {
+    onCaptions: (listener: (captions: MeetingWindowCaptions) => void): (() => void) => {
+      const handler = (_event: unknown, payload: unknown) => {
+        const parsed = meetingWindowCaptionsSchema.safeParse(payload);
+        if (parsed.success) listener(parsed.data);
+      };
+      ipcRenderer.on(IPC.meetingWindowCaptions, handler);
+      return () => {
+        ipcRenderer.removeListener(IPC.meetingWindowCaptions, handler);
+      };
+    },
+    openAccessibilitySettings: async () => {
+      z.void().parse(await ipcRenderer.invoke(IPC.openAccessibilitySettings));
+    },
   },
   teams: {
     tick: async (sessionToken: string) => teamsTickResultSchema.parse(await ipcRenderer.invoke(IPC.teamsTick, { sessionToken })),

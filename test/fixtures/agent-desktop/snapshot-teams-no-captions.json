@@ -1,0 +1,117 @@
+{
+ "version": "2.5",
+ "ok": true,
+ "command": "snapshot",
+ "data": {
+  "app": "Microsoft Teams",
+  "window": {
+   "id": "w-1002",
+   "title": "Acme renewal | Microsoft Teams"
+  },
+  "snapshot_id": "s2",
+  "ref_count": 10,
+  "complete": true,
+  "tree": {
+   "role": "window",
+   "name": "Acme renewal | Microsoft Teams",
+   "children": [
+    {
+     "role": "webarea",
+     "name": "Acme renewal | Microsoft Teams",
+     "children": [
+      {
+       "role": "toolbar",
+       "name": "Meeting controls",
+       "children": [
+        {
+         "role": "button",
+         "name": "Chat",
+         "ref_id": "@s1:e1"
+        },
+        {
+         "role": "button",
+         "name": "People",
+         "ref_id": "@s1:e2"
+        },
+        {
+         "role": "button",
+         "name": "Raise",
+         "ref_id": "@s1:e3"
+        },
+        {
+         "role": "button",
+         "name": "Camera",
+         "ref_id": "@s1:e4"
+        },
+        {
+         "role": "button",
+         "name": "Mic",
+         "ref_id": "@s1:e5"
+        },
+        {
+         "role": "button",
+         "name": "Share",
+         "ref_id": "@s1:e6"
+        },
+        {
+         "role": "button",
+         "name": "More",
+         "ref_id": "@s1:e7"
+        },
+        {
+         "role": "button",
+         "name": "Leave (⌘+Shift+H)",
+         "ref_id": "@s1:e8"
+        }
+       ]
+      },
+      {
+       "role": "group",
+       "name": "Video gallery",
+       "children": [
+        {
+         "role": "group",
+         "name": "Priya Patel, video is off"
+        },
+        {
+         "role": "group",
+         "name": "Bob Jones, video is on"
+        }
+       ]
+      },
+      {
+       "role": "menu",
+       "name": "More actions",
+       "children": [
+        {
+         "role": "menuitem",
+         "name": "Turn on live captions",
+         "ref_id": "@s2:e9"
+        },
+        {
+         "role": "menuitem",
+         "name": "Start transcription",
+         "ref_id": "@s2:e10"
+        }
+       ]
+      },
+      {
+       "role": "group",
+       "name": "Captions settings",
+       "children": [
+        {
+         "role": "text",
+         "name": "Spoken language"
+        },
+        {
+         "role": "text",
+         "name": "English (UK)"
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  }
+ }
+}

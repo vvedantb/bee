@@ -1,0 +1,8 @@
+{"version":"2.5","ok":true,"command":"list-apps","data":{"apps":[
+  {"name":"Finder","pid":512,"bundle_id":"com.apple.finder","presentation":"foreground"},
+  {"name":"Microsoft Teams","pid":1201,"bundle_id":"com.microsoft.teams2","presentation":"foreground"},
+  {"name":"zoom.us","pid":1302,"bundle_id":"us.zoom.xos","presentation":"foreground"},
+  {"name":"Google Chrome","pid":1403,"bundle_id":"com.google.Chrome","presentation":"foreground"},
+  {"name":"Slack","pid":1504,"bundle_id":"com.tinyspeck.slackmacgap","presentation":"foreground"},
+  {"name":"Bee","pid":1605,"bundle_id":"app.bee.desktop","presentation":"background"}
+]}}
