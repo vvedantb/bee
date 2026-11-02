@@ -195,7 +195,7 @@
         "LSUIElement": true,
         "NSMicrophoneUsageDescription": "Bee listens to your microphone during meetings to transcribe speech and suggest tips. Audio is sent only for transcription.",
         "NSAudioCaptureUsageDescription": "Bee can hear the Microsoft Teams app, and only Teams, during a call when someone in it does not have Bee, to transcribe it. Optional; turn it off in Settings.",
-        "NSScreenCaptureUsageDescription": "Bee hears the Microsoft Teams app's sound, and only Teams, during a call when someone in it does not have Bee. macOS counts app audio as Screen Recording. Bee never records your screen or other apps."
+        "NSScreenCaptureUsageDescription": "Bee hears the Microsoft Teams app's sound, and only Teams, during a call when someone in it does not have Bee. macOS counts app audio as Screen Recording. When you ask Bee to use an app for you, it may also take a picture of that app's window for the AI to see. Bee never records video of your screen."
       }
     },
     "linux": {

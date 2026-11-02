@@ -69,6 +69,7 @@ const SETTINGS: SettingsView = {
   teamsAudioFallbackEnabled: true,
   hintsEnabled: false,
   wakeWordEnabled: true,
+  askBeforeSendingEnabled: true,
 };
 
 const VIEW: TeamsView = {

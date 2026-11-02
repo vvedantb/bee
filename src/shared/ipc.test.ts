@@ -1,5 +1,20 @@
 import { describe, expect, it } from "vitest";
-import { COMMAND_MAX_CHARS, TIP_MAX_CHARS, clampTip, commandRequestSchema, lunaActivitySchema, lunaPartialSchema, meetingSummaryRequestSchema, pipelineRequestSchema, pipelineResultSchema } from "./ipc";
+import {
+  COMMAND_MAX_CHARS,
+  COMPUTER_LINE_MAX,
+  TIP_MAX_CHARS,
+  clampTip,
+  commandRequestSchema,
+  commandStopSchema,
+  computerAccessSchema,
+  computerAnswerSchema,
+  computerUpdateSchema,
+  lunaActivitySchema,
+  lunaPartialSchema,
+  meetingSummaryRequestSchema,
+  pipelineRequestSchema,
+  pipelineResultSchema,
+} from "./ipc";
 
 describe("lunaActivitySchema", () => {
   it("takes a tool call's start and end, with or without the run id", () => {
@@ -52,3 +67,29 @@ describe("commandRequestSchema", () => {
     expect(() => commandRequestSchema.parse({ command: "open Teams" })).toThrow();
   });
 });
+
+describe("computer use over IPC", () => {
+  it("takes a step line or a Confirm prompt for one run, within one island line", () => {
+    expect(computerUpdateSchema.parse({ runId: 4, type: "step", label: "Clicking Send…" })).toEqual({ runId: 4, type: "step", label: "Clicking Send…" });
+    const confirm = { runId: 4, type: "confirm", id: 1, kind: "send", question: "Send this?", detail: "Click “Send” in Discord" };
+    expect(computerUpdateSchema.parse(confirm)).toEqual(confirm);
+    expect(computerUpdateSchema.safeParse({ ...confirm, kind: "launch" }).success).toBe(false);
+    expect(computerUpdateSchema.safeParse({ runId: 4, type: "step", label: "x".repeat(COMPUTER_LINE_MAX + 1) }).success).toBe(false);
+    expect(computerUpdateSchema.safeParse({ runId: 4, type: "click" }).success).toBe(false);
+  });
+
+  it("takes a Confirm or Cancel tap and a Stop only with a run id", () => {
+    expect(computerAnswerSchema.parse({ runId: 4, id: 1, confirmed: true })).toEqual({ runId: 4, id: 1, confirmed: true });
+    for (const bad of [{ runId: 4, id: 1 }, { runId: 4, id: 0, confirmed: true }, { id: 1, confirmed: true }, { runId: 4, id: 1, confirmed: "yes" }]) {
+      expect(computerAnswerSchema.safeParse(bad).success, JSON.stringify(bad)).toBe(false);
+    }
+    expect(commandStopSchema.parse({ runId: "run-1" })).toEqual({ runId: "run-1" });
+    expect(commandStopSchema.safeParse({}).success).toBe(false);
+  });
+
+  it("reports access as agent-desktop's states only", () => {
+    expect(computerAccessSchema.parse({ supported: true, platform: "mac", accessibility: "denied", screenRecording: "granted" }).accessibility).toBe("denied");
+    expect(computerAccessSchema.safeParse({ supported: true, platform: "linux", accessibility: "denied", screenRecording: "granted" }).success).toBe(false);
+  });
+});
+

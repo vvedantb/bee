@@ -535,6 +535,43 @@ describe("settings wake word", () => {
   });
 });
 
+describe("settings ask before sending or deleting", () => {
+  it("is on by default, in the view and for main", () => {
+    const store = create();
+    expect(store.view().askBeforeSendingEnabled).toBe(true);
+    expect(store.askBeforeSending()).toBe(true);
+  });
+
+  it("round-trips through settings.json, survives unrelated saves, and applies to main at once", () => {
+    const store = create();
+    expect(store.save({ askBeforeSendingEnabled: false }).askBeforeSendingEnabled).toBe(false);
+    expect(JSON.parse(readFileSync(join(dir, "settings.json"), "utf8")).askBeforeSendingEnabled).toBe(false);
+    expect(store.askBeforeSending()).toBe(false);
+    store.save({ wakeWordEnabled: false });
+    expect(create().view().askBeforeSendingEnabled).toBe(false);
+    store.save({ askBeforeSendingEnabled: true });
+    expect(create().askBeforeSending()).toBe(true);
+  });
+
+  it("reads a missing, bad or corrupt value as on, the safe side", () => {
+    writeFileSync(join(dir, "settings.json"), JSON.stringify({ meetingMode: true }));
+    expect(create().view()).toMatchObject({ meetingMode: true, askBeforeSendingEnabled: true });
+    writeFileSync(join(dir, "settings.json"), JSON.stringify({ askBeforeSendingEnabled: "no" }));
+    expect(create().askBeforeSending()).toBe(true);
+    writeFileSync(join(dir, "settings.json"), JSON.stringify({ askBeforeSendingEnabled: 0 }));
+    expect(create().askBeforeSending()).toBe(true);
+    writeFileSync(join(dir, "settings.json"), "{not json");
+    expect(create().view().askBeforeSendingEnabled).toBe(true);
+  });
+
+  it("rejects a non-boolean update at the IPC schema, and the view always carries it", async () => {
+    const { settingsUpdateSchema, settingsViewSchema } = await import("../shared/ipc");
+    expect(() => settingsUpdateSchema.parse({ askBeforeSendingEnabled: "off" })).toThrow();
+    expect(settingsUpdateSchema.parse({ askBeforeSendingEnabled: false })).toEqual({ askBeforeSendingEnabled: false });
+    expect(settingsViewSchema.parse(create().view()).askBeforeSendingEnabled).toBe(true);
+  });
+});
+
 describe("settings savedGatewayApiKey", () => {
   const withEnv = () => createSettingsStore({ userDataDir: dir, notesDir: join(dir, "notes"), envGatewayKey: "env-key-FAKE" });
 

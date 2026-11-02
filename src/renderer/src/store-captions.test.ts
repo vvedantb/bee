@@ -47,6 +47,7 @@ const SETTINGS: SettingsView = {
   teamsAudioFallbackEnabled: true,
   hintsEnabled: false,
   wakeWordEnabled: true,
+  askBeforeSendingEnabled: true,
 };
 
 async function loadStore(settings: Partial<SettingsView> = {}) {

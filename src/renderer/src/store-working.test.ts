@@ -170,6 +170,13 @@ describe("workingLabel", () => {
     expect(workingLabel(base)).toBe("Thinking…");
   });
 
+  it("shows computer use's step over any tool", async () => {
+    const { workingLabel } = await import("./notch");
+    const computer = { runId: 1, step: "Clicking Send…", confirm: null };
+    expect(workingLabel({ ...base, tools: ["click", "web_search"], computer })).toBe("Clicking Send…");
+    expect(workingLabel({ ...base, tools: ["click"], computer: null })).toBe("Clicking…");
+  });
+
   it("never names Luna", async () => {
     const { workingLabel } = await import("./notch");
     for (const state of [base, { ...base, question: true }, { ...base, tools: ["web_search"] }]) expect(workingLabel(state)).not.toMatch(/luna/i);

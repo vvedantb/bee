@@ -57,8 +57,150 @@ export function assertDesktopAction(command: string, args: readonly string[]): a
   if (positionals !== ACTION_POSITIONALS[command as DesktopActionCommand]) throw new Error(`agent-desktop arguments not allowed for ${command}`);
 }
 
+/**
+ * Computer use for a direct request ("Bee, send Sam a message in Slack", core/computer-use.ts): the commands the AI's computer
+ * tools run, on their own runner (main/agent-desktop.ts createAgentDesktopComputerRunner). The meeting window reader never gets
+ * it. No clipboard, notifications, mouse, drag, batch, sessions, traces or launch (apps open through the desktop actions).
+ */
+export const COMPUTER_USE_COMMANDS = [
+  "snapshot", "find", "get", "is", "screenshot", "list-apps", "list-windows", "permissions",
+  "click", "type", "set-value", "clear", "focus", "select", "check", "uncheck", "expand", "collapse", "scroll", "scroll-to", "press",
+  "close-app", "wait",
+] as const;
+export type ComputerUseCommand = (typeof COMPUTER_USE_COMMANDS)[number];
+
+/** agent-desktop's flag for physical input. Only press, type and focus may take it (assertComputerUse), when the AI asks. */
+export const HEADED_FLAG = "--headed";
+
+// What a flag value or positional may be. Value flags are always "--flag=value", so a value can never read as a flag.
+type ValueKind = "ref" | "app" | "window" | "text" | "role" | "ms" | "count" | "keys" | readonly string[];
+type CommandSpec = {
+  /** Value flags (a kind) and bare switches (true). */
+  flags: Record<string, ValueKind | true>;
+  /** Positionals before "--", in order. min: how many may be left out from the end (wait's milliseconds). */
+  positionals: readonly ValueKind[];
+  min?: number;
+  /** Free text after "--" (type, set-value, select): so text that starts with "-" is never a flag. */
+  text?: true;
+  /** May take HEADED_FLAG. */
+  headed?: true;
+};
+
+const SURFACES = ["window", "focused", "menu", "menubar", "sheet", "popover", "alert"] as const;
+const EVENTS = ["window-opened", "window-closed", "app-launched", "app-terminated", "focus-changed", "surface-appeared", "surface-dismissed"] as const;
+const ACTION = { "--timeout-ms": "ms" } as const;
+const SCOPE = { "--app": "app", "--window-id": "window", "--root": "ref", "--surface": SURFACES, "--timeout-ms": "ms" } as const;
+const onRef = (extra: Partial<CommandSpec> = {}): CommandSpec => ({ flags: ACTION, positionals: ["ref"], ...extra });
+
+const COMPUTER_SPECS: Record<ComputerUseCommand, CommandSpec> = {
+  snapshot: { flags: { ...SCOPE, "--max-depth": "count", "--interactive-only": true, "--compact": true, "--skeleton": true }, positionals: [] },
+  find: {
+    flags: { ...SCOPE, "--role": "role", "--name": "text", "--text": "text", "--value": "text", "--description": "text", "--exact": true, "--first": true, "--limit": "count" },
+    positionals: [],
+  },
+  get: { flags: { "--property": ["text", "value", "title", "role", "states"] }, positionals: ["ref"] },
+  is: { flags: { "--property": ["visible", "enabled", "checked", "focused", "expanded", "selected"] }, positionals: ["ref"] },
+  // No path: the picture comes back in the envelope and is never written to disk. One app's window only, never a whole display.
+  screenshot: { flags: { "--app": "app", "--window-id": "window" }, positionals: [] },
+  "list-apps": { flags: { "--app": "app", "--timeout-ms": "ms" }, positionals: [] },
+  "list-windows": { flags: { "--app": "app", "--timeout-ms": "ms" }, positionals: [] },
+  permissions: { flags: {}, positionals: [] },
+  click: onRef(),
+  type: onRef({ text: true, headed: true }),
+  "set-value": onRef({ text: true }),
+  clear: onRef(),
+  focus: onRef({ headed: true }),
+  select: onRef({ text: true }),
+  check: onRef(),
+  uncheck: onRef(),
+  expand: onRef(),
+  collapse: onRef(),
+  scroll: onRef({ flags: { ...ACTION, "--direction": ["up", "down", "left", "right"], "--amount": "count" } }),
+  "scroll-to": onRef(),
+  // Never --force: agent-desktop refuses quit and lock shortcuts without it.
+  press: { flags: { "--app": "app", "--window-id": "window" }, positionals: ["keys"], headed: true },
+  // Never --force: the app quits gracefully, and agent-desktop refuses protected system processes.
+  "close-app": { flags: {}, positionals: ["app"] },
+  wait: { flags: { "--window": "text", "--text": "text", "--app": "app", "--event": EVENTS, "--timeout": "ms", "--menu": true, "--menu-closed": true }, positionals: ["ms"], min: 1 },
+};
+
+/** A ref as agent-desktop prints it: @<snapshot id>:e<N>. A bare @e8 is refused by agent-desktop too. */
+export const REF_PATTERN = /^@[A-Za-z0-9]{1,40}:e\d{1,6}$/;
+const CONTROL = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/;
+// Waits and timeouts: at most a minute.
+const MAX_MS = 60_000;
+
+function validValue(kind: ValueKind, value: string): boolean {
+  if (Array.isArray(kind)) return kind.includes(value);
+  switch (kind) {
+    case "ref":
+      return REF_PATTERN.test(value);
+    case "app":
+      return value.length > 0 && value.length <= 120 && !value.startsWith("-") && !/[\u0000-\u001f\u007f]/.test(value);
+    case "window":
+      return /^w-[A-Za-z0-9-]{1,40}$/.test(value);
+    case "text":
+      return value.length <= 4000 && !CONTROL.test(value);
+    case "role":
+      return /^[A-Za-z]{2,30}$/.test(value);
+    case "ms":
+      return /^\d{1,5}$/.test(value) && Number(value) <= MAX_MS;
+    case "count":
+      return /^\d{1,3}$/.test(value);
+    case "keys":
+      // return, cmd+w, ctrl+shift+tab: letters and digits joined by "+". Punctuation goes by name (comma, period).
+      return value.length <= 40 && /^[A-Za-z0-9]{1,12}(?:\+[A-Za-z0-9]{1,12}){0,4}$/.test(value);
+  }
+  return false;
+}
+
+/**
+ * Throws for any command, flag or argument outside the computer-use set. Called before every spawn on that runner. Value flags
+ * must be "--flag=value"; free text must follow "--"; only press, type and focus may take HEADED_FLAG.
+ */
+export function assertComputerUse(command: string, args: readonly string[]): asserts command is ComputerUseCommand {
+  if (!(COMPUTER_USE_COMMANDS as readonly string[]).includes(command)) throw new Error(`agent-desktop command not allowed: ${command}`);
+  const spec = COMPUTER_SPECS[command as ComputerUseCommand];
+  const dash = args.indexOf("--");
+  const before = dash < 0 ? args : args.slice(0, dash);
+  const after = dash < 0 ? [] : args.slice(dash + 1);
+  const seen = new Set<string>();
+  const positionals: string[] = [];
+  for (const arg of before) {
+    if (!arg.startsWith("-")) {
+      positionals.push(arg);
+      continue;
+    }
+    const [flag = "", ...rest] = arg.split("=");
+    const value = rest.length > 0 ? rest.join("=") : null;
+    if (seen.has(flag)) throw new Error(`agent-desktop flag repeated: ${flag}`);
+    seen.add(flag);
+    if (flag === HEADED_FLAG && spec.headed && value === null) continue;
+    const kind = Object.hasOwn(spec.flags, flag) ? spec.flags[flag] : undefined;
+    if (kind === undefined) throw new Error(`agent-desktop flag not allowed: ${flag}`);
+    if (kind === true) {
+      if (value !== null) throw new Error(`agent-desktop flag takes no value: ${flag}`);
+      continue;
+    }
+    if (value === null || !validValue(kind, value)) throw new Error(`agent-desktop flag value not allowed: ${flag}`);
+  }
+  const fewest = spec.positionals.length - (spec.min ?? 0);
+  if (positionals.length < fewest || positionals.length > spec.positionals.length) throw new Error(`agent-desktop arguments not allowed for ${command}`);
+  positionals.forEach((value, index) => {
+    const kind = spec.positionals[index];
+    if (!kind || !validValue(kind, value)) throw new Error(`agent-desktop argument not allowed for ${command}`);
+  });
+  if (spec.text ? dash < 0 || after.length !== 1 || !validValue("text", after[0] ?? "") : dash >= 0) throw new Error(`agent-desktop text not allowed for ${command}`);
+}
+
 /** ok: the command's data. Otherwise a short code safe for logs (agent-desktop's own, or SPAWN_FAILED, TIMEOUT_LOCAL, BAD_OUTPUT). */
 export type AgentDesktopResult = { ok: true; data: unknown } | { ok: false; code: string };
+
+/**
+ * A computer-use command on its own runner (main/agent-desktop.ts). signal: Stop or a newer request kills the command in
+ * flight; a queued one never starts (ABORTED).
+ */
+export type ComputerRun = (command: ComputerUseCommand, args: string[], options?: { timeoutMs?: number; signal?: AbortSignal }) => Promise<AgentDesktopResult>;
 
 const envelopeSchema = z.union([
   z.object({ ok: z.literal(true), data: z.unknown() }),
@@ -124,8 +266,14 @@ export function parseWindows(data: unknown): AdWindow[] {
 
 /** Accessibility from `permissions` (data.accessibility) or `status` (data.permissions.accessibility). */
 export function parseAccessibility(data: unknown): AccessState {
+  return parsePermission(data, "accessibility");
+}
+
+/** One permission from `permissions` (data[name]) or `status` (data.permissions[name]): accessibility or screen_recording. */
+export function parsePermission(data: unknown, name: "accessibility" | "screen_recording"): AccessState {
   const holder = isRecord(data) && isRecord(data.permissions) ? data.permissions : data;
-  const state = isRecord(holder) && isRecord(holder.accessibility) ? holder.accessibility.state : undefined;
+  const entry = isRecord(holder) ? holder[name] : undefined;
+  const state = isRecord(entry) ? entry.state : undefined;
   return state === "granted" || state === "denied" || state === "not_required" ? state : "unknown";
 }
 

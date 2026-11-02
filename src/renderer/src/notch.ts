@@ -32,10 +32,12 @@ export function logoState(state: LogoInputs): LogoState {
 export const ANSWERING_LABEL = "The AI is answering…";
 
 /**
- * The pill while a run is busy, shown from the moment a line lands (before anything streams). A tool call in flight wins (web
- * search over the others), then "Updating…" while kept tips are revised, then answering a question, then thinking.
+ * The pill while a run is busy, shown from the moment a line lands (before anything streams). Computer use shows its step
+ * ("Clicking Send…"). Otherwise a tool call in flight wins (web search over the others), then "Updating…" while kept tips are
+ * revised, then answering a question, then thinking.
  */
-export function workingLabel(state: Pick<BeeState, "tools" | "revising" | "question">): string {
+export function workingLabel(state: Pick<BeeState, "tools" | "revising" | "question"> & { computer?: BeeState["computer"] }): string {
+  if (state.computer?.step) return state.computer.step;
   const tool = state.tools.includes("web_search") ? "web_search" : state.tools.at(-1);
   if (tool) return activityLabel(tool);
   if (state.revising) return "Updating…";
@@ -55,6 +57,7 @@ export type NotchLine = { kind: NotchStatusKind; text: string };
 export const TEAMS_AUDIO_LABEL = "Listening to you and Teams audio…";
 
 type LineInputs = Pick<BeeState, "busy" | "revising" | "tools" | "question" | "heard" | "mic" | "result"> & {
+  computer?: BeeState["computer"];
   settings: Pick<SettingsView, "gatewayKeySource" | "meetingMode"> | null;
   session: Pick<BeeState["session"], "lines">;
   teamsAudio?: Pick<BeeState["teamsAudio"], "listening">;
