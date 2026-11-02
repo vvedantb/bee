@@ -1,7 +1,7 @@
 import { getToken } from "@clerk/electron/react";
 import { useSyncExternalStore } from "react";
 import { echoesOwnLine } from "../../core/agent-desktop-meeting";
-import { detectLinks, mergeChips, visibleChips, type LinkChip } from "../../core/link-suggest";
+import { detectLinks, mergeChips, sourceChips, visibleChips, type LinkChip } from "../../core/link-suggest";
 import { MAX_STEERING_TIPS, isFiller, isNewTurn, isQuestion, mergeTips, recentRestarts, runDelayMs, tipCap, tipKey, waitsForRun } from "../../core/steering";
 import { mergeLines, pipelineText, summaryTranscript, type SessionLine } from "../../core/sync-lines";
 import { TEAMS_AUDIO_SPEAKER, TEAMS_AUDIO_SPEAKER_ID, teamsAudioEcho, teamsAudioPlan, teamsAudioReplaced, type TeamsAudioPlan } from "../../core/teams-audio";
@@ -264,7 +264,7 @@ let islandTimer: ReturnType<typeof setTimeout> | undefined;
 // Mic hints: one detector for the app, so a hint's cooldown outlasts a mic toggle. Fed by each mic frame and phrase outcome.
 const hintDetector = createHintDetector({ enabled: false });
 let hintShownAt = 0;
-const EMPTY_RESULT = { tips: [], sources: [], guideError: null };
+const EMPTY_RESULT = { tips: [], guideError: null };
 
 /**
  * What the island and panel show: the last result, with the streamed tips over it while a run is in flight.
@@ -343,7 +343,7 @@ export function syncCard(current: BeeState): SyncCard {
   return null;
 }
 
-/** The island body shows a response (tips, sources, link chips, the meeting card): something to show, and no panel or sync card in the way. */
+/** The island body shows a response (tips, link chips, the meeting card): something to show, and no panel or sync card in the way. */
 export function responseOpen(current: BeeState): boolean {
   if (current.expanded || syncCard(current)) return false;
   return islandShowsBody(islandArgs(current));
@@ -642,10 +642,12 @@ async function runPipeline(): Promise<void> {
     const tips = keep.length > 0 ? mergeTips(keep, result.tips, cap, true) : result.tips;
     const tipSources = withSources(state.tipSources, result);
     const shown = { ...result, tips, tipSources: sourcesOf(tipSources, tips) };
-    // The tips' links join this turn's chips (deduped, capped).
-    const chips = mergeChips(state.chips, tips.flatMap((tip) => detectLinks(tip)));
-    const added = chips.filter((chip) => !state.chips.some((known) => known.id === chip.id));
+    // The tips' links join this turn's chips, then the search sources (deduped, capped). Sources are exact pages already, so only
+    // the tips' links are personalised.
+    const linked = mergeChips(state.chips, tips.flatMap((tip) => detectLinks(tip)));
+    const added = linked.filter((chip) => !state.chips.some((known) => known.id === chip.id));
     void enrichChips(added, [turnText, ...tips].join("\n"), turnSeq);
+    const chips = mergeChips(linked, sourceChips(result.sources));
     set({
       result: shown,
       partialTips: null,

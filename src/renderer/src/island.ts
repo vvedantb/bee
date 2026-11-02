@@ -40,11 +40,10 @@ export function mcpErrorNote(errors: ReadonlyArray<{ server: string; error: stri
 
 type ResponseArgs = {
   tips: readonly string[];
-  sources: readonly unknown[];
   guideError: string | null;
   // The user closed the body for the result on screen. A new result clears it (store.ts).
   dismissed: boolean;
-  // Link chips on screen for this turn. They can open the body on their own, before any result.
+  // Link chips on screen for this turn, search sources included (store.ts). They can open the body on their own, before any result.
   chipCount?: number;
   // Lines of the meeting card ("Last time with…") on screen. Like a chip, it can open the body before any result.
   cardLines?: number;
@@ -53,12 +52,12 @@ type ResponseArgs = {
 /** The body shows when the result (or a link chip) has something to say and the user has not closed it. */
 export function shouldShowResponse(args: ResponseArgs): boolean {
   if (args.dismissed) return false;
-  return args.tips.length > 0 || args.sources.length > 0 || args.guideError !== null || (args.chipCount ?? 0) > 0 || (args.cardLines ?? 0) > 0;
+  return args.tips.length > 0 || args.guideError !== null || (args.chipCount ?? 0) > 0 || (args.cardLines ?? 0) > 0;
 }
 
 /**
  * Whether the island body is on screen. While Luna thinks, the tips already shown stay (the pill says "Thinking…", and streamed
- * tips replace them line by line), and so do link chips. A stale error or sources alone do not open the body while busy.
+ * tips replace them line by line), and so do link chips. A stale error alone does not open the body while busy.
  */
 export function islandShowsBody(args: ResponseArgs & { busy: boolean }): boolean {
   if (!args.busy) return shouldShowResponse(args);
@@ -109,31 +108,4 @@ export function timingsLabel(timings: PipelineTimings): string {
 export function timingsTitle(timings: PipelineTimings): string {
   const ms = (value: number) => `${Math.round(value)} ms`;
   return `retrieve ${ms(timings.retrieve)} · Jev ${ms(timings.rank)} · MCP ${ms(timings.mcp)} · AI ${ms(timings.guide)} (Jev runs beside MCP and the AI)`;
-}
-
-/**
- * Whether the island body pins its newest line (follow-bottom.ts). Only an answer that opened on its own does, like a
- * teleprompter. The full text the user opened by clicking the one-line answer opens at the top and stays where they scroll.
- */
-export function bodyFollowsNewest(fullText: boolean): boolean {
-  return !fullText;
-}
-
-/** How close to the end of the island body counts as "at the bottom", in CSS px. */
-export const FOLLOW_SLACK_PX = 24;
-
-export type ScrollMetrics = { scrollTop: number; scrollHeight: number; clientHeight: number };
-
-export function nearBottom(metrics: ScrollMetrics): boolean {
-  return metrics.scrollHeight - metrics.clientHeight - metrics.scrollTop <= FOLLOW_SLACK_PX;
-}
-
-/**
- * Whether the body keeps pinning its newest line after a scroll. Near the bottom it follows; moving up (the user) pauses it.
- * Moving down without reaching the bottom keeps the current choice, so Bee's own smooth scroll never pauses itself.
- */
-export function keepFollowing(following: boolean, previousTop: number, metrics: ScrollMetrics): boolean {
-  if (nearBottom(metrics)) return true;
-  if (metrics.scrollTop < previousTop) return false;
-  return following;
 }

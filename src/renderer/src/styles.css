@@ -633,47 +633,6 @@ body {
   font-weight: 600;
 }
 
-.island-sources {
-  margin-top: 14px;
-  padding-top: 12px;
-  border-top: 1px solid var(--surface-raised);
-  animation: island-rise 460ms var(--spring) 140ms backwards;
-}
-
-.island-sources h3 {
-  margin: 0 0 6px;
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--muted);
-}
-
-.island-sources ul {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.island-sources li {
-  font-size: 14px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.island-sources a {
-  color: var(--accent);
-  text-decoration: none;
-}
-
-.island-sources a:hover {
-  text-decoration: underline;
-}
-
 .panel {
   display: flex;
   flex-direction: column;
@@ -778,32 +737,6 @@ ol {
   border-radius: 10px;
   background: var(--surface-raised);
   font-size: 14px;
-}
-
-.sources {
-  margin-top: 8px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  font-size: 12px;
-}
-
-.sources li {
-  padding: 4px 10px;
-  border-radius: 8px;
-  background: var(--surface-raised);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.sources a {
-  color: var(--accent);
-  text-decoration: none;
-}
-
-.sources a:hover {
-  text-decoration: underline;
 }
 
 .notes li {

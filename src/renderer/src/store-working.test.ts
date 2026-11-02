@@ -144,6 +144,18 @@ describe("store: working state", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(requests[1]?.searched).toBe(true);
   });
+
+  it("shows result sources as link chips, which open the body on their own", async () => {
+    const sources = [
+      { title: "BBC News", url: "https://www.bbc.co.uk/news" },
+      { title: "BBC Live", url: "https://www.bbc.co.uk/live" },
+    ];
+    const { store, say } = await loadStore([result([], sources)]);
+    say("what's in the news in London today");
+    await vi.advanceTimersByTimeAsync(RUN_MS);
+    expect(store.getBeeState().chips).toEqual([{ id: "bbc.co.uk", domain: "bbc.co.uk", url: "https://www.bbc.co.uk/news", label: "bbc.co.uk › news" }]);
+    expect(store.responseOpen(store.getBeeState())).toBe(true);
+  });
 });
 
 describe("workingLabel", () => {

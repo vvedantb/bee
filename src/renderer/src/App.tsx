@@ -17,7 +17,6 @@ import { Badge, Button, Input, PillTabs, Textarea } from "@vvedantb/ui";
 import { useEffect, useState, type FormEvent } from "react";
 import { BeeLogo } from "./BeeLogo";
 import { Favicon } from "./Favicon";
-import { followBottom } from "./follow-bottom";
 import { Connectors } from "./Connectors";
 import { MeetingContextSection } from "./MeetingContextSection";
 import { MicHint } from "./MicHint";
@@ -28,7 +27,7 @@ import { DEFAULT_MOTION_PREFERENCE, MOTION_PREFERENCES, resolveReducedMotion, ty
 import { visibleChips, type LinkChip } from "../../core/link-suggest";
 import { tipKey } from "../../core/steering";
 import type { PipelineResult, SettingsView } from "../../shared/ipc";
-import { bodyFollowsNewest, islandClick, mcpErrorNote, timingsLabel, timingsTitle } from "./island";
+import { islandClick, mcpErrorNote, timingsLabel, timingsTitle } from "./island";
 import { NOTCH_LOGO_PX } from "./logo";
 import { focusKeyFieldWhenReady, GATEWAY_KEY_FIELD_ID, statusClick, type StatusClick } from "./island-click";
 import { NOTCH_BUTTON, NOTCH_UPDATE_BUTTON, logoState, notchLine, workingLabel, type NotchLine } from "./notch";
@@ -72,7 +71,6 @@ function IslandBody({
   card,
   hint,
   hintClosing,
-  follow,
 }: {
   result: PipelineResult | null;
   chips: LinkChip[];
@@ -81,21 +79,18 @@ function IslandBody({
   card: string[];
   hint: BeeState["hint"];
   hintClosing: boolean;
-  follow: boolean;
 }) {
   const tips = result?.tips ?? [];
   const tipSources = result?.tipSources ?? [];
   const kept = new Set(keptTips.map(tipKey));
-  const sources = result?.sources ?? [];
   return (
     <section className={closing ? "island-body closing" : "island-body"} aria-live="polite">
       <div className="island-inner">
         <Button type="button" variant="ghost" size="icon-sm" className="island-close" title="Dismiss" aria-label="Dismiss" onClick={() => void actions.dismissIsland()}>
           <IconX {...ICON} />
         </Button>
-        {/* An answer that opened on its own is pinned to the newest line until the user scrolls up (follow-bottom.ts). The full
-            text view never scrolls by itself (island.ts bodyFollowsNewest). Scrolling keeps the body open. */}
-        <div className="island-scroll scrollbar-thin" ref={follow ? followBottom : null} onScroll={() => actions.islandScrolled()}>
+        {/* Answers open at the top and never scroll by themselves, so the user reads from the start. Scrolling keeps the body open. */}
+        <div className="island-scroll scrollbar-thin" onScroll={() => actions.islandScrolled()}>
           <div className="island-content">
             {card.length > 0 ? (
               <div className="island-card">
@@ -118,21 +113,6 @@ function IslandBody({
             <LinkChips chips={chips} />
             {result?.guideError ? <p className="island-error">{result.guideError}</p> : null}
             {result?.guideNote ? <p className="island-note">{result.guideNote}</p> : null}
-            {sources.length > 0 ? (
-              <div className="island-sources">
-                <h3>Sources</h3>
-                <ul>
-                  {sources.map((source) => (
-                    <li key={source.url}>
-                      <a href={source.url} target="_blank" rel="noreferrer" title={source.title}>
-                        {source.title}
-                      </a>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            ) : null}
-            {/* Last, so a body pinned to its newest line (follow-bottom.ts) keeps the hint in view. */}
             {hint ? <MicHint text={hint.text} closing={hintClosing} /> : null}
           </div>
         </div>
@@ -264,7 +244,6 @@ function Island({ state }: { state: BeeState }) {
           card={showResponse ? (state.meetingCard?.lines ?? []) : []}
           hint={state.hint}
           hintClosing={state.hintClosing}
-          follow={bodyFollowsNewest(state.fullText)}
         />
       ) : null}
     </div>
@@ -337,20 +316,6 @@ function LiveTab({ state }: { state: BeeState }) {
           <p className="muted">{state.busy ? workingLabel(state) : state.heard ? "Got it…" : state.mic.on ? "Listening…" : "No tips yet. Turn on the mic to start."}</p>
         )}
         <LinkChips chips={chips} />
-        {result && result.sources.length > 0 ? (
-          <div className="sources">
-            <span className="muted">Sources</span>
-            <ul>
-              {result.sources.map((source) => (
-                <li key={source.url}>
-                  <a href={source.url} target="_blank" rel="noreferrer">
-                    {source.title}
-                  </a>
-                </li>
-              ))}
-            </ul>
-          </div>
-        ) : null}
         {state.mic.error ? <p className="error">{state.mic.error}</p> : null}
         {/* The island is hidden behind the panel, so the mic hint shows here too. Guidance, not an error. */}
         {state.hint ? <p className="muted">{state.hint.text}</p> : null}

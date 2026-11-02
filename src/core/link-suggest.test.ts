@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { detectLinks, mergeChips, visibleChips, MAX_CHIPS } from "./link-suggest";
+import { detectLinks, mergeChips, sourceChips, visibleChips, MAX_CHIPS } from "./link-suggest";
 
 const domains = (text: string) => detectLinks(text).map((chip) => chip.domain);
 
@@ -108,5 +108,16 @@ describe("dedupe and cap", () => {
   it("hides dismissed chips", () => {
     const chips = detectLinks("convex.dev github.com");
     expect(visibleChips(chips, ["convex.dev"]).map((chip) => chip.id)).toEqual(["github.com"]);
+  });
+});
+
+describe("sourceChips", () => {
+  it("makes a chip for the page each search source cites, one per domain, and drops unsafe URLs", () => {
+    const chips = sourceChips([
+      { url: "https://www.example.com/pricing" },
+      { url: "https://example.com/docs" },
+      { url: "http://localhost:3000/admin" },
+    ]);
+    expect(chips).toEqual([{ id: "example.com", domain: "example.com", url: "https://www.example.com/pricing", label: "example.com › pricing" }]);
   });
 });
