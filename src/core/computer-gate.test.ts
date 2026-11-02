@@ -1,28 +1,51 @@
 import { describe, expect, it } from "vitest";
-import { confirmDetail, confirmQuestion, irreversibleKind, keysLabel, needsConfirm, type GateAction } from "./computer-gate";
+import {
+  confirmDetail, confirmQuestion, elementKind, focusAfterClick, irreversibleKind, isNavField, keepsFocus, keysLabel, needsConfirm, unlabelled,
+  type Element, type GateAction, type TreeContext,
+} from "./computer-gate";
 
-// "Ask before sending or deleting": which computer-use actions wait for a Confirm tap.
+// "Ask before sending or deleting": which computer-use actions wait for a Confirm tap. The tree decides; the AI's effect can
+// only add a Confirm.
 
 const button = (name: string) => ({ role: "button", name });
 const messageBox = { role: "textfield", name: "Message @sam" };
 const searchBox = { role: "textfield", name: "Search" };
+const at = (app: string, ancestors: Element[], nearby: string[] = [], field: Element | null = null): TreeContext => ({ app, ancestors, nearby, field });
+const placed = (name: string, context: TreeContext, role = "button"): Element => ({ role, name, context });
+const discordWindow = { role: "window", name: "Discord" };
+const composer = { role: "group", name: "Message @sam" };
 
 describe("irreversibleKind", () => {
   it("flags sending, deleting, buying and submitting by the element's name", () => {
     expect(irreversibleKind({ command: "click", target: button("Send") })).toBe("send");
     expect(irreversibleKind({ command: "click", target: button("Send now") })).toBe("send");
     expect(irreversibleKind({ command: "click", target: button("Post") })).toBe("send");
+    expect(irreversibleKind({ command: "click", target: button("Reply") })).toBe("send");
+    expect(irreversibleKind({ command: "click", target: button("Publish") })).toBe("send");
     expect(irreversibleKind({ command: "click", target: button("Delete message") })).toBe("delete");
+    expect(irreversibleKind({ command: "click", target: button("Delete post") })).toBe("delete");
     expect(irreversibleKind({ command: "click", target: button("Move to Trash") })).toBe("delete");
     expect(irreversibleKind({ command: "click", target: button("Don't Save") })).toBe("delete");
     expect(irreversibleKind({ command: "click", target: button("Buy now") })).toBe("buy");
     expect(irreversibleKind({ command: "click", target: button("Place your order") })).toBe("buy");
+    expect(irreversibleKind({ command: "click", target: button("Order") })).toBe("buy");
+    expect(irreversibleKind({ command: "click", target: button("Proceed to checkout") })).toBe("buy");
     expect(irreversibleKind({ command: "click", target: button("Submit") })).toBe("submit");
+    expect(irreversibleKind({ command: "click", target: button("Unsubscribe") })).toBe("submit");
     expect(irreversibleKind({ command: "select", text: "Delete" })).toBe("delete");
+  });
+
+  it("reads poor labels: class-style names, descriptions and send or trash symbols", () => {
+    expect(irreversibleKind({ command: "click", target: button("sendButton") })).toBe("send");
+    expect(irreversibleKind({ command: "click", target: button("ic_delete_24") })).toBe("delete");
+    expect(irreversibleKind({ command: "click", target: { role: "button", name: "", description: "Send message" } })).toBe("send");
+    expect(irreversibleKind({ command: "click", target: button("🗑") })).toBe("delete");
+    expect(irreversibleKind({ command: "click", target: button("➤") })).toBe("send");
   });
 
   it("trusts the AI's stated effect whatever the element is called", () => {
     expect(irreversibleKind({ command: "click", target: button("➤"), effect: "send" })).toBe("send");
+    expect(irreversibleKind({ command: "click", target: button("Labels"), effect: "send" })).toBe("send");
     expect(irreversibleKind({ command: "set-value", target: messageBox, text: "hi", effect: "submit" })).toBe("submit");
   });
 
@@ -30,10 +53,10 @@ describe("irreversibleKind", () => {
     const safe: GateAction[] = [
       { command: "click", target: button("Compose") },
       { command: "click", target: button("New message") },
-      { command: "click", target: button("Reply") },
       { command: "click", target: button("Close tab") },
       { command: "click", target: { role: "tab", name: "Discord" } },
       { command: "click", target: { role: "link", name: "Posts" } },
+      { command: "click", target: { role: "link", name: "Your Orders" } },
       { command: "click", target: { role: "treeitem", name: "Deleted Items" } },
       { command: "click", target: null },
       { command: "type", target: messageBox, text: "Running 5 minutes late" },
@@ -45,6 +68,7 @@ describe("irreversibleKind", () => {
       { command: "press", keys: "return", lastField: searchBox },
       { command: "press", keys: "return", lastField: { role: "textfield", name: "Address and search bar" } },
       { command: "press", keys: "backspace", lastField: messageBox },
+      { command: "press", keys: "space", lastField: messageBox },
       { command: "close-app", target: null },
       { command: "scroll", target: button("Send") },
       { command: "snapshot" },
@@ -65,6 +89,115 @@ describe("irreversibleKind", () => {
   });
 });
 
+describe("irreversibleKind: from the tree, whatever the AI says", () => {
+  it("asks before an unlabelled arrow send button in a chat composer, toolbar or dialog, even with effect none", () => {
+    const arrows: Element[] = [
+      // Discord: an arrow next to the message box.
+      placed("➤", at("Discord", [composer, discordWindow], ["Emoji", "GIF"], messageBox)),
+      placed("", at("Discord", [composer, discordWindow], [], messageBox)),
+      // Slack: an unnamed button in the composer's toolbar.
+      placed("", at("Slack", [{ role: "toolbar", name: "" }, { role: "group", name: "" }, { role: "window", name: "Slack" }])),
+      placed("→", at("Slack", [{ role: "toolbar", name: "Composer actions" }])),
+      // Teams: a generic name inside a dialog.
+      placed("button", at("Microsoft Teams", [{ role: "dialog", name: "Share to Teams" }])),
+      // Gmail in a browser: the window title says where it is.
+      placed("", at("Google Chrome Inbox (3) - Gmail", [{ role: "group", name: "" }])),
+      // An unnamed control inside a message box's container, in an app Bee does not know.
+      placed("›", at("Acme Desk", [{ role: "group", name: "Type a message" }])),
+      // A find match: nothing known around it.
+      button(""),
+    ];
+    for (const target of arrows) {
+      expect(irreversibleKind({ command: "click", target, effect: "none" }), JSON.stringify(target)).toBe("send");
+      expect(needsConfirm({ command: "click", target, effect: "none" }, true), JSON.stringify(target)).toBe("send");
+    }
+    // A shop asks before buying; an unknown app's dialog before submitting.
+    expect(irreversibleKind({ command: "click", target: placed("", at("Google Chrome Amazon.co.uk Basket", [{ role: "group", name: "" }])), effect: "none" })).toBe("buy");
+    expect(irreversibleKind({ command: "click", target: placed("OK", at("Preview", [{ role: "sheet", name: "" }])), effect: "none" })).toBe("submit");
+  });
+
+  it("asks before any click beside a message box or text field, unless the control clearly commits nothing", () => {
+    expect(irreversibleKind({ command: "click", target: placed("GIF", at("Discord", [composer], ["Emoji"], messageBox)), effect: "none" })).toBe("send");
+    expect(irreversibleKind({ command: "click", target: placed("Insert link", at("Mail", [{ role: "group", name: "" }], [], { role: "textarea", name: "" })), effect: "none" })).toBe("send");
+    // Inside a message box (a control drawn in the field).
+    expect(irreversibleKind({ command: "click", target: placed("Go", at("Acme", [{ role: "textarea", name: "Notes" }])), effect: "none" })).toBe("send");
+    // Compose, New message, Emoji and Close stay safe even beside the message box and a Send button.
+    for (const name of ["Compose", "New message", "Emoji", "Close", "More options", "Bold (⌘B)"]) {
+      expect(irreversibleKind({ command: "click", target: placed(name, at("Discord", [discordWindow], ["Send", "Message @sam"], messageBox)), effect: "none" }), name).toBeNull();
+    }
+    // A search box is not a composer; clicking into a text field only puts the cursor there.
+    expect(irreversibleKind({ command: "click", target: placed("Filters", at("Slack", [{ role: "group", name: "Search" }], [], searchBox)) })).toBeNull();
+    expect(irreversibleKind({ command: "click", target: placed("Reply to thread", at("Slack", [composer], ["Send"]), "textfield") })).toBeNull();
+    // Navigating a messaging app: a labelled channel with plain neighbours.
+    expect(irreversibleKind({ command: "click", target: placed("general", at("Slack", [{ role: "tree", name: "Channels" }], ["random", "design"]), "treeitem") })).toBeNull();
+  });
+
+  it("asks before Enter in a chat box, with any modifier, whatever the AI says", () => {
+    for (const keys of ["return", "enter", "cmd+enter", "ctrl+enter", "ctrl+return", "shift+return"]) {
+      expect(irreversibleKind({ command: "press", keys, lastField: messageBox, effect: "none" }), keys).toBe("send");
+    }
+    // A channel named like a search does not make its message box a search box.
+    for (const field of [{ role: "textfield", name: "Message #job-search" }, { role: "textarea", name: "Type a message" }, { role: "group", name: "Message Body" }]) {
+      expect(isNavField(field), field.name).toBe(false);
+      expect(irreversibleKind({ command: "press", keys: "return", lastField: field, effect: "none" }), field.name).toBe("send");
+    }
+    expect(irreversibleKind({ command: "type", target: { role: "textfield", name: "Message #find-a-buddy" }, text: "hi\n", effect: "none" })).toBe("send");
+    // Focus on the arrow itself: Return and Space press it.
+    const arrow = placed("➤", at("Discord", [composer], [], messageBox));
+    expect(irreversibleKind({ command: "press", keys: "return", lastField: arrow, effect: "none" })).toBe("send");
+    expect(irreversibleKind({ command: "press", keys: "space", lastField: arrow, effect: "none" })).toBe("send");
+    expect(irreversibleKind({ command: "press", keys: "space", lastField: null })).toBe("submit");
+    // Send shortcuts outside Return.
+    expect(irreversibleKind({ command: "press", keys: "alt+s", lastField: null, effect: "none" })).toBe("send");
+    expect(irreversibleKind({ command: "press", keys: "cmd+shift+d", lastField: messageBox, effect: "none" })).toBe("send");
+  });
+
+  it("asks before an icon-only or badly labelled delete control", () => {
+    const toolbar = { role: "toolbar", name: "Message actions" };
+    const deletes: Element[] = [
+      // Unnamed, with "Delete" beside it.
+      placed("", at("Slack", [toolbar], ["Delete"])),
+      // Unnamed, inside a "Delete message" group.
+      placed("", at("Discord", [{ role: "group", name: "Delete message" }, toolbar, discordWindow], ["Add Reaction", "Edit"])),
+      // A trash symbol in a message toolbar.
+      placed("🗑", at("Discord", [toolbar], ["Add Reaction", "Reply"])),
+      // "Trash" only in its description.
+      { role: "button", name: "", description: "Move to trash", context: at("Mail", [toolbar]) },
+      // A plain OK in a dialog that says what it deletes.
+      placed("OK", at("Outlook", [{ role: "dialog", name: "Are you sure you want to permanently delete this message?" }])),
+    ];
+    for (const target of deletes) {
+      expect(irreversibleKind({ command: "click", target, effect: "none" }), JSON.stringify(target)).toBe("delete");
+      expect(elementKind(target), JSON.stringify(target)).toBe("delete");
+    }
+    // The Delete key on a focused message, not in a text field.
+    expect(irreversibleKind({ command: "press", keys: "delete", lastField: placed("Sam, hello there", at("Slack", [toolbar]), "listitem") })).toBe("delete");
+  });
+
+  it("never lets effect none clear what the tree found, and lets a stated effect add a Confirm", () => {
+    const arrow = placed("➤", at("Discord", [composer], [], messageBox));
+    expect(irreversibleKind({ command: "click", target: arrow, effect: "none" })).toBe("send");
+    expect(irreversibleKind({ command: "click", target: arrow })).toBe("send");
+    expect(irreversibleKind({ command: "click", target: placed("Compose", at("Discord", [discordWindow])), effect: "delete" })).toBe("delete");
+  });
+
+  it("knows a control with no useful name", () => {
+    for (const name of ["", "  ", "➤", "→", "›", "🗑", "X", "button", "OK", "Go"]) expect(unlabelled(button(name)), name).toBe(true);
+    for (const name of ["Send", "Compose", "Add Reaction", "general"]) expect(unlabelled(button(name)), name).toBe(false);
+  });
+});
+
+describe("where focus is", () => {
+  it("is unknown after a key that may move it, and leaves a search box on a click elsewhere", () => {
+    expect(["a", "shift+a", "backspace", "down", "space"].every(keepsFocus)).toBe(true);
+    expect(["return", "tab", "shift+tab", "escape", "cmd+k", "ctrl+enter", "f6"].some(keepsFocus)).toBe(false);
+    expect(focusAfterClick(searchBox, button("sam"))).toBeNull();
+    expect(focusAfterClick(messageBox, button("Bold"))).toBe(messageBox);
+    expect(focusAfterClick(null, messageBox)).toBe(messageBox);
+    expect(focusAfterClick(button("Send"), button("Edit"))).toBeNull();
+  });
+});
+
 describe("needsConfirm", () => {
   it("asks only with the setting on", () => {
     const send = { command: "click", target: button("Send") };
@@ -72,6 +205,10 @@ describe("needsConfirm", () => {
     expect(needsConfirm(send, false)).toBeNull();
     expect(needsConfirm({ command: "click", target: button("Send"), effect: "send" }, false)).toBeNull();
     expect(needsConfirm({ command: "click", target: button("Compose") }, true)).toBeNull();
+    // Setting off: no pause, whatever the tree says.
+    const arrow = placed("➤", at("Discord", [composer], [], messageBox));
+    expect(needsConfirm({ command: "click", target: arrow, effect: "none" }, false)).toBeNull();
+    expect(needsConfirm({ command: "press", keys: "return", lastField: messageBox }, false)).toBeNull();
   });
 });
 
@@ -80,6 +217,7 @@ describe("confirm prompt", () => {
     expect(confirmQuestion("send")).toBe("Send this?");
     expect(confirmQuestion("submit")).toBe("Submit this?");
     expect(confirmDetail({ command: "click", target: button("Send") }, "Discord")).toBe("Click “Send” in Discord");
+    expect(confirmDetail({ command: "click", target: button("") }, "Discord")).toBe("Click the selected item in Discord");
     expect(confirmDetail({ command: "press", keys: "return", lastField: messageBox }, "Discord")).toBe("Press Return in “Message @sam”");
     expect(confirmDetail({ command: "select", text: "Delete" }, null)).toBe("Choose “Delete”");
     expect(confirmDetail({ command: "click", target: button("A very long button name that goes on and on and on forever") }, null).length).toBeLessThan(60);

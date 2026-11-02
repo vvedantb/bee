@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HEADED_FLAG, type AgentDesktopResult, type ComputerRun, type ComputerUseCommand } from "./agent-desktop-envelope";
 import { createRunControl, type RunControl } from "./computer-control";
-import { shellElement } from "./computer-gate";
+import { shellElement, type Element } from "./computer-gate";
 import { CONFIRM_LABEL, STOPPED, computerTools, formatSnapshot, offLimitsApp, type ConfirmRequest } from "./computer-tools";
 import type { DesktopActions } from "./desktop-actions";
 
@@ -76,8 +76,8 @@ afterEach(() => vi.restoreAllMocks());
 
 describe("formatSnapshot", () => {
   it("lists elements with refs, one line each, and remembers what each ref is", () => {
-    const seen = new Map<string, { role: string; name: string }>();
-    const { text, app } = formatSnapshot(SNAPSHOT, (ref, element) => seen.set(ref, element));
+    const seen = new Map<string, Element>();
+    const { text, app, focused } = formatSnapshot(SNAPSHOT, (ref, element) => seen.set(ref, element));
     expect(app).toBe("Discord");
     expect(text.split("\n")).toEqual([
       'App "Discord", window "Discord" (w-100)',
@@ -88,7 +88,65 @@ describe("formatSnapshot", () => {
       '  text "hello there"',
       '  group "Channels" @s1abc:e4 (42 inside: snapshot it with root)',
     ]);
-    expect(seen.get("@s1abc:e2")).toEqual({ role: "button", name: "Send" });
+    // Each ref keeps where it sits: the containers above it, its neighbours' labels and a text field beside it.
+    expect(seen.get("@s1abc:e2")).toEqual({
+      role: "button",
+      name: "Send",
+      context: { app: "Discord", ancestors: [{ role: "window", name: "Discord" }], nearby: ["Message @sam", "Compose", "Channels"], field: { role: "textfield", name: "Message @sam" } },
+    });
+    expect(focused).toMatchObject({ role: "textfield", name: "Message @sam" });
+  });
+
+  it("keeps the containers around each ref, and only short neighbour labels, never a text field's draft", () => {
+    const seen = new Map<string, Element>();
+    const data = {
+      app: "Slack",
+      window: { title: "general - Acme" },
+      tree: {
+        role: "window",
+        name: "Slack",
+        children: [
+          {
+            role: "group",
+            name: "Composer",
+            children: [
+              { role: "textarea", name: "", value: "please search for the doc", ref_id: "@s2:e1" },
+              { role: "toolbar", name: "Formatting", children: [{ role: "button", name: "Bold", ref_id: "@s2:e2" }, { role: "button", name: "", ref_id: "@s2:e3" }] },
+            ],
+          },
+          {
+            role: "list",
+            name: "Messages in general",
+            children: [
+              { role: "listitem", name: "Sam: I will send the order confirmation to everyone tomorrow morning", ref_id: "@s2:e4" },
+              { role: "listitem", name: "Kim: ok", ref_id: "@s2:e5" },
+            ],
+          },
+        ],
+      },
+    };
+    formatSnapshot(data, (ref, element) => seen.set(ref, element));
+    // A text field's name never falls back to its draft (here it would read as a search box).
+    expect(seen.get("@s2:e1")).toMatchObject({ role: "textarea", name: "", value: "please search for the doc" });
+    expect(seen.get("@s2:e3")?.context).toEqual({
+      app: "Slack general - Acme",
+      ancestors: [{ role: "toolbar", name: "Formatting" }, { role: "group", name: "Composer" }, { role: "window", name: "Slack" }],
+      nearby: ["Bold"],
+      field: { role: "textarea", name: "" },
+    });
+    // A long message is content, not a label: it is not a neighbour.
+    expect(seen.get("@s2:e5")?.context?.nearby).toEqual([]);
+  });
+
+  it("puts a root snapshot's region under the containers Bee kept for that ref", () => {
+    const window = { role: "window", name: "Slack" };
+    const within = { ref: "@s1:e7", element: { role: "group", name: "Composer", context: { app: "Slack", ancestors: [window], nearby: [], field: null } } };
+    const seen = new Map<string, Element>();
+    formatSnapshot({ tree: { role: "group", name: "Composer", ref_id: "@s1:e7", children: [{ role: "button", name: "", ref_id: "@s9:e1" }] } }, (ref, element) => seen.set(ref, element), undefined, within);
+    expect(seen.get("@s9:e1")?.context).toMatchObject({ app: "Slack", ancestors: [{ role: "group", name: "Composer" }, window] });
+    // A tree whose top is not the ref itself sits under it.
+    formatSnapshot({ tree: { role: "group", name: "Inner", children: [{ role: "button", name: "", ref_id: "@s9:e2" }] } }, (ref, element) => seen.set(ref, element), undefined, within);
+    expect(seen.get("@s9:e2")?.context?.ancestors).toEqual([{ role: "group", name: "Inner" }, { role: "group", name: "Composer" }, window]);
   });
 
   it("cuts a huge tree to fit", () => {
@@ -323,5 +381,128 @@ describe("computerTools: ask before sending or deleting", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("computerTools: the confirm gate reads the tree, not the AI", () => {
+  // Discord with an unlabelled arrow send button beside the message box, and a message's hover toolbar with a trash icon.
+  const DISCORD = {
+    app: "Discord",
+    window: { id: "w-200", title: "@sam - Discord" },
+    tree: {
+      role: "window",
+      name: "Discord",
+      children: [
+        { role: "tree", name: "Direct Messages", children: [{ role: "treeitem", name: "sam", ref_id: "@s3:e1" }] },
+        { role: "textfield", name: "Search", ref_id: "@s3:e2" },
+        {
+          role: "list",
+          name: "Messages in @sam",
+          children: [
+            {
+              role: "listitem",
+              name: "sam: hello there",
+              children: [{ role: "toolbar", name: "Message actions", children: [{ role: "button", name: "Add Reaction", ref_id: "@s3:e3" }, { role: "button", name: "🗑", ref_id: "@s3:e4" }] }],
+            },
+          ],
+        },
+        {
+          role: "group",
+          name: "Message @sam",
+          ref_id: "@s3:e5",
+          children: [
+            { role: "button", name: "Upload a file", ref_id: "@s3:e6" },
+            { role: "textfield", name: "Message @sam", ref_id: "@s3:e7" },
+            { role: "button", name: "Emoji", ref_id: "@s3:e8" },
+            { role: "button", name: "", ref_id: "@s3:e9" },
+          ],
+        },
+      ],
+    },
+  };
+  const discordRun = (extra: (call: Call) => AgentDesktopResult | null = () => null) => {
+    const commands: Call[] = [];
+    const run: ComputerRun = async (command, args) => {
+      commands.push({ command, args });
+      return extra({ command, args }) ?? (command === "snapshot" ? { ok: true, data: DISCORD } : { ok: true, data: {} });
+    };
+    return { run, commands };
+  };
+
+  it("asks before clicking an unlabelled send arrow, though the AI said none", async () => {
+    const { run, commands } = discordRun();
+    const { call, asked } = setup({ run, confirm: async () => false });
+    await call("snapshot", { app: "Discord" });
+    expect(await call("click", { ref: "@s3:e9", effect: "none" })).toBe(STOPPED);
+    expect(asked).toEqual([{ kind: "send", question: "Send this?", detail: "Click the selected item in Discord" }]);
+    expect(commands.map((item) => item.command)).toEqual(["snapshot"]);
+  });
+
+  it("asks before a trash icon, but not before navigating, drafting or opening the emoji picker", async () => {
+    const { run } = discordRun();
+    const { call, asked } = setup({ run });
+    await call("snapshot", { app: "Discord" });
+    await call("click", { ref: "@s3:e1", effect: "none" });
+    await call("click", { ref: "@s3:e7", effect: "none" });
+    await call("set_value", { ref: "@s3:e7", value: "Running late", effect: "none" });
+    await call("click", { ref: "@s3:e8", effect: "none" });
+    expect(asked).toEqual([]);
+    await call("click", { ref: "@s3:e4", effect: "none" });
+    await call("click", { ref: "@s3:e6", effect: "none" });
+    expect(asked.map((request) => request.kind)).toEqual(["delete", "send"]);
+  });
+
+  it("asks before Return once focus may have left a search box", async () => {
+    const { run } = discordRun();
+    const { call, asked } = setup({ run });
+    await call("snapshot", { app: "Discord" });
+    await call("type_text", { ref: "@s3:e2", text: "sam", effect: "none" });
+    await call("press_key", { keys: "return", app: "Discord", effect: "none" });
+    expect(asked).toEqual([]);
+    // The search jumped somewhere: focus is unknown, so a second Return asks.
+    await call("press_key", { keys: "return", app: "Discord", effect: "none" });
+    expect(asked.map((request) => [request.kind, request.detail])).toEqual([["submit", "Press Return in Discord"]]);
+    // Clicking into the message box puts focus there; Return sends.
+    await call("click", { ref: "@s3:e7", effect: "none" });
+    await call("press_key", { keys: "ctrl+enter", app: "Discord", effect: "none" });
+    expect(asked.map((request) => [request.kind, request.detail]).at(-1)).toEqual(["send", "Press Ctrl+Enter in “Message @sam”"]);
+  });
+
+  it("asks before Return when a snapshot shows the message box focused, with nothing typed this run", async () => {
+    const focused = { ...SNAPSHOT, tree: { role: "window", children: [{ role: "textarea", name: "Message #job-search", ref_id: "@s4:e1", states: ["focused"] }] } };
+    const { call, asked } = setup({ run: async (command) => (command === "snapshot" ? { ok: true, data: focused } : { ok: true, data: {} }) });
+    await call("snapshot", { app: "Discord" });
+    await call("press_key", { keys: "return", app: "Discord", effect: "none" });
+    expect(asked.map((request) => [request.kind, request.detail])).toEqual([["send", "Press Return in “Message #job-search”"]]);
+  });
+
+  it("keeps the containers above a root snapshot's region, and asks before an unlabelled match from find", async () => {
+    // The region alone says nothing (no app, no names): only what Bee kept about @s3:e5 shows it is Discord's message box.
+    const region = { tree: { role: "group", name: "", ref_id: "@s3:e5", children: [{ role: "button", name: "", ref_id: "@s5:e1" }] } };
+    const { run } = discordRun(({ command, args }) => {
+      if (command === "snapshot" && args.includes("--root=@s3:e5")) return { ok: true, data: region };
+      if (command === "find") return { ok: true, data: { matches: [{ role: "button", name: "", ref_id: "@s6:e1" }, { role: "button", name: "Gift", ref_id: "@s6:e2" }] } };
+      return null;
+    });
+    const { call, asked } = setup({ run });
+    await call("snapshot", { app: "Discord" });
+    await call("snapshot", { root: "@s3:e5" });
+    await call("click", { ref: "@s5:e1", effect: "none" });
+    expect(asked.map((request) => request.kind)).toEqual(["send"]);
+    await call("find", { app: "Discord", role: "button" });
+    await call("click", { ref: "@s6:e2", effect: "none" });
+    expect(asked).toHaveLength(1);
+    await call("click", { ref: "@s6:e1", effect: "none" });
+    expect(asked.map((request) => request.kind)).toEqual(["send", "send"]);
+  });
+
+  it("still runs on its own with the setting off", async () => {
+    const { run, commands } = discordRun();
+    const { call, asked } = setup({ run, askFirst: false });
+    await call("snapshot", { app: "Discord" });
+    expect(await call("click", { ref: "@s3:e9", effect: "none" })).toMatch(/^Done/);
+    expect(await call("click", { ref: "@s3:e4", effect: "none" })).toMatch(/^Done/);
+    expect(asked).toEqual([]);
+    expect(commands.map((item) => item.command)).toEqual(["snapshot", "click", "click"]);
   });
 });

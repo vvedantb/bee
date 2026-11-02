@@ -2,7 +2,10 @@ import { tool } from "ai";
 import { z } from "zod";
 import { HEADED_FLAG, REF_PATTERN, parseApps, parseWindows, type AgentDesktopResult, type ComputerRun, type ComputerUseCommand } from "./agent-desktop-envelope";
 import { awaitAnswer, CONFIRM_TIMEOUT_MS, type ComputerPlatform, type IrreversibleKind, type RunControl } from "./computer-control";
-import { EFFECTS, confirmDetail, confirmQuestion, keysLabel, needsConfirm, shellElement, shortName, type Effect, type Element, type GateAction } from "./computer-gate";
+import {
+  EFFECTS, LABEL_MAX, WINDOW_ROLES, confirmDetail, confirmQuestion, focusAfterClick, insideOf, isNavField, isTextEntry, keepsFocus, keysLabel, needsConfirm,
+  shellElement, shortName, type Effect, type Element, type GateAction, type TreeContext,
+} from "./computer-gate";
 import { APP_NAME_MAX, WINDOW_TITLE_MAX, appKey, isBlockedApp, type DesktopActionResult, type DesktopActions } from "./desktop-actions";
 import { debugLog, msSince } from "./debug-log";
 import type { LunaToolActivity } from "./luna";
@@ -12,7 +15,8 @@ import type { LunaToolActivity } from "./luna";
 // runner with fixed argv and no shell; main/agent-desktop.ts assertComputerUse checks every one). Apps open, windows come forward
 // and pages open through the desktop actions (core/desktop-actions.ts). Each call is one step of the run's budget
 // (core/computer-control.ts); sending, deleting, buying and submitting wait for the user's Confirm first when the setting is on
-// (core/computer-gate.ts). Terminals, script tools, system settings and Bee itself are never read or typed into.
+// (core/computer-gate.ts, which reads where each ref sits in the tree, not just what the AI says). Terminals, script tools,
+// system settings and Bee itself are never read or typed into.
 
 export type ConfirmRequest = { kind: IrreversibleKind; question: string; detail: string };
 
@@ -56,6 +60,10 @@ const SHELL_MESSAGE = "Error: Bee does not type into terminals or consoles.";
 const SURFACES = ["window", "menu", "menubar", "sheet", "popover", "alert"] as const;
 // Text in a snapshot line, and the whole snapshot, so a dense app cannot flood the context.
 const NODE_TEXT = 80;
+// What the confirm gate keeps about where each ref sits: containers above it, neighbours each side, a description or value.
+const MAX_ANCESTORS = 8;
+const NEIGHBOURS = 3;
+const KEPT_TEXT = 200;
 const SNAPSHOT_CHARS = 9000;
 const MAX_NODES = 1500;
 const MAX_DEPTH = 60;
@@ -120,12 +128,40 @@ function elementLine(node: Record<string, unknown>, depth: number): string | nul
   ].join("");
 }
 
+/** A node's own labels. A text field's name never falls back to what it holds (a draft could read as "Search"). */
+function elementOf(raw: Record<string, unknown>): Element {
+  const role = str(raw.role);
+  const description = clip(str(raw.description), KEPT_TEXT);
+  const value = clip(str(raw.value), KEPT_TEXT);
+  return {
+    role,
+    name: str(raw.name) || (isTextEntry({ role, name: "" }) ? "" : value) || description,
+    ...(description ? { description } : {}),
+    ...(value ? { value } : {}),
+  };
+}
+
+/** A container as an ancestor: role, name and description only (never a value). */
+const asAncestor = ({ role, name, description }: Element): Element => ({ role, name, ...(description ? { description } : {}) });
+const childrenOf = (raw: Record<string, unknown>): unknown[] => (Array.isArray(raw.children) ? raw.children : []);
+const focusedNode = (raw: Record<string, unknown>) => Array.isArray(raw.states) && raw.states.includes("focused") && !WINDOW_ROLES.test(str(raw.role));
+
+type Place = { parent: Record<string, unknown> | null; grand: Record<string, unknown> | null; siblings: readonly unknown[]; index: number; ancestors: readonly Element[] };
+type FoundField = { field: Element; branch: unknown; depth: number };
+
 /**
  * A snapshot as compact text lines, one per element, indented by depth, capped in size. Each ref seen is remembered with its
- * role and name, so the confirm gate knows what a click would press. Returns the app the snapshot read, when it says.
+ * role, name and where it sits (containers, neighbours, a text field beside it), so the confirm gate knows what a click would
+ * press. within: the ref a root snapshot read, so its region keeps the containers above it. Returns the app the snapshot read,
+ * when it says, and the element it shows focused.
  */
-export function formatSnapshot(data: unknown, remember: (ref: string, element: Element) => void, max = SNAPSHOT_CHARS): { text: string; app: string | null } {
-  if (!isRecord(data)) return { text: "Empty snapshot.", app: null };
+export function formatSnapshot(
+  data: unknown,
+  remember: (ref: string, element: Element) => void,
+  max = SNAPSHOT_CHARS,
+  within: { ref: string; element: Element } | null = null,
+): { text: string; app: string | null; focused: Element | null } {
+  if (!isRecord(data)) return { text: "Empty snapshot.", app: null, focused: null };
   const app = str(data.app) || null;
   const window = isRecord(data.window) ? data.window : {};
   const head = [
@@ -134,11 +170,61 @@ export function formatSnapshot(data: unknown, remember: (ref: string, element: E
     str(window.id) ? ` (${str(window.id)})` : "",
     data.complete === false ? ", partial: raise detail with root" : "",
   ].join("");
+  const title = str(window.title);
+  const where = app ? (title && title !== app ? `${app} ${title}` : app) : (within?.element.context?.app ?? title);
   const lines = [head];
   let size = head.length;
   let count = 0;
   let cut = false;
-  const walk = (raw: unknown, depth: number) => {
+  let focused: Element | null = null;
+
+  // Text fields under a container, down to three levels, with the child each one is under. Remembered per container.
+  const fieldMemo = new Map<unknown, FoundField[]>();
+  const fieldsIn = (container: Record<string, unknown>, depth: number): FoundField[] => {
+    let found = fieldMemo.get(container);
+    if (!found) {
+      const list: FoundField[] = [];
+      const visit = (node: unknown, level: number, branch: unknown) => {
+        if (list.length >= 20 || !isRecord(node)) return;
+        const element = elementOf(node);
+        if (isTextEntry(element)) list.push({ field: { role: element.role, name: element.name }, branch, depth: level });
+        if (level < 3) for (const child of childrenOf(node)) visit(child, level + 1, branch);
+      };
+      for (const child of childrenOf(container)) visit(child, 1, child);
+      fieldMemo.set(container, list);
+      found = list;
+    }
+    return found.filter((item) => item.depth <= depth);
+  };
+  // A text field beside the node: a sibling, or a cousin under the same container. A window's direct children only.
+  const fieldNear = (raw: Record<string, unknown>, place: Place): Element | null => {
+    const { parent, grand } = place;
+    const rootish = (node: Record<string, unknown>) => WINDOW_ROLES.test(str(node.role));
+    const near = [
+      ...(parent ? fieldsIn(parent, rootish(parent) ? 1 : 2).filter((item) => item.branch !== raw) : []),
+      ...(parent && grand && !rootish(grand) ? fieldsIn(grand, 3).filter((item) => item.branch !== parent) : []),
+    ];
+    return near.find((item) => !isNavField(item.field))?.field ?? near[0]?.field ?? null;
+  };
+  // Short labels of the nearest siblings, nearest first: UI labels, not content.
+  const neighbours = (place: Place): string[] => {
+    const labels: string[] = [];
+    for (let step = 1; step <= NEIGHBOURS; step += 1) {
+      for (const sibling of [place.siblings[place.index - step], place.siblings[place.index + step]]) {
+        const label = isRecord(sibling) ? elementOf(sibling).name.replace(/\s+/g, " ").trim() : "";
+        if (label && label.length <= LABEL_MAX) labels.push(label);
+      }
+    }
+    return labels;
+  };
+  const contextOf = (raw: Record<string, unknown>, place: Place): TreeContext => ({ app: where, ancestors: place.ancestors, nearby: neighbours(place), field: fieldNear(raw, place) });
+
+  // A root snapshot's region sits under the ref it read: keep the containers above that ref (and the ref, when the tree's top
+  // is not the ref itself).
+  const tree = isRecord(data.tree) ? data.tree : null;
+  const above = within?.element.context?.ancestors ?? [];
+  const top = within && tree && str(tree.ref_id) === within.ref ? above : within ? [asAncestor(within.element), ...above] : [];
+  const walk = (raw: unknown, depth: number, place: Place) => {
     if (cut || !isRecord(raw) || depth > MAX_DEPTH) return;
     if (count >= MAX_NODES) {
       cut = true;
@@ -146,7 +232,11 @@ export function formatSnapshot(data: unknown, remember: (ref: string, element: E
     }
     count += 1;
     const ref = str(raw.ref_id);
-    if (ref && REF_PATTERN.test(ref)) remember(ref, { role: str(raw.role), name: str(raw.name) || str(raw.value) || str(raw.description) });
+    if (ref && REF_PATTERN.test(ref)) {
+      const element: Element = { ...elementOf(raw), context: contextOf(raw, place) };
+      remember(ref, element);
+      if (focusedNode(raw)) focused = element;
+    }
     const line = elementLine(raw, depth);
     if (line) {
       if (size + line.length + 1 > max) {
@@ -156,14 +246,16 @@ export function formatSnapshot(data: unknown, remember: (ref: string, element: E
       lines.push(line);
       size += line.length + 1;
     }
-    if (Array.isArray(raw.children)) for (const child of raw.children) walk(child, line ? depth + 1 : depth);
+    const children = childrenOf(raw);
+    const ancestors = children.length > 0 ? [asAncestor(elementOf(raw)), ...place.ancestors].slice(0, MAX_ANCESTORS) : [];
+    children.forEach((child, index) => walk(child, line ? depth + 1 : depth, { parent: raw, grand: place.parent, siblings: children, index, ancestors }));
   };
-  walk(data.tree, 0);
+  walk(tree, 0, { parent: null, grand: null, siblings: [], index: 0, ancestors: top.slice(0, MAX_ANCESTORS) });
   if (cut) lines.push("… more not shown: snapshot one region with root, or use find.");
-  return { text: lines.join("\n"), app };
+  return { text: lines.join("\n"), app, focused };
 }
 
-/** find: one line per match (refs remembered), or the count, or what roles are there when nothing matched. */
+/** find: one line per match (refs remembered with their own labels), or the count, or what roles are there when nothing matched. */
 export function formatMatches(data: unknown, remember: (ref: string, element: Element) => void): string {
   if (typeof data === "number") return `${data} matches.`;
   if (!isRecord(data)) return "No matches.";
@@ -177,7 +269,7 @@ export function formatMatches(data: unknown, remember: (ref: string, element: El
     .slice(0, FIND_LIMIT)
     .map((match) => {
       const ref = str(match.ref_id);
-      if (ref && REF_PATTERN.test(ref)) remember(ref, { role: str(match.role), name: str(match.name) || str(match.value) });
+      if (ref && REF_PATTERN.test(ref)) remember(ref, elementOf(match));
       return elementLine(match, 0) ?? str(match.role);
     })
     .join("\n");
@@ -233,7 +325,9 @@ type ScreenshotOutput = { text: string; image?: string };
 /** The computer tools over the given runners. One call at a time, in order; each is one step. */
 export function computerTools(deps: ComputerToolDeps) {
   const { control } = deps;
-  // Refs this run has seen, with what they are, and the text field written last (for Return).
+  // Refs this run has seen, with what they are and where they sit, and where keyboard focus is as far as Bee knows: the field
+  // written last, a text field clicked, or what a snapshot showed focused. Null once a key, a click or an app switch may have
+  // moved it, so Return asks again.
   const refs = new Map<string, Element>();
   // Window ids this run has shown the AI (never one of an app Bee does not use).
   const windows = new Set<string>();
@@ -323,11 +417,12 @@ export function computerTools(deps: ComputerToolDeps) {
   const done = (result: AgentDesktopResult) => (result.ok ? formatDone(result.data) : errorLine(result.code));
   const desktopLine = (result: DesktopActionResult) => (result.ok ? `Done: ${result.message}.` : `Error: ${result.message}.`);
 
-  /** A ref action: check the ref, run it, and keep the last text field for Return. Never in a terminal or console. */
+  /** A ref action: check the ref, run it, and keep where focus is for Return. Never in a terminal or console. */
   const onRef = (command: ComputerUseCommand, ref: string, args: string[] = [], timeoutMs = ACT_MS) => async () => {
     if (["click", "type", "set-value", "clear", "focus"].includes(command) && shellElement(refs.get(ref))) return SHELL_MESSAGE;
     const result = await exec(command, [ref, ...args], timeoutMs);
     if (result.ok && ["type", "set-value", "clear", "focus"].includes(command)) lastField = refs.get(ref) ?? lastField;
+    if (result.ok && command === "click") lastField = focusAfterClick(lastField, refs.get(ref));
     return done(result);
   };
   const gateFor = (command: string, ref: string, extra: Partial<GateAction> & { effect?: Effect }) => (): GateAction => ({ command, target: refs.get(ref) ?? null, lastField, ...extra });
@@ -360,9 +455,11 @@ export function computerTools(deps: ComputerToolDeps) {
           if (!result.ok) return errorLine(result.code);
           // Refs from an app Bee never uses are dropped before the AI sees them.
           const kept = new Map<string, Element>();
-          const shown = formatSnapshot(result.data, (ref, item) => kept.set(ref, item));
+          const within = input.root ? refs.get(input.root) : undefined;
+          const shown = formatSnapshot(result.data, (ref, item) => kept.set(ref, item), SNAPSHOT_CHARS, input.root && within ? { ref: input.root, element: within } : null);
           if (shown.app && offLimitsApp(shown.app)) return OFF_LIMITS_MESSAGE;
           for (const [ref, item] of kept) remember(ref, item);
+          if (shown.focused) lastField = shown.focused;
           const shownWindow = isRecord(result.data) && isRecord(result.data.window) ? str(result.data.window.id) : "";
           if (/^w-[A-Za-z0-9-]{1,40}$/.test(shownWindow)) windows.add(shownWindow);
           currentApp = shown.app ?? (input.app ? cleanApp(input.app) : currentApp);
@@ -398,7 +495,13 @@ export function computerTools(deps: ComputerToolDeps) {
             `--limit=${FIND_LIMIT}`,
           ];
           const result = await exec("find", args, LOOK_MS);
-          return result.ok ? formatMatches(result.data, remember) : errorLine(result.code);
+          // A match keeps where it sits when a snapshot showed it, or sits inside root when one was given.
+          const inside = insideOf(input.root ? refs.get(input.root) : null);
+          const found = (ref: string, item: Element) => {
+            const context = refs.get(ref)?.context ?? inside;
+            remember(ref, context ? { ...item, context } : item);
+          };
+          return result.ok ? formatMatches(result.data, found) : errorLine(result.code);
         }),
     }),
 
@@ -571,6 +674,7 @@ export function computerTools(deps: ComputerToolDeps) {
             if (shellElement(lastField)) return SHELL_MESSAGE;
             currentApp = cleanApp(input.app) ?? currentApp;
             const result = await exec("press", [keys, ...scope(input), ...(input.physical ? [HEADED_FLAG] : [])], ACT_MS);
+            if (!keepsFocus(keys)) lastField = null;
             return result.ok ? `${formatDone(result.data)} Check the result with a snapshot.` : errorLine(result.code);
           },
           () => ({ command: "press", keys: input.keys.trim().toLowerCase().replace(/\s*\+\s*/g, "+"), lastField, effect: input.effect }),
@@ -584,7 +688,7 @@ export function computerTools(deps: ComputerToolDeps) {
         step("open_app", `Opening ${shortName(name, 30)}…`, async () => {
           if (offLimitsApp(name)) return OFF_LIMITS_MESSAGE;
           const result = await deps.desktop.openApp(name);
-          if (result.ok) currentApp = name;
+          if (result.ok) [currentApp, lastField] = [name, null];
           return desktopLine(result);
         }),
     }),
@@ -596,7 +700,7 @@ export function computerTools(deps: ComputerToolDeps) {
         step("focus_window", `Switching to ${shortName(app, 30)}…`, async () => {
           if (offLimitsApp(app)) return OFF_LIMITS_MESSAGE;
           const result = await deps.desktop.focusWindow({ app, ...(title ? { title } : {}) });
-          if (result.ok) currentApp = app;
+          if (result.ok) [currentApp, lastField] = [app, null];
           return desktopLine(result);
         }),
     }),
@@ -604,7 +708,12 @@ export function computerTools(deps: ComputerToolDeps) {
     open_url: tool({
       description: "Open a web page in the default browser, by its full https URL.",
       inputSchema: z.object({ url: z.string().min(1).max(2000) }),
-      execute: ({ url }) => step("open_url", "Opening the link…", async () => desktopLine(await deps.desktop.openUrl(url))),
+      execute: ({ url }) =>
+        step("open_url", "Opening the link…", async () => {
+          const result = await deps.desktop.openUrl(url);
+          if (result.ok) lastField = null;
+          return desktopLine(result);
+        }),
     }),
 
     close_app: tool({
@@ -615,7 +724,9 @@ export function computerTools(deps: ComputerToolDeps) {
           const app = cleanApp(name);
           if (!app) return "Error: that is not an app name. Check list_apps.";
           if (offLimitsApp(app) || ["finder", "explorer", "file explorer", "dock", "windows explorer"].includes(appKey(app))) return "Error: Bee does not quit that app.";
-          return done(await exec("close-app", [app], ACT_MS));
+          const result = await exec("close-app", [app], ACT_MS);
+          if (result.ok) lastField = null;
+          return done(result);
         }),
     }),
 
