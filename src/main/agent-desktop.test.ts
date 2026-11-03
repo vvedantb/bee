@@ -9,14 +9,98 @@ import {
   createAgentDesktopActionRunner,
   createAgentDesktopComputerRunner,
   createAgentDesktopRunner,
+  lockDownWindowsPrivateDir,
+  parseWhoamiSid,
   platformBinaryNames,
   resolveAgentDesktop,
   type ExecFile,
+  type ExecFileSync,
 } from "./agent-desktop";
 
 const root = new URL("../../", import.meta.url);
 const repo = (path: string) => fileURLToPath(new URL(path, root));
 const ENVELOPE = '{"version":"2.5","ok":true,"command":"version","data":{"version":"1.0.2"}}';
+
+describe("Windows state folder lockdown", () => {
+  const SID = "S-1-5-21-1111111111-2222222222-3333333333-1001";
+
+  function fakeSync(fail?: { tool: string; stdout?: string; stderr?: string }, whoami = `"desktop-1\\someone","${SID}"\r\n`) {
+    const calls: { file: string; args: string[] }[] = [];
+    const execSync: ExecFileSync = (file, args) => {
+      calls.push({ file, args });
+      const tool = file.includes("whoami") ? "whoami" : "icacls";
+      if (fail?.tool === tool) throw Object.assign(new Error(`${tool} exited 5`), { stdout: fail.stdout ?? "", stderr: fail.stderr ?? "" });
+      return tool === "whoami" ? whoami : "processed 1 files";
+    };
+    return { execSync, calls };
+  }
+
+  it("parses the SID from whoami CSV output", () => {
+    expect(parseWhoamiSid(`"desktop-1\\someone","${SID}"\r\n`)).toBe(SID);
+    expect(parseWhoamiSid(`\r\n"DOMAIN\\a, b","${SID}"`)).toBe(SID);
+    expect(parseWhoamiSid("")).toBeNull();
+    expect(parseWhoamiSid('"desktop-1\\someone","not-a-sid"')).toBeNull();
+  });
+
+  it("drops inheritance and grants only the current user, SYSTEM and Administrators by SID, without a shell", () => {
+    const fake = fakeSync();
+    const warnings: string[] = [];
+    expect(lockDownWindowsPrivateDir("C:\\Temp\\bee-agent-desktop-x", { execSync: fake.execSync, warn: (m) => warnings.push(m), env: { SystemRoot: "C:\\Windows" } })).toBe(true);
+    expect(fake.calls.map((c) => c.file.split(/[\\/]/).pop())).toEqual(["whoami.exe", "icacls.exe"]);
+    expect(fake.calls[0]?.args).toEqual(["/user", "/fo", "csv", "/nh"]);
+    expect(fake.calls[1]?.args).toEqual([
+      "C:\\Temp\\bee-agent-desktop-x",
+      "/inheritance:r",
+      "/grant:r",
+      `*${SID}:(OI)(CI)F`,
+      "*S-1-5-18:(OI)(CI)F",
+      "*S-1-5-32-544:(OI)(CI)F",
+    ]);
+    expect(warnings).toEqual([]);
+  });
+
+  it("warns with the tool output and returns false when whoami or icacls fails, without throwing", () => {
+    const warnings: string[] = [];
+    const warn = (m: string) => warnings.push(m);
+    const icacls = fakeSync({ tool: "icacls", stderr: "Access is denied." });
+    expect(lockDownWindowsPrivateDir("C:\\d", { execSync: icacls.execSync, warn })).toBe(false);
+    expect(warnings[0]).toContain("icacls failed");
+    expect(warnings[0]).toContain("Access is denied.");
+    const whoami = fakeSync({ tool: "whoami", stderr: "boom" });
+    expect(lockDownWindowsPrivateDir("C:\\d", { execSync: whoami.execSync, warn })).toBe(false);
+    expect(warnings[1]).toContain("whoami failed");
+    expect(whoami.calls).toHaveLength(1);
+    const noSid = fakeSync(undefined, "garbage");
+    expect(lockDownWindowsPrivateDir("C:\\d", { execSync: noSid.execSync, warn })).toBe(false);
+    expect(warnings[2]).toContain("no SID");
+    expect(warnings[2]).not.toContain("garbage");
+    expect(noSid.calls).toHaveLength(1);
+  });
+
+  it("locks the runner's folder down once on win32, keeps running if that fails, and never calls icacls elsewhere", async () => {
+    const temp = mkdtempSync(join(tmpdir(), "bee-ad-win-"));
+    try {
+      const exec: ExecFile = (_file, _args, _options, callback) => callback(null, ENVELOPE);
+      const win = fakeSync({ tool: "icacls", stderr: "denied" });
+      const warnings: string[] = [];
+      const runner = createAgentDesktopRunner({ path: "agent-desktop.exe", macHelper: null }, { exec, tempDir: () => temp, platform: "win32", execSync: win.execSync, warn: (m) => warnings.push(m) });
+      expect(await runner.run("version", [])).toEqual({ ok: true, data: { version: "1.0.2" } });
+      expect(await runner.run("version", [])).toEqual({ ok: true, data: { version: "1.0.2" } });
+      expect(win.calls.map((c) => c.file.split(/[\\/]/).pop())).toEqual(["whoami.exe", "icacls.exe"]);
+      expect(win.calls[1]?.args[0]?.startsWith(temp)).toBe(true);
+      expect(warnings).toHaveLength(1);
+      runner.cleanup();
+
+      const mac = fakeSync();
+      const other = createAgentDesktopRunner({ path: "/bin/agent-desktop", macHelper: null }, { exec, tempDir: () => temp, platform: "darwin", execSync: mac.execSync });
+      expect(await other.run("version", [])).toEqual({ ok: true, data: { version: "1.0.2" } });
+      expect(mac.calls).toEqual([]);
+      other.cleanup();
+    } finally {
+      rmSync(temp, { recursive: true, force: true });
+    }
+  });
+});
 
 describe("platformBinaryNames", () => {
   it("names the bundled binary and macOS helper per platform", () => {
@@ -150,8 +234,8 @@ describe("createAgentDesktopRunner", () => {
     const home = call?.env.AGENT_DESKTOP_HOME ?? "";
     expect(home.startsWith(temp)).toBe(true);
     expect(statSync(home).isDirectory()).toBe(true);
-    // POSIX only: Windows has no mode bits (Node reports 0o666 for any writable entry); there the folder is private
-    // through the per-user ACL it inherits from %TEMP%.
+    // POSIX only: Windows has no mode bits (Node reports 0o666 for any writable entry); there the folder is made private
+    // with icacls (lockDownWindowsPrivateDir, tested above).
     if (process.platform !== "win32") expect(statSync(home).mode & 0o077).toBe(0);
     runner.cleanup();
     expect(existsSync(home)).toBe(false);

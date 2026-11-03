@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -100,11 +100,64 @@ export type AgentDesktopRunner = {
   cleanup: () => void;
 };
 
-type RunnerDeps = { exec?: ExecFile; env?: NodeJS.ProcessEnv; tempDir?: () => string };
+/** A synchronous execFile with an args array (no shell). Returns stdout; throws on a non-zero exit. */
+export type ExecFileSync = (file: string, args: string[], options: { timeout: number; windowsHide: boolean; encoding: "utf8" }) => string;
+
+type RunnerDeps = {
+  exec?: ExecFile;
+  env?: NodeJS.ProcessEnv;
+  tempDir?: () => string;
+  platform?: NodeJS.Platform;
+  execSync?: ExecFileSync;
+  warn?: (message: string) => void;
+};
+
+/** The SID from `whoami /user /fo csv /nh` ("DOMAIN\user","S-1-5-21-…"): the last quoted field. Null if there is none. */
+export function parseWhoamiSid(output: string): string | null {
+  const line = output.split(/\r?\n/).find((l) => l.trim() !== "") ?? "";
+  const fields = line.split(",").map((f) => f.trim().replace(/^"|"$/g, ""));
+  const sid = fields[fields.length - 1] ?? "";
+  return /^S-1-\d+(-\d+)+$/.test(sid) ? sid : null;
+}
+
+/**
+ * Windows ignores mkdtemp's mode 0700, so a new folder inherits %TEMP%'s ACL, which can hold extra principals
+ * (sandbox groups, unresolved SIDs). agent-desktop refuses a state folder that grants anyone but the current user, SYSTEM
+ * and Administrators. This drops inheritance and grants only those three, by SID so it works in any Windows language.
+ * Returns false (and warns with the tool output) on failure; the caller carries on.
+ */
+export function lockDownWindowsPrivateDir(
+  dir: string,
+  deps: { execSync?: ExecFileSync; warn?: (message: string) => void; env?: NodeJS.ProcessEnv } = {},
+): boolean {
+  const execSync = deps.execSync ?? (execFileSync as unknown as ExecFileSync);
+  const warn = deps.warn ?? ((message: string) => console.warn(message));
+  const system32 = join((deps.env ?? process.env).SystemRoot ?? "C:\\Windows", "System32");
+  const options = { timeout: 10_000, windowsHide: true, encoding: "utf8" as const };
+  let step = "whoami";
+  try {
+    const whoami = execSync(join(system32, "whoami.exe"), ["/user", "/fo", "csv", "/nh"], options);
+    const sid = parseWhoamiSid(whoami);
+    if (!sid) {
+      warn("Bee: could not lock down agent-desktop folder: no SID in whoami output");
+      return false;
+    }
+    step = "icacls";
+    execSync(join(system32, "icacls.exe"), [dir, "/inheritance:r", "/grant:r", `*${sid}:(OI)(CI)F`, "*S-1-5-18:(OI)(CI)F", "*S-1-5-32-544:(OI)(CI)F"], options);
+    return true;
+  } catch (error) {
+    const e = error as { message?: string; stdout?: unknown; stderr?: unknown };
+    const out = [e.stdout, e.stderr].map((v) => (v == null ? "" : String(v).trim())).filter(Boolean).join(" | ");
+    warn(`Bee: could not lock down agent-desktop folder (${step} failed): ${e.message ?? String(error)}${out ? ` — ${out}` : ""}`);
+    return false;
+  }
+}
 
 /**
  * One command at a time. agent-desktop keeps snapshot ref maps under AGENT_DESKTOP_HOME; Bee points it at a private
- * temporary folder (mode 0700) instead of ~/.agent-desktop, and deletes it when reading stops and at quit.
+ * temporary folder instead of ~/.agent-desktop, and deletes it when reading stops and at quit. Private means mode 0700 on
+ * macOS and Linux (mkdtemp), and on Windows an ACL for the current user, SYSTEM and Administrators only
+ * (lockDownWindowsPrivateDir).
  */
 export function createAgentDesktopRunner(binary: AgentDesktopBinary, deps: RunnerDeps = {}): AgentDesktopRunner {
   return queuedRunner<ReadOnlyCommand>(binary, deps, assertReadOnly);
@@ -134,7 +187,10 @@ function queuedRunner<C extends string>(binary: AgentDesktopBinary, deps: Runner
   let queue: Promise<unknown> = Promise.resolve();
 
   const ensureHome = (): string => {
-    home ??= mkdtempSync(join(deps.tempDir?.() ?? tmpdir(), "bee-agent-desktop-"));
+    if (home) return home;
+    const dir = mkdtempSync(join(deps.tempDir?.() ?? tmpdir(), "bee-agent-desktop-"));
+    if ((deps.platform ?? process.platform) === "win32") lockDownWindowsPrivateDir(dir, { execSync: deps.execSync, warn: deps.warn, env: deps.env });
+    home = dir;
     return home;
   };
 
