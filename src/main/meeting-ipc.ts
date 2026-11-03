@@ -7,6 +7,7 @@ import { computerAccess } from "../core/computer-use";
 import { debugLog, errorData, msSince } from "../core/debug-log";
 import type { DesktopActions } from "../core/desktop-actions";
 import { runDirectCommand, type ComputerHost } from "../core/direct-command";
+import { classifyFollowUp } from "../core/follow-up";
 import { loadMcpTools, type McpPool, type McpServerConfig } from "../core/mcp";
 import type { MeetingContext } from "../core/meeting-context";
 import { GUIDE_MODEL, NO_GATEWAY_KEY, STT_MODEL, createBeeGateway, type BeeGateway } from "../core/gateway";
@@ -20,6 +21,7 @@ import {
   commandRequestSchema,
   commandStopSchema,
   computerAnswerSchema,
+  followUpRequestSchema,
   meetingContextRequestSchema,
   meetingSummaryRequestSchema,
   pipelineCancelSchema,
@@ -27,6 +29,7 @@ import {
   transcribeRequestSchema,
   type ComputerAccessView,
   type ComputerUpdate,
+  type FollowUpResult,
   type LunaActivity,
   type LunaPartial,
   type MeetingSummaryResult,
@@ -253,6 +256,7 @@ export function registerMeetingIpc(args: { notesDir: string; fsRoots: () => stri
       runId: request.runId,
       command: request.command,
       transcript: request.transcript,
+      history: request.history ?? [],
       meetingBrief: meetingBrief ?? null,
       hasKey: Boolean(apiKey),
       desktop: Boolean(args.desktop),
@@ -262,6 +266,7 @@ export function registerMeetingIpc(args: { notesDir: string; fsRoots: () => stri
       const result = await runDirectCommand({
         command: request.command,
         transcript: request.transcript,
+        history: request.history,
         meetingBrief,
         meetingTerms: meetingTerms(windowContext) || undefined,
         searchLocation: searchLocation({ timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone, locale: app.getSystemLocale() }),
@@ -293,6 +298,16 @@ export function registerMeetingIpc(args: { notesDir: string; fsRoots: () => stri
         releaseComputer();
       }
     }
+  });
+
+  // The conversation window's one small call (core/follow-up.ts): is an unclear own mic phrase for Bee or the meeting? Null
+  // without a key, with the wake word off, or on any failure, so the phrase stays a meeting line.
+  ipcMain.handle(IPC.classifyFollowUp, async (_event, payload): Promise<FollowUpResult> => {
+    const request = followUpRequestSchema.parse(payload);
+    assertSignedIn(request.sessionToken);
+    const apiKey = args.gatewayApiKey();
+    if (!apiKey || (args.wakeWordEnabled && !args.wakeWordEnabled())) return null;
+    return classifyFollowUp({ model: createGateway(apiKey).languageModel(GUIDE_MODEL), lastBee: request.lastBee, lines: request.lines, phrase: request.phrase, othersQuiet: request.othersQuiet });
   });
 
   // Stop for a direct request: the island's Stop button or "Bee, stop" from the user's own mic. Computer use stops at once (the

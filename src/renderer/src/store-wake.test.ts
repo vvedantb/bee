@@ -4,6 +4,8 @@ import {
   computerAnswerSchema,
   pipelineRequestSchema,
   type CommandRequest,
+  type FollowUpRequest,
+  type FollowUpResult,
   type ComputerAnswer,
   type ComputerUpdate,
   type MeetingSummaryRequest,
@@ -84,7 +86,9 @@ const IN_SYNC = {
 
 const teammate: SessionLine = { id: "r1:1", own: false, speakerId: "u-alice", speakerName: "Alice", text: "Bee, pull up the Q3 roadmap deck", clientTs: 0, serverTs: 1 };
 
-async function loadStore(options: { settings?: Partial<SettingsView>; command?: (request: CommandRequest) => Promise<PipelineResult> } = {}) {
+async function loadStore(
+  options: { settings?: Partial<SettingsView>; command?: (request: CommandRequest) => Promise<PipelineResult>; classify?: (request: FollowUpRequest) => Promise<FollowUpResult> } = {},
+) {
   const pipeline: PipelineRequest[] = [];
   const commands: CommandRequest[] = [];
   const published: string[] = [];
@@ -124,6 +128,8 @@ async function loadStore(options: { settings?: Partial<SettingsView>; command?: 
         pipeline.push(pipelineRequestSchema.parse(request));
         return result(["Offer 10% off."]);
       },
+      // Only when the test gives one: without it, an unclear phrase in the conversation window stays a meeting line.
+      ...(options.classify ? { classifyFollowUp: options.classify } : {}),
       runCommand: async (request: CommandRequest) => {
         commands.push(commandRequestSchema.parse(request));
         return options.command ? options.command(request) : result(["Opened Teams"]);
@@ -445,5 +451,177 @@ describe("store: computer use", () => {
     finish(result(["Late answer"]));
     await vi.advanceTimersByTimeAsync(0);
     expect(state().result?.tips).toEqual(["Stopped."]);
+  });
+});
+
+describe("store: Bee's history and the conversation window", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.resetModules();
+    micSessions.length = 0;
+    vi.spyOn(console, "debug").mockImplementation(() => undefined);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  const USAGE_URL = "Opened https://vercel.com/acme/~/usage";
+  const opened = async (request: CommandRequest) =>
+    request.command === "open Vercel usage" ? { ...result([USAGE_URL]), actions: [USAGE_URL] } : result([`Reply to ${request.command}`]);
+
+  it("sends earlier exchanges with each request, as history, never in the transcript", async () => {
+    const { say, commands } = await loadStore({ command: opened });
+    await say("B, open Vercel usage");
+    await say("Bee, open the team usage");
+    expect(commands[0]?.history).toBeUndefined();
+    expect(commands[1]).toMatchObject({ command: "open the team usage", history: [{ request: "open Vercel usage", reply: "", actions: [USAGE_URL] }] });
+    expect(commands[1]?.transcript).toBeUndefined();
+  });
+
+  it("keeps at most six exchanges, dropping the oldest", async () => {
+    const { say, commands, store } = await loadStore();
+    for (let index = 1; index <= 8; index++) await say(`Bee, what is ${index} plus ${index}?`);
+    expect(commands.at(-1)?.history?.map((item) => item.request)).toEqual([2, 3, 4, 5, 6, 7].map((index) => `what is ${index} plus ${index}?`));
+    expect(store.beeHistory()).toHaveLength(6);
+  });
+
+  it("clears the history after ten idle minutes", async () => {
+    const { say, commands, store } = await loadStore();
+    await say("Bee, open Teams");
+    expect(store.beeHistory()).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    expect(store.beeHistory()).toEqual([]);
+    await say("Bee, open Slack");
+    expect(commands.at(-1)?.history).toBeUndefined();
+  });
+
+  it("clears the history and closes the window when the meeting ends", async () => {
+    const { say, store, state } = await loadStore();
+    await say("Let's pick up the Acme renewal.");
+    await say("Bee, open Teams");
+    expect(state().conversationOpen).toBe(true);
+    await store.actions.endMeeting();
+    expect(store.beeHistory()).toEqual([]);
+    expect(state().conversationOpen).toBe(false);
+  });
+
+  it("takes a follow-up without Bee in the window, with the history, and keeps it out of the meeting", async () => {
+    const { say, commands, pipeline, published, state } = await loadStore({ command: opened });
+    await say("B, open Vercel usage");
+    expect(state().conversationOpen).toBe(true);
+    const { notchLine, CONVERSATION_LABEL } = await import("./notch");
+    expect(notchLine(state(), true).text).toBe(CONVERSATION_LABEL);
+    await say("Why do you not go to the team usage?");
+    expect(commands.map((request) => request.command)).toEqual(["open Vercel usage", "Why do you not go to the team usage?"]);
+    expect(commands[1]?.history?.[0]?.request).toBe("open Vercel usage");
+    expect(state().session.lines).toEqual([]);
+    expect(pipeline).toEqual([]);
+    expect(published).toEqual([]);
+  });
+
+  it("closes the window after twenty seconds of silence", async () => {
+    const { say, commands, state } = await loadStore();
+    await say("Bee, open Teams");
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(state().conversationOpen).toBe(false);
+    await say("why did you open that");
+    expect(commands).toHaveLength(1);
+    expect(state().session.lines.map((line) => line.text)).toEqual(["why did you open that"]);
+  });
+
+  it("holds the window open while Bee's reply asks a question", async () => {
+    const { say, commands, state } = await loadStore({ command: async (request) => result([request.command === "open the team usage" ? "Which team?" : "Opened the Acme team usage."]) });
+    await say("Bee, open the team usage");
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(state().conversationOpen).toBe(true);
+    await say("Acme platform");
+    expect(commands.map((request) => request.command)).toEqual(["open the team usage", "Acme platform"]);
+  });
+
+  it("never opens the window or runs a request for other people's lines", async () => {
+    const { store, say, caption, fromTeammate, commands, state } = await loadStore();
+    await caption("Why did you open that page?");
+    store.actions.teamsAudioLines(["No, the team one"]);
+    await fromTeammate({ ...teammate, id: "r1:3", text: "Can you check the billing tab?" });
+    expect(commands).toEqual([]);
+    expect(state().conversationOpen).toBe(false);
+    // In the window too: only the user's own mic reaches Bee.
+    await say("Bee, open Teams");
+    await caption("Why did you open that page?");
+    store.actions.teamsAudioLines(["Go back to that page"]);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(commands).toHaveLength(1);
+  });
+
+  it("closes the window when the user replies to someone else, or names them", async () => {
+    const first = await loadStore();
+    await first.say("Bee, open Teams");
+    await first.caption("Should we ship on Friday?");
+    await first.say("I think Friday works for the release.");
+    expect(first.state().conversationOpen).toBe(false);
+    expect(first.commands).toHaveLength(1);
+
+    vi.resetModules();
+    const second = await loadStore();
+    await second.caption("Morning all.");
+    await second.say("Bee, open Teams");
+    await second.say("Priya, could you share the deck?");
+    expect(second.state().conversationOpen).toBe(false);
+    expect(second.commands).toHaveLength(1);
+    expect(second.state().session.lines.map((line) => line.text)).toContain("Priya, could you share the deck?");
+  });
+
+  it("closes on thanks, on stop, and when the island is dismissed", async () => {
+    const thanks = await loadStore();
+    await thanks.say("Bee, open Teams");
+    await thanks.say("Thanks!");
+    expect(thanks.state().conversationOpen).toBe(false);
+    expect(thanks.state().session.lines).toEqual([]);
+    expect(thanks.commands).toHaveLength(1);
+
+    vi.resetModules();
+    const stop = await loadStore();
+    await stop.say("Bee, open Teams");
+    await stop.say("Stop.");
+    expect(stop.state().conversationOpen).toBe(false);
+
+    vi.resetModules();
+    const dismissed = await loadStore();
+    await dismissed.say("Bee, open Teams");
+    const closing = dismissed.store.actions.dismissIsland();
+    await vi.advanceTimersByTimeAsync(300);
+    await closing;
+    expect(dismissed.state().conversationOpen).toBe(false);
+  });
+
+  it("asks the classifier once for an unclear phrase, and acts only on bee at 0.7 or more", async () => {
+    const asked: FollowUpRequest[] = [];
+    let verdict: FollowUpResult = { addressed: "bee", confidence: 0.9 };
+    const { say, commands, state } = await loadStore({
+      classify: async (request) => {
+        asked.push(request);
+        return verdict;
+      },
+    });
+    await say("Bee, open the Vercel dashboard");
+    await say("The billing numbers look off this month.");
+    expect(asked).toHaveLength(1);
+    expect(asked[0]).toMatchObject({ phrase: "The billing numbers look off this month.", lastBee: { request: "open the Vercel dashboard" }, othersQuiet: true });
+    expect(commands.map((request) => request.command)).toEqual(["open the Vercel dashboard", "The billing numbers look off this month."]);
+    verdict = { addressed: "bee", confidence: 0.5 };
+    await say("Revenue is flat this quarter.");
+    expect(asked).toHaveLength(2);
+    expect(commands).toHaveLength(2);
+    expect(state().session.lines.map((line) => line.text)).toEqual(["Revenue is flat this quarter."]);
+  });
+
+  it("shows a fallback line for a reply with no lines and no error", async () => {
+    const { say, state, store } = await loadStore({ command: async () => result([]) });
+    await say("Bee, open the team one");
+    expect(state().result?.tips).toEqual(["Which one?"]);
+    expect(store.beeHistory()[0]).toMatchObject({ request: "open the team one", reply: "Which one?" });
   });
 });

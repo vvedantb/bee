@@ -1,7 +1,8 @@
-import { tool } from "ai";
+import { tool, type ModelMessage } from "ai";
 import { z } from "zod";
 import type { PipelineResult } from "../shared/ipc";
 import type { ComputerRun } from "./agent-desktop-envelope";
+import { commandFallbackReply, historyMessages, type BeeExchange } from "./bee-history";
 import { COMPUTER_MAX_STEPS, createRunControl, stopLine, type ComputerPlatform, type RunControl } from "./computer-control";
 import { computerTools, type ConfirmRequest } from "./computer-tools";
 import { computerAccess, runComputerUse, wantsComputerUse } from "./computer-use";
@@ -22,7 +23,9 @@ import { needsWebSearch, type SearchLocation } from "./web-search";
 // ("send Sam a message in Discord", core/computer-use.ts wantsComputerUse) runs the computer-use loop. Anything else goes to
 // Luna with the desktop tools, and use_computer to hand a task on screen over to the loop. The result has the pipeline's
 // shape, so the island shows it like tips: action lines first ("Opened Teams"), then the reply, or the loop's one last line.
-// No Jev: there is no meeting turn to rank notes for.
+// No Jev: there is no meeting turn to rank notes for. The last few exchanges with Bee (core/bee-history.ts) go to the AI as
+// earlier turns, so a follow-up ("the team one") carries on from the last request. The result also says which lines were
+// actions and where computer use left the screen, for the next request's history.
 
 const RETRIEVE_LIMIT = 5;
 const GUIDE_NOTE_LIMIT = 3;
@@ -83,6 +86,7 @@ const lineResult = (line: string, patch: Partial<PipelineResult["timingsMs"]> = 
 async function runComputerCommand(args: {
   command: string;
   transcript?: string[];
+  history?: readonly ModelMessage[];
   host: ComputerHost;
   actions: DesktopActions;
   gateway: BeeGateway;
@@ -121,6 +125,7 @@ async function runComputerCommand(args: {
       model: args.gateway.languageModel(GUIDE_MODEL),
       command: args.command,
       transcript: args.transcript,
+      history: args.history,
       tools,
       control,
       platform: host.platform,
@@ -128,8 +133,9 @@ async function runComputerCommand(args: {
     });
     const guide = performance.now() - started;
     debugLog.info("computer", "run-end", { ...outcome, reason: control.reason(), declined: control.declined(), ms: Math.round(guide) });
-    if (outcome.error) return { ...lineResult(outcome.line, { guide, lunaTotal: guide }), tips: [], tipSources: [], guideError: outcome.line };
-    return lineResult(outcome.line, { guide, lunaTotal: guide });
+    const where = outcome.endedWhere ? { endedWhere: outcome.endedWhere } : {};
+    if (outcome.error) return { ...lineResult(outcome.line, { guide, lunaTotal: guide }), tips: [], tipSources: [], guideError: outcome.line, ...where };
+    return { ...lineResult(outcome.line, { guide, lunaTotal: guide }), ...where };
   } finally {
     control.dispose();
   }
@@ -140,6 +146,8 @@ export async function runDirectCommand(args: {
   command: string;
   /** The latest meeting lines, as background for a request about the meeting. Never answered as tips. */
   transcript?: string[];
+  /** The last few exchanges with Bee, oldest first: earlier turns for the AI. */
+  history?: readonly BeeExchange[];
   meetingBrief?: string;
   meetingTerms?: string;
   searchLocation?: SearchLocation;
@@ -158,7 +166,8 @@ export async function runDirectCommand(args: {
 }): Promise<PipelineResult> {
   const command = args.command.replace(/\s+/g, " ").trim();
   const route = routeCommand(command);
-  debugLog.info("ai", "command-route", { command, route, computer: Boolean(args.computer), desktop: Boolean(args.actions), wantsComputer: wantsComputerUse(command) });
+  const history = historyMessages(args.history ?? []);
+  debugLog.info("ai", "command-route", { command, route, history: args.history?.length ?? 0, computer: Boolean(args.computer), desktop: Boolean(args.actions), wantsComputer: wantsComputerUse(command) });
   if (route.kind !== "ai" && args.actions) {
     const tool = FAST_TOOL[route.kind];
     const actions = args.actions;
@@ -174,13 +183,13 @@ export async function runDirectCommand(args: {
     }
     debugLog.info("desktop", "fast-action", { route, result });
     console.debug(`perf command fast ${route.kind} ok=${result.ok ? 1 : 0}`);
-    return { notes: [], rankSource: "fallback", rankError: null, tips: [result.message], tipSources: [null], sources: [], guideError: null, timingsMs: timings() };
+    return { notes: [], rankSource: "fallback", rankError: null, tips: [result.message], tipSources: [null], sources: [], guideError: null, actions: [result.message], timingsMs: timings() };
   }
 
   // A task on screen goes straight to the loop: it needs no notes, connectors or web search.
   const computer = args.computer && args.actions && args.gateway ? { host: args.computer, actions: args.actions, gateway: args.gateway } : null;
   const loop = () =>
-    computer ? runComputerCommand({ ...computer, command, transcript: args.transcript, signal: args.signal, onActivity: args.onActivity }) : Promise.reject(new Error("no computer use"));
+    computer ? runComputerCommand({ ...computer, command, transcript: args.transcript, history, signal: args.signal, onActivity: args.onActivity }) : Promise.reject(new Error("no computer use"));
   if (computer && wantsComputerUse(command)) {
     console.debug("perf command computer");
     return loop();
@@ -246,6 +255,7 @@ export async function runDirectCommand(args: {
     unavailableServers: mcp?.errors.map(({ server, error }) => ({ name: server, error })),
     desktopTools: tools,
     computerUse: computer !== null,
+    historyMessages: history,
     onActivity: args.onActivity,
     onPartial: (partial) => {
       if (handOver.signal.aborted) return;
@@ -263,15 +273,19 @@ export async function runDirectCommand(args: {
   const closeStarted = performance.now();
   void mcp?.close().catch(() => undefined).finally(() => console.debug(`perf mcp-close ${Math.round(performance.now() - closeStarted)}ms`));
   console.debug(`perf command actions=${actionLines.length} mcp ${Math.round(mcpMs)}ms guide ${Math.round(guideMs)}ms`);
-  const shown = joinLines(actionLines, guide);
+  // No reply and no action (NONE, or no text at all) never leaves the island blank: a short line or a question back instead.
+  const silent = actionLines.length === 0 && guide.tips.length === 0 && (guide.error === null || guide.empty === true);
+  if (silent) debugLog.info("ai", "command-fallback", { command, empty: guide.empty ?? false });
+  const shown = silent ? { tips: [commandFallbackReply(command)], tipSources: [null] } : joinLines(actionLines, guide);
   return {
     notes,
     rankSource: "fallback",
     rankError: null,
     ...shown,
     sources: guide.sources,
+    ...(actionLines.length > 0 ? { actions: actionLines.slice(0, 10) } : {}),
     // After an action, no further text is a fine end: the action line is the answer.
-    guideError: guide.empty && actionLines.length > 0 ? null : guide.error,
+    guideError: silent || (guide.empty && actionLines.length > 0) ? null : guide.error,
     guideNote: guide.skipped,
     mcpErrors: (mcp?.errors ?? []).slice(0, MCP_ERRORS_MAX).map(({ server, error }) => ({ server: server.slice(0, 200), error: error.slice(0, MCP_ERROR_CHARS) })),
     timingsMs: timings({ retrieve: retrieveMs, mcp: mcpMs, guide: guideMs, lunaFirstToken: guide.firstTokenMs, lunaTotal: guide.totalMs }),

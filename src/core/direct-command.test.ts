@@ -300,3 +300,80 @@ describe("runDirectCommand: computer use", () => {
     expect(streamCalls[0]?.tools).not.toContain("click");
   });
 });
+
+describe("runDirectCommand: Bee's history and no blank replies", () => {
+  const history = [
+    { request: "open Vercel usage", reply: "", actions: ["Opened https://vercel.com/acme/~/usage"], at: 1 },
+    { request: "open the team usage", reply: "Which team?", at: 2 },
+  ];
+  type Prompt = Array<{ role: string; content: unknown; providerOptions?: unknown }>;
+  const cacheMarks = (prompt: Prompt) => (JSON.stringify(prompt).match(/"cacheControl"/g) ?? []).length;
+
+  it("sends the history as earlier user and assistant turns before the request, within four cache breakpoints", async () => {
+    const { model } = stepsModel([text("- The Acme team usage page is open.\n")]);
+    const gateway = { languageModel: () => model } as unknown as BeeGateway;
+    const result = await runDirectCommand({ command: "the Acme one", history, snippets, gateway, actions: fakeActions().actions });
+    expect(result.tips).toEqual(["The Acme team usage page is open."]);
+    const prompt = (model.doStreamCalls[0]?.prompt ?? []) as Prompt;
+    expect(prompt.map((message) => message.role)).toEqual(["system", "user", "assistant", "user", "assistant", "user"]);
+    expect(JSON.stringify(prompt[1])).toContain("open Vercel usage");
+    expect(JSON.stringify(prompt[2])).toContain("Done: Opened https://vercel.com/acme/~/usage");
+    expect(JSON.stringify(prompt[4])).toContain("Which team?");
+    // The current request is last, never in the history.
+    expect(JSON.stringify(prompt[5])).toContain("the Acme one");
+    // System, the end of the history, and the notes context: three, within Anthropic's four.
+    expect(cacheMarks(prompt)).toBe(3);
+    expect(JSON.stringify(prompt[4])).toContain("cacheControl");
+  });
+
+  it("keeps two breakpoints with no history", async () => {
+    const { model } = stepsModel([text("- 15% of 18,000 is 2,700.\n")]);
+    await runDirectCommand({ command: "what's 15% of 18000?", snippets, gateway: { languageModel: () => model } as unknown as BeeGateway, actions: null });
+    const prompt = (model.doStreamCalls[0]?.prompt ?? []) as Prompt;
+    expect(prompt.map((message) => message.role)).toEqual(["system", "user"]);
+    expect(cacheMarks(prompt)).toBe(2);
+  });
+
+  it("never leaves the island blank: NONE or no text with no action gives a fallback line", async () => {
+    const none = await runDirectCommand({ command: "do the thing", snippets, gateway: stepsModel([text("NONE")]).gateway, actions: fakeActions().actions });
+    expect(none).toMatchObject({ tips: ["Bee isn't sure what to do next."], guideError: null });
+    const empty = await runDirectCommand({ command: "open the team one", snippets, gateway: stepsModel([text("")]).gateway, actions: fakeActions().actions });
+    expect(empty).toMatchObject({ tips: ["Which one?"], guideError: null });
+  });
+
+  it("marks action lines, for the next request's history", async () => {
+    const after = await runDirectCommand({ command: "get Figma up", snippets, gateway: stepsModel([toolCall("open_app", { name: "Figma" }), text("- Figma is open.\n")]).gateway, actions: fakeActions().actions });
+    expect(after).toMatchObject({ tips: ["Opened Figma", "Figma is open."], actions: ["Opened Figma"] });
+    expect((await runDirectCommand({ command: "open Teams", snippets, gateway: null, actions: fakeActions().actions })).actions).toEqual(["Opened Teams"]);
+  });
+
+  it("tells the AI to confirm or ask, never to reply NONE, while meeting tips keep NONE", () => {
+    expect(LUNA_DIRECT_SYSTEM).not.toContain("reply with exactly NONE");
+    expect(LUNA_DIRECT_SYSTEM).not.toContain("reply NONE");
+    expect(LUNA_DIRECT_SYSTEM).toContain("Which team?");
+    expect(LUNA_DIRECT_SYSTEM).toContain("confirms what the user can see now");
+    expect(LUNA_SYSTEM).toContain("If nothing useful can be said, reply with exactly NONE.");
+  });
+
+  it("passes the history to computer use as earlier turns, and returns where it ended", async () => {
+    const prompts: unknown[] = [];
+    const model = new MockLanguageModelV4({
+      doGenerate: async (options) => {
+        prompts.push(options.prompt);
+        return { content: [{ type: "text", text: "Opened the team usage page.\nEnded: vercel.com/acme/~/usage, 404" }], finishReason: { unified: "stop", raw: undefined }, usage, warnings: [] };
+      },
+    });
+    const computer: ComputerHost = {
+      platform: "windows",
+      run: async () => ({ ok: true, data: {} }),
+      askFirst: () => false,
+      confirm: async () => true,
+    };
+    const result = await runDirectCommand({ command: "click the team usage tab", history, snippets, gateway: { languageModel: () => model } as unknown as BeeGateway, actions: fakeActions().actions, computer });
+    expect(result).toMatchObject({ tips: ["Opened the team usage page."], endedWhere: "vercel.com/acme/~/usage, 404" });
+    const prompt = prompts[0] as Prompt;
+    expect(prompt.map((message) => message.role)).toEqual(["system", "user", "assistant", "user", "assistant", "user"]);
+    expect(JSON.stringify(prompt[2])).toContain("Opened https://vercel.com/acme/~/usage");
+    expect(cacheMarks(prompt)).toBe(2);
+  });
+});

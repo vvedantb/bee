@@ -10,11 +10,11 @@ export const NOTCH_BUTTON = "rounded-full bg-[var(--surface-raised)] hover:bg-[#
 /** The notch's update button (App.tsx UpdateButton), a size="icon-sm" Button. Shown only when an update is available. */
 export const NOTCH_UPDATE_BUTTON = "notch-update bg-[var(--surface-raised)] hover:bg-[#2d271e]";
 
-type LogoInputs = Pick<BeeState, "busy" | "tools" | "done" | "mic" | "error" | "result" | "summary" | "mcp" | "update" | "teamsError">;
+type LogoInputs = Pick<BeeState, "busy" | "tools" | "done" | "mic" | "error" | "result" | "summary" | "mcp" | "update" | "teamsError"> & { conversationOpen?: boolean };
 
 /**
  * The notch logo's state. Any error wins, then a tool call in flight (web search over the others), then a busy run,
- * then the one-shot done after tips, then an open mic.
+ * then the one-shot done after tips, then listening: an open mic, or the conversation window after a request to Bee.
  */
 export function logoState(state: LogoInputs): LogoState {
   // A new run hides the last run's guide error (store.ts displayResult), so it counts only when idle.
@@ -25,7 +25,7 @@ export function logoState(state: LogoInputs): LogoState {
   if (state.tools.length > 0) return "tool";
   if (state.busy) return "thinking";
   if (state.done) return "done";
-  if (state.mic.on) return "listening";
+  if (state.mic.on || state.conversationOpen) return "listening";
   return "idle";
 }
 
@@ -53,11 +53,15 @@ export type NotchStatusKind = "loading" | "sign-in" | "working" | "mic-error" | 
 
 export type NotchLine = { kind: NotchStatusKind; text: string };
 
+/** The pill in the conversation window after a request (store.ts openConversation): a follow-up needs no "Bee". */
+export const CONVERSATION_LABEL = "I'm listening…";
+
 /** The pill while the mic is on and Bee also hears the Teams app (Teams audio fallback). */
 export const TEAMS_AUDIO_LABEL = "Listening to you and Teams audio…";
 
 type LineInputs = Pick<BeeState, "busy" | "revising" | "tools" | "question" | "heard" | "mic" | "result"> & {
   computer?: BeeState["computer"];
+  conversationOpen?: boolean;
   settings: Pick<SettingsView, "gatewayKeySource" | "meetingMode"> | null;
   session: Pick<BeeState["session"], "lines">;
   teamsAudio?: Pick<BeeState["teamsAudio"], "listening">;
@@ -73,6 +77,8 @@ export function notchLine(state: LineInputs, signedIn: boolean | undefined): Not
   if (state.heard) return { kind: "working", text: "Got it…" };
   if (state.mic.error) return { kind: "mic-error", text: state.mic.error };
   const tip = state.result?.tips[0];
+  // Bee waits for a follow-up. The reply stays in the island body, and a click on the pill still opens it.
+  if (state.conversationOpen) return { kind: tip ? "answer" : "idle", text: CONVERSATION_LABEL };
   if (tip) return { kind: "answer", text: displayTip(tip) };
   if (state.settings?.gatewayKeySource === "none") return { kind: "gateway-key", text: "Add your AI Gateway key in Settings" };
   if (state.mic.on && state.teamsAudio?.listening) return { kind: "idle", text: TEAMS_AUDIO_LABEL };

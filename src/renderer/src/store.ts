@@ -6,7 +6,8 @@ import { detectLinks, mergeChips, sourceChips, visibleChips, type LinkChip } fro
 import { MAX_STEERING_TIPS, isFiller, isNewTurn, isQuestion, mergeTips, recentRestarts, runDelayMs, tipCap, tipKey, waitsForRun } from "../../core/steering";
 import { mergeLines, pipelineText, summaryTranscript, type SessionLine } from "../../core/sync-lines";
 import { TEAMS_AUDIO_SPEAKER, TEAMS_AUDIO_SPEAKER_ID, teamsAudioEcho, teamsAudioPlan, teamsAudioReplaced, type TeamsAudioPlan } from "../../core/teams-audio";
-import { WAKE_FOLLOW_MS, isConfirmWords, routeLine } from "../../core/wake-word";
+import { HISTORY_IDLE_MS, addExchange, commandFallbackReply, liveHistory, type BeeExchange } from "../../core/bee-history";
+import { CONVERSATION_QUESTION_MS, CONVERSATION_WINDOW_MS, OTHERS_QUIET_MS, WAKE_FOLLOW_MS, isConfirmWords, isForBee, routeLine } from "../../core/wake-word";
 import type { TeamsAudioFailure } from "../../core/teams-audio-protocol";
 import {
   COMMAND_MAX_CHARS,
@@ -133,6 +134,9 @@ export type BeeState = {
   // Computer use in progress (null when none), and what macOS allows it, for Settings (null until asked).
   computer: ComputerView | null;
   computerAccess: ComputerAccessView | null;
+  // The conversation window after a request to Bee (core/wake-word.ts CONVERSATION_WINDOW_MS): a follow-up needs no "Bee". The
+  // pill says Bee is listening. State only, never words.
+  conversationOpen: boolean;
 };
 
 const PIPELINE_WINDOW = 8;
@@ -202,6 +206,7 @@ let state: BeeState = {
   teamsAudio: { status: null, listening: false, failed: false, failure: null },
   computer: null,
   computerAccess: null,
+  conversationOpen: false,
 };
 const listeners = new Set<() => void>();
 
@@ -272,6 +277,20 @@ let wakeArmedUntil = 0;
 let commandRun: number | null = null;
 let commandHold: ReturnType<typeof setTimeout> | undefined;
 let parkedLines: SessionLine[] = [];
+// Bee's history (core/bee-history.ts): the last few requests and what Bee did, sent with each new request as earlier turns.
+// Separate from the meeting session: never in the summary, meeting memory or the Teams sync. Cleared after HISTORY_IDLE_MS
+// with no exchange, and when the meeting ends.
+let history: BeeExchange[] = [];
+let historyTimer: ReturnType<typeof setTimeout> | undefined;
+// The conversation window after a request (BeeState.conversationOpen): when it ends, Bee's last exchange for the routing and
+// the follow-up check, when the last exchange ended, and when someone else (caption, Teams audio, teammate) was last heard.
+let conversationUntil = 0;
+let conversationTimer: ReturnType<typeof setTimeout> | undefined;
+let lastBee: { request: string; reply: string } | null = null;
+let lastExchangeAt = 0;
+let lastOtherSpeakerAt = 0;
+// "Bee, stop" for this run: its result opens no conversation window.
+let stoppedRun: number | null = null;
 // The Teams audio capture while it runs, and guards while it opens and while main is asked for its status.
 let stopTeamsAudio: (() => void) | null = null;
 let teamsAudioOpening = false;
@@ -480,6 +499,8 @@ function selfName(): string {
  * transcript. Returns true when a run should follow.
  */
 function addLines(lines: SessionLine[]): boolean {
+  // Other people's lines never open the conversation window; they only mark that someone else spoke.
+  if (lines.some((line) => !line.own)) lastOtherSpeakerAt = Date.now();
   const current = state.session.lines;
   if (current.length === 0) sessionMeetingId = state.meeting?.active ? state.meeting.id : null;
   // A teammate's or caption line that repeats a recent Teams-audio line replaces it: it names the speaker. Its words are
@@ -792,21 +813,89 @@ function endCommandHold(): void {
   scheduleRun();
 }
 
+/** Names of other people in this meeting (captions, teammates, the sync's roster): a phrase that names one is for them. */
+function participantNames(): string[] {
+  const names = new Set<string>();
+  for (const line of state.session.lines) if (!line.own && line.speakerName !== CAPTION_SPEAKER && line.speakerName !== TEAMS_AUDIO_SPEAKER) names.add(line.speakerName);
+  for (const member of state.teams?.roster ?? []) if (member.userId !== state.teams?.me?.userId) names.add(member.displayName);
+  return [...names];
+}
+
+/**
+ * Opens (or restarts) the conversation window after an exchange with Bee: CONVERSATION_WINDOW_MS, or CONVERSATION_QUESTION_MS
+ * while Bee's reply asks a question. It closes on silence, "thanks", "Bee, stop", a reply to someone else, a participant's
+ * name, the island's dismiss button or the end of the meeting (closeConversation).
+ */
+function openConversation(): void {
+  const ms = lastBee?.reply.includes("?") ? CONVERSATION_QUESTION_MS : CONVERSATION_WINDOW_MS;
+  conversationUntil = Date.now() + ms;
+  clearTimeout(conversationTimer);
+  conversationTimer = setTimeout(() => closeConversation("silence"), ms);
+  debugLog.info("wake", "conversation-open", { ms, question: ms === CONVERSATION_QUESTION_MS });
+  if (!state.conversationOpen) set({ conversationOpen: true });
+}
+
+function closeConversation(reason: string): void {
+  clearTimeout(conversationTimer);
+  conversationTimer = undefined;
+  const open = conversationUntil > 0;
+  conversationUntil = 0;
+  if (!open) return;
+  debugLog.info("wake", "conversation-closed", { reason });
+  if (state.conversationOpen) set({ conversationOpen: false });
+}
+
+/** One more exchange in Bee's history, and the idle clock restarts. */
+function rememberExchange(exchange: BeeExchange): void {
+  history = addExchange(liveHistory(history, exchange.at), exchange);
+  lastBee = { request: exchange.request, reply: [exchange.reply, ...(exchange.actions ?? [])].filter(Boolean).join(" ") };
+  lastExchangeAt = exchange.at;
+  clearTimeout(historyTimer);
+  historyTimer = setTimeout(() => clearHistory("idle"), HISTORY_IDLE_MS);
+}
+
+function clearHistory(reason: string): void {
+  clearTimeout(historyTimer);
+  historyTimer = undefined;
+  if (history.length > 0) debugLog.info("wake", "history-cleared", { reason, exchanges: history.length });
+  history = [];
+  lastBee = null;
+}
+
+/** Bee's history as it stands now, oldest first (tests). */
+export function beeHistory(): BeeExchange[] {
+  return liveHistory(history, Date.now());
+}
+
 /**
  * A mic phrase that starts with the wake word ("Bee, open Teams") is a request to the AI, not a meeting line: it never joins
- * the session, the summary, meeting memory or the Teams sync. "Bee" alone arms the next phrase. Returns true when the phrase
- * was taken. Console lines never carry the words; the local debug log does.
+ * the session, the summary, meeting memory or the Teams sync. "Bee" alone arms the next phrase. In the conversation window, a
+ * phrase without "Bee" that looks addressed to Bee is a follow-up; an unclear one may get one small AI check (followUpCheck).
+ * Returns true when the phrase was taken. Console lines never carry the words; the local debug log does.
  */
 function takeWakeLine(text: string): boolean {
   const now = Date.now();
   const enabled = state.settings?.wakeWordEnabled ?? true;
   const armed = now < wakeArmedUntil;
-  const route = routeLine({ text, source: "mic", enabled, armed });
+  const conversationOpen = enabled && now < conversationUntil && commandRun === null;
+  const othersSpoke = lastOtherSpeakerAt > lastExchangeAt;
+  const route = routeLine({ text, source: "mic", enabled, armed, conversationOpen, lastBee, participants: participantNames(), othersSpoke });
   wakeArmedUntil = route.kind === "wake" ? now + WAKE_FOLLOW_MS : 0;
   // The local debug log keeps the words that woke Bee, and the meeting lines that nearly did (a likely miss or false trigger).
-  if (route.kind !== "meeting" || NEAR_WAKE.test(text)) debugLog.info("wake", route.kind === "meeting" ? "near-miss" : route.kind, { text, route, enabled, armed });
-  if (route.kind === "meeting") return false;
+  if (route.kind !== "meeting" || NEAR_WAKE.test(text) || conversationOpen) {
+    debugLog.info("wake", route.kind === "meeting" ? "near-miss" : route.kind, { text, route, enabled, armed, conversationOpen, othersSpoke });
+  }
+  if (route.kind === "meeting") {
+    // A reply to someone else, or a name from the meeting: the user has turned back to the meeting.
+    if (conversationOpen && (route.reason === "reply-to-others" || route.reason === "names-participant")) closeConversation(route.reason);
+    return false;
+  }
   console.debug(`Bee: wake ${route.kind}`);
+  if (route.kind === "close") {
+    closeConversation("thanks");
+    return true;
+  }
+  if (route.kind === "unclear") return followUpCheck(text);
   // Only a tap answers a Confirm prompt. "Bee, yes, send it" leaves the prompt as it is, rather than cancelling the task.
   if (route.kind === "command" && state.computer?.confirm && isConfirmWords(route.command)) {
     debugLog.info("wake", "confirm-words-ignored", { command: route.command, confirm: state.computer.confirm.id });
@@ -814,8 +903,38 @@ function takeWakeLine(text: string): boolean {
     return true;
   }
   if (route.kind === "command") void runCommand(route.command);
-  // "Bee, stop" ends the request in flight, if any. Nothing else happens.
-  if (route.kind === "stop") void stopCommand();
+  // "Bee, stop" ends the request in flight, if any, and the conversation. Nothing else happens.
+  if (route.kind === "stop") {
+    stoppedRun = commandRun;
+    closeConversation("stop");
+    void stopCommand();
+  }
+  return true;
+}
+
+/**
+ * An unclear phrase in the conversation window: one small AI call (main, core/follow-up.ts) decides whether it is for Bee.
+ * The phrase waits for it, then becomes a follow-up or a meeting line. Without the call (older preload) or on any failure it
+ * is a meeting line at once. Only reached from the user's own mic.
+ */
+function followUpCheck(text: string): boolean {
+  const classify = window.bee.classifyFollowUp;
+  const bee = lastBee;
+  if (typeof classify !== "function" || !bee) {
+    debugLog.info("wake", "follow-up-unchecked", { reason: bee ? "no classifier" : "no exchange" });
+    return false;
+  }
+  const lines = state.session.lines.slice(-3).map((line) => `${line.own ? "me" : "them"}: ${line.text}`);
+  const othersQuiet = Date.now() - lastOtherSpeakerAt >= OTHERS_QUIET_MS;
+  void (async () => {
+    const verdict = await sessionToken()
+      .then((token) => classify({ phrase: text.slice(0, 1000), lastBee: bee, lines, othersQuiet, sessionToken: token }))
+      .catch(() => null);
+    const forBee = isForBee(verdict) && conversationUntil > 0;
+    debugLog.info("wake", "follow-up-checked", { text, verdict, forBee, othersQuiet });
+    if (forBee) void runCommand(text);
+    else addOwnLine(text, "mic");
+  })();
   return true;
 }
 
@@ -847,7 +966,8 @@ async function stopCommand(): Promise<void> {
  * Runs a direct request in main (core/direct-command.ts) and shows the reply in the island as the answer to the user: action
  * lines first ("Opened Teams"), then the AI's reply. It takes the island like a new turn: the meeting run in flight is dropped
  * (its lines stay in the session), and meeting lines wait until the reply has been on screen for COMMAND_HOLD_MS. The reply is
- * not a meeting answer: it is not kept for the summary or meeting memory, nor sent as context for later tips.
+ * not a meeting answer: it is not kept for the summary or meeting memory, nor sent as context for later tips. It does go into
+ * Bee's own history (rememberExchange), sent with the next requests as earlier turns, and opens the conversation window.
  */
 async function runCommand(command: string): Promise<void> {
   const previous = latestRun;
@@ -864,6 +984,8 @@ async function runCommand(command: string): Promise<void> {
   pendingFresh = false;
   turnOpen = false;
   commandRun = run;
+  // The window reopens when this request is answered; while it runs, phrases without "Bee" are meeting lines.
+  closeConversation("request");
   clearTimeout(commandHold);
   commandHold = undefined;
   clearTimeout(islandTimer);
@@ -909,14 +1031,28 @@ async function runCommand(command: string): Promise<void> {
   try {
     // The meeting so far, as background for a request about it ("what did Priya just say").
     const recent = state.session.lines.slice(-PIPELINE_WINDOW).map(pipelineText);
-    const result = await window.bee.runCommand({
+    // Bee's history: earlier turns for the AI, so "the team one" follows on from the last request.
+    const earlier = liveHistory(history, Date.now());
+    const reply = await window.bee.runCommand({
       command: command.slice(0, COMMAND_MAX_CHARS),
       ...(recent.length > 0 ? { transcript: recent } : {}),
+      ...(earlier.length > 0 ? { history: earlier } : {}),
       runId: run,
       sessionToken: await sessionToken(),
     });
-    debugLog.info("ai", "command-result", { run, latest: latestRun, ms: Math.round(performance.now() - started), tips: result.tips, sources: result.sources, guideError: result.guideError, timingsMs: result.timingsMs });
+    debugLog.info("ai", "command-result", { run, latest: latestRun, ms: Math.round(performance.now() - started), tips: reply.tips, sources: reply.sources, guideError: reply.guideError, actions: reply.actions ?? [], endedWhere: reply.endedWhere ?? null, timingsMs: reply.timingsMs });
     if (run !== latestRun) return;
+    // Main already fills in a line for a silent reply; this guards an older main. An error shows as itself.
+    const result = reply.tips.length === 0 && !reply.guideError ? { ...reply, tips: [commandFallbackReply(command)], tipSources: [null] } : reply;
+    const actionLines = new Set(result.actions ?? []);
+    rememberExchange({
+      request: command,
+      reply: result.tips.filter((tip) => !actionLines.has(tip)).join(" "),
+      ...(result.actions?.length ? { actions: result.actions } : {}),
+      ...(result.endedWhere ? { endedWhere: result.endedWhere } : {}),
+      ...(result.guideError ? { error: result.guideError } : {}),
+      at: Date.now(),
+    });
     const tipSources = withSources(state.tipSources, result);
     set({
       result: { ...result, tipSources: sourcesOf(tipSources, result.tips) },
@@ -937,6 +1073,7 @@ async function runCommand(command: string): Promise<void> {
       // Electron prefixes a handler's error with "Error invoking remote method …".
       const message = error instanceof Error ? error.message.replace(/^Error invoking remote method '[^']*': (Error: )?/, "") : "";
       set({ busy: false, partialTips: null, tools: [], computer: null, error: message || "The AI could not answer" });
+      rememberExchange({ request: command, reply: "", error: message || "The AI could not answer", at: Date.now() });
     }
   } finally {
     stopActivity();
@@ -945,9 +1082,29 @@ async function runCommand(command: string): Promise<void> {
     if (commandRun === run) {
       commandRun = null;
       commandHold = setTimeout(endCommandHold, COMMAND_HOLD_MS);
+      // A follow-up needs no "Bee" for a while, unless the user said "Bee, stop".
+      if (stoppedRun !== run && run === latestRun) openConversation();
     }
+    if (stoppedRun === run) stoppedRun = null;
     void applyWindowSize();
   }
+}
+
+/** The user's own line joins the meeting: the session, the sync (mic only) and, with content words, a run. */
+function addOwnLine(text: string, source: "typed" | "mic"): void {
+  localSeq += 1;
+  const own: SessionLine = {
+    id: `local-${localSeq}`,
+    own: true,
+    speakerId: state.teams?.me?.userId ?? "local",
+    speakerName: selfName(),
+    text,
+    clientTs: Date.now(),
+    serverTs: null,
+  };
+  const content = addLines([own]);
+  if (source === "mic" && state.teams?.room) void shareLine(own);
+  if (content) scheduleRun();
 }
 
 /** Shares one mic phrase with the sync. Main applies the share gate; failures leave Bee working solo. */
@@ -1365,6 +1522,7 @@ export const actions = {
   /** Close the island body without closing the window. A mic hint closes with it, and its cooldown starts (hints.ts). */
   dismissIsland(): Promise<void> {
     debugLog.info("ui", "dismiss", { confirm: state.computer?.confirm?.id ?? null, hint: state.hint?.id ?? null });
+    closeConversation("dismissed");
     // Closing a Confirm prompt is Cancel.
     if (state.computer?.confirm) return actions.answerConfirm(false);
     if (!state.hint) return closeIsland();
@@ -1469,19 +1627,7 @@ export const actions = {
     if (!text) return;
     if (source === "typed") debugLog.info("meeting", "typed-line", { text });
     if (source === "mic" && takeWakeLine(text)) return;
-    localSeq += 1;
-    const own: SessionLine = {
-      id: `local-${localSeq}`,
-      own: true,
-      speakerId: state.teams?.me?.userId ?? "local",
-      speakerName: selfName(),
-      text,
-      clientTs: Date.now(),
-      serverTs: null,
-    };
-    const content = addLines([own]);
-    if (source === "mic" && state.teams?.room) void shareLine(own);
-    if (content) scheduleRun();
+    addOwnLine(text, source);
   },
 
   /**
@@ -1580,6 +1726,9 @@ export const actions = {
    */
   async endMeeting(options: { auto?: boolean } = {}): Promise<void> {
     const ended = state.session;
+    // Bee's history and the conversation window end with the meeting, even one with no lines to save.
+    closeConversation("meeting-end");
+    clearHistory("meeting-end");
     if (ended.lines.length === 0 || state.summary.saving) return;
     debugLog.info("meeting", "end", { auto: options.auto ?? false, lines: ended.lines.length, tips: ended.tips.length, meetingId: sessionMeetingId });
     // An automatic save leaves the mic alone: the next meeting may be starting. It is not retried if it fails.
