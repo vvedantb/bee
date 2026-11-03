@@ -21,6 +21,7 @@ import { Favicon } from "./Favicon";
 import { Connectors } from "./Connectors";
 import { logSignIn } from "./debug-log";
 import { MeetingContextSection } from "./MeetingContextSection";
+import { NotchStatus } from "./NotchStatus";
 import { MicHint } from "./MicHint";
 import { SecretField } from "./SecretField";
 import { SettingRow } from "./SettingRow";
@@ -194,7 +195,6 @@ function Island({ state }: { state: BeeState }) {
   // A folded answer opens in full in the island, even under a hint; status that asks for action opens its place in the panel (island-click.ts).
   const click = statusClick({ kind: line.kind, panelOpen: state.expanded, bodyShown: showResponse, answerFolded: answerFolded(state) });
   const newVersion = state.update.check?.available ? state.update.check.latestVersion : null;
-  const statusClass = state.mic.error ? "notch-status error-text" : "notch-status";
   return (
     <div
       className={["island", state.busy && "thinking", showBody && "open"].filter(Boolean).join(" ")}
@@ -203,23 +203,8 @@ function Island({ state }: { state: BeeState }) {
     >
       <header className="notch">
         <BeeLogo size={NOTCH_LOGO_PX} state={logoState(state)} level={state.mic.level} />
-        {click ? (
-          // Keyed so each new status fades in.
-          <Button
-            key={status}
-            type="button"
-            variant="ghost"
-            title={status}
-            className={`${statusClass} h-auto justify-start rounded-none p-0 text-[13px] font-normal text-foreground hover:bg-transparent hover:text-foreground hover:underline`}
-            onClick={() => openStatus(click)}
-          >
-            {status}
-          </Button>
-        ) : (
-          <span key={status} className={statusClass} title={status}>
-            {status}
-          </span>
-        )}
+        {/* Keyed so each new status fades in. One component either way, so the panel opening or closing does not remount it. */}
+        <NotchStatus key={status} status={status} click={click} error={Boolean(state.mic.error)} onOpen={openStatus} />
         {newVersion ? <UpdateButton update={state.update} /> : null}
         {/* Computer use in progress: one tap stops it, like saying "Bee, stop". */}
         {state.computer ? (

@@ -131,6 +131,11 @@ body {
   -webkit-app-region: no-drag;
 }
 
+/* Status text with nothing to open (NotchStatus.tsx) drags like the rest of the notch. */
+.notch .notch-status.inert {
+  -webkit-app-region: drag;
+}
+
 /* Bee's mark (BeeLogo.tsx). Transforms use view-box units, so origins are in the 64-unit art space. */
 
 .bee-logo {
