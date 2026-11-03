@@ -319,6 +319,18 @@ describe("parseLunaTips", () => {
     ]) expect(isMetaTip(line), line).toBe(false);
   });
 
+  it("keeps a question back to the user, even in the first person, and still drops narration", () => {
+    for (const line of ["Which one should I do?", "Do you want me to open the team page or the personal one?", "Should I search your notes or the web?", "Which card should I compare it with?"]) {
+      expect(isMetaTip(line), line).toBe(false);
+      expect(parseTexts(`- ${line}`), line).toEqual([line]);
+    }
+    // Narration around the question goes; the question stays.
+    expect(parseTexts("- I'll check both. Which one should I do first?")).toEqual(["Which one should I do first?"]);
+    for (const line of ["I'll look into it.", "I will search again with other terms.", "I'm dropping the old tips."]) expect(isMetaTip(line), line).toBe(true);
+    // Asking what to look into stays meta, as before.
+    expect(isMetaTip('Say "Which London story would you like me to look into?"')).toBe(true);
+  });
+
   it("strips a leading note on which tips apply, keeping the answer after it", () => {
     // Turn 4 of the live conversation test, after "make that Paris instead".
     const leaked = "The London tips no longer apply, so I'm dropping them. Sortiraparis forecasts Paris rain on Saturday.";

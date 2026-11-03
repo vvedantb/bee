@@ -63,7 +63,7 @@ export function isConfirmWords(command: string): boolean {
  * After a request is answered, the conversation window stays open this long: a mic phrase without "Bee" that looks addressed to
  * Bee is a follow-up. Each exchange restarts it. Separate from WAKE_FOLLOW_MS, which is only for the phrase after "Bee" alone.
  */
-export const CONVERSATION_WINDOW_MS = 20_000;
+export const CONVERSATION_WINDOW_MS = 60_000;
 /** An unclear phrase in the window (routeLine "unclear") may get one small AI call (core/follow-up.ts). Its answer. */
 export type FollowUpVerdict = { addressed: "bee" | "meeting"; confidence: number };
 /** Bee acts on that answer only at or above this confidence. */
@@ -77,7 +77,7 @@ export function isForBee(verdict: FollowUpVerdict | null): boolean {
 }
 
 /** While Bee's last reply asks a question ("Which team?"), the window stays open up to this long for the answer. */
-export const CONVERSATION_QUESTION_MS = 60_000;
+export const CONVERSATION_QUESTION_MS = 120_000;
 
 // "Thanks", "that's all", "never mind": the user is done with Bee. Only the whole phrase counts.
 const CLOSE = /^(?:(?:ok|okay|yeah|yes|yep|great|perfect|cool|nice|right|good|lovely|brilliant)[\s,.!]+)*(?:thanks|thank you|thanks bee|thank you bee|cheers|ta|that's all|that is all|that's it|that is it|that'll do|all good|we're good|done|i'm done|got it|bye|bye bee)(?:[\s,.!]+(?:thanks|thank you|bee|for now|then))*[\s.!]*$/i;
@@ -96,20 +96,25 @@ const STRONG_REFERENCE = /\b(?:that|this|the)\s+(?:page|one|tab|link|app|window|
 const REFERENCE = /\b(?:it|there|back)\b/i;
 // An instruction or a question to Bee: the wake word's request verbs, and a few more for follow-ups.
 const FOLLOW_VERB = /^(?:(?:so|and|ok|okay|then|now|just|please)[\s,]+)*(?:open|launch|start|focus|switch|show|bring|go|pull|find|search|look|check|click|scroll|close|try|use|read|calculate|convert|translate|define|explain|summari[sz]e|remind|what|what's|whats|how|how's|who|who's|when|where|why|which|tell me|give me|can you|could you|do it|did it|is it|stop|cancel)\b/i;
+// Pointing Bee at one of its own tools: "use the vmem connector", "search vmem", "try it with the Eva connector", "check MCP".
+// "vmem" is only ever Bee's connector; Eva or any other name counts only with "connector", as it may be a person.
+const CONNECTOR = /\bvmem\b|\b(?:use|using|search|try|check|query|ask|with|via|in|from|through)\s+(?:the\s+|my\s+|your\s+|bee['’]?s\s+)?(?:mcp|connectors?|[\p{L}\p{N}-]+\s+connectors?)\b/iu;
 // A short answer to Bee's question ("Which team?" → "the Acme one", "Acme").
 const SHORT_ANSWER_WORDS = 5;
 
 const words = (text: string) => text.split(/\s+/).filter(Boolean).length;
 
 /**
- * Why the phrase looks addressed to Bee in the conversation window, or null: second person, a correction, a pointer at what
- * Bee just did, an instruction or question, or a short answer when Bee's last reply asked a question. Heuristic only.
+ * Why the phrase looks addressed to Bee in the conversation window, or null: one of Bee's connectors, second person, a
+ * correction, a pointer at what Bee just did, an instruction or question, or a short answer when Bee's last reply asked a
+ * question. Heuristic only.
  */
 export function looksAddressedToBee(text: string, lastBee?: { request: string; reply: string } | null): string | null {
   const line = text.replace(/\s+/g, " ").trim();
   if (!line) return null;
   // A bare "no" is an answer only to Bee's question; otherwise it is likely for someone in the meeting.
   if (/^(?:no|nope|nah)[.!]*$/i.test(line)) return lastBee?.reply.includes("?") ? "answer" : null;
+  if (CONNECTOR.test(line)) return "connector";
   if (SECOND_PERSON.test(line)) return "second-person";
   if (CORRECTION.test(line)) return "correction";
   if (FOLLOW_VERB.test(line)) return "instruction";
@@ -176,8 +181,9 @@ export function routeLine(args: {
   if (namesParticipant(text, args.participants)) return { kind: "meeting", reason: "names-participant" };
   const addressed = looksAddressedToBee(text, args.lastBee);
   if (!addressed && isFiller(text)) return { kind: "meeting", reason: "filler" };
-  // After someone else spoke, "you" or a question may be for them: only a correction or a pointer at Bee's page still counts.
-  const strong = addressed === "correction" || (addressed === "reference" && STRONG_REFERENCE.test(text));
+  // After someone else spoke, "you" or a question may be for them: only a correction, a pointer at Bee's page or one of Bee's
+  // connectors still counts.
+  const strong = addressed === "correction" || addressed === "connector" || (addressed === "reference" && STRONG_REFERENCE.test(text));
   if (addressed && (!args.othersSpoke || strong)) return { kind: "command", command: text, followUp: true, reason: addressed };
   // Someone else spoke since Bee answered: an unclear phrase is a reply to them.
   if (args.othersSpoke) return { kind: "meeting", reason: "reply-to-others" };

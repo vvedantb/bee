@@ -6,7 +6,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { jsonSchema, tool, type ToolSet } from "ai";
 import { MCP_MAX_TOOLS, type McpServer } from "../shared/ipc";
-import { mcpSlug } from "../shared/mcp-names";
+import { isVmemConnector, mcpSlug } from "../shared/mcp-names";
 import { sanitizeMcpSchema } from "./mcp-schema";
 
 export { isEvaConnector, isVmemConnector, mcpSlug } from "../shared/mcp-names";
@@ -43,6 +43,34 @@ export type McpServerConfig = {
 };
 
 export type McpToolInfo = { name: string; description: string };
+
+/**
+ * The vmem tools Bee sends to the AI. vmem lists about 94 tools (some 25k tokens of schemas a turn); Bee needs only its memory,
+ * artifact and file read and search tools. Table, query and daily-note tools belong to other connectors such as Eva, not vmem.
+ * Names without the vmem__ prefix; names vmem does not list are ignored. Other connectors send all their tools.
+ */
+export const VMEM_TOOL_ALLOWLIST: readonly string[] = [
+  "memory_search",
+  "memory_retrieve",
+  "memory_get",
+  "memory_timeline",
+  "memory_related",
+  "memory_stats",
+  "artifacts_search",
+  "artifacts_get",
+  "files_list",
+  "files_get",
+];
+
+/**
+ * The listed tools Luna gets for one server: for vmem, only VMEM_TOOL_ALLOWLIST. If vmem lists none of them (renamed tools),
+ * all of its tools stay, so the connector never goes silent.
+ */
+export function lunaToolsFor<T extends { name: string }>(config: { name: string; url?: string }, tools: readonly T[]): readonly T[] {
+  if (!isVmemConnector(config)) return tools;
+  const allowed = tools.filter((item) => VMEM_TOOL_ALLOWLIST.includes(item.name));
+  return allowed.length > 0 ? allowed : tools;
+}
 
 /** Splits the "Args" box: one per line, or space-separated (with "double" or 'single' quotes) on a single line. */
 export function parseMcpArgs(text: string): string[] {
@@ -369,7 +397,7 @@ export type McpTools = {
 export type McpServerTools = { name: string; prefix: string; toolCount: number };
 
 /**
- * Wraps every enabled server's enabled tools as AI SDK tools. Tool lists come from the pool's cache when it is primed, so
+ * Wraps every enabled server's enabled tools as AI SDK tools (for vmem, only VMEM_TOOL_ALLOWLIST: lunaToolsFor). Tool lists come from the pool's cache when it is primed, so
  * nothing connects until a tool is called. Without a cache entry the server connects and lists once (then it is cached).
  * A server that fails or hangs is skipped, so one bad server never costs Luna the rest. Never throws.
  * Without options.pool, a private pool is used and close() disconnects everything, as before.
@@ -403,7 +431,7 @@ export async function loadMcpTools(
     // Lowercase, so the "Eva" preset's tools are eva__… whatever case the name was saved in.
     const slug = mcpSlug(config.name).toLowerCase();
     let toolCount = 0;
-    for (const item of entry.tools) {
+    for (const item of lunaToolsFor(config, entry.tools)) {
       if (config.disabledTools?.includes(item.name)) continue;
       toolCount++;
       tools[toolKey(slug, item.name, taken)] = tool({

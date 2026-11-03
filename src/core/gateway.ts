@@ -1,7 +1,9 @@
 import { createGateway, type GatewayProvider } from "@ai-sdk/gateway";
 
-// The model behind Luna (tips) and meeting summaries.
+// The model behind Luna's meeting tips, the follow-up check and meeting summaries: fast, thinking off.
 export const GUIDE_MODEL = "anthropic/claude-haiku-5.5";
+// The model behind direct requests to Bee ("Bee, …") and computer use: it chains tool calls and thinks briefly first.
+export const COMMAND_MODEL = "anthropic/claude-sonnet-5.5";
 export const JEV_MODEL = "typesafe-ai/jev";
 // Gateway also lists this model as spacexai/grok-stt; both ids resolve.
 export const STT_MODEL = "xai/grok-stt";
@@ -21,7 +23,7 @@ export function gatewayTier(tier: GatewayTier): { gateway?: { serviceTier: strin
 
 export const FLEX_PROVIDER_OPTIONS = gatewayTier("flex");
 
-// The provider Bee routes GUIDE_MODEL calls to. The Gateway uses the team's own Anthropic key (BYOK) only if the team
+// The provider Bee routes GUIDE_MODEL and COMMAND_MODEL calls to. The Gateway uses the team's own Anthropic key (BYOK) only if the team
 // that owns the Gateway API key has set one up; otherwise it uses the Gateway's system credentials.
 export const GUIDE_PROVIDER = "anthropic";
 
@@ -40,9 +42,29 @@ export const ANTHROPIC_NO_THINKING = { anthropic: { thinking: { type: "disabled"
 export function guideProviderOptions(
   tier: GatewayTier,
   options: { web: boolean },
-): { gateway: { serviceTier?: string; only?: string[]; order?: string[] } } & typeof ANTHROPIC_NO_THINKING {
+): { gateway: GatewayRouting } & typeof ANTHROPIC_NO_THINKING {
+  return { gateway: anthropicRouting(tier, options), ...ANTHROPIC_NO_THINKING };
+}
+
+type GatewayRouting = { serviceTier?: string; only?: string[]; order?: string[] };
+
+function anthropicRouting(tier: GatewayTier, options: { web: boolean }): GatewayRouting {
   const routing = options.web ? { only: [GUIDE_PROVIDER] } : { order: [GUIDE_PROVIDER] };
-  return { gateway: { ...gatewayTier(tier).gateway, ...routing }, ...ANTHROPIC_NO_THINKING };
+  return { ...gatewayTier(tier).gateway, ...routing };
+}
+
+/** Thinking tokens per command step: enough to plan the next tool call, small enough to keep replies quick. */
+export const COMMAND_THINKING_BUDGET = 1500;
+
+/**
+ * Brief extended thinking for a COMMAND_MODEL call (direct requests and computer use), so the model plans before it answers or
+ * calls the next tool. Thinking tokens count against maxOutputTokens, so those calls raise it. Never send to tips (GUIDE_MODEL).
+ */
+export const ANTHROPIC_BRIEF_THINKING = { anthropic: { thinking: { type: "enabled", budgetTokens: COMMAND_THINKING_BUDGET } } } as const;
+
+/** Like guideProviderOptions, with brief thinking on. Cache markers stay on the messages (ANTHROPIC_CACHE). */
+export function commandProviderOptions(tier: GatewayTier, options: { web: boolean }): { gateway: GatewayRouting } & typeof ANTHROPIC_BRIEF_THINKING {
+  return { gateway: anthropicRouting(tier, options), ...ANTHROPIC_BRIEF_THINKING };
 }
 
 /**

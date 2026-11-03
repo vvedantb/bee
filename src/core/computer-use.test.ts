@@ -185,6 +185,26 @@ describe("wantsComputerUse", () => {
     }
   });
 
+  it("never takes filler or a name for a desktop verb: the AI can still hand over with use_computer", () => {
+    for (const command of [
+      "find me the best credit cards, like balance transfer",
+      "search vmem for card offers, like balance transfer ones",
+      "look up flights to Paris, so I can plan",
+      "find the notes from Sam and Mark",
+      "like the last post",
+      "so just find the budget doc",
+      "well, search my notes for the Q4 plan",
+    ]) {
+      expect(wantsComputerUse(command), command).toBe(false);
+    }
+  });
+
+  it("still takes clear desktop verbs after polite padding or a filler", () => {
+    for (const command of ["so click Send", "just close the tab", "open Slack, like, and send Sam a message", "please scroll down", "type hello, then press Return"]) {
+      expect(wantsComputerUse(command), command).toBe(true);
+    }
+  });
+
   it("is not a question, a plain open, or a request for the AI to answer", () => {
     for (const command of ["what did Priya just say?", "what's 15% of 18000?", "open Teams", "switch to Slack", "tell me the news", "summarise the meeting", "how do I close a tab?", "add a note about the budget"]) {
       expect(wantsComputerUse(command), command).toBe(false);

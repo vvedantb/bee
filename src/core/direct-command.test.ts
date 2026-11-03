@@ -5,8 +5,8 @@ import { pipelineResultSchema } from "../shared/ipc";
 import { ACCESSIBILITY_LINE, type RunControl } from "./computer-control";
 import type { DesktopActions } from "./desktop-actions";
 import { runDirectCommand, type ComputerHost } from "./direct-command";
-import type { BeeGateway } from "./gateway";
-import { LUNA_COMPUTER, LUNA_DIRECT_SYSTEM, LUNA_NO_COMPUTER, LUNA_SYSTEM, buildLunaPrompt, guideWithLuna } from "./luna";
+import { COMMAND_MODEL, GUIDE_MODEL, type BeeGateway } from "./gateway";
+import { COMMAND_MAX_STEPS, LUNA_COMPUTER, LUNA_DIRECT_SYSTEM, LUNA_NO_COMPUTER, LUNA_SYSTEM, MAX_DIRECT_LINES, TIP_MAX_STEPS, buildLunaPrompt, guideWithLuna } from "./luna";
 import { SEED_NOTES, chunkNotes } from "./notes";
 
 // A direct request ("Bee, …") with a mock model and fake desktop runners: no network, no OS. One model call per step.
@@ -163,9 +163,18 @@ describe("buildLunaPrompt for a direct request", () => {
     expect(prompt.system.startsWith(LUNA_DIRECT_SYSTEM)).toBe(true);
     expect(prompt.system).not.toContain(LUNA_SYSTEM);
     expect(prompt.transcript).toBe(["Meeting lines so far (oldest first; background only, never the request):", "- Alice: Can we ship Friday?", "", "The user's request to Bee:", "- what did Alice just ask?"].join("\n"));
-    expect(prompt.tail).toContain("Give at most 3 short lines.");
+    expect(prompt.tail).toContain("Give at most 5 short lines, and fewer when fewer will do.");
     expect(prompt.tail).not.toContain("Old tip");
     expect(prompt.tail.endsWith("Reply:")).toBe(true);
+  });
+
+  it("tells the AI to call tools, search again when results are thin, and chain calls, in up to five lines", () => {
+    expect(MAX_DIRECT_LINES).toBe(5);
+    expect(COMMAND_MAX_STEPS).toBe(12);
+    expect(TIP_MAX_STEPS).toBe(8);
+    expect(LUNA_DIRECT_SYSTEM).toContain("call it in this turn. Never only say that Bee will look, search or check.");
+    expect(LUNA_DIRECT_SYSTEM).toContain("try again with different terms or another tool before you answer");
+    expect(LUNA_DIRECT_SYSTEM).toContain("make them all, then answer");
   });
 
   it("tells the AI it answers the user, never drafts what to say, and acts only when asked", () => {
@@ -375,5 +384,61 @@ describe("runDirectCommand: Bee's history and no blank replies", () => {
     expect(prompt.map((message) => message.role)).toEqual(["system", "user", "assistant", "user", "assistant", "user"]);
     expect(JSON.stringify(prompt[2])).toContain("Opened https://vercel.com/acme/~/usage");
     expect(cacheMarks(prompt)).toBe(2);
+  });
+});
+
+describe("runDirectCommand: the command model, brief thinking and caching", () => {
+  const THINKING = { anthropic: { thinking: { type: "enabled", budgetTokens: 1500 } } };
+  /** A gateway that records which model ids were asked for. */
+  function idGateway(model: MockLanguageModelV4) {
+    const ids: string[] = [];
+    const gateway = {
+      languageModel: (id: string) => {
+        ids.push(id);
+        return model;
+      },
+    } as unknown as BeeGateway;
+    return { gateway, ids };
+  }
+
+  it("answers with COMMAND_MODEL, thinking briefly, with room to think and the cache markers kept", async () => {
+    const { model } = stepsModel([text("- 15% of 18,000 is 2,700.\n")]);
+    const { gateway, ids } = idGateway(model);
+    await runDirectCommand({ command: "what's 15% of 18000?", snippets, gateway, actions: null });
+    expect(COMMAND_MODEL).toBe("anthropic/claude-sonnet-5.5");
+    expect(ids).toEqual([COMMAND_MODEL]);
+    expect(ids).not.toContain(GUIDE_MODEL);
+    const call = model.doStreamCalls[0];
+    expect(call?.providerOptions).toMatchObject({ gateway: { order: ["anthropic"] }, ...THINKING });
+    expect(call?.maxOutputTokens).toBe(3000);
+    expect(JSON.stringify(call?.prompt)).toContain("cacheControl");
+  });
+
+  it("runs computer use on COMMAND_MODEL with brief thinking and the cache markers kept", async () => {
+    const model = new MockLanguageModelV4({
+      doGenerate: async () => ({ content: [{ type: "text", text: "Sent the message." }], finishReason: { unified: "stop", raw: undefined }, usage, warnings: [] }),
+    });
+    const { gateway, ids } = idGateway(model);
+    const computer: ComputerHost = {
+      platform: "windows",
+      run: async () => ({ ok: true, data: {} }),
+      askFirst: () => false,
+      confirm: async () => true,
+    };
+    const result = await runDirectCommand({ command: "send Sam a message in Discord", snippets, gateway, actions: fakeActions().actions, computer });
+    expect(result.tips).toEqual(["Sent the message."]);
+    expect(ids).toEqual([COMMAND_MODEL]);
+    const call = model.doGenerateCalls[0];
+    expect(call?.providerOptions).toMatchObject({ gateway: { order: ["anthropic"] }, ...THINKING });
+    expect(call?.maxOutputTokens).toBeGreaterThan(1500);
+    expect(JSON.stringify(call?.prompt)).toContain("cacheControl");
+  });
+
+  it("keeps meeting tips on thinking off, with the smaller output budget", async () => {
+    const { model } = stepsModel([text("- Ask about the budget.\n")]);
+    await guideWithLuna({ model, transcript: ["Alice: What's the budget?"], notes: [] });
+    const call = model.doStreamCalls[0];
+    expect(call?.providerOptions).toMatchObject({ anthropic: { thinking: { type: "disabled" } } });
+    expect(call?.maxOutputTokens).toBe(800);
   });
 });
