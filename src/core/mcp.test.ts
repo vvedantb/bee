@@ -482,20 +482,21 @@ describe("vmem tool allowlist", () => {
     expect(VMEM_TOOL_ALLOWLIST.length).toBeGreaterThanOrEqual(5);
     expect(VMEM_TOOL_ALLOWLIST.length).toBeLessThanOrEqual(10);
     expect(VMEM_TOOL_ALLOWLIST).toContain("memory_search");
+    for (const name of ["list_tables", "count_table", "query_table", "query_docs", "get_or_create_daily_note"]) expect(VMEM_TOOL_ALLOWLIST).not.toContain(name);
   });
 
   it("sends only allowlisted vmem tools, by name or by vmem host, and counts only those", async () => {
     for (const config of [http("vmem", "https://example.com/mcp"), http("Memory", "https://vmem.projectv.uk/mcp")]) {
-      const mcp = await loadMcpTools([config], { pool: listing(["memory_search", "list_tables", "delete_everything", "admin_tool_1"]) });
+      const mcp = await loadMcpTools([config], { pool: listing(["memory_search", "files_get", "list_tables", "delete_everything", "admin_tool_1"]) });
       const prefix = mcpSlug(config.name).toLowerCase();
-      expect(Object.keys(mcp.tools).sort()).toEqual([`${prefix}__list_tables`, `${prefix}__memory_search`]);
+      expect(Object.keys(mcp.tools).sort()).toEqual([`${prefix}__files_get`, `${prefix}__memory_search`]);
       expect(mcp.servers).toEqual([{ name: config.name, prefix, toolCount: 2 }]);
     }
   });
 
   it("still drops allowlisted tools the user switched off", async () => {
-    const mcp = await loadMcpTools([http("vmem", "https://example.com/mcp", { disabledTools: ["list_tables"] })], { pool: listing(many) });
-    expect(Object.keys(mcp.tools)).not.toContain("vmem__list_tables");
+    const mcp = await loadMcpTools([http("vmem", "https://example.com/mcp", { disabledTools: ["memory_get"] })], { pool: listing(many) });
+    expect(Object.keys(mcp.tools)).not.toContain("vmem__memory_get");
     expect(mcp.servers[0]?.toolCount).toBe(VMEM_TOOL_ALLOWLIST.length - 1);
   });
 

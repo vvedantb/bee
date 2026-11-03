@@ -45,20 +45,21 @@ export type McpServerConfig = {
 export type McpToolInfo = { name: string; description: string };
 
 /**
- * The vmem tools Bee sends to the AI. vmem lists about 94 tools (some 25k tokens of schemas a turn); Bee needs only its read and
- * search tools. Names without the vmem__ prefix; names vmem does not list are ignored. Other connectors send all their tools.
+ * The vmem tools Bee sends to the AI. vmem lists about 94 tools (some 25k tokens of schemas a turn); Bee needs only its memory,
+ * artifact and file read and search tools. Table, query and daily-note tools belong to other connectors such as Eva, not vmem.
+ * Names without the vmem__ prefix; names vmem does not list are ignored. Other connectors send all their tools.
  */
 export const VMEM_TOOL_ALLOWLIST: readonly string[] = [
   "memory_search",
   "memory_retrieve",
   "memory_get",
   "memory_timeline",
-  "search",
-  "query_docs",
-  "list_tables",
-  "count_table",
-  "query_table",
-  "get_or_create_daily_note",
+  "memory_related",
+  "memory_stats",
+  "artifacts_search",
+  "artifacts_get",
+  "files_list",
+  "files_get",
 ];
 
 /**
