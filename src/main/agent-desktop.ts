@@ -1,7 +1,7 @@
-import { execFile } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, win32 } from "node:path";
 import {
   assertComputerUse,
   assertDesktopAction,
@@ -100,11 +100,87 @@ export type AgentDesktopRunner = {
   cleanup: () => void;
 };
 
-type RunnerDeps = { exec?: ExecFile; env?: NodeJS.ProcessEnv; tempDir?: () => string };
+type RunnerDeps = { exec?: ExecFile; env?: NodeJS.ProcessEnv; tempDir?: () => string; lockAcl?: (dir: string) => void };
+
+export type ExecFileSync = (file: string, args: string[], options: { encoding: "utf8"; windowsHide: boolean; timeout: number }) => string;
+
+export type AclDeps = {
+  execFileSync?: ExecFileSync;
+  platform?: NodeJS.Platform;
+  env?: NodeJS.ProcessEnv;
+  /** The current user as a SID or DOMAIN\name. Default: the SID from whoami, else USERDOMAIN\USERNAME. */
+  user?: string;
+  warn?: (message: string) => void;
+};
+
+// Well-known SIDs, so the grants work on non-English Windows.
+const SYSTEM_SID = "*S-1-5-18";
+const ADMINISTRATORS_SID = "*S-1-5-32-544";
+
+/**
+ * Windows only: makes `dir` private. mkdtemp's mode is ignored there and the folder inherits %TEMP%'s ACL, which on some
+ * PCs grants other principals; agent-desktop then refuses the state folder ("private file DACL grants an untrusted
+ * principal"). Grants full control (inherited by files and subfolders) to the current user, SYSTEM and Administrators only,
+ * then removes inherited entries. Warns, never throws. Returns whether the ACL is locked and checked.
+ */
+export function lockPrivateStateDirAcl(dir: string, deps: AclDeps = {}): boolean {
+  if ((deps.platform ?? process.platform) !== "win32") return true;
+  const env = deps.env ?? process.env;
+  const run = deps.execFileSync ?? (execFileSync as unknown as ExecFileSync);
+  const warn = deps.warn ?? ((message: string) => console.warn(message));
+  // Full paths, so a folder on PATH cannot stand in for the system tools.
+  const system32 = win32.join(env.SystemRoot ?? env.windir ?? "C:\\Windows", "System32");
+  const options = { encoding: "utf8" as const, windowsHide: true, timeout: 10_000 };
+  try {
+    const user = deps.user ?? currentUserSid(run, win32.join(system32, "whoami.exe"), options) ?? accountName(env);
+    if (!user) throw new Error("current user unknown");
+    const icacls = win32.join(system32, "icacls.exe");
+    // Grant first, then drop inheritance, so the folder is never left with no entry for the user.
+    run(icacls, [dir, "/grant:r", `${SYSTEM_SID}:(OI)(CI)F`, `${ADMINISTRATORS_SID}:(OI)(CI)F`, `${user}:(OI)(CI)F`], options);
+    run(icacls, [dir, "/inheritance:r"], options);
+    const entries = aclEntries(run(icacls, [dir], options), dir);
+    // Names in the listing are localised, so check the shape: no inherited entries, and only the three grants.
+    if (entries.length === 0 || entries.length > 3 || entries.some((entry) => entry.includes("(I)"))) {
+      throw new Error(`unexpected ACL (${entries.length} entries)`);
+    }
+    return true;
+  } catch (error) {
+    warn(`agent-desktop: could not make the state folder private; commands may fail. ${error instanceof Error ? error.message : String(error)}`);
+    return false;
+  }
+}
+
+function currentUserSid(run: ExecFileSync, whoami: string, options: Parameters<ExecFileSync>[2]): string | null {
+  try {
+    const sid = /"(S-1-[\d-]+)"/.exec(run(whoami, ["/user", "/fo", "csv", "/nh"], options))?.[1];
+    return sid ? `*${sid}` : null;
+  } catch {
+    return null;
+  }
+}
+
+function accountName(env: NodeJS.ProcessEnv): string | null {
+  if (!env.USERNAME) return null;
+  return env.USERDOMAIN ? `${env.USERDOMAIN}\\${env.USERNAME}` : env.USERNAME;
+}
+
+/** The ACE lines from `icacls <dir>`: the first is prefixed by the path; a blank line comes before the summary. */
+function aclEntries(output: string, dir: string): string[] {
+  const text = output.replace(/\r/g, "");
+  const start = text.indexOf(dir);
+  const lines = (start >= 0 ? text.slice(start + dir.length) : text).split("\n");
+  const entries: string[] = [];
+  for (const line of lines) {
+    if (!line.trim()) break;
+    entries.push(line.trim());
+  }
+  return entries;
+}
 
 /**
  * One command at a time. agent-desktop keeps snapshot ref maps under AGENT_DESKTOP_HOME; Bee points it at a private
- * temporary folder (mode 0700) instead of ~/.agent-desktop, and deletes it when reading stops and at quit.
+ * temporary folder instead of ~/.agent-desktop, and deletes it when reading stops and at quit. Private means mode 0700 on
+ * macOS and Linux (mkdtemp's default), and on Windows an ACL for the user, SYSTEM and Administrators only (lockPrivateStateDirAcl).
  */
 export function createAgentDesktopRunner(binary: AgentDesktopBinary, deps: RunnerDeps = {}): AgentDesktopRunner {
   return queuedRunner<ReadOnlyCommand>(binary, deps, assertReadOnly);
@@ -134,7 +210,10 @@ function queuedRunner<C extends string>(binary: AgentDesktopBinary, deps: Runner
   let queue: Promise<unknown> = Promise.resolve();
 
   const ensureHome = (): string => {
-    home ??= mkdtempSync(join(deps.tempDir?.() ?? tmpdir(), "bee-agent-desktop-"));
+    if (home) return home;
+    const dir = mkdtempSync(join(deps.tempDir?.() ?? tmpdir(), "bee-agent-desktop-"));
+    (deps.lockAcl ?? lockPrivateStateDirAcl)(dir);
+    home = dir;
     return home;
   };
 

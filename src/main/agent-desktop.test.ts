@@ -2,16 +2,18 @@ import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } 
 import { tmpdir } from "node:os";
 import { join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { COMPUTER_USE_COMMANDS, DESKTOP_ACTION_COMMANDS, READ_ONLY_COMMANDS } from "../core/agent-desktop-envelope";
 import {
   childEnv,
   createAgentDesktopActionRunner,
   createAgentDesktopComputerRunner,
   createAgentDesktopRunner,
+  lockPrivateStateDirAcl,
   platformBinaryNames,
   resolveAgentDesktop,
   type ExecFile,
+  type ExecFileSync,
 } from "./agent-desktop";
 
 const root = new URL("../../", import.meta.url);
@@ -150,8 +152,8 @@ describe("createAgentDesktopRunner", () => {
     const home = call?.env.AGENT_DESKTOP_HOME ?? "";
     expect(home.startsWith(temp)).toBe(true);
     expect(statSync(home).isDirectory()).toBe(true);
-    // POSIX only: Windows has no mode bits (Node reports 0o666 for any writable entry); there the folder is private
-    // through the per-user ACL it inherits from %TEMP%.
+    // POSIX only: Windows has no mode bits (Node reports 0o666 for any writable entry); there lockPrivateStateDirAcl
+    // replaces the ACL inherited from %TEMP% (tested below).
     if (process.platform !== "win32") expect(statSync(home).mode & 0o077).toBe(0);
     runner.cleanup();
     expect(existsSync(home)).toBe(false);
@@ -190,6 +192,79 @@ describe("createAgentDesktopRunner", () => {
     expect(fake.calls.map((call) => call.args[0])).toEqual(["list-windows"]);
     await Promise.all([first, second]);
     expect(fake.calls.map((call) => call.args[0])).toEqual(["list-windows", "version"]);
+  });
+});
+
+describe("lockPrivateStateDirAcl", () => {
+  const dir = "C:\\Users\\sam\\AppData\\Local\\Temp\\bee-agent-desktop-abc";
+  const env = { SystemRoot: "C:\\Windows", USERNAME: "sam", USERDOMAIN: "PC" };
+  const icacls = "C:\\Windows\\System32\\icacls.exe";
+  const locked = `${dir} NT AUTHORITY\\SYSTEM:(OI)(CI)(F)\r\n${" ".repeat(dir.length + 1)}BUILTIN\\Administrators:(OI)(CI)(F)\r\n${" ".repeat(dir.length + 1)}PC\\sam:(OI)(CI)(F)\r\n\r\nSuccessfully processed 1 files; Failed processing 0 files\r\n`;
+
+  const fakeSync = (listing: string, whoami = '"pc\\sam","S-1-5-21-1-2-3-1001"\r\n') => {
+    const calls: { file: string; args: string[] }[] = [];
+    const run: ExecFileSync = (file, args) => {
+      calls.push({ file, args });
+      if (file.endsWith("whoami.exe")) return whoami;
+      return args.length === 1 ? listing : "processed file";
+    };
+    return { run, calls };
+  };
+
+  it("does nothing outside Windows", () => {
+    const fake = fakeSync(locked);
+    expect(lockPrivateStateDirAcl("/tmp/x", { platform: "darwin", execFileSync: fake.run })).toBe(true);
+    expect(fake.calls).toEqual([]);
+  });
+
+  it("grants only the current user, SYSTEM and Administrators (inheritable), then removes inheritance and checks", () => {
+    const fake = fakeSync(locked);
+    const warn = vi.fn();
+    expect(lockPrivateStateDirAcl(dir, { platform: "win32", env, execFileSync: fake.run, warn })).toBe(true);
+    expect(warn).not.toHaveBeenCalled();
+    const icaclsCalls = fake.calls.filter((call) => call.file === icacls).map((call) => call.args);
+    expect(icaclsCalls).toEqual([
+      [dir, "/grant:r", "*S-1-5-18:(OI)(CI)F", "*S-1-5-32-544:(OI)(CI)F", "*S-1-5-21-1-2-3-1001:(OI)(CI)F"],
+      [dir, "/inheritance:r"],
+      [dir],
+    ]);
+  });
+
+  it("falls back to USERDOMAIN\\USERNAME when whoami gives no SID", () => {
+    const fake = fakeSync(locked, "");
+    lockPrivateStateDirAcl(dir, { platform: "win32", env, execFileSync: fake.run, warn: vi.fn() });
+    expect(fake.calls.find((call) => call.args[1] === "/grant:r")?.args[4]).toBe("PC\\sam:(OI)(CI)F");
+  });
+
+  it("warns, without throwing, when icacls fails or the ACL still has inherited or extra entries", () => {
+    const failing: ExecFileSync = () => {
+      throw new Error("icacls exited 5");
+    };
+    const warn = vi.fn();
+    expect(lockPrivateStateDirAcl(dir, { platform: "win32", env, user: "PC\\sam", execFileSync: failing, warn })).toBe(false);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("icacls exited 5"));
+
+    const inherited = locked.replace("PC\\sam:(OI)(CI)(F)", "PC\\sam:(I)(OI)(CI)(F)");
+    expect(lockPrivateStateDirAcl(dir, { platform: "win32", env, user: "PC\\sam", execFileSync: fakeSync(inherited).run, warn })).toBe(false);
+    const extra = locked.replace("\r\n\r\n", `\r\n${" ".repeat(dir.length + 1)}PC\\CodexSandboxUsers:(OI)(CI)(RX)\r\n\r\n`);
+    expect(lockPrivateStateDirAcl(dir, { platform: "win32", env, user: "PC\\sam", execFileSync: fakeSync(extra).run, warn })).toBe(false);
+    expect(warn).toHaveBeenCalledTimes(3);
+  });
+
+  it("is applied to the runner's state folder once, before the first command", async () => {
+    const temp = mkdtempSync(join(tmpdir(), "bee-ad-test-"));
+    try {
+      const lockAcl = vi.fn();
+      const exec: ExecFile = (_file, _args, _options, callback) => callback(null, ENVELOPE);
+      const runner = createAgentDesktopRunner({ path: "/bin/agent-desktop", macHelper: null }, { exec, env: {}, tempDir: () => temp, lockAcl });
+      await runner.run("version", []);
+      await runner.run("version", []);
+      expect(lockAcl).toHaveBeenCalledTimes(1);
+      expect(String(lockAcl.mock.calls[0]?.[0]).startsWith(temp)).toBe(true);
+      runner.cleanup();
+    } finally {
+      rmSync(temp, { recursive: true, force: true });
+    }
   });
 });
 
