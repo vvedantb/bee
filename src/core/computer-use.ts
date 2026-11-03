@@ -7,8 +7,9 @@ import { ANTHROPIC_CACHE, commandProviderOptions } from "./gateway";
 
 // Computer use for a direct request: "Bee, open Discord, send Sam a message, then close the Discord tab in Chrome". The AI runs
 // an observe → act → observe loop over the computer tools (core/computer-tools.ts) until the task is done or a control stops it
-// (core/computer-control.ts: steps, time, Stop). It ends with one line for the island. Only a request the user made by name, on
-// their own mic, starts one (core/wake-word.ts); never a meeting line, caption, Teams audio or a teammate.
+// (core/computer-control.ts: steps, time, Stop): agent-desktop snapshots and refs first, a screenshot only when the tree shows
+// nothing usable. It ends with one line for the island. Only a request the user made by name, on their own mic, starts one
+// (core/wake-word.ts); never a meeting line, caption, Teams audio or a teammate.
 
 // Model turns per run: a backstop above the tool-step limit, so the AI can still write its last line.
 const TURNS_ABOVE_STEPS = 2;
@@ -16,21 +17,27 @@ const LINE_MAX = 160;
 // Output tokens per step: brief thinking (gateway.ts ANTHROPIC_BRIEF_THINKING) spends from this budget before the tool call.
 export const COMPUTER_MAX_OUTPUT_TOKENS = 3000;
 const TRANSCRIPT_LINES = 8;
-/** Screenshots kept in the loop's messages: older ones are cut to a short note before each step (dropOldScreenshots). */
+/**
+ * Screenshots kept in the loop's messages: older ones are cut to a short note before each step (dropOldScreenshots). The
+ * tree path (snapshot, find, refs) is the main one; a screenshot is the fallback, so few should ever pile up.
+ */
 export const SCREENSHOTS_KEPT = 2;
 const ENDED = /^ended:\s*/i;
 
 // Cached (gateway.ts ANTHROPIC_CACHE): it must not change between runs on one computer. The platform part is fixed per OS.
+// agent-desktop's own loop: read the accessibility tree, act on a ref, read again. Screenshots cost far more (an image each,
+// and slower steps) and give no refs, so they come last.
 export const COMPUTER_SYSTEM = [
   "You are Bee, an assistant that uses the user's computer for them. The user asked you by name to do a task: do it with the tools, step by step.",
-  "Work in a loop: look (snapshot or find), act on one element by its ref, then look again to check it worked.",
-  "Refs look like @s8f3k2p9:e12 and come only from this task's snapshots and finds. After the screen changes, take a new snapshot. Never make up a ref.",
-  "Give snapshot and find an app name. For a busy app (Slack, Teams, Discord, Chrome, Outlook), take a skeleton snapshot first, then read one region with root.",
-  "Use find when you know an element's role or name, for example role button and name Send.",
-  "An error's Detail is agent-desktop's own reason: use it to choose the next step. If snapshot and find keep failing or show nothing usable in an app, take a screenshot, then click_at the spot; after click_at into a text field, type_text without ref types there.",
+  "Work through the app's accessibility tree, in a loop: look (find or snapshot), act on one element by its ref, then look again to check it worked. When an action's result already says what changed (Now: …, Open now: …), you need not look again.",
+  "Refs look like @s8f3k2p9:e12 and come only from this task's snapshots and finds. After the screen changes, read again: root the same region, or take a new snapshot. Never make up a ref.",
+  "Give snapshot and find an app name. When you know an element's role or name, find it first, for example role textfield, or role button and name Send. For a busy app (Slack, Teams, Discord, Chrome, Outlook), take a skeleton snapshot, then read one region with root.",
+  "Bee already waits for a slow app and reads it again with more time. When a snapshot still shows few elements, try find by role or name, or a skeleton then root, before anything else.",
+  "A screenshot is the last resort: only when snapshot and find of that app show nothing usable (a canvas, an image, a tree that stays empty). Then click_at the spot; after click_at into a text field, type_text without ref types there.",
+  "An error's Detail is agent-desktop's own reason: use it to choose the next step.",
   "To open an app use open_app; to bring a window to the front use focus_window; to open a web page use open_url. Use list_apps for an app's exact name.",
   "To fill a text field prefer set_value; use type_text when the app needs real typing.",
-  "Everything is headless by default. Set physical only after POLICY_DENIED says a step needs real keys or focus. Never set it to retry any other error.",
+  "Everything is headless by default. Set physical only when a step needs real keys or focus: after POLICY_DENIED says so, or where the line about this computer says it always does. Never set it to retry any other error.",
   "When a result says a menu, sheet or alert is open, act on it next: snapshot with that surface.",
   "After ACTION_FAILED, TIMEOUT or APP_UNRESPONSIVE the action may still have happened: look before you try again. Never repeat a send or a delete blindly.",
   "Set effect on every action: send when it sends a message, email or post (Return in a chat box sends), delete when it deletes something, buy when it pays or orders, submit when it submits a form; otherwise none.",
@@ -47,7 +54,7 @@ export const COMPUTER_SYSTEM = [
 const PLATFORM_SYSTEM: Record<ComputerPlatform, string> = {
   mac: "This is a Mac. The main modifier is cmd: cmd+w closes a tab, cmd+l selects a browser's address bar. Apps go by their display names, for example Google Chrome.",
   windows:
-    "This is Windows. The main modifier is ctrl: ctrl+w closes a tab, ctrl+l selects a browser's address bar. type_text and focus need physical here, so prefer set_value. A key press goes to the app at the front: bring it forward with focus_window first.",
+    "This is Windows. The main modifier is ctrl: ctrl+w closes a tab, ctrl+l selects a browser's address bar. Prefer set_value: type_text and focus always need physical here, so set it on them. A key press goes to the app at the front: bring it forward with focus_window first. An open menu is surface menu, and a dialog inside Teams or Edge is surface sheet.",
 };
 
 // e.g. "Monday 2 November 2026". Built from parts, like luna.ts.

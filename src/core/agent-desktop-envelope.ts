@@ -1,7 +1,8 @@
 import { z } from "zod";
 
 // agent-desktop (npm, Apache-2.0) prints one JSON envelope per command: { version, ok: true, command, data } or
-// { ok: false, error: { code, message, disposition } }. Pure parsing here; main/agent-desktop.ts runs the binary.
+// { ok: false, error: { code, message, disposition, details } }. Envelope 2.6 (agent-desktop 1.1). Pure parsing here;
+// main/agent-desktop.ts runs the binary.
 // Error messages can hold window titles and names: an error keeps its code, whether a retry is safe, and the message cut short
 // with anything quoted, any path, link or address taken out (safeMessage).
 
@@ -216,9 +217,10 @@ export function assertComputerUse(command: string, args: readonly string[]): ass
 /**
  * A failed command: a short code safe for logs (agent-desktop's own, or SPAWN_FAILED, TIMEOUT_LOCAL, BAD_OUTPUT, ABORTED,
  * REFUSED); agent-desktop's message cut short and redacted (safeMessage); whether a retry is safe ("safe": it was never
- * delivered); and its details.kind ("observation_incomplete", "actionability_timeout").
+ * delivered); its details.kind ("observation_incomplete", "identity_not_unique"); and retryable: false when agent-desktop
+ * says waiting cannot change the outcome (details.retryable).
  */
-export type AgentDesktopFailure = { ok: false; code: string; message?: string; retry?: string; kind?: string };
+export type AgentDesktopFailure = { ok: false; code: string; message?: string; retry?: string; kind?: string; retryable?: false };
 
 /** ok: the command's data. */
 export type AgentDesktopResult = { ok: true; data: unknown } | AgentDesktopFailure;
@@ -302,9 +304,26 @@ export function parseEnvelope(stdout: string): AgentDesktopResult {
     const message = safeMessage(error.message);
     const retry = token(field(error.disposition, "retry"));
     const kind = token(field(error.details, "kind"));
-    return { ok: false, code: safeCode(error.code), ...(message ? { message } : {}), ...(retry ? { retry } : {}), ...(kind ? { kind } : {}) };
+    const final = field(error.details, "retryable") === false;
+    return {
+      ok: false,
+      code: safeCode(error.code),
+      ...(message ? { message } : {}),
+      ...(retry ? { retry } : {}),
+      ...(kind ? { kind } : {}),
+      ...(final ? { retryable: false as const } : {}),
+    };
   }
   return { ok: false, code: "BAD_OUTPUT" };
+}
+
+/**
+ * A snapshot that could not read the whole window in time to prove its refs unique (data.identity_unproven, agent-desktop
+ * 1.1). On Windows and Linux, and on macOS for an element with no address, its refs fail with AMBIGUOUS_TARGET
+ * (identity_not_unique) until a snapshot with a larger --timeout-ms reads the window whole.
+ */
+export function identityUnproven(data: unknown): boolean {
+  return isRecord(data) && data.identity_unproven === true;
 }
 
 export type AdApp = { name: string; pid: number | null; bundleId: string | null };

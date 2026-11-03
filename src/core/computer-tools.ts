@@ -1,7 +1,8 @@
 import { tool } from "ai";
 import { z } from "zod";
 import {
-  HEADED_FLAG, REF_PATTERN, parseApps, parseWindows, type AdBounds, type AgentDesktopFailure, type AgentDesktopResult, type ComputerRun, type ComputerUseCommand,
+  HEADED_FLAG, REF_PATTERN, identityUnproven, parseApps, parseWindows, type AdBounds, type AgentDesktopFailure, type AgentDesktopResult, type ComputerRun,
+  type ComputerUseCommand,
 } from "./agent-desktop-envelope";
 import { awaitAnswer, CONFIRM_TIMEOUT_MS, type ComputerPlatform, type IrreversibleKind, type RunControl } from "./computer-control";
 import {
@@ -14,14 +15,16 @@ import { opaqueRect, type PixelRect } from "./png-opaque";
 import type { LunaToolActivity } from "./luna";
 
 // The AI's computer tools, for a direct request only ("Bee, send Sam a message in Discord"): never in a meeting tip turn. They
-// read an app's accessibility tree and act on one element at a time through agent-desktop (main runs each command on its own
-// runner with fixed argv and no shell; main/agent-desktop.ts assertComputerUse checks every one). Apps open, windows come forward
-// and pages open through the desktop actions (core/desktop-actions.ts). Each call is one step of the run's budget
+// follow agent-desktop's own loop: read an app's accessibility tree as a compact snapshot (or find one element), act on one
+// element by its ref, read again to check. A small set, like agent-browser's: observe (snapshot, find, read), act on a ref
+// (click, set_value, type_text, select_option, set_state, scroll, focus), keys, apps and waits. main runs each command on its
+// own runner with fixed argv and no shell; main/agent-desktop.ts assertComputerUse checks every one. Apps open, windows come
+// forward and pages open through the desktop actions (core/desktop-actions.ts). Each call is one step of the run's budget
 // (core/computer-control.ts); sending, deleting, buying and submitting wait for the user's Confirm first when the setting is on
 // (core/computer-gate.ts, which reads where each ref sits in the tree, not just what the AI says). Terminals, script tools,
-// system settings and Bee itself are never read or typed into. When an app's tree cannot be read (a Chromium or WebView2 app
-// such as Teams that is still building it, or fails), click_at clicks a spot in a screenshot and type_text types where it put
-// the cursor.
+// system settings and Bee itself are never read or typed into. Screenshots are the fallback only: when an app's tree stays
+// empty or unhelpful once Bee has waited for it (a canvas, some Chromium or WebView2 apps), click_at clicks a spot in a
+// screenshot and type_text types where it put the cursor.
 
 export type ConfirmRequest = { kind: IrreversibleKind; question: string; detail: string };
 
@@ -62,7 +65,10 @@ export function offLimitsApp(name: string): boolean {
 
 const SHELL_MESSAGE = "Error: Bee does not type into terminals or consoles.";
 
-const SURFACES = ["window", "menu", "menubar", "sheet", "popover", "alert"] as const;
+// Overlays snapshot and find may read instead of the window, as each OS has them (agent-desktop status supported_surfaces).
+// Since agent-desktop 1.1 a kind the OS does not have is INVALID_ARGS, so the AI is never offered one. Windows reads an open
+// menu as menu and a Chromium modal (Teams, Edge) as sheet, and has no menubar.
+const SURFACES = { mac: ["menu", "menubar", "sheet", "popover", "alert"], windows: ["menu", "sheet"] } as const satisfies Record<ComputerPlatform, readonly string[]>;
 // Text in a snapshot line, and the whole snapshot, so a dense app cannot flood the context.
 const NODE_TEXT = 80;
 // What the confirm gate keeps about where each ref sits: containers above it, neighbours each side, a description or value.
@@ -75,19 +81,28 @@ const MAX_DEPTH = 60;
 const FIND_LIMIT = 15;
 // agent-desktop's observation budget for snapshot and find, and the longer one for a second read. A cold Chromium or WebView2
 // app (Teams, Slack, Discord) builds its web tree only once the first read asks, which takes 10 to 25 s, and a new process sees
-// the grown tree: a thin first read, or one that failed where a retry is safe, is read again once with more time.
+// the grown tree: a thin first read, or one that failed where a retry is safe, is read again once with more time. Bee waits
+// here, inside one step, rather than leave the AI to loop on screenshots.
 const LOOK_TIMEOUT_MS = 12_000;
 const SETTLE_TIMEOUT_MS = 25_000;
 // Bee's kill timer sits this far above agent-desktop's own budget: start-up, and a large tree's JSON.
 const KILL_MARGIN_MS = 6000;
 // A whole-window read is thin with fewer refs than THIN_REFS (a cold Chromium app shows little more than its title bar
 // buttons), or when it ran out of budget (complete: false) with fewer than PARTIAL_REFS (a first read is about a thirteenth of
-// the settled tree). The second read also goes deeper: Chromium nests its controls under long chains of unnamed groups.
+// the settled tree). It is shallow when its refs are almost all containers with more cut below them: Chromium nests its
+// controls under long chains of unnamed groups, past the default depth. Either is read once more, and that read goes deeper.
+// So is a read that could not prove its refs (identity_unproven), which a longer budget fixes.
 const THIN_REFS = 4;
 const PARTIAL_REFS = 20;
 const DEEP_DEPTH = 25;
+// Roles that only hold other elements. A ref on one of them is a region to drill into with root, not a control. A window's
+// own buttons are no app control either: a cut-off Chromium window shows little else. A read is shallow with fewer than
+// SHALLOW_CONTROLS app controls left above the cut.
+const CONTAINER_ROLE = /^(?:group|pane|generic|section|region|document|webarea|web ?view|scroll ?area|window|application|panel|list|toolbar|unknown|element|custom|none|presentation)$/i;
+const WINDOW_BUTTON = /^(?:minimi[sz]e|maximi[sz]e|restore(?: down)?|close|system menu)$/i;
+const SHALLOW_CONTROLS = 2;
 // Codes, and details.kind words, where a second read may succeed, when agent-desktop says a retry is safe (nothing was
-// delivered).
+// delivered) and does not say waiting cannot help (details.retryable: false).
 const LOOK_AGAIN = new Set(["INTERNAL", "TIMEOUT", "APP_UNRESPONSIVE"]);
 const LOOK_AGAIN_KIND = /renderer|activation|incomplete|settle/;
 // get and is take no budget of their own: Bee's kill timer only.
@@ -131,19 +146,39 @@ const LOOK_HINTS: Record<string, string> = {
     "the app's tree did not finish in time. Take a skeleton snapshot, then root one region, or find by role. If the app just opened, wait and look again. If it keeps failing, take a screenshot and use click_at.",
   TIMEOUT_LOCAL: "the app's tree took too long. Take a skeleton snapshot, then root one region. If it keeps failing, take a screenshot and use click_at.",
   APP_UNRESPONSIVE: "the app did not answer. Wait, then look again. If it keeps failing, take a screenshot and use click_at.",
+  INVALID_ARGS: "check the ref and the arguments: refs come only from the latest snapshot or find, and a surface must be one this computer has.",
+};
+// agent-desktop 1.1's details.kind, where it says more than the code. Refs prove their identity: on Windows (and on macOS for
+// an element with no address) a ref acts only when it was the only element in its window with its role, name and
+// description.
+const KIND_HINTS: Record<string, string> = {
+  identity_not_unique:
+    "this element has an identical twin in the window, so it cannot be used by ref. Act on a control that is unique in the window: find it by name, or root into its row. If there is none, take a screenshot and use click_at.",
+  saved_ref_ambiguous: "an identical element appeared since the snapshot. Take a new snapshot, and act on a control that is unique in the window.",
+  resolution_identity_unknown: "agent-desktop could not check the element in time, so nothing was done. Look again, then try once more.",
+  post_action_verification: "it happened, but the element now reads differently (the app may have reformatted it). Read it before writing again. Never repeat a send or delete blindly.",
+  actionability_timeout: "the element never became ready: it may be disabled, hidden or covered. Check it with read, or take a new snapshot.",
+  scroll_into_view_unsupported: "the element is out of view and cannot scroll itself. Scroll the area around it with scroll, then try again.",
+  live_read_incomplete: "the app did not answer for that element. Take a new snapshot and use its refs.",
 };
 const MAY_HAVE_HAPPENED = "It may still have happened: look before trying again.";
+const NOT_DELIVERED = "nothing was done (agent-desktop says it was not delivered). Look again, then try once more or another way.";
+const FINAL = " Waiting will not help: try another way.";
 
 /**
  * A failed command as the AI sees it: the code, what to do, and agent-desktop's own message when it gave one (cut short and with
  * names, titles and paths taken out: core/agent-desktop-envelope.ts safeMessage). look: an observation, which changes nothing.
- * An action agent-desktop does not call safe to retry may still have happened.
+ * An action agent-desktop does not call safe to retry may still have happened; one it calls safe (not delivered) did not.
  */
 export function errorLine(failure: string | AgentDesktopFailure, look = false): string {
-  const { code, message, retry } = typeof failure === "string" ? { code: failure, message: undefined, retry: undefined } : failure;
-  const hint = (look ? LOOK_HINTS[code] : undefined) ?? HINTS[code] ?? "that did not work. Look again before trying something else.";
-  const unsafe = !look && retry !== undefined && retry !== "safe" && !hint.includes("may still have happened") ? ` ${MAY_HAVE_HAPPENED}` : "";
-  return `Error ${code}: ${hint}${unsafe}${message ? ` Detail: ${message}` : ""}`;
+  const { code, message, retry, kind, retryable } = typeof failure === "string" ? ({ code: failure } as Partial<AgentDesktopFailure> & { code: string }) : failure;
+  const byKind = kind && Object.hasOwn(KIND_HINTS, kind) ? KIND_HINTS[kind] : undefined;
+  let hint = byKind ?? (look ? LOOK_HINTS[code] : undefined) ?? HINTS[code] ?? "that did not work. Look again before trying something else.";
+  if (!look && !byKind && retry === "safe" && hint.includes("may still have happened")) hint = NOT_DELIVERED;
+  // A hint that already says whether it happened needs no second word on it.
+  const says = hint.includes("may still have happened") || kind === "post_action_verification";
+  const unsafe = !look && retry !== undefined && retry !== "safe" && !says ? ` ${MAY_HAVE_HAPPENED}` : "";
+  return `Error ${code}: ${hint}${unsafe}${retryable === false ? FINAL : ""}${message ? ` Detail: ${message}` : ""}`;
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
@@ -359,28 +394,48 @@ export function thinTree(data: unknown): boolean {
   return count < THIN_REFS || (isRecord(data) && data.complete === false && count < PARTIAL_REFS);
 }
 
+/**
+ * A settled window read cut off by depth (Chromium's long chains of unnamed groups): refs, but next to no app controls (a
+ * window's own buttons do not count), and branches cut below with more inside. Read deeper, or drill one region with root.
+ */
+export function shallowTree(data: unknown): boolean {
+  const { controls, cut } = walkRefs(data);
+  return cut && controls < SHALLOW_CONTROLS;
+}
+
 /** How many refs a snapshot holds: its ref_count, else counted in its tree (up to 5000 nodes). */
 export function refCount(data: unknown): number {
   if (!isRecord(data)) return 0;
   if (typeof data.ref_count === "number" && Number.isFinite(data.ref_count)) return data.ref_count;
-  let found = 0;
-  let seen = 0;
-  const stack: unknown[] = [data.tree];
+  return walkRefs(data).refs;
+}
+
+/** A snapshot tree's refs (up to 5000 nodes): all of them, those on controls rather than containers, and whether a branch was cut. */
+function walkRefs(data: unknown): { refs: number; controls: number; cut: boolean } {
+  let [refs, controls, cut, seen] = [0, 0, false, 0];
+  const stack: unknown[] = [isRecord(data) ? data.tree : null];
   while (stack.length > 0 && seen < 5000) {
     const node = stack.pop();
     seen += 1;
     try {
       if (!isRecord(node)) continue;
-      if (typeof node.ref_id === "string" && REF_PATTERN.test(node.ref_id)) found += 1;
+      if (typeof node.ref_id === "string" && REF_PATTERN.test(node.ref_id)) {
+        refs += 1;
+        if (!CONTAINER_ROLE.test(str(node.role)) && !WINDOW_BUTTON.test(str(node.name).trim())) controls += 1;
+      }
+      if ((typeof node.children_count === "number" && node.children_count > 0) || node.subtree_truncated === true) cut = true;
       if (Array.isArray(node.children)) for (const child of node.children.slice(0, 5000)) stack.push(child);
     } catch {
       // Not counted.
     }
   }
-  return found;
+  return { refs, controls, cut };
 }
 
-/** A successful action: how it was delivered, and any menu, sheet or alert it left open. */
+/**
+ * A successful action: how it was delivered, the element as agent-desktop read it back after (post_state: its value and
+ * states, so the AI need not look again just to check), and any menu, sheet or alert it left open.
+ */
 export function formatDone(data: unknown): string {
   const record = isRecord(data) ? data : {};
   const disposition = isRecord(record.disposition) ? str(record.disposition.delivery) : "";
@@ -389,8 +444,25 @@ export function formatDone(data: unknown): string {
     : [];
   return [
     `Done${disposition ? ` (${disposition})` : ""}.`,
+    postState(record.post_state),
     surfaces.length > 0 ? ` Open now: ${[...new Set(surfaces)].slice(0, 5).join(", ")}. Act on it next: snapshot with that surface.` : "",
   ].join("");
+}
+
+const POST_FLAGS = ["checked", "expanded", "selected", "focused", "enabled"] as const;
+
+/** post_state as " Now: value="…" [checked]." , or "" when agent-desktop read nothing back Bee understands. */
+function postState(raw: unknown): string {
+  if (!isRecord(raw)) return "";
+  try {
+    const value = typeof raw.value === "string" ? ` value=${quoted(raw.value)}` : "";
+    const states = Array.isArray(raw.states) ? raw.states.filter((state): state is string => typeof state === "string" && /^[a-z_]{1,24}$/.test(state)) : [];
+    for (const flag of POST_FLAGS) if (typeof raw[flag] === "boolean" && !states.includes(flag)) states.push(raw[flag] ? flag : `not ${flag}`);
+    const shown = states.slice(0, 6);
+    return value || shown.length > 0 ? ` Now:${value}${shown.length > 0 ? ` [${shown.join(", ")}]` : ""}.` : "";
+  } catch {
+    return "";
+  }
 }
 
 /** get and is: the answer as short JSON. */
@@ -547,7 +619,21 @@ const windowSchema = z.string().max(60).describe("A window id from list_windows 
 const effectSchema = z
   .enum(EFFECTS)
   .describe("What this action does: send (sends a message, email or post, including Return in a chat box), delete, buy (pays or orders), submit (submits a form), or none.");
-const physicalSchema = z.boolean().optional().describe("Real key presses or focus. Only when POLICY_DENIED said this step needs it. Never to retry other errors.");
+const physicalSchema = z
+  .boolean()
+  .optional()
+  .describe("Real key presses or focus. Only when POLICY_DENIED said this step needs it, or the system says this computer always needs it. Never to retry other errors.");
+
+// read: get's properties, then is's true-or-false checks.
+const GET_PROPERTIES = ["text", "value", "title", "role", "states"] as const;
+const IS_PROPERTIES = ["visible", "enabled", "checked", "focused", "expanded", "selected"] as const;
+// set_state: the agent-desktop command for each state, and the island's step line.
+const STATE_ACTIONS = {
+  checked: { command: "check", verb: "Ticking", line: "Ticking a box…" },
+  unchecked: { command: "uncheck", verb: "Unticking", line: "Unticking a box…" },
+  expanded: { command: "expand", verb: "Expanding", line: "Expanding…" },
+  collapsed: { command: "collapse", verb: "Collapsing", line: "Collapsing…" },
+} as const satisfies Record<string, { command: ComputerUseCommand; verb: string; line: string }>;
 
 type ScreenshotOutput = { text: string; image?: string };
 
@@ -569,7 +655,13 @@ const NO_BREAKS = "Error: without a ref, type_text types no line breaks or tabs.
 // and a tab may move focus somewhere else.
 const BREAKS = /[\t\n\v\f\r\u0085\u2028\u2029]/;
 const UNREADABLE = "Error: Bee could not read that snapshot. Take a skeleton snapshot, then root one region; or take a screenshot and use click_at.";
-const THIN_NOTE = "Few elements came back: the app may still be loading. Wait, then snapshot again; or take a screenshot and use click_at.";
+// What a whole-window read says when Bee's second read did not fix it. Bee has already waited for the app by then, so the AI
+// tries the tree another way before any screenshot.
+const THIN_NOTE =
+  "Few elements came back, though Bee gave the app time to load. Try find by role (textfield, button) or name, or a skeleton snapshot then root. If those show nothing usable, take a screenshot and use click_at.";
+const SHALLOW_NOTE = "The controls sit deeper than this read: snapshot one region marked inside with root, or use find by role or name.";
+const UNPROVEN_NOTE = "Bee could not read the whole window in time, so some refs may be refused (AMBIGUOUS_TARGET). If one is, snapshot again or use find.";
+const LOOK_FIRST = "Error: read this app with snapshot or find first: they give refs. Take a screenshot only when they show nothing usable.";
 
 /** Focus after typing without a ref into a field Bee never saw: a text field with no name, so Return always asks as a send. */
 const typedField = (app: string): Element => ({ role: "textfield", name: "", context: { app, ancestors: [], nearby: [], field: null } });
@@ -592,6 +684,13 @@ export function computerTools(deps: ComputerToolDeps) {
   const shots = new Map<string, (Shot & { windowId: string | undefined }) | null>();
   // The app the run last read or acted in, for the Confirm prompt's detail.
   let currentApp: string | null = null;
+  // Apps (by appKey) this run has read through the tree, whatever came back: a screenshot comes after that, never first.
+  const looked = new Set<string>();
+  const lookedAt = (name: string | null | undefined) => {
+    const app = name ? cleanApp(name) : null;
+    if (app) looked.add(appKey(app));
+  };
+  const surfaceSchema = z.enum(SURFACES[deps.platform]);
   let chain: Promise<unknown> = Promise.resolve();
   const remember = (ref: string, element: Element) => refs.set(ref, element);
 
@@ -626,21 +725,38 @@ export function computerTools(deps: ComputerToolDeps) {
 
   /** A failed read that a second one may fix: agent-desktop says nothing was delivered, so a retry is safe. */
   const lookAgain = (result: AgentDesktopResult) =>
-    !result.ok && (LOOK_AGAIN.has(result.code) || LOOK_AGAIN_KIND.test(result.kind ?? "")) && result.retry === "safe" && !control.reason();
+    !result.ok &&
+    (LOOK_AGAIN.has(result.code) || LOOK_AGAIN_KIND.test(result.kind ?? "")) &&
+    result.retry === "safe" &&
+    result.retryable !== false &&
+    !control.reason();
 
   /**
    * snapshot or find, read again once in a new process with the longer budget (args(budget, again)) when the first read failed
-   * where a retry is safe, or came back thin. A thin first read still beats a failed or thinner second one.
+   * where a retry is safe, or settle(data) gives a reason to (thin, shallow, unproven). A first read still beats a failed
+   * second one, and a second read with fewer app controls (a deeper read can drop the refs of the regions it no longer cuts),
+   * unless only the second proved its refs.
    */
-  const observe = async (command: "snapshot" | "find", args: (budget: number, again: boolean) => string[], thin?: (data: unknown) => boolean): Promise<AgentDesktopResult> => {
+  const observe = async (command: "snapshot" | "find", args: (budget: number, again: boolean) => string[], settle?: (data: unknown) => string | null): Promise<AgentDesktopResult> => {
     const first = await exec(command, args(LOOK_TIMEOUT_MS, false), LOOK_TIMEOUT_MS + KILL_MARGIN_MS);
-    if (!(first.ok ? (thin?.(first.data) ?? false) && !control.reason() : lookAgain(first))) return first;
-    debugLog.info("computer", "look-again", { command, why: first.ok ? "thin" : first.code, refs: first.ok ? refCount(first.data) : null });
+    const why = first.ok ? (control.reason() ? null : (settle?.(first.data) ?? null)) : lookAgain(first) ? first.code : null;
+    if (!why) return first;
+    debugLog.info("computer", "look-again", { command, why, refs: first.ok ? refCount(first.data) : null });
     deps.onStep?.("Waiting for the app…");
     const second = await exec(command, args(SETTLE_TIMEOUT_MS, true), SETTLE_TIMEOUT_MS + KILL_MARGIN_MS);
-    if (first.ok && (!second.ok || refCount(second.data) < refCount(first.data))) return first;
-    return second;
+    if (!first.ok || !second.ok) return first.ok ? first : second;
+    const [before, after] = [unproven(first.data), unproven(second.data)];
+    if (before !== after) return before ? second : first;
+    return walkRefs(second.data).controls < walkRefs(first.data).controls ? first : second;
   };
+
+  // On a Mac each ref carries its element's own address, so a snapshot that could not prove its refs still acts. On Windows
+  // its refs are refused (identity_not_unique) until a read with more time proves them.
+  const unproven = (data: unknown) => deps.platform === "windows" && identityUnproven(data);
+
+  /** Why a whole-window snapshot should be read once more: few refs, cut off by depth (not a skeleton), or refs not proven. */
+  const settleWindow = (skeleton: boolean) => (data: unknown): string | null =>
+    thinTree(data) ? "thin" : !skeleton && shallowTree(data) ? "shallow" : unproven(data) ? "unproven" : null;
 
   /** get or is, once more when a retry is safe. */
   const readOnce = async (command: "get" | "is", args: string[]): Promise<AgentDesktopResult> => {
@@ -709,10 +825,17 @@ export function computerTools(deps: ComputerToolDeps) {
   const done = (result: AgentDesktopResult) => (result.ok ? formatDone(result.data) : errorLine(result));
   const desktopLine = (result: DesktopActionResult) => (result.ok ? `Done: ${result.message}.` : `Error: ${result.message}.`);
 
-  /** A ref action: check the ref, run it, and keep where focus is for Return. Never in a terminal or console. */
+  /**
+   * A ref action: check the ref, run it, and keep where focus is for Return. Never in a terminal or console. Once more when
+   * agent-desktop could not check the element in time and says nothing was sent (resolution_identity_unknown).
+   */
   const onRef = (command: ComputerUseCommand, ref: string, args: string[] = [], timeoutMs = ACT_MS) => async () => {
     if (["click", "type", "set-value", "clear", "focus"].includes(command) && shellElement(refs.get(ref))) return SHELL_MESSAGE;
-    const result = await exec(command, [ref, ...args], timeoutMs);
+    let result = await exec(command, [ref, ...args], timeoutMs);
+    if (!result.ok && result.kind === "resolution_identity_unknown" && result.retry === "safe" && !control.reason()) {
+      debugLog.info("computer", "act-again", { command, kind: result.kind });
+      result = await exec(command, [ref, ...args], timeoutMs);
+    }
     // Focus may have left the spot click_at put it.
     if (["click", "type", "focus", "select"].includes(command)) point = null;
     if (result.ok && ["type", "set-value", "clear", "focus"].includes(command)) lastField = refs.get(ref) ?? lastField;
@@ -848,12 +971,12 @@ export function computerTools(deps: ComputerToolDeps) {
   return {
     snapshot: tool({
       description:
-        "Read an app's window as a list of elements; each one you can act on has a ref (@s8f3k2p9:e12). Call it before acting and after anything changes. For a busy app (Slack, Teams, Discord, Chrome, Outlook) use skeleton first, then root to read one region.",
+        "The main way to see an app: its window as a compact list of elements, each one you can act on with a ref (@s8f3k2p9:e12). Call it before acting, and after anything changes (root the same region to check). For a busy app (Slack, Teams, Discord, Chrome, Outlook) use skeleton first, then root to read one region.",
       inputSchema: z.object({
         app: appSchema.optional().describe("The app to read. Needed unless root is given."),
         window_id: windowSchema.optional(),
         root: refSchema.optional().describe("A ref from this task's snapshots: read only that region."),
-        surface: z.enum(SURFACES).optional().describe("An open menu, menubar, sheet, popover or alert instead of the window."),
+        surface: surfaceSchema.optional().describe("An open menu or dialog to read instead of the window, when an action said one is open."),
         skeleton: z.boolean().optional().describe("A shallow map of a busy window; drill in with root."),
       }),
       execute: (input) =>
@@ -861,6 +984,7 @@ export function computerTools(deps: ComputerToolDeps) {
           if (!input.app && !input.root) return "Error: give app (or a root ref).";
           const invalid = badApp(input.app) ?? badWindow(input.window_id) ?? (input.root ? badRef(input.root) : null);
           if (invalid) return invalid;
+          lookedAt(input.app);
           const skeleton = !!input.skeleton && !input.surface && !input.root;
           // Only a whole window can read thin; a region or a menu is small by nature.
           const whole = !input.root && !input.surface;
@@ -873,7 +997,7 @@ export function computerTools(deps: ComputerToolDeps) {
             ...(again && whole && !skeleton ? [`--max-depth=${DEEP_DEPTH}`] : []),
             `--timeout-ms=${budget}`,
           ];
-          const result = await observe("snapshot", args, whole ? thinTree : undefined);
+          const result = await observe("snapshot", args, whole ? settleWindow(skeleton) : undefined);
           if (!result.ok) return errorLine(result, true);
           // Refs from an app Bee never uses are dropped before the AI sees them.
           const kept = new Map<string, Element>();
@@ -890,18 +1014,26 @@ export function computerTools(deps: ComputerToolDeps) {
           if (shown.focused) lastField = shown.focused;
           const shownWindow = isRecord(result.data) && isRecord(result.data.window) ? str(result.data.window.id) : "";
           if (/^w-[A-Za-z0-9-]{1,40}$/.test(shownWindow)) windows.add(shownWindow);
+          lookedAt(shown.app);
           currentApp = shown.app ?? (input.app ? cleanApp(input.app) : currentApp);
-          return whole && thinTree(result.data) ? `${shown.text}\n${THIN_NOTE}` : shown.text;
+          const notes = whole
+            ? [
+                thinTree(result.data) ? THIN_NOTE : !skeleton && shallowTree(result.data) ? SHALLOW_NOTE : null,
+                unproven(result.data) ? UNPROVEN_NOTE : null,
+              ].filter((note) => note !== null)
+            : [];
+          return [shown.text, ...notes].join("\n");
         }),
     }),
 
     find: tool({
-      description: "Find elements in an app by role (button, textfield, link, tab…) and name or text. Faster than a snapshot when you know what you want.",
+      description:
+        "Find elements in an app by role (button, textfield, link, tab…) and name or text, with refs. The fastest look when you know what you want; it also reaches controls a snapshot cuts off.",
       inputSchema: z.object({
         app: appSchema.optional().describe("The app to search. Needed unless root is given."),
         window_id: windowSchema.optional(),
         root: refSchema.optional().describe("Search only inside this ref's region."),
-        surface: z.enum(SURFACES).optional(),
+        surface: surfaceSchema.optional(),
         role: z.string().max(30).optional(),
         name: z.string().max(200).optional(),
         text: z.string().max(200).optional().describe("Text anywhere in the element or inside it."),
@@ -913,6 +1045,7 @@ export function computerTools(deps: ComputerToolDeps) {
           const invalid = badApp(input.app) ?? badWindow(input.window_id) ?? (input.root ? badRef(input.root) : null);
           if (invalid) return invalid;
           if (input.role && !/^[A-Za-z]{2,30}$/.test(input.role)) return "Error: role is one word, for example button.";
+          lookedAt(input.app);
           const args = [
             ...(input.root ? [`--root=${input.root}`] : scope(input)),
             ...(input.surface && !input.root ? [`--surface=${input.surface}`] : []),
@@ -934,36 +1067,28 @@ export function computerTools(deps: ComputerToolDeps) {
     }),
 
     read: tool({
-      description: "Read one property of a ref: text (what a person reads), value, title, role or states.",
-      inputSchema: z.object({ ref: refSchema, property: z.enum(["text", "value", "title", "role", "states"]).optional() }),
+      description:
+        "Read one thing about a ref: text (what a person reads), value, title, role or states; or check one state, true or false: visible, enabled, checked, focused, expanded or selected.",
+      inputSchema: z.object({ ref: refSchema, property: z.enum([...GET_PROPERTIES, ...IS_PROPERTIES]).optional() }),
       execute: ({ ref, property }) =>
         step("read", "Reading the screen…", async () => {
           const invalid = badRef(ref);
           if (invalid) return invalid;
-          const result = await readOnce("get", [ref, `--property=${property ?? "text"}`]);
-          return result.ok ? formatRead(result.data) : errorLine(result, true);
-        }),
-    }),
-
-    check_state: tool({
-      description: "Check one state of a ref: visible, enabled, checked, focused, expanded or selected.",
-      inputSchema: z.object({ ref: refSchema, property: z.enum(["visible", "enabled", "checked", "focused", "expanded", "selected"]) }),
-      execute: ({ ref, property }) =>
-        step("check_state", "Reading the screen…", async () => {
-          const invalid = badRef(ref);
-          if (invalid) return invalid;
-          const result = await readOnce("is", [ref, `--property=${property}`]);
+          const args = [ref, `--property=${property ?? "text"}`];
+          const result = (IS_PROPERTIES as readonly string[]).includes(property ?? "") ? await readOnce("is", args) : await readOnce("get", args);
           return result.ok ? formatRead(result.data) : errorLine(result, true);
         }),
     }),
 
     screenshot: tool({
-      description: "A picture of one app's window, when the element list is not enough (a canvas, an image, a layout). Prefer snapshot: it gives refs.",
+      description:
+        "Last resort: a picture of one app's window, only after snapshot or find of that app showed nothing usable (a canvas, an image, a tree that stays empty). It gives no refs and costs far more than a snapshot. Use it with click_at.",
       inputSchema: z.object({ app: appSchema, window_id: windowSchema.optional() }),
       execute: (input) =>
         step("screenshot", `Looking at ${shortName(input.app, 30)}…`, async (): Promise<ScreenshotOutput> => {
           const invalid = badApp(input.app) ?? badWindow(input.window_id);
           if (invalid) return { text: invalid };
+          if (!looked.has(appKey(cleanApp(input.app) ?? ""))) return { text: LOOK_FIRST };
           const result = await exec("screenshot", scope(input), READ_MS);
           if (!result.ok) return { text: result.code === "PERM_DENIED" ? "Error PERM_DENIED: Screen Recording is off for Bee. Use snapshot instead." : errorLine(result, true) };
           const image = screenshotData(result.data);
@@ -1029,7 +1154,7 @@ export function computerTools(deps: ComputerToolDeps) {
 
     click_at: tool({
       description:
-        "Click a spot in an app's window by where it is in your latest screenshot of that app, when snapshot and find give no ref for it (they fail, or come back empty). A real mouse click. After clicking into a text field, type_text without ref types there.",
+        "Fallback: click a spot in an app's window by where it is in your latest screenshot of that app, only when snapshot and find give no ref for it. A real mouse click. After clicking into a text field, type_text without ref types there.",
       inputSchema: z.object({
         app: appSchema,
         window_id: windowSchema.optional(),
@@ -1078,21 +1203,17 @@ export function computerTools(deps: ComputerToolDeps) {
     }),
 
     set_value: tool({
-      description: "Set a text field's whole value at once. Faster than type_text; use it for drafts and form fields.",
+      description: "Fill a text field: set its whole value at once; an empty value clears it. Faster than type_text and headless; use it for drafts, searches and form fields.",
       inputSchema: z.object({ ref: refSchema, value: z.string().max(4000), effect: effectSchema }),
       execute: ({ ref, value, effect }) =>
-        step(
-          "set_value",
-          label(ref, "Typing in", "Typing…"),
-          async () => badRef(ref) ?? onRef("set-value", ref, ["--", cleanText(value)])(),
-          gateFor("set-value", ref, { effect, text: value }),
-        ),
-    }),
-
-    clear: tool({
-      description: "Empty a text field.",
-      inputSchema: z.object({ ref: refSchema }),
-      execute: ({ ref }) => step("clear", label(ref, "Clearing", "Clearing a field…"), async () => badRef(ref) ?? onRef("clear", ref)()),
+        value === ""
+          ? step("set_value", label(ref, "Clearing", "Clearing a field…"), async () => badRef(ref) ?? onRef("clear", ref)(), gateFor("clear", ref, { effect }))
+          : step(
+              "set_value",
+              label(ref, "Typing in", "Typing…"),
+              async () => badRef(ref) ?? onRef("set-value", ref, ["--", cleanText(value)])(),
+              gateFor("set-value", ref, { effect, text: value }),
+            ),
     }),
 
     focus: tool({
@@ -1108,31 +1229,24 @@ export function computerTools(deps: ComputerToolDeps) {
         step("select_option", `Choosing ${shortName(option, 30)}…`, async () => badRef(ref) ?? onRef("select", ref, ["--", cleanText(option)])(), gateFor("select", ref, { effect, text: option })),
     }),
 
-    set_checked: tool({
-      description: "Tick or untick a checkbox or switch.",
-      inputSchema: z.object({ ref: refSchema, checked: z.boolean() }),
-      execute: ({ ref, checked }) =>
-        step("set_checked", label(ref, checked ? "Ticking" : "Unticking", checked ? "Ticking a box…" : "Unticking a box…"), async () => badRef(ref) ?? onRef(checked ? "check" : "uncheck", ref)()),
-    }),
-
-    expand: tool({
-      description: "Expand or collapse a disclosure, tree item or section.",
-      inputSchema: z.object({ ref: refSchema, open: z.boolean() }),
-      execute: ({ ref, open }) =>
-        step("expand", label(ref, open ? "Expanding" : "Collapsing", open ? "Expanding…" : "Collapsing…"), async () => badRef(ref) ?? onRef(open ? "expand" : "collapse", ref)()),
+    set_state: tool({
+      description: "Tick or untick a checkbox or switch (checked, unchecked), or open or close a disclosure, tree item or section (expanded, collapsed).",
+      inputSchema: z.object({ ref: refSchema, state: z.enum(["checked", "unchecked", "expanded", "collapsed"]) }),
+      execute: ({ ref, state }) => {
+        const { command, verb, line } = STATE_ACTIONS[state];
+        return step("set_state", label(ref, verb, line), async () => badRef(ref) ?? onRef(command, ref)());
+      },
     }),
 
     scroll: tool({
-      description: "Scroll a scroll area (a ref) up, down, left or right.",
-      inputSchema: z.object({ ref: refSchema, direction: z.enum(["up", "down", "left", "right"]), amount: z.number().int().min(1).max(20).optional() }),
+      description: "Scroll a scroll area (its ref) up, down, left or right. Without direction, scroll until the element with this ref is in view.",
+      inputSchema: z.object({ ref: refSchema, direction: z.enum(["up", "down", "left", "right"]).optional(), amount: z.number().int().min(1).max(20).optional() }),
       execute: ({ ref, direction, amount }) =>
-        step("scroll", "Scrolling…", async () => badRef(ref) ?? onRef("scroll", ref, [`--direction=${direction}`, `--amount=${amount ?? 3}`])()),
-    }),
-
-    scroll_to: tool({
-      description: "Scroll until an element is in view.",
-      inputSchema: z.object({ ref: refSchema }),
-      execute: ({ ref }) => step("scroll_to", "Scrolling…", async () => badRef(ref) ?? onRef("scroll-to", ref)()),
+        step(
+          "scroll",
+          "Scrolling…",
+          async () => badRef(ref) ?? (direction ? onRef("scroll", ref, [`--direction=${direction}`, `--amount=${amount ?? 3}`]) : onRef("scroll-to", ref))(),
+        ),
     }),
 
     press_key: tool({
@@ -1235,6 +1349,6 @@ export function computerTools(deps: ComputerToolDeps) {
 
 /** The tools' names, for the prompt and the activity labels (renderer/src/island.ts). */
 export const COMPUTER_TOOL_NAMES = [
-  "snapshot", "find", "read", "check_state", "screenshot", "list_apps", "list_windows", "click", "click_at", "type_text", "set_value", "clear", "focus",
-  "select_option", "set_checked", "expand", "scroll", "scroll_to", "press_key", "open_app", "focus_window", "open_url", "close_app", "wait",
+  "snapshot", "find", "read", "screenshot", "list_apps", "list_windows", "click", "click_at", "type_text", "set_value", "focus", "select_option", "set_state",
+  "scroll", "press_key", "open_app", "focus_window", "open_url", "close_app", "wait",
 ] as const;

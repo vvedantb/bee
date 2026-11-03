@@ -8,6 +8,7 @@ import {
   assertComputerUse,
   assertDesktopAction,
   assertReadOnly,
+  identityUnproven,
   parseAccessibility,
   parsePermission,
   parseApps,
@@ -221,6 +222,28 @@ describe("parseEnvelope", () => {
     expect(JSON.stringify(internal)).not.toMatch(/Sam Lee|\/Users/);
     // Odd shapes keep the code alone.
     expect(parseEnvelope('{"ok":false,"error":{"code":"TIMEOUT","message":42,"disposition":"safe","details":{"kind":"Not A Token"}}}')).toEqual({ ok: false, code: "TIMEOUT" });
+  });
+
+  it("reads agent-desktop 1.1's envelope 2.6: identity kinds, and whether waiting can help", () => {
+    // agent-desktop 1.1.0's own output for a bare ref.
+    const bare =
+      '{"version":"2.6","ok":false,"command":"click","error":{"code":"INVALID_ARGS","message":"Invalid ref_id \'@e1\': expected @<snapshot_id>:e<N>","suggestion":"Use the snapshot-qualified ref that snapshot prints, for example @s8f3k2p9:e1. A bare @eN ref is not accepted.","disposition":{"delivery":"not_delivered","retry":"safe"}}}';
+    expect(parseEnvelope(bare)).toEqual({ ok: false, code: "INVALID_ARGS", message: "Invalid ref_id '…': expected @<snapshot_id>:e<N>", retry: "safe" });
+    const twin = { code: "AMBIGUOUS_TARGET", message: "ref not proven unique", details: { kind: "identity_not_unique" }, disposition: { delivery: "not_delivered", retry: "safe" } };
+    expect(parseEnvelope(JSON.stringify({ version: "2.6", ok: false, command: "click", error: twin }))).toEqual({ ok: false, code: "AMBIGUOUS_TARGET", message: "ref not proven unique", retry: "safe", kind: "identity_not_unique" });
+    // details.retryable: false means waiting cannot change the outcome; anything else is left out.
+    const final = { code: "ACTION_FAILED", details: { kind: "live_read_incomplete", retryable: false }, disposition: { delivery: "not_delivered", retry: "safe" } };
+    expect(parseEnvelope(JSON.stringify({ version: "2.6", ok: false, error: final }))).toEqual({ ok: false, code: "ACTION_FAILED", retry: "safe", kind: "live_read_incomplete", retryable: false });
+    expect(parseEnvelope(JSON.stringify({ ok: false, error: { code: "TIMEOUT", details: { retryable: true } } }))).toEqual({ ok: false, code: "TIMEOUT" });
+    expect(parseEnvelope(JSON.stringify({ ok: false, error: { code: "TIMEOUT", details: { retryable: "false" } } }))).toEqual({ ok: false, code: "TIMEOUT" });
+  });
+
+  it("tells a snapshot that could not prove its refs (identity_unproven) from one that did", () => {
+    const snapshot = (extra: Record<string, unknown>) => parseEnvelope(JSON.stringify({ version: "2.6", ok: true, command: "snapshot", data: { snapshot_id: "s1", complete: true, ref_count: 3, tree: {}, ...extra } }));
+    const unproven = snapshot({ identity_unproven: true });
+    expect(unproven.ok && identityUnproven(unproven.data)).toBe(true);
+    for (const result of [snapshot({}), snapshot({ identity_unproven: false }), snapshot({ identity_unproven: "true" })]) expect(result.ok && identityUnproven(result.data)).toBe(false);
+    for (const odd of [null, "x", 1, [], { data: { identity_unproven: true } }]) expect(identityUnproven(odd)).toBe(false);
   });
 
   it("redacts names, titles, paths, links and addresses in a message, and cuts it short", () => {

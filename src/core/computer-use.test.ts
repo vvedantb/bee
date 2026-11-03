@@ -2,7 +2,7 @@ import { tool, type ModelMessage } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import { z } from "zod";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ComputerRun } from "./agent-desktop-envelope";
+import type { AgentDesktopResult, ComputerRun } from "./agent-desktop-envelope";
 import { createRunControl, type RunControl } from "./computer-control";
 import { computerTools } from "./computer-tools";
 import { COMPUTER_SYSTEM, SCREENSHOTS_KEPT, computerAccess, dropOldScreenshots, endedWhere, finalLine, runComputerUse, wantsComputerUse } from "./computer-use";
@@ -164,6 +164,101 @@ describe("runComputerUse", () => {
     expect(COMPUTER_SYSTEM).toMatch(/Never set it to retry any other error/);
     expect(COMPUTER_SYSTEM).toMatch(/exactly one short line/);
     expect(COMPUTER_SYSTEM).not.toMatch(/claude|haiku|anthropic|clerk|gpt/i);
+  });
+
+  it("tells the AI to work through the tree, find first, and take a screenshot only as the last resort", () => {
+    expect(COMPUTER_SYSTEM).toMatch(/Work through the app's accessibility tree/);
+    expect(COMPUTER_SYSTEM).toMatch(/When you know an element's role or name, find it first/);
+    expect(COMPUTER_SYSTEM).toMatch(/Bee already waits for a slow app/);
+    expect(COMPUTER_SYSTEM).toMatch(/A screenshot is the last resort: only when snapshot and find of that app show nothing usable/);
+    // Screenshots come once, after the tree: never in the loop's first lines.
+    expect(COMPUTER_SYSTEM.indexOf("screenshot")).toBeGreaterThan(COMPUTER_SYSTEM.indexOf("find it first"));
+  });
+});
+
+describe("runComputerUse: snapshots and refs first, a screenshot only as the fallback", () => {
+  const TEAMS = "Microsoft Teams";
+  const done: AgentDesktopResult = { ok: true, data: { disposition: { delivery: "delivered_verified" } } };
+  const INTERNAL: AgentDesktopResult = { ok: false, code: "INTERNAL", message: "Accessibility deadline exhausted before IPC", retry: "safe" };
+  const prompted = (turns: Turn[]) => {
+    const prompts: ModelMessage[][] = [];
+    let calls = 0;
+    const model = new MockLanguageModelV4({
+      doGenerate: async (options) => {
+        prompts.push(options.prompt as ModelMessage[]);
+        const turn = turns[Math.min(calls, turns.length - 1)] ?? { text: "" };
+        calls += 1;
+        return "tool" in turn
+          ? { content: [{ type: "tool-call", toolCallId: `c${calls}`, toolName: turn.tool, input: JSON.stringify(turn.input) }], finishReason: { unified: "tool-calls", raw: undefined }, usage, warnings: [] }
+          : { content: [{ type: "text", text: turn.text }], finishReason: { unified: "stop", raw: undefined }, usage, warnings: [] };
+      },
+    });
+    return { model, prompts };
+  };
+  const images = (messages: readonly ModelMessage[]) => (JSON.stringify(messages).match(/image\/png/g) ?? []).length;
+
+  it("sends a Teams message on the tree alone: find, set_value, find, click, with no screenshot", async () => {
+    const commands: string[][] = [];
+    const run: ComputerRun = async (command, args) => {
+      commands.push([command, ...args]);
+      if (command !== "find") return done;
+      return args.includes("--role=textfield")
+        ? { ok: true, data: { snapshot_id: "s5", matches: [{ role: "textfield", name: "Type a message", ref_id: "@s5:e1" }] } }
+        : { ok: true, data: { snapshot_id: "s6", matches: [{ role: "button", name: "Send", ref_id: "@s6:e2" }] } };
+    };
+    const { model, prompts } = prompted([
+      { tool: "find", input: { app: TEAMS, role: "textfield" } },
+      { tool: "set_value", input: { ref: "@s5:e1", value: "Running late", effect: "none" } },
+      { tool: "find", input: { app: TEAMS, role: "button", name: "Send" } },
+      { tool: "click", input: { ref: "@s6:e2", effect: "send" } },
+      { text: "Sent the message in Teams.\nEnded: Microsoft Teams, Chat" },
+    ]);
+    const control = createRunControl({ maxSteps: 30 });
+    const tools = computerTools({ run, desktop, control, platform: "windows", askFirst: () => false, confirm: async () => true });
+    const result = await runComputerUse({ model, command: "send Sam running late in Teams", tools, control, platform: "windows", maxSteps: 30 });
+    expect(result).toEqual({ line: "Sent the message in Teams.", stopped: false, steps: 4, error: false, endedWhere: "Microsoft Teams, Chat" });
+    expect(commands.map(([command]) => command)).toEqual(["find", "set-value", "find", "click"]);
+    expect(commands[1]).toEqual(["set-value", "@s5:e1", "--", "Running late"]);
+    expect(prompts.map(images).every((count) => count === 0)).toBe(true);
+    // The Windows line: write headless with set_value; type_text and focus always need physical.
+    const system = JSON.stringify(prompts[0]?.[0]);
+    expect(system).toContain("This is Windows.");
+    expect(system).toMatch(/Prefer set_value: type_text and focus always need physical here, so set it on them/);
+  });
+
+  it("falls back to a screenshot and click_at only after the tree fails, and never takes one first", async () => {
+    // A PNG header: 2560 × 1600, a Retina picture of a 1280 × 800 pt window.
+    const head = Buffer.alloc(24);
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13]).copy(head, 0);
+    head.write("IHDR", 12, "ascii");
+    head.writeUInt32BE(2560, 16);
+    head.writeUInt32BE(1600, 20);
+    const png = head.toString("base64") + "A".repeat(200);
+    const commands: string[] = [];
+    const run: ComputerRun = async (command) => {
+      commands.push(command);
+      if (command === "snapshot" || command === "find") return INTERNAL;
+      if (command === "screenshot") return { ok: true, data: { base64: png } };
+      if (command === "list-windows") return { ok: true, data: { windows: [{ id: "w-7", app_name: TEAMS, title: "Chat", bounds: { x: 100, y: 50, width: 1280, height: 800 }, is_focused: true }] } };
+      return done;
+    };
+    const { model, prompts } = prompted([
+      { tool: "screenshot", input: { app: TEAMS } },
+      { tool: "snapshot", input: { app: TEAMS } },
+      { tool: "screenshot", input: { app: TEAMS } },
+      { tool: "click_at", input: { app: TEAMS, x: 500, y: 900, target: "message box", effect: "none" } },
+      { tool: "type_text", input: { text: "ok", effect: "none" } },
+      { text: "Typed the message in Teams." },
+    ]);
+    const control = createRunControl({ maxSteps: 30 });
+    const tools = computerTools({ run, desktop, control, platform: "mac", askFirst: () => false, confirm: async () => true });
+    const result = await runComputerUse({ model, command: "type ok in Teams", tools, control, platform: "mac", maxSteps: 30 });
+    expect(result).toMatchObject({ line: "Typed the message in Teams.", stopped: false, steps: 5 });
+    // The first screenshot is refused before any command; the tree is read (and read again once) before the picture.
+    expect(commands).toEqual(["snapshot", "snapshot", "screenshot", "list-windows", "mouse-click", "find", "press", "press"]);
+    expect(JSON.stringify(prompts[1])).toContain("read this app with snapshot or find first");
+    // The picture reaches the AI on the step after it, and stays within SCREENSHOTS_KEPT.
+    expect(prompts.map(images)).toEqual([0, 0, 0, 1, 1, 1]);
   });
 });
 

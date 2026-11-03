@@ -18,7 +18,8 @@ import {
 
 const root = new URL("../../", import.meta.url);
 const repo = (path: string) => fileURLToPath(new URL(path, root));
-const ENVELOPE = '{"version":"2.5","ok":true,"command":"version","data":{"version":"1.0.2"}}';
+// agent-desktop 1.1.0's own reply to version (envelope 2.6), less its os and target.
+const ENVELOPE = '{"version":"2.6","ok":true,"command":"version","data":{"version":"1.1.0"}}';
 
 describe("platformBinaryNames", () => {
   it("names the bundled binary and macOS helper per platform", () => {
@@ -85,6 +86,15 @@ describe("package.json packaging", () => {
     for (const entry of agentDesktop(build.win.extraResources)) expect(existsSync(repo(expand(entry.from, "x64"))), entry.from).toBe(true);
   });
 
+  it("installs agent-desktop 1.1 or later (envelope 2.6, refs that prove their identity), as package.json asks", () => {
+    const manifest = JSON.parse(readFileSync(repo("package.json"), "utf8"));
+    expect(manifest.dependencies["agent-desktop"]).toBe("^1.1.0");
+    const installed = JSON.parse(readFileSync(repo("node_modules/agent-desktop/package.json"), "utf8")).version as string;
+    const [major, minor] = installed.split(".").map(Number);
+    expect(major, installed).toBe(1);
+    expect(minor, installed).toBeGreaterThanOrEqual(1);
+  });
+
   it("keeps every OS's binaries out of app.asar", () => {
     expect(build.files).toContain("!node_modules/agent-desktop{,/**}");
     expect(build.extraResources).toBeUndefined();
@@ -142,7 +152,7 @@ describe("createAgentDesktopRunner", () => {
   it("runs a read-only command headless in a private state folder, and parses the envelope", async () => {
     const fake = fakeExec(() => ({ stdout: ENVELOPE }));
     const runner = make(fake.exec);
-    expect(await runner.run("version", [], { timeoutMs: 1234 })).toEqual({ ok: true, data: { version: "1.0.2" } });
+    expect(await runner.run("version", [], { timeoutMs: 1234 })).toEqual({ ok: true, data: { version: "1.1.0" } });
     const call = fake.calls[0];
     expect(call?.file).toBe("/bin/agent-desktop");
     expect(call?.args).toEqual(["version"]);
@@ -262,6 +272,31 @@ describe("lockPrivateStateDirAcl", () => {
       expect(lockAcl).toHaveBeenCalledTimes(1);
       expect(String(lockAcl.mock.calls[0]?.[0]).startsWith(temp)).toBe(true);
       runner.cleanup();
+    } finally {
+      rmSync(temp, { recursive: true, force: true });
+    }
+  });
+
+  it("is applied to the desktop action and computer-use runners' own state folders too, before their first command", async () => {
+    const temp = mkdtempSync(join(tmpdir(), "bee-ad-test-"));
+    try {
+      const exec: ExecFile = (_file, _args, _options, callback) => callback(null, ENVELOPE);
+      const binary = { path: "/bin/agent-desktop", macHelper: null };
+      const actionAcl = vi.fn();
+      const computerAcl = vi.fn();
+      const action = createAgentDesktopActionRunner(binary, { exec, env: {}, tempDir: () => temp, lockAcl: actionAcl });
+      const computer = createAgentDesktopComputerRunner(binary, { exec, env: {}, tempDir: () => temp, lockAcl: computerAcl });
+      await action.run("list-apps", []);
+      await computer.run("snapshot", ["--interactive-only", "--compact", "--app=Microsoft Teams", "--timeout-ms=12000"]);
+      await computer.run("click", ["@s8f3k2p9:e2"]);
+      expect(actionAcl).toHaveBeenCalledTimes(1);
+      expect(computerAcl).toHaveBeenCalledTimes(1);
+      // Two folders, each its own: snapshot refs never leave the computer-use runner's.
+      const [actionDir, computerDir] = [String(actionAcl.mock.calls[0]?.[0]), String(computerAcl.mock.calls[0]?.[0])];
+      expect(actionDir.startsWith(temp) && computerDir.startsWith(temp)).toBe(true);
+      expect(actionDir).not.toBe(computerDir);
+      action.cleanup();
+      computer.cleanup();
     } finally {
       rmSync(temp, { recursive: true, force: true });
     }
