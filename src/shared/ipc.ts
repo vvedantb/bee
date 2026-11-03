@@ -51,6 +51,7 @@ export const IPC = {
   computerUpdate: "bee:computer:update",
   computerAnswer: "bee:computer:answer",
   computerAccess: "bee:computer:access",
+  classifyFollowUp: "bee:command:classify-follow-up",
 };
 
 // Collapsed notch, notch plus the sync popup, notch plus the island response, or the full panel.
@@ -174,17 +175,44 @@ export const pipelineRequestSchema = z.object({
 });
 export type PipelineRequest = z.infer<typeof pipelineRequestSchema>;
 
-// A direct request to the AI: an own mic phrase that started with the wake word, without it ("open Teams"). It is never a
-// meeting line: not in the session, the summary, meeting memory or the Teams sync. The reply comes back as a PipelineResult.
+// A direct request to the AI: an own mic phrase that started with the wake word, without it ("open Teams"), or a follow-up in
+// the conversation window after one. It is never a meeting line: not in the session, the summary, meeting memory or the Teams
+// sync. The reply comes back as a PipelineResult.
 export const COMMAND_MAX_CHARS = 2000;
+// One earlier exchange with Bee (core/bee-history.ts BeeExchange), oldest first. The store keeps at most HISTORY_MAX.
+export const HISTORY_ITEMS_MAX = 6;
+export const beeExchangeSchema = z.object({
+  request: z.string().max(COMMAND_MAX_CHARS),
+  reply: z.string().max(COMMAND_MAX_CHARS),
+  actions: z.array(z.string().max(300)).max(6).optional(),
+  endedWhere: z.string().max(300).optional(),
+  error: z.string().max(300).optional(),
+  at: z.number(),
+});
 export const commandRequestSchema = z.object({
   command: z.string().trim().min(1).max(COMMAND_MAX_CHARS),
   // The latest meeting lines, as background for a request about the meeting ("what did Priya just say"). Never answered as tips.
   transcript: z.array(z.string().max(2000)).max(8).optional(),
+  // The last few exchanges with Bee, sent to the AI as earlier turns ("the team one" after "open Vercel usage").
+  history: z.array(beeExchangeSchema).max(HISTORY_ITEMS_MAX).optional(),
   runId: runIdSchema.optional(),
   sessionToken: z.string().max(8000),
 });
 export type CommandRequest = z.infer<typeof commandRequestSchema>;
+
+// While the conversation window is open, an own mic phrase that is neither clearly for Bee nor clearly for the meeting: one small
+// AI call decides (core/follow-up.ts). Lines are labelled "me:" or "them:".
+export const followUpRequestSchema = z.object({
+  phrase: z.string().trim().min(1).max(1000),
+  lastBee: z.object({ request: z.string().max(COMMAND_MAX_CHARS), reply: z.string().max(COMMAND_MAX_CHARS) }),
+  lines: z.array(z.string().max(1000)).max(3),
+  // No one else heard for a minute (core/follow-up.ts OTHERS_QUIET_MS): the prompt leans toward Bee.
+  othersQuiet: z.boolean(),
+  sessionToken: z.string().max(8000),
+});
+export type FollowUpRequest = z.infer<typeof followUpRequestSchema>;
+export const followUpResultSchema = z.object({ addressed: z.enum(["bee", "meeting"]), confidence: z.number().min(0).max(1) }).nullable();
+export type FollowUpResult = z.infer<typeof followUpResultSchema>;
 
 export const pipelineCancelSchema = z.object({ runId: runIdSchema });
 export type PipelineCancel = z.infer<typeof pipelineCancelSchema>;
@@ -371,6 +399,9 @@ export const pipelineResultSchema = z.object({
   guideNote: z.string().max(300).nullable().optional(),
   /** Enabled MCP servers Luna could not use this turn, with a short reason (never a secret). */
   mcpErrors: z.array(z.object({ server: z.string().max(200), error: z.string().max(300) })).max(20).optional(),
+  /** A direct request only: its desktop action lines ("Opened Vercel"), and where computer use left the screen. For Bee's history. */
+  actions: z.array(z.string().max(300)).max(10).optional(),
+  endedWhere: z.string().max(300).optional(),
   // Numbers only, in ms. rank: Jev (runs beside Luna). mcp: MCP connect and list (runs beside Jev). guide: Luna alone, without the MCP wait.
   // lunaFirstToken is null when no text streamed. loadNotes is added in main.
   timingsMs: z.object({

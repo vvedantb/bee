@@ -34,7 +34,7 @@ import type { PipelineResult, SettingsView } from "../../shared/ipc";
 import { displayTip, islandClick, mcpErrorNote, timingsLabel, timingsTitle } from "./island";
 import { NOTCH_LOGO_PX } from "./logo";
 import { focusKeyFieldWhenReady, GATEWAY_KEY_FIELD_ID, statusClick, type StatusClick } from "./island-click";
-import { NOTCH_BUTTON, NOTCH_UPDATE_BUTTON, logoState, notchLine, workingLabel, type NotchLine } from "./notch";
+import { CONVERSATION_LABEL, NOTCH_BUTTON, NOTCH_UPDATE_BUTTON, logoState, notchLine, workingLabel, type NotchLine } from "./notch";
 import { actions, answerFolded, displayResult, islandOpen, responseOpen, teamsAudioNow, useBee, type BeeState, type ComputerConfirm, type SummaryState, type UpdateState } from "./store";
 import { SyncCard, SyncSection, TeamSection, syncedWith } from "./Teams";
 import { TEAMS_AUDIO_LISTENING } from "./teams-audio-message";
@@ -190,7 +190,9 @@ function Island({ state }: { state: BeeState }) {
   const showBody = islandOpen(state);
   // While Luna thinks, chips may open the body but the pill keeps its thinking text.
   const cardOnly = (state.meetingCard?.lines.length ?? 0) > 0 && (result?.tips.length ?? 0) === 0;
-  const line: NotchLine = showResponse && !state.busy && !state.heard && !state.mic.error ? { kind: "answer", text: cardOnly ? "Last time" : "Tips" } : notchLine(state, isSignedIn);
+  // In the conversation window after a request, the pill says Bee is listening for a follow-up (notch.ts CONVERSATION_LABEL).
+  const answerText = state.conversationOpen ? CONVERSATION_LABEL : cardOnly ? "Last time" : "Tips";
+  const line: NotchLine = showResponse && !state.busy && !state.heard && !state.mic.error ? { kind: "answer", text: answerText } : notchLine(state, isSignedIn);
   const status = line.text;
   // A folded answer opens in full in the island, even under a hint; status that asks for action opens its place in the panel (island-click.ts).
   const click = statusClick({ kind: line.kind, panelOpen: state.expanded, bodyShown: showResponse, answerFolded: answerFolded(state) });

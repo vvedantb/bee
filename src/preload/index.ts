@@ -18,6 +18,7 @@ import {
   meetingSummaryResultSchema,
   openExternalUrlResultSchema,
   pipelineResultSchema,
+  followUpResultSchema,
   revealGatewayKeyResultSchema,
   settingsViewSchema,
   teamsActionResultSchema,
@@ -31,6 +32,7 @@ import {
   updateActionSchema,
   updateCheckSchema,
   type CommandRequest,
+  type FollowUpRequest,
   type CommandStop,
   type ComputerAnswer,
   type ComputerUpdate,
@@ -113,6 +115,8 @@ const api = {
     pipelineResultSchema.parse(await ipcRenderer.invoke(IPC.runPipeline, request)),
   // A direct request ("Bee, open Teams"): the reply and any desktop action lines, shaped like a pipeline result. Cancelled like a run.
   runCommand: async (request: CommandRequest) => pipelineResultSchema.parse(await ipcRenderer.invoke(IPC.runCommand, request)),
+  // In the conversation window: is an unclear own mic phrase for Bee or the meeting? Null when main cannot tell (no key, failure).
+  classifyFollowUp: async (request: FollowUpRequest) => followUpResultSchema.parse(await ipcRenderer.invoke(IPC.classifyFollowUp, request)),
   // Cancels a run a newer line has superseded. Fire and forget: the run's own result is dropped anyway.
   cancelPipeline: async (request: PipelineCancel) => {
     z.void().parse(await ipcRenderer.invoke(IPC.cancelPipeline, request));

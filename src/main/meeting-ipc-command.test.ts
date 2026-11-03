@@ -207,3 +207,60 @@ describe("main: computer use for a direct request", () => {
   });
 });
 
+
+describe("main: Bee's history and the follow-up check", () => {
+  const usage = { inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 }, outputTokens: { total: 1, text: 1, reasoning: undefined } };
+
+  function setupWithModel(reply: string, options: { key?: boolean } = {}) {
+    electron.handlers.clear();
+    const prompts: string[] = [];
+    const model = new MockLanguageModelV4({
+      doGenerate: async (call) => {
+        prompts.push(JSON.stringify(call.prompt));
+        return { content: [{ type: "text", text: reply }], finishReason: { unified: "stop", raw: undefined }, usage, warnings: [] };
+      },
+    });
+    registerMeetingIpc({
+      notesDir: "/notes",
+      fsRoots: () => [],
+      mcpConfigs: () => [],
+      mcpSignedOut: () => [],
+      mcpPool: {} as never,
+      meeting: { brief: () => "" } as unknown as MeetingContext,
+      gatewayApiKey: () => (options.key === false ? undefined : "vck_FAKE"),
+      gateway: () => ({ languageModel: () => model }) as unknown as BeeGateway,
+      desktop: { openApp: async (name) => ({ ok: true, message: `Opened ${name}` }), focusWindow: async ({ app }) => ({ ok: true, message: `Focused ${app}` }), openUrl: async (url) => ({ ok: true, message: url }) },
+      wakeWordEnabled: () => true,
+      computer: { platform: "windows", run: async () => ({ ok: true, data: {} }), askFirst: () => false, cleanup: () => undefined },
+    });
+    const handler = (channel: string) => {
+      const found = electron.handlers.get(channel);
+      if (!found) throw new Error(`no handler for ${channel}`);
+      return (payload: unknown) => found(event, payload);
+    };
+    return { handler, prompts };
+  }
+
+  const history = [{ request: "open Vercel usage", reply: "", actions: ["Opened https://vercel.com/acme/~/usage"], at: 1 }];
+
+  it("passes the history through to the AI as earlier turns, and returns where computer use ended", async () => {
+    const { handler, prompts } = setupWithModel("Opened the team usage.\nEnded: vercel.com/acme/~/usage, 404");
+    const result = (await handler(IPC.runCommand)({ command: "click the team usage tab", history, runId: 3, sessionToken: "signed-in" })) as { tips: string[]; endedWhere?: string };
+    expect(result).toMatchObject({ tips: ["Opened the team usage."], endedWhere: "vercel.com/acme/~/usage, 404" });
+    expect(prompts[0]).toContain("open Vercel usage");
+    expect(prompts[0]).toContain("Done: Opened https://vercel.com/acme/~/usage");
+  });
+
+  it("refuses more than six exchanges", async () => {
+    const { handler } = setupWithModel("Done.");
+    const many = Array.from({ length: 7 }, (_, index) => ({ request: `r${index}`, reply: "", at: index }));
+    await expect(handler(IPC.runCommand)({ command: "open Teams", history: many, sessionToken: "signed-in" })).rejects.toThrow();
+  });
+
+  it("answers the follow-up check from the model, and null without a key", async () => {
+    const request = { phrase: "the Acme one", lastBee: { request: "open the team usage", reply: "Which team?" }, lines: ["me: open the team usage"], othersQuiet: true, sessionToken: "signed-in" };
+    expect(await setupWithModel('{"addressed":"bee","confidence":0.9}').handler(IPC.classifyFollowUp)(request)).toEqual({ addressed: "bee", confidence: 0.9 });
+    expect(await setupWithModel("{}", { key: false }).handler(IPC.classifyFollowUp)(request)).toBeNull();
+    await expect(setupWithModel("{}").handler(IPC.classifyFollowUp)({ ...request, sessionToken: "nope" })).rejects.toThrow(/Sign in/);
+  });
+});

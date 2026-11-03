@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { PipelineResult } from "../../shared/ipc";
-import { logoState } from "./notch";
+import { CONVERSATION_LABEL, logoState, notchLine } from "./notch";
 
 const idle: Parameters<typeof logoState>[0] = {
   busy: false,
@@ -58,5 +58,31 @@ describe("logoState", () => {
   it("counts the last run's guide error only once no newer run is busy", () => {
     expect(logoState({ ...idle, result: failedRun })).toBe("error");
     expect(logoState({ ...idle, result: failedRun, busy: true })).toBe("thinking");
+  });
+});
+
+describe("the conversation window", () => {
+  const line = {
+    busy: false,
+    revising: false,
+    tools: [],
+    question: false,
+    heard: false,
+    mic: { on: true, level: 0, error: null },
+    result: null,
+    settings: { gatewayKeySource: "saved" as const, meetingMode: false },
+    session: { lines: [] },
+  };
+
+  it("reads I'm listening while the window is open and Bee is not busy", () => {
+    expect(CONVERSATION_LABEL).toBe("I'm listening…");
+    expect(notchLine({ ...line, conversationOpen: true }, true)).toEqual({ kind: "idle", text: CONVERSATION_LABEL });
+    expect(notchLine({ ...line, conversationOpen: true, result: { ...failedRun, tips: ["Opened Vercel"], guideError: null } }, true)).toEqual({ kind: "answer", text: CONVERSATION_LABEL });
+    expect(notchLine({ ...line, conversationOpen: true, busy: true }, true).text).not.toBe(CONVERSATION_LABEL);
+    expect(notchLine({ ...line, conversationOpen: false }, true).text).toBe("Listening for something useful…");
+  });
+
+  it("shows the listening logo in the window", () => {
+    expect(logoState({ ...idle, conversationOpen: true })).toBe("listening");
   });
 });

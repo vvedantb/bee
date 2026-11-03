@@ -1,9 +1,11 @@
+import { tool, type ModelMessage } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
+import { z } from "zod";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ComputerRun } from "./agent-desktop-envelope";
 import { createRunControl, type RunControl } from "./computer-control";
 import { computerTools } from "./computer-tools";
-import { COMPUTER_SYSTEM, computerAccess, finalLine, runComputerUse, wantsComputerUse } from "./computer-use";
+import { COMPUTER_SYSTEM, SCREENSHOTS_KEPT, computerAccess, dropOldScreenshots, endedWhere, finalLine, runComputerUse, wantsComputerUse } from "./computer-use";
 import type { DesktopActions } from "./desktop-actions";
 
 // The computer-use loop with a mock model and a fake agent-desktop: no network, no OS. Each model call is one turn.
@@ -205,5 +207,73 @@ describe("computerAccess", () => {
     expect(await computerAccess(granted)).toEqual({ accessibility: "granted", screenRecording: "denied" });
     expect(await computerAccess(async () => ({ ok: false, code: "PERM_DENIED" }))).toEqual({ accessibility: "denied", screenRecording: "unknown" });
     expect(await computerAccess(async () => ({ ok: false, code: "SPAWN_FAILED" }))).toEqual({ accessibility: "unknown", screenRecording: "unknown" });
+  });
+});
+
+describe("computer use: where it ended, and old screenshots", () => {
+  const shot = (id: string): ModelMessage => ({
+    role: "tool",
+    content: [{ type: "tool-result", toolCallId: id, toolName: "screenshot", output: { type: "content", value: [{ type: "text", text: `shot ${id}` }, { type: "file", data: { type: "data", data: "AAAA" }, mediaType: "image/png" }] } }],
+  });
+  const images = (messages: readonly ModelMessage[]) => (JSON.stringify(messages).match(/image\/png/g) ?? []).length;
+
+  it("reads the Ended line, and leaves it out of the island's line", () => {
+    const text = "Opened the team usage page.\nEnded: vercel.com/acme/~/usage, 404";
+    expect(finalLine(text)).toBe("Opened the team usage page.");
+    expect(endedWhere(text)).toBe("vercel.com/acme/~/usage, 404");
+    expect(endedWhere("Done.")).toBe("");
+    expect(COMPUTER_SYSTEM).toContain('starting with "Ended: "');
+  });
+
+  it("keeps only the newest two screenshots, newest last", () => {
+    const messages: ModelMessage[] = [{ role: "user", content: "go" }, shot("a"), shot("b"), shot("c")];
+    const kept = dropOldScreenshots(messages);
+    expect(SCREENSHOTS_KEPT).toBe(2);
+    expect(images(kept)).toBe(2);
+    expect(JSON.stringify(kept[1])).toContain("An older screenshot, removed");
+    expect(JSON.stringify(kept[3])).toContain("image/png");
+    // Nothing to cut: the same array back.
+    const few = [shot("a")];
+    expect(dropOldScreenshots(few)).toBe(few);
+  });
+
+  it("drops old screenshots before each step of a long run", async () => {
+    const prompts: ModelMessage[][] = [];
+    let calls = 0;
+    const model = new MockLanguageModelV4({
+      doGenerate: async (options) => {
+        prompts.push(options.prompt as ModelMessage[]);
+        calls += 1;
+        return calls <= 4
+          ? { content: [{ type: "tool-call", toolCallId: `s${calls}`, toolName: "screenshot", input: "{}" }], finishReason: { unified: "tool-calls", raw: undefined }, usage, warnings: [] }
+          : { content: [{ type: "text", text: "Looked four times." }], finishReason: { unified: "stop", raw: undefined }, usage, warnings: [] };
+      },
+    });
+    const screenshot = tool({
+      inputSchema: z.object({}),
+      execute: async () => "AAAA",
+      toModelOutput: ({ output }) => ({ type: "content", value: [{ type: "file", data: { type: "data", data: output }, mediaType: "image/png" }] }),
+    });
+    const control = createRunControl({ maxSteps: 10 });
+    const result = await runComputerUse({ model, command: "look", tools: { screenshot }, control, platform: "mac", maxSteps: 10 });
+    expect(result.line).toBe("Looked four times.");
+    expect(prompts.map(images)).toEqual([0, 1, 2, 2, 2]);
+  });
+
+  it("sends earlier turns before the request", async () => {
+    const prompts: ModelMessage[][] = [];
+    const model = new MockLanguageModelV4({
+      doGenerate: async (options) => {
+        prompts.push(options.prompt as ModelMessage[]);
+        return { content: [{ type: "text", text: "Done." }], finishReason: { unified: "stop", raw: undefined }, usage, warnings: [] };
+      },
+    });
+    const history: ModelMessage[] = [
+      { role: "user", content: [{ type: "text", text: "open Vercel usage" }] },
+      { role: "assistant", content: [{ type: "text", text: "Ended: vercel.com/acme/~/usage" }] },
+    ];
+    await runComputerUse({ model, command: "the team one", history, tools: {}, control: createRunControl({ maxSteps: 5 }), platform: "mac", maxSteps: 5 });
+    expect(prompts[0]?.map((message) => message.role)).toEqual(["system", "user", "assistant", "user"]);
+    expect(JSON.stringify(prompts[0]?.[3])).toContain("the team one");
   });
 });
