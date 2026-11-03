@@ -7,7 +7,7 @@ import { COMPUTER_MAX_STEPS, createRunControl, stopLine, type ComputerPlatform, 
 import { computerTools, type ConfirmRequest } from "./computer-tools";
 import { computerAccess, runComputerUse, wantsComputerUse } from "./computer-use";
 import { debugLog, errorData } from "./debug-log";
-import { GUIDE_MODEL, NO_GATEWAY_KEY, type BeeGateway } from "./gateway";
+import { COMMAND_MODEL, NO_GATEWAY_KEY, type BeeGateway } from "./gateway";
 import type { McpTools } from "./mcp";
 import { routeCommand, type DesktopActionResult, type DesktopActions } from "./desktop-actions";
 import { desktopTools } from "./desktop-tools";
@@ -122,7 +122,7 @@ async function runComputerCommand(args: {
       onActivity: args.onActivity,
     });
     const outcome = await runComputerUse({
-      model: args.gateway.languageModel(GUIDE_MODEL),
+      model: args.gateway.languageModel(COMMAND_MODEL),
       command: args.command,
       transcript: args.transcript,
       history: args.history,
@@ -241,7 +241,7 @@ export async function runDirectCommand(args: {
     : undefined;
   const started = performance.now();
   const guide = await guideWithLuna({
-    model: args.gateway.languageModel(GUIDE_MODEL),
+    model: args.gateway.languageModel(COMMAND_MODEL),
     transcript: args.transcript ?? [],
     command,
     notes: guideNotes,

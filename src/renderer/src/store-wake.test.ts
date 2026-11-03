@@ -522,10 +522,12 @@ describe("store: Bee's history and the conversation window", () => {
     expect(published).toEqual([]);
   });
 
-  it("closes the window after twenty seconds of silence", async () => {
+  it("closes the window after a minute of silence", async () => {
     const { say, commands, state } = await loadStore();
     await say("Bee, open Teams");
-    await vi.advanceTimersByTimeAsync(20_000);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(state().conversationOpen).toBe(true);
+    await vi.advanceTimersByTimeAsync(30_000);
     expect(state().conversationOpen).toBe(false);
     await say("why did you open that");
     expect(commands).toHaveLength(1);
@@ -535,7 +537,7 @@ describe("store: Bee's history and the conversation window", () => {
   it("holds the window open while Bee's reply asks a question", async () => {
     const { say, commands, state } = await loadStore({ command: async (request) => result([request.command === "open the team usage" ? "Which team?" : "Opened the Acme team usage."]) });
     await say("Bee, open the team usage");
-    await vi.advanceTimersByTimeAsync(30_000);
+    await vi.advanceTimersByTimeAsync(90_000);
     expect(state().conversationOpen).toBe(true);
     await say("Acme platform");
     expect(commands.map((request) => request.command)).toEqual(["open the team usage", "Acme platform"]);

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { pipelineRequestSchema, pipelineResultSchema } from "../shared/ipc";
-import type { BeeGateway } from "./gateway";
+import { COMMAND_MODEL, GUIDE_MODEL, type BeeGateway } from "./gateway";
 import { rankWithJev } from "./jev";
 import { guideWithLuna, type LunaResult } from "./luna";
 import type { McpTools } from "./mcp";
@@ -62,6 +62,16 @@ describe("runPipeline", () => {
     expect(timingsMs.rank).toBeGreaterThanOrEqual(4);
     expect(timingsMs.lunaFirstToken).toBe(12);
     expect(timingsMs.lunaTotal).toBe(30);
+  });
+
+  it("asks for meeting tips from GUIDE_MODEL, never the command model", async () => {
+    jevAfter(1);
+    guide.mockResolvedValue(lunaOk());
+    const ids: string[] = [];
+    const recording = { languageModel: (id: string) => (ids.push(id), {}), evaluationModel: () => ({}) } as unknown as BeeGateway;
+    await runPipeline({ transcript, snippets, gateway: recording, loadMcpTools: async () => mcpTools() });
+    expect(ids).toEqual([GUIDE_MODEL]);
+    expect(ids).not.toContain(COMMAND_MODEL);
   });
 
   it("accepts at most 3 shown tips in a pipeline request", () => {

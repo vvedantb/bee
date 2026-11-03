@@ -3,7 +3,7 @@ import { cacheAtEnd } from "./bee-history";
 import { parsePermission, type AccessState, type ComputerRun } from "./agent-desktop-envelope";
 import { stopLine, type ComputerPlatform, type RunControl } from "./computer-control";
 import { debugLog, errorData, modelName, msSince, onceText, stepData } from "./debug-log";
-import { ANTHROPIC_CACHE, guideProviderOptions } from "./gateway";
+import { ANTHROPIC_CACHE, commandProviderOptions } from "./gateway";
 
 // Computer use for a direct request: "Bee, open Discord, send Sam a message, then close the Discord tab in Chrome". The AI runs
 // an observe → act → observe loop over the computer tools (core/computer-tools.ts) until the task is done or a control stops it
@@ -13,6 +13,8 @@ import { ANTHROPIC_CACHE, guideProviderOptions } from "./gateway";
 // Model turns per run: a backstop above the tool-step limit, so the AI can still write its last line.
 const TURNS_ABOVE_STEPS = 2;
 const LINE_MAX = 160;
+// Output tokens per step: brief thinking (gateway.ts ANTHROPIC_BRIEF_THINKING) spends from this budget before the tool call.
+export const COMPUTER_MAX_OUTPUT_TOKENS = 3000;
 const TRANSCRIPT_LINES = 8;
 /** Screenshots kept in the loop's messages: older ones are cut to a short note before each step (dropOldScreenshots). */
 export const SCREENSHOTS_KEPT = 2;
@@ -61,8 +63,11 @@ const QUESTION = /^(?:what|what's|whats|who|who's|when|where|why|how|how's|which
 // Polite padding before the request: "please", "can you", "could you".
 const POLITE = /^(?:(?:please|hey|ok|okay|so|now|just|can you|could you|would you|will you)[\s,]+)+/i;
 // Verbs that only a task on screen can do. "Open" and "switch to" alone stay on the quick path (core/desktop-actions.ts).
+// Only clear desktop verbs: a word that is also filler in speech ("like", "so", "well", "just") or a common name ("Mark") never
+// routes here, so "…, like balance transfer" goes to the AI. "Like a post" and "mark it read" still reach the loop through
+// use_computer.
 const VERB =
-  "(?:click|tap|press|hit|type|send|message|dm|text|e-?mail|reply|respond|post|tweet|close|quit|scroll|select|choose|pick|tick|untick|uncheck|toggle|turn (?:on|off)|mute|unmute|play|pause|skip|fill(?: in| out)?|submit|delete|remove|archive|rename|drag|paste|copy|minimi[sz]e|maximi[sz]e|go back|go forward|reload|refresh|join|leave|accept|decline|like|star|pin|mark|forward|attach|upload|download|print|undo|redo|bookmark|tell (?!me\\b)|ask (?!me\\b))";
+  "(?:click|tap|press|hit|type|send|message|dm|text|e-?mail|reply|respond|post|tweet|close|quit|scroll|select|choose|pick|tick|untick|uncheck|toggle|turn (?:on|off)|mute|unmute|play|pause|skip|fill(?: in| out)?|submit|delete|remove|archive|rename|drag|paste|copy|minimi[sz]e|maximi[sz]e|go back|go forward|reload|refresh|join|leave|accept|decline|star|pin|forward|attach|upload|download|print|undo|redo|bookmark|tell (?!me\\b)|ask (?!me\\b))";
 const STARTS_WITH_VERB = new RegExp(`^${VERB}\\b`, "i");
 // A later step: "open Discord, send Sam…", "…and then close the tab".
 const LATER_VERB = new RegExp(`(?:,|;|\\band\\b|\\bthen\\b)\\s+(?:then\\s+|and\\s+)?${VERB}\\b`, "i");
@@ -207,10 +212,10 @@ export async function runComputerUse(args: {
       onStepEnd: (step) => debugLog.info("computer", "ai-step", { ms: msSince(started), steps: control.steps(), ...stepData(step) }),
       stopWhen: isStepCount(args.maxSteps + TURNS_ABOVE_STEPS),
       abortSignal: control.signal,
-      maxOutputTokens: 1000,
+      maxOutputTokens: COMPUTER_MAX_OUTPUT_TOKENS,
       maxRetries: 1,
-      // User-facing: not flex. No web search here, so routing keeps fail-over; thinking off, like Luna (gateway.ts).
-      providerOptions: guideProviderOptions("default", { web: false }),
+      // User-facing: not flex. No web search here, so routing keeps fail-over; brief thinking to plan each step (gateway.ts).
+      providerOptions: commandProviderOptions("default", { web: false }),
     });
     args.onFinish?.({ usage: result.totalUsage, providerMetadata: result.providerMetadata });
     debugLog.info("computer", "ai-response", { ms: msSince(started), finishReason: result.finishReason, text: result.text, usage: result.totalUsage, cost: result.providerMetadata?.gateway ?? null });

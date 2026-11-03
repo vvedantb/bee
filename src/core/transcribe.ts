@@ -23,7 +23,8 @@ export async function transcribeSpeech(args: {
       audio: args.audio,
       maxRetries: 1,
       abortSignal: AbortSignal.timeout(args.timeoutMs ?? STT_TIMEOUT_MS),
-      // User-facing: not flex (see gateway.ts).
+      // User-facing: not flex (see gateway.ts). No vocabulary hints (vmem, Eva, Evalucom…): the SDK and Gateway types give
+      // grok-stt no prompt or vocabulary option, and Bee sends no untyped ones.
       providerOptions: gatewayTier("default"),
     });
     console.debug(`perf stt ${Math.round(performance.now() - started)}ms`);

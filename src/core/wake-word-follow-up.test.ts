@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  CONVERSATION_QUESTION_MS,
   CONVERSATION_WINDOW_MS,
   FOLLOW_UP_CONFIDENCE,
   WAKE_FOLLOW_MS,
@@ -20,7 +21,8 @@ const open = (text: string, extra: Partial<Parameters<typeof routeLine>[0]> = {}
 
 describe("routeLine: the conversation window", () => {
   it("keeps the window and the wake follow-up separate", () => {
-    expect(CONVERSATION_WINDOW_MS).toBe(20_000);
+    expect(CONVERSATION_WINDOW_MS).toBe(60_000);
+    expect(CONVERSATION_QUESTION_MS).toBe(120_000);
     expect(WAKE_FOLLOW_MS).toBe(8000);
   });
 
@@ -35,6 +37,18 @@ describe("routeLine: the conversation window", () => {
     ]) {
       expect(open(text), text).toMatchObject({ kind: "command", command: text, followUp: true });
     }
+  });
+
+  it("takes a phrase that points Bee at one of its connectors, even after someone else spoke", () => {
+    for (const text of ["use the vmem connector", "search vmem", "and try it in vmem", "check the Eva connector", "ok, use the connectors", "look it up with the Notion connector"]) {
+      expect(open(text), text).toMatchObject({ kind: "command", command: text, followUp: true, reason: "connector" });
+      expect(open(text, { othersSpoke: true }), text).toMatchObject({ kind: "command", reason: "connector" });
+    }
+  });
+
+  it("never takes a person named Eva, or connector talk without the window, for a connector", () => {
+    expect(looksAddressedToBee("Eva said the budget is fine", lastBee)).not.toBe("connector");
+    expect(routeLine({ text: "search vmem", source: "mic", enabled: true, lastBee })).toEqual({ kind: "meeting" });
   });
 
   it("takes a short answer when Bee's last reply asked a question", () => {
