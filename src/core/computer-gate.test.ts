@@ -187,35 +187,6 @@ describe("irreversibleKind: from the tree, whatever the AI says", () => {
   });
 });
 
-describe("irreversibleKind: a click at a screen point (click_at), where there is no tree", () => {
-  const teams = (name: string): Element => ({ role: "", name, context: at("Microsoft Teams", []) });
-
-  it("asks when what the AI says it clicks reads as a commit, whatever the effect", () => {
-    expect(irreversibleKind({ command: "click-at", target: teams("Send button"), effect: "none" })).toBe("send");
-    expect(irreversibleKind({ command: "click-at", target: teams("Delete message"), effect: "none" })).toBe("delete");
-    expect(irreversibleKind({ command: "click-at", target: { role: "", name: "Place order", context: at("Amazon", []) } })).toBe("buy");
-    expect(irreversibleKind({ command: "click-at", target: teams("Chat tab"), effect: "send" })).toBe("send");
-  });
-
-  it("asks before an unnamed spot, and before any click once text was typed (a draft may be waiting)", () => {
-    expect(irreversibleKind({ command: "click-at", target: teams(""), effect: "none" })).toBe("send");
-    expect(irreversibleKind({ command: "click-at", target: teams("➤"), effect: "none" })).toBe("send");
-    expect(irreversibleKind({ command: "click-at", target: { role: "", name: "", context: at("Preview", []) } })).toBe("submit");
-    expect(irreversibleKind({ command: "click-at", target: null })).toBe("submit");
-    for (const name of ["message box", "Chat tab", "Close"]) expect(irreversibleKind({ command: "click-at", target: teams(name), typed: true }), name).toBe("send");
-  });
-
-  it("does not ask before a named click with nothing typed yet, nor with the setting off", () => {
-    for (const name of ["message box", "Type a message", "Chat tab", "Sam Lee"]) expect(irreversibleKind({ command: "click-at", target: teams(name), effect: "none" }), name).toBeNull();
-    expect(needsConfirm({ command: "click-at", target: teams("Send button"), effect: "send" }, false)).toBeNull();
-  });
-
-  it("says where the click is, in its own app", () => {
-    expect(confirmDetail({ command: "click-at", target: teams("Send button") }, "Discord")).toBe("Click “Send button” in Microsoft Teams");
-    expect(confirmDetail({ command: "click-at", target: { role: "", name: "" } }, "Slack")).toBe("Click a spot on screen in Slack");
-  });
-});
-
 describe("where focus is", () => {
   it("is unknown after a key that may move it, and leaves a search box on a click elsewhere", () => {
     expect(["a", "shift+a", "backspace", "down", "space"].every(keepsFocus)).toBe(true);

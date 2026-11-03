@@ -62,22 +62,21 @@ export function assertDesktopAction(command: string, args: readonly string[]): a
 /**
  * Computer use for a direct request ("Bee, send Sam a message in Slack", core/computer-use.ts): the commands the AI's computer
  * tools run, on their own runner (main/agent-desktop.ts createAgentDesktopComputerRunner). The meeting window reader never gets
- * it. No clipboard, notifications, drag, hover, batch, sessions, traces or launch (apps open through the desktop actions). The
- * mouse only for one left click at one point, always physical (mouse-click --xy --headed): the way in when an app's tree
- * cannot be read.
+ * it. Accessibility snapshots, refs and keys only: no screenshots, mouse, clipboard, notifications, drag, hover, batch, sessions,
+ * traces or launch (apps open through the desktop actions).
  */
 export const COMPUTER_USE_COMMANDS = [
-  "snapshot", "find", "get", "is", "screenshot", "list-apps", "list-windows", "permissions",
+  "snapshot", "find", "get", "is", "list-apps", "list-windows", "permissions",
   "click", "type", "set-value", "clear", "focus", "select", "check", "uncheck", "expand", "collapse", "scroll", "scroll-to", "press",
-  "mouse-click", "close-app", "wait",
+  "close-app", "wait",
 ] as const;
 export type ComputerUseCommand = (typeof COMPUTER_USE_COMMANDS)[number];
 
-/** agent-desktop's flag for physical input. Only press, type, focus and mouse-click may take it (assertComputerUse). */
+/** agent-desktop's flag for physical input. Only press, type and focus may take it (assertComputerUse), when the AI asks. */
 export const HEADED_FLAG = "--headed";
 
 // What a flag value or positional may be. Value flags are always "--flag=value", so a value can never read as a flag.
-type ValueKind = "ref" | "app" | "window" | "text" | "role" | "ms" | "count" | "keys" | "point" | readonly string[];
+type ValueKind = "ref" | "app" | "window" | "text" | "role" | "ms" | "count" | "keys" | readonly string[];
 type CommandSpec = {
   /** Value flags (a kind) and bare switches (true). */
   flags: Record<string, ValueKind | true>;
@@ -88,8 +87,6 @@ type CommandSpec = {
   text?: true;
   /** May take HEADED_FLAG. */
   headed?: true;
-  /** Flags (HEADED_FLAG too) that must be there. */
-  required?: readonly string[];
 };
 
 const SURFACES = ["window", "focused", "menu", "menubar", "sheet", "popover", "alert"] as const;
@@ -101,17 +98,11 @@ const onRef = (extra: Partial<CommandSpec> = {}): CommandSpec => ({ flags: ACTIO
 const COMPUTER_SPECS: Record<ComputerUseCommand, CommandSpec> = {
   snapshot: { flags: { ...SCOPE, "--max-depth": "count", "--interactive-only": true, "--compact": true, "--skeleton": true }, positionals: [] },
   find: {
-    flags: {
-      ...SCOPE, "--role": "role", "--name": "text", "--text": "text", "--value": "text", "--description": "text", "--exact": true, "--first": true, "--limit": "count",
-      // Only to find what has keyboard focus after a click at a point.
-      "--state": ["focused"],
-    },
+    flags: { ...SCOPE, "--role": "role", "--name": "text", "--text": "text", "--value": "text", "--description": "text", "--exact": true, "--first": true, "--limit": "count" },
     positionals: [],
   },
   get: { flags: { "--property": ["text", "value", "title", "role", "states"] }, positionals: ["ref"] },
   is: { flags: { "--property": ["visible", "enabled", "checked", "focused", "expanded", "selected"] }, positionals: ["ref"] },
-  // No path: the picture comes back in the envelope and is never written to disk. One app's window only, never a whole display.
-  screenshot: { flags: { "--app": "app", "--window-id": "window" }, positionals: [] },
   "list-apps": { flags: { "--app": "app", "--timeout-ms": "ms" }, positionals: [] },
   "list-windows": { flags: { "--app": "app", "--timeout-ms": "ms" }, positionals: [] },
   permissions: { flags: {}, positionals: [] },
@@ -129,8 +120,6 @@ const COMPUTER_SPECS: Record<ComputerUseCommand, CommandSpec> = {
   "scroll-to": onRef(),
   // Never --force: agent-desktop refuses quit and lock shortcuts without it.
   press: { flags: { "--app": "app", "--window-id": "window" }, positionals: ["keys"], headed: true },
-  // One left click at one screen point, physical. Never --button, --count or --modifiers.
-  "mouse-click": { flags: { "--xy": "point" }, positionals: [], headed: true, required: ["--xy", HEADED_FLAG] },
   // Never --force: the app quits gracefully, and agent-desktop refuses protected system processes.
   "close-app": { flags: {}, positionals: ["app"] },
   wait: { flags: { "--window": "text", "--text": "text", "--app": "app", "--event": EVENTS, "--timeout": "ms", "--menu": true, "--menu-closed": true }, positionals: ["ms"], min: 1 },
@@ -141,8 +130,6 @@ export const REF_PATTERN = /^@[A-Za-z0-9]{1,40}:e\d{1,6}$/;
 const CONTROL = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/;
 // Waits and timeouts: at most a minute.
 const MAX_MS = 60_000;
-// A screen point: whole numbers, negative to the left of or above the main display.
-const MAX_POINT = 32_767;
 
 function validValue(kind: ValueKind, value: string): boolean {
   if (Array.isArray(kind)) return kind.includes(value);
@@ -164,18 +151,13 @@ function validValue(kind: ValueKind, value: string): boolean {
     case "keys":
       // return, cmd+w, ctrl+shift+tab: letters and digits joined by "+". Punctuation goes by name (comma, period).
       return value.length <= 40 && /^[A-Za-z0-9]{1,12}(?:\+[A-Za-z0-9]{1,12}){0,4}$/.test(value);
-    case "point": {
-      const match = /^(-?\d{1,5}),(-?\d{1,5})$/.exec(value);
-      return !!match && Math.abs(Number(match[1])) <= MAX_POINT && Math.abs(Number(match[2])) <= MAX_POINT;
-    }
   }
   return false;
 }
 
 /**
  * Throws for any command, flag or argument outside the computer-use set. Called before every spawn on that runner. Value flags
- * must be "--flag=value"; free text must follow "--"; only press, type, focus and mouse-click may take HEADED_FLAG, and
- * mouse-click must.
+ * must be "--flag=value"; free text must follow "--"; only press, type and focus may take HEADED_FLAG.
  */
 export function assertComputerUse(command: string, args: readonly string[]): asserts command is ComputerUseCommand {
   if (!(COMPUTER_USE_COMMANDS as readonly string[]).includes(command)) throw new Error(`agent-desktop command not allowed: ${command}`);
@@ -203,8 +185,6 @@ export function assertComputerUse(command: string, args: readonly string[]): ass
     }
     if (value === null || !validValue(kind, value)) throw new Error(`agent-desktop flag value not allowed: ${flag}`);
   }
-  const missing = spec.required?.find((flag) => !seen.has(flag));
-  if (missing) throw new Error(`agent-desktop arguments not allowed for ${command}: needs ${missing}`);
   const fewest = spec.positionals.length - (spec.min ?? 0);
   if (positionals.length < fewest || positionals.length > spec.positionals.length) throw new Error(`agent-desktop arguments not allowed for ${command}`);
   positionals.forEach((value, index) => {
@@ -327,10 +307,7 @@ export function identityUnproven(data: unknown): boolean {
 }
 
 export type AdApp = { name: string; pid: number | null; bundleId: string | null };
-/** A rectangle in screen coordinates: points on macOS, physical pixels on Windows (the same space mouse-click --xy takes). */
-export type AdBounds = { x: number; y: number; width: number; height: number };
-/** bounds: where the window is on screen, when agent-desktop says. */
-export type AdWindow = { id: string; title: string; app: string; pid: number | null; focused: boolean; bounds?: AdBounds };
+export type AdWindow = { id: string; title: string; app: string; pid: number | null; focused: boolean };
 /** One accessibility node. Text fields are "" when absent. */
 export type AdNode = { role: string; name: string; value: string; description: string; children: AdNode[] };
 export type AccessState = "granted" | "denied" | "not_required" | "unknown";
@@ -354,14 +331,6 @@ export function parseApps(data: unknown): AdApp[] {
   });
 }
 
-/** `{ x, y, width, height }` with finite numbers and a positive size, or undefined. */
-export function parseBounds(value: unknown): AdBounds | undefined {
-  if (!isRecord(value)) return undefined;
-  const [x, y, width, height] = [value.x, value.y, value.width, value.height];
-  if (![x, y, width, height].every((item) => typeof item === "number" && Number.isFinite(item))) return undefined;
-  return (width as number) > 0 && (height as number) > 0 ? { x: x as number, y: y as number, width: width as number, height: height as number } : undefined;
-}
-
 /** list-windows: `{ id, title, app_name, pid, bounds, is_focused, accessible }` rows. Rows without an id or app are dropped. */
 export function parseWindows(data: unknown): AdWindow[] {
   return listOf(data, "windows").flatMap((item): AdWindow[] => {
@@ -369,8 +338,7 @@ export function parseWindows(data: unknown): AdWindow[] {
     const id = typeof item.id === "number" ? String(item.id) : text(item.id);
     const app = text(item.app_name) || text(item.app) || (isRecord(item.app) ? text(item.app.name) : "");
     if (!id || !app.trim()) return [];
-    const bounds = parseBounds(item.bounds);
-    return [{ id, title: text(item.title), app: app.trim(), pid: pid(item.pid), focused: item.is_focused === true, ...(bounds ? { bounds } : {}) }];
+    return [{ id, title: text(item.title), app: app.trim(), pid: pid(item.pid), focused: item.is_focused === true }];
   });
 }
 

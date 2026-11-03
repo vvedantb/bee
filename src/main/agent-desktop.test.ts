@@ -393,9 +393,9 @@ describe("createAgentDesktopComputerRunner", () => {
     expect(calls.map((call) => [call.args[0], call.killed])).toEqual([["snapshot", true]]);
   });
 
-  it("refuses clipboard, launch, mouse, batch and forced commands before any process starts", () => {
+  it("refuses screenshots, clipboard, launch, mouse, batch and forced commands before any process starts", () => {
     const { runner, calls } = make();
-    for (const command of ["clipboard-get", "clipboard-set", "launch", "mouse-click", "drag", "batch", "session", "notification-action"]) {
+    for (const command of ["screenshot", "clipboard-get", "clipboard-set", "launch", "mouse-click", "drag", "batch", "session", "notification-action"]) {
       expect(() => runner.run(command as never, []), command).toThrow(/not allowed/);
     }
     expect(() => runner.run("press", ["cmd+q", "--app=Discord", "--force"])).toThrow(/not allowed/);
@@ -469,7 +469,9 @@ describe("source scan: agent-desktop stays read-only", () => {
     const tools = readFileSync(repo("src/core/computer-tools.ts"), "utf8");
     const used = new Set([...tools.matchAll(/\b(?:exec|observe|readOnce)\(\s*"([a-z-]+)"/g), ...tools.matchAll(/onRef\(\s*"([a-z-]+)"/g)].map((match) => match[1]));
     for (const command of used) expect(COMPUTER_USE_COMMANDS as readonly (string | undefined)[], command).toContain(command);
-    for (const command of ["snapshot", "find", "get", "click", "type", "set-value", "press", "mouse-click", "close-app", "screenshot"]) expect(used.has(command), command).toBe(true);
+    for (const command of ["snapshot", "find", "get", "click", "type", "set-value", "press", "close-app"]) expect(used.has(command), command).toBe(true);
+    // The tree only: no picture and no click at a point.
+    for (const command of ["screenshot", "mouse-click"]) expect(tools, command).not.toContain(`"${command}"`);
     // No shell, no clipboard, no launch: apps open through the desktop actions.
     expect(tools).not.toMatch(/child_process|execFile|spawn\(|shell:\s*true|"cmd(?:\.exe)?"|powershell|"\/bin\/(?:ba|z)?sh"|osascript|clipboard|"launch"/i);
     expect(readFileSync(repo("src/main/agent-desktop.ts"), "utf8")).toMatch(/queuedRunner<ComputerUseCommand>\(binary, deps, assertComputerUse\)/);

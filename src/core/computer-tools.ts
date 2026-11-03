@@ -1,17 +1,15 @@
 import { tool } from "ai";
 import { z } from "zod";
 import {
-  HEADED_FLAG, REF_PATTERN, identityUnproven, parseApps, parseWindows, type AdBounds, type AgentDesktopFailure, type AgentDesktopResult, type ComputerRun,
-  type ComputerUseCommand,
+  HEADED_FLAG, REF_PATTERN, identityUnproven, parseApps, parseWindows, type AgentDesktopFailure, type AgentDesktopResult, type ComputerRun, type ComputerUseCommand,
 } from "./agent-desktop-envelope";
 import { awaitAnswer, CONFIRM_TIMEOUT_MS, type ComputerPlatform, type IrreversibleKind, type RunControl } from "./computer-control";
 import {
-  EFFECTS, LABEL_MAX, MODIFIERS, WINDOW_ROLES, confirmDetail, confirmQuestion, focusAfterClick, insideOf, isNavField, isTextEntry, keepsFocus, keysLabel, needsConfirm,
-  shellElement, shortName, type Effect, type Element, type GateAction, type TreeContext,
+  EFFECTS, LABEL_MAX, WINDOW_ROLES, confirmDetail, confirmQuestion, focusAfterClick, insideOf, isNavField, isTextEntry, keepsFocus, keysLabel, needsConfirm, shellElement,
+  shortName, type Effect, type Element, type GateAction, type TreeContext,
 } from "./computer-gate";
 import { APP_NAME_MAX, WINDOW_TITLE_MAX, appKey, isBlockedApp, type DesktopActionResult, type DesktopActions } from "./desktop-actions";
 import { debugLog, errorData, msSince } from "./debug-log";
-import { opaqueRect, type PixelRect } from "./png-opaque";
 import type { LunaToolActivity } from "./luna";
 
 // The AI's computer tools, for a direct request only ("Bee, send Sam a message in Discord"): never in a meeting tip turn. They
@@ -22,9 +20,9 @@ import type { LunaToolActivity } from "./luna";
 // forward and pages open through the desktop actions (core/desktop-actions.ts). Each call is one step of the run's budget
 // (core/computer-control.ts); sending, deleting, buying and submitting wait for the user's Confirm first when the setting is on
 // (core/computer-gate.ts, which reads where each ref sits in the tree, not just what the AI says). Terminals, script tools,
-// system settings and Bee itself are never read or typed into. Screenshots are the fallback only: when an app's tree stays
-// empty or unhelpful once Bee has waited for it (a canvas, some Chromium or WebView2 apps), click_at clicks a spot in a
-// screenshot and type_text types where it put the cursor.
+// system settings and Bee itself are never read or typed into. The tree is the only way in: no screenshots and no clicks at a
+// point. When an app's tree stays empty or unusable once Bee has waited for it and the AI has tried find, a skeleton and root
+// (a canvas, an app that never exposes its controls), the tools tell the AI to stop and say Bee cannot control that app.
 
 export type ConfirmRequest = { kind: IrreversibleKind; question: string; detail: string };
 
@@ -58,7 +56,7 @@ const OFF_LIMITS = new Set(
 );
 const OFF_LIMITS_MESSAGE = "Error: Bee does not use terminals, script tools, system settings, password managers or Bee itself.";
 
-/** An app computer use never reads, types into or screenshots. */
+/** An app computer use never reads or types into. */
 export function offLimitsApp(name: string): boolean {
   return isBlockedApp(name) || OFF_LIMITS.has(appKey(name));
 }
@@ -82,7 +80,7 @@ const FIND_LIMIT = 15;
 // agent-desktop's observation budget for snapshot and find, and the longer one for a second read. A cold Chromium or WebView2
 // app (Teams, Slack, Discord) builds its web tree only once the first read asks, which takes 10 to 25 s, and a new process sees
 // the grown tree: a thin first read, or one that failed where a retry is safe, is read again once with more time. Bee waits
-// here, inside one step, rather than leave the AI to loop on screenshots.
+// here, inside one step, rather than leave the AI to loop on reads.
 const LOOK_TIMEOUT_MS = 12_000;
 const SETTLE_TIMEOUT_MS = 25_000;
 // Bee's kill timer sits this far above agent-desktop's own budget: start-up, and a large tree's JSON.
@@ -109,12 +107,13 @@ const LOOK_AGAIN_KIND = /renderer|activation|incomplete|settle/;
 const READ_MS = 15_000;
 const ACT_MS = 12_000;
 const WAIT_MAX_MS = 15_000;
-// What has focus after a click at a point: a short search, never retried.
-const FOCUS_TIMEOUT_MS = 6000;
-// A screenshot as base64. Larger ones are refused rather than sent.
-const SCREENSHOT_MAX_CHARS = 6_000_000;
-// Text typed as key presses, one process each: kept short.
-const KEYS_MAX = 300;
+
+/**
+ * What the AI is told to do when the tree gives it nothing to act on, once Bee has waited and the AI has tried find, a skeleton
+ * and root. Bee has no screenshots or clicks at a point to fall back on, so it says so plainly.
+ */
+export const CANNOT_CONTROL = "stop and say Bee cannot control this app";
+const KEEPS_FAILING = `If it keeps failing, ${CANNOT_CONTROL}.`;
 
 const HINTS: Record<string, string> = {
   STALE_REF: "the screen changed. Take a new snapshot and use its refs.",
@@ -133,19 +132,17 @@ const HINTS: Record<string, string> = {
   PLATFORM_NOT_SUPPORTED: "not available on this computer. Try another way.",
   PERM_DENIED: "Bee is not allowed to do that.",
   ABORTED: "Bee stopped this task.",
-  INTERNAL:
-    "agent-desktop hit an unexpected error in this app. Look again once. For a busy app take a skeleton snapshot, then root one region. If it keeps failing, take a screenshot and use click_at.",
-  BAD_OUTPUT: "agent-desktop gave no answer Bee could read. Look again once. If it keeps failing, take a screenshot and use click_at.",
+  INTERNAL: `agent-desktop hit an unexpected error in this app. Look again once. For a busy app take a skeleton snapshot, then root one region. ${KEEPS_FAILING}`,
+  BAD_OUTPUT: `agent-desktop gave no answer Bee could read. Look again once. ${KEEPS_FAILING}`,
   SPAWN_FAILED: "Bee could not start its desktop helper. Stop and say so.",
   REFUSED: "Bee does not run that. Check the ref, app name, window id and other arguments.",
 };
 // Looking (snapshot, find, read, check_state, list_apps, list_windows) changes nothing, so a timeout or no answer means the
 // app's tree is slow or broken, not that something may have happened.
 const LOOK_HINTS: Record<string, string> = {
-  TIMEOUT:
-    "the app's tree did not finish in time. Take a skeleton snapshot, then root one region, or find by role. If the app just opened, wait and look again. If it keeps failing, take a screenshot and use click_at.",
-  TIMEOUT_LOCAL: "the app's tree took too long. Take a skeleton snapshot, then root one region. If it keeps failing, take a screenshot and use click_at.",
-  APP_UNRESPONSIVE: "the app did not answer. Wait, then look again. If it keeps failing, take a screenshot and use click_at.",
+  TIMEOUT: `the app's tree did not finish in time. Take a skeleton snapshot, then root one region, or find by role. If the app just opened, wait and look again. ${KEEPS_FAILING}`,
+  TIMEOUT_LOCAL: `the app's tree took too long. Take a skeleton snapshot, then root one region. ${KEEPS_FAILING}`,
+  APP_UNRESPONSIVE: `the app did not answer. Wait, then look again. ${KEEPS_FAILING}`,
   INVALID_ARGS: "check the ref and the arguments: refs come only from the latest snapshot or find, and a surface must be one this computer has.",
 };
 // agent-desktop 1.1's details.kind, where it says more than the code. Refs prove their identity: on Windows (and on macOS for
@@ -153,7 +150,7 @@ const LOOK_HINTS: Record<string, string> = {
 // description.
 const KIND_HINTS: Record<string, string> = {
   identity_not_unique:
-    "this element has an identical twin in the window, so it cannot be used by ref. Act on a control that is unique in the window: find it by name, or root into its row. If there is none, take a screenshot and use click_at.",
+    "this element has an identical twin in the window, so it cannot be used by ref. Act on a control that is unique in the window: find it by name, or root into its row. If there is none, stop and say Bee cannot tell which one to use.",
   saved_ref_ambiguous: "an identical element appeared since the snapshot. Take a new snapshot, and act on a control that is unique in the window.",
   resolution_identity_unknown: "agent-desktop could not check the element in time, so nothing was done. Look again, then try once more.",
   post_action_verification: "it happened, but the element now reads differently (the app may have reformatted it). Read it before writing again. Never repeat a send or delete blindly.",
@@ -468,141 +465,6 @@ function postState(raw: unknown): string {
 /** get and is: the answer as short JSON. */
 const formatRead = (data: unknown) => clip(JSON.stringify(data ?? null) ?? "null", 1500);
 
-/** The PNG in a screenshot envelope (base64), or null. */
-export function screenshotData(data: unknown): string | null {
-  const candidates = typeof data === "string" ? [data] : isRecord(data) ? ["base64", "data", "png", "image", "content"].map((key) => data[key]) : [];
-  for (const candidate of candidates) {
-    if (typeof candidate !== "string" || candidate.length > SCREENSHOT_MAX_CHARS) continue;
-    const body = candidate.replace(/^data:image\/png;base64,/, "");
-    if (/^[A-Za-z0-9+/]{100}/.test(body)) return body;
-  }
-  return null;
-}
-
-/** agent-desktop's scale_factor for a screenshot (1 or 2 on a Mac), or null. */
-export function shotScale(data: unknown): number | null {
-  const scale = isRecord(data) ? data.scale_factor : undefined;
-  return typeof scale === "number" && Number.isFinite(scale) && scale >= 1 && scale <= 4 ? scale : null;
-}
-
-/** A PNG's width and height in pixels, from its header (the first 24 bytes), or null. */
-export function pngSize(base64: string): { width: number; height: number } | null {
-  let head: string;
-  try {
-    head = atob(base64.slice(0, 32));
-  } catch {
-    return null;
-  }
-  if (head.length < 24 || head.slice(1, 4) !== "PNG" || head.slice(12, 16) !== "IHDR") return null;
-  const int = (at: number) => head.charCodeAt(at) * 0x1000000 + (head.charCodeAt(at + 1) << 16) + (head.charCodeAt(at + 2) << 8) + head.charCodeAt(at + 3);
-  const [width, height] = [int(16), int(20)];
-  return width > 0 && height > 0 && width <= 100_000 && height <= 100_000 ? { width, height } : null;
-}
-
-/** Where a spot in a screenshot is on screen, or why it cannot be placed. */
-export type ScreenPoint = { x: number; y: number } | "resized" | "outside";
-
-/**
- * A window's screenshot as click_at places spots in it: its size in pixels; on a Mac, the display's scale (agent-desktop's
- * scale_factor) and the opaque window inside the shadow when the PNG showed it (core/png-opaque.ts).
- */
-export type Shot = { width: number; height: number; scale?: number | null; content?: PixelRect | null };
-
-// macOS window shadows (screencapture -l, which agent-desktop uses and cannot turn off): about the same each side, and offset
-// down by about 10 pt, so the top margin is that much under half the vertical margin and the bottom that much over. A shadow
-// wider than SHADOW_MAX pt a side, or margins across and down that differ by more than SHADOW_SLACK pt, mean the window
-// changed size since.
-const SHADOW_DROP = 10;
-const SHADOW_MAX = 80;
-const SHADOW_SLACK = 8;
-// Windows: list-windows bounds are GetWindowRect, which counts the invisible resize border (7 px at 100%, about 11 px at 150%)
-// left, right and below; the picture (Windows Graphics Capture) is the visible frame without it. A maximised window has the
-// border above too. Both are physical pixels, so the scale is 1. BORDER_MAX px a side covers every scaling Windows offers.
-const BORDER_MAX = 32;
-
-/** The window's place in its picture: left and top edges in pixels, and pixels per screen unit across and down. Null: resized. */
-type Placement = { left: number; top: number; sx: number; sy: number };
-
-/** On a Mac: from the opaque window the PNG showed, when it fits the bounds at the display's scale both ways. */
-function macContent(shot: Shot, bounds: AdBounds): Placement | null {
-  const { content, scale } = shot;
-  if (!content) return null;
-  const [sx, sy] = [content.width / bounds.width, content.height / bounds.height];
-  // One or two pixels of the window's thin edge can read as shadow.
-  const fits = (pixels: number, units: number, s: number) => Math.abs(pixels - units * s) <= 3 + 0.01 * pixels;
-  const s = scale ?? Math.round(sx);
-  if (s < 1 || !fits(content.width, bounds.width, s) || !fits(content.height, bounds.height, s)) return null;
-  return { left: content.x, top: content.y, sx, sy };
-}
-
-/** On a Mac without a usable alpha reading: the display's scale (or the whole scale that fits) and the shadow's usual shape. */
-function macShadow(shot: Shot, bounds: AdBounds): Placement | null {
-  const fit = [3, 2, 1].find((s) => bounds.width * s <= shot.width + 2 && bounds.height * s <= shot.height + 2);
-  const s = shot.scale ?? fit;
-  if (!s) return null;
-  const across = (shot.width - bounds.width * s) / 2;
-  const down = shot.height - bounds.height * s;
-  if (across < -s || down < -2 * s || across > SHADOW_MAX * s || Math.abs(down - 2 * across) > SHADOW_SLACK * s) return null;
-  return { left: across, top: Math.max(0, down / 2 - Math.min(SHADOW_DROP * s, down / 2)), sx: s, sy: s };
-}
-
-/** On Windows: physical pixels both, the picture inside the bounds by the invisible border. */
-function windowsFrame(shot: Shot, bounds: AdBounds): Placement | null {
-  const side = (bounds.width - shot.width) / 2;
-  const down = bounds.height - shot.height;
-  if (side < -1 || side > BORDER_MAX || down < side - 2 || down > 2 * side + 2) return null;
-  // Below only (down ≈ side), or above and below too for a maximised window (down ≈ 2 × side).
-  return { left: -side, top: -Math.min(down, Math.max(0, down - side)), sx: 1, sy: 1 };
-}
-
-/**
- * A spot in a window's screenshot, x and y from 0 to 1000 across and down the picture (so it does not matter how the AI's
- * picture was scaled on the way), as a screen point inside the window's bounds now. On a Mac the picture is in pixels (2x on a
- * Retina display) and carries the window's shadow; on Windows it is the window without its invisible border. "resized": the
- * picture no longer fits the window. "outside": the spot is off the window (in the shadow).
- */
-export function screenPoint(shot: Shot, bounds: AdBounds, x: number, y: number, platform: ComputerPlatform): ScreenPoint {
-  if (bounds.width < 1 || bounds.height < 1) return "resized";
-  const place = platform === "mac" ? (macContent(shot, bounds) ?? macShadow(shot, bounds)) : windowsFrame(shot, bounds);
-  if (!place) return "resized";
-  const px = bounds.x + ((x / 1000) * shot.width - place.left) / place.sx;
-  const py = bounds.y + ((y / 1000) * shot.height - place.top) / place.sy;
-  if (px < bounds.x - 0.5 || py < bounds.y - 0.5 || px > bounds.x + bounds.width || py > bounds.y + bounds.height) return "outside";
-  // Whole numbers inside the bounds, one in from the far edges so the click stays on the window.
-  const clamp = (value: number, start: number, size: number) => Math.max(Math.ceil(start), Math.min(Math.round(value), Math.floor(start + size) - 1));
-  return { x: clamp(px, bounds.x, bounds.width), y: clamp(py, bounds.y, bounds.height) };
-}
-
-// Unshifted punctuation by the key name agent-desktop press takes; each is sent with the key that types it in the keyboard
-// layout in use. Shifted symbols (! ? @ …) sit on different keys in different layouts, so they are never guessed.
-const KEY_NAMES: Record<string, string> = {
-  " ": "space", ",": "comma", ".": "period", "/": "slash", ";": "semicolon", "'": "quote", "[": "leftbracket", "]": "rightbracket",
-  "\\": "backslash", "-": "minus", "=": "equal", "`": "grave",
-};
-
-/** Text as key presses for press: letters (Shift for a capital), digits, space and KEY_NAMES. odd: the characters left out. */
-export function keysFor(text: string): { keys: string[]; odd: string[] } {
-  const keys: string[] = [];
-  const odd = new Set<string>();
-  for (const char of text) {
-    if (/^[a-z0-9]$/.test(char)) keys.push(char);
-    else if (/^[A-Z]$/.test(char)) keys.push(`shift+${char.toLowerCase()}`);
-    else if (Object.hasOwn(KEY_NAMES, char)) keys.push(KEY_NAMES[char] as string);
-    else odd.add(char);
-  }
-  return { keys, odd: [...odd] };
-}
-
-// Keys that only move or select (with any modifiers), or a modifier alone. Every other key may type or change a draft.
-const MOVE_KEYS = /^(?:tab|escape|esc|up|down|left|right|arrowup|arrowdown|arrowleft|arrowright|pageup|pagedown|home|end)$/;
-
-/** Whether pressing these keys (normalised, as return or cmd+w) may type or change text. When unsure, it may. */
-export function editsText(keys: string): boolean {
-  const parts = keys.split("+");
-  const key = parts.at(-1) ?? "";
-  return !(parts.every((part) => MODIFIERS.has(part)) || (MOVE_KEYS.test(key) && parts.slice(0, -1).every((part) => MODIFIERS.has(part))));
-}
-
 /** A text the AI gave for typing or a name: no control characters other than tabs and line breaks. */
 const cleanText = (text: string) => text.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "");
 
@@ -635,36 +497,12 @@ const STATE_ACTIONS = {
   collapsed: { command: "collapse", verb: "Collapsing", line: "Collapsing…" },
 } as const satisfies Record<string, { command: ComputerUseCommand; verb: string; line: string }>;
 
-type ScreenshotOutput = { text: string; image?: string };
-
-/** What has keyboard focus after click_at: a text field, something else, or unknown (the tree could not say). */
-type PointFocus = { kind: "text" | "other" | "unknown"; element: Element | null; ref: string | null };
-/** The last click_at, while focus has not moved since: where it clicked, what the AI said it was, and what got focus. */
-type Point = { app: string; windowId: string | undefined; target: string; focus: PointFocus };
-
-// What the AI called the spot it clicked: a text field, unless it also reads as a control.
-const TEXT_TARGET = /\b(?:box|field|input|compose|composer|editor|text|textarea|textbox|message|reply|comment|search|type|write|chat ?bar)\b/i;
-const CONTROL_TARGET = /\b(?:button|icon|tab|link|menu|item|list|row|checkbox|toggle|switch|dropdown|picker|avatar|image|arrow|header|title|sidebar)\b/i;
-const textTarget = (target: string) => TEXT_TARGET.test(target) && !CONTROL_TARGET.test(target);
-// Code editors and IDEs, whose focus may be in a built-in terminal: Bee never types key presses into one without a ref.
-const EMBEDS_SHELL = /\b(?:code|visual studio|cursor|windsurf|zed|xcode|intellij|pycharm|webstorm|goland|rider|clion|phpstorm|rubymine|android studio|sublime text|eclipse|netbeans)\b/i;
-
-const NEEDS_REF = "Error: give a ref from this task's latest snapshot or find. If the app gives no refs, take a screenshot, click the field with click_at, then call type_text without ref.";
-const NO_BREAKS = "Error: without a ref, type_text types no line breaks or tabs. Type the text, then use press_key: return sends in most chat apps, shift+return adds a line.";
-// Line and paragraph breaks of every kind, and tabs: without a ref Bee cannot see the field, and a break may send the draft
-// and a tab may move focus somewhere else.
-const BREAKS = /[\t\n\v\f\r\u0085\u2028\u2029]/;
-const UNREADABLE = "Error: Bee could not read that snapshot. Take a skeleton snapshot, then root one region; or take a screenshot and use click_at.";
+const UNREADABLE = `Error: Bee could not read that snapshot. Take a skeleton snapshot, then root one region, or use find. If those fail too, ${CANNOT_CONTROL}.`;
 // What a whole-window read says when Bee's second read did not fix it. Bee has already waited for the app by then, so the AI
-// tries the tree another way before any screenshot.
-const THIN_NOTE =
-  "Few elements came back, though Bee gave the app time to load. Try find by role (textfield, button) or name, or a skeleton snapshot then root. If those show nothing usable, take a screenshot and use click_at.";
-const SHALLOW_NOTE = "The controls sit deeper than this read: snapshot one region marked inside with root, or use find by role or name.";
-const UNPROVEN_NOTE = "Bee could not read the whole window in time, so some refs may be refused (AMBIGUOUS_TARGET). If one is, snapshot again or use find.";
-const LOOK_FIRST = "Error: read this app with snapshot or find first: they give refs. Take a screenshot only when they show nothing usable.";
-
-/** Focus after typing without a ref into a field Bee never saw: a text field with no name, so Return always asks as a send. */
-const typedField = (app: string): Element => ({ role: "textfield", name: "", context: { app, ancestors: [], nearby: [], field: null } });
+// tries the tree another way, then stops: there is no other way in.
+const THIN_NOTE = `Few elements came back, though Bee gave the app time to load. Try find by role (textfield, button) or name, or a skeleton snapshot then root. If those show nothing usable either, ${CANNOT_CONTROL}.`;
+const SHALLOW_NOTE = `The controls sit deeper than this read: snapshot one region marked inside with root, or use find by role or name. If those show no usable controls, ${CANNOT_CONTROL}.`;
+const UNPROVEN_NOTE = `Bee could not read the whole window in time, so some refs may be refused (AMBIGUOUS_TARGET). If one is, snapshot again or use find. If they keep being refused, ${CANNOT_CONTROL}.`;
 
 /** The computer tools over the given runners. One call at a time, in order; each is one step. */
 export function computerTools(deps: ComputerToolDeps) {
@@ -676,20 +514,8 @@ export function computerTools(deps: ComputerToolDeps) {
   // Window ids this run has shown the AI (never one of an app Bee does not use).
   const windows = new Set<string>();
   let lastField: Element | null = null;
-  // The last click_at while focus stays where it put it (null once a key, a ref action or an app switch may have moved it), and
-  // whether this run has typed or set any text (a click at a point may then send a draft, so it asks).
-  let point: Point | null = null;
-  let typed = false;
-  // The latest screenshot of each app (by appKey), for click_at: its size, scale and window. Null: its size could not be read.
-  const shots = new Map<string, (Shot & { windowId: string | undefined }) | null>();
   // The app the run last read or acted in, for the Confirm prompt's detail.
   let currentApp: string | null = null;
-  // Apps (by appKey) this run has read through the tree, whatever came back: a screenshot comes after that, never first.
-  const looked = new Set<string>();
-  const lookedAt = (name: string | null | undefined) => {
-    const app = name ? cleanApp(name) : null;
-    if (app) looked.add(appKey(app));
-  };
   const surfaceSchema = z.enum(SURFACES[deps.platform]);
   let chain: Promise<unknown> = Promise.resolve();
   const remember = (ref: string, element: Element) => refs.set(ref, element);
@@ -702,7 +528,7 @@ export function computerTools(deps: ComputerToolDeps) {
   };
 
   /**
-   * One agent-desktop command for this run. A permission refusal (other than Screen Recording) ends the run. A failure is logged
+   * One agent-desktop command for this run. A permission refusal ends the run. A failure is logged
    * with agent-desktop's message (redacted); a command the allowlist refuses never starts and comes back as REFUSED.
    */
   const exec = async (command: ComputerUseCommand, args: string[], timeoutMs: number): Promise<AgentDesktopResult> => {
@@ -718,7 +544,7 @@ export function computerTools(deps: ComputerToolDeps) {
     if (!result.ok) {
       debugLog.warn("computer", "exec-failed", { command, code: result.code, message: result.message ?? null, retry: result.retry ?? null, kind: result.kind ?? null, timeoutMs, ms: msSince(started) });
       console.debug(`computer ${command} ${result.code}`);
-      if (result.code === "PERM_DENIED" && command !== "screenshot") control.stop("permission");
+      if (result.code === "PERM_DENIED") control.stop("permission");
     }
     return result;
   };
@@ -768,7 +594,7 @@ export function computerTools(deps: ComputerToolDeps) {
    * Runs one tool step: counts it, shows its line, asks first when the gate says so, then does the work. A step after the run
    * stopped does nothing.
    */
-  const step = <T extends string | ScreenshotOutput>(name: string, label: string, work: () => Promise<T>, gate?: () => GateAction): Promise<T | string> =>
+  const step = (name: string, label: string, work: () => Promise<string>, gate?: () => GateAction): Promise<string> =>
     serial(async () => {
       if (!control.step()) {
         debugLog.info("computer", "step-refused", { tool: name, reason: control.reason(), steps: control.steps() });
@@ -836,136 +662,11 @@ export function computerTools(deps: ComputerToolDeps) {
       debugLog.info("computer", "act-again", { command, kind: result.kind });
       result = await exec(command, [ref, ...args], timeoutMs);
     }
-    // Focus may have left the spot click_at put it.
-    if (["click", "type", "focus", "select"].includes(command)) point = null;
     if (result.ok && ["type", "set-value", "clear", "focus"].includes(command)) lastField = refs.get(ref) ?? lastField;
-    if (result.ok && ["type", "set-value"].includes(command)) typed = true;
     if (result.ok && command === "click") lastField = focusAfterClick(lastField, refs.get(ref));
     return done(result);
   };
 
-  /** What has keyboard focus in the app after a click at a point, from a short find. Unknown when the tree cannot say. */
-  const focusNow = async (app: string, windowId: string | undefined): Promise<PointFocus> => {
-    const unknown: PointFocus = { kind: "unknown", element: null, ref: null };
-    const result = await exec("find", [...scope({ app, window_id: windowId }), "--state=focused", "--limit=5", `--timeout-ms=${FOCUS_TIMEOUT_MS}`], FOCUS_TIMEOUT_MS + KILL_MARGIN_MS);
-    if (!result.ok || !isRecord(result.data) || !Array.isArray(result.data.matches)) return unknown;
-    try {
-      const matches = result.data.matches.filter(isRecord).filter((match) => !WINDOW_ROLES.test(str(match.role)));
-      const match = matches.find((item) => isTextEntry(elementOf(item))) ?? matches[0];
-      if (!match) return unknown;
-      const element = elementOf(match);
-      const ref = str(match.ref_id);
-      const kept = REF_PATTERN.test(ref) ? ref : null;
-      if (kept) remember(kept, refs.get(kept)?.context ? { ...element, context: refs.get(kept)?.context } : element);
-      return { kind: isTextEntry(element) ? "text" : "other", element, ref: kept };
-    } catch {
-      return unknown;
-    }
-  };
-
-  /** What click_at says about focus, so the AI knows whether and how to type. */
-  const focusLine = (focus: PointFocus): string => {
-    const what = focus.element ? `${focus.element.role || "element"}${focus.element.name ? ` ${quoted(focus.element.name)}` : ""}` : "";
-    if (focus.kind === "text") return `The cursor is in ${what}${focus.ref ? ` ${focus.ref}` : ""}. type_text without ref types there.`;
-    if (focus.kind === "other") return `Focus is on ${what}, not a text field. To type, click_at the text field itself.`;
-    return "Bee cannot see what has focus. If that was a text field, type_text without ref types there. Check the result with a screenshot.";
-  };
-
-  /** Why a click at a point cannot run now, or null. Read when the step runs, after the steps queued before it. */
-  const clickRefusal = (input: { app: string; window_id?: string }): string | null => {
-    const invalid = badApp(input.app) ?? badWindow(input.window_id);
-    if (invalid) return invalid;
-    const key = appKey(cleanApp(input.app) ?? "");
-    if (!shots.has(key)) return "Error: take a screenshot of that app first. click_at takes a spot in it.";
-    return shots.get(key) ? null : "Error: Bee could not read that screenshot's size, so it cannot place a spot in it. Use snapshot and refs.";
-  };
-
-  /** A left click at a spot in the app's latest screenshot: the window comes forward, then a real click at the screen point. */
-  const clickAt = async (input: { app: string; window_id?: string; x: number; y: number; target: string }): Promise<string> => {
-    const refused = clickRefusal(input);
-    if (refused) return refused;
-    const app = cleanApp(input.app) as string;
-    const shot = shots.get(appKey(app));
-    if (!shot) return "Error: take a screenshot of that app first. click_at takes a spot in it.";
-
-    const windowId = input.window_id ?? shot.windowId;
-    // In front, so the click lands on this window and not on one over it.
-    const front = await deps.desktop.focusWindow({ app });
-    if (!front.ok) debugLog.info("computer", "click-at-front", { app, message: front.message });
-    const listed = await exec("list-windows", scope({ app }), READ_MS);
-    if (!listed.ok) return errorLine(listed, true);
-    const open = parseWindows(listed.data).filter((window) => !offLimitsApp(window.app));
-    const window = windowId ? open.find((item) => item.id === windowId) : open.length === 1 ? open[0] : open.find((item) => item.focused);
-    if (!window) return windowId ? "Error: that window is gone. Check list_windows." : "Error: that app has several windows. Pass window_id from list_windows, and take the screenshot with it.";
-    for (const item of open) windows.add(item.id);
-    if (!window.bounds) return "Error: Bee cannot tell where that window is on screen. Use snapshot and refs instead.";
-    const spot = screenPoint(shot, window.bounds, input.x, input.y, deps.platform);
-    if (spot === "resized") return "Error: the window changed size since the screenshot. Take a new screenshot.";
-    if (spot === "outside") return "Error: that spot is outside the window. Check the screenshot.";
-    const result = await exec("mouse-click", [`--xy=${spot.x},${spot.y}`, HEADED_FLAG], ACT_MS);
-    // Whatever had focus, it may not have it now.
-    [lastField, point, currentApp] = [null, null, app];
-    if (!result.ok) return errorLine(result);
-    const focus = await focusNow(app, window.id);
-    point = { app, windowId: window.id, target: input.target, focus };
-    lastField = focus.element;
-    return `${formatDone(result.data)} ${focusLine(focus)}`;
-  };
-
-  /** Why key presses cannot type this text into the app, or null. */
-  const keysRefusal = (app: string, text: string): string | null => {
-    if (EMBEDS_SHELL.test(app)) return "Error: Bee does not type into a code editor without a ref: its focus may be in a terminal. Use snapshot or find for a ref.";
-    const { keys, odd } = keysFor(text);
-    if (odd.length > 0) return `Error: without a ref, Bee types only letters, digits, spaces and , . / ; ' [ ] \\ - = \`. Leave out: ${clip(odd.join(" "), 40)}`;
-    return keys.length > KEYS_MAX ? `Error: without a ref, type at most ${KEYS_MAX} characters at a time.` : null;
-  };
-
-  /** Why typing where click_at put the cursor cannot run now, or null. Read when the step runs, so a refused step asks nothing. */
-  const typeRefusal = (text: string): string | null => {
-    if (!point) return NEEDS_REF;
-    if (BREAKS.test(text)) return NO_BREAKS;
-    const { focus, target } = point;
-    if (focus.kind === "other") return "Error: focus is not in a text field. click_at the text field itself first.";
-    if (focus.kind === "unknown" && !textTarget(target)) return "Error: click_at did not say it clicked a text field. click_at the text field itself first.";
-    if (shellElement(focus.element) || shellElement({ role: "", name: target })) return SHELL_MESSAGE;
-    return focus.ref ? null : keysRefusal(point.app, text);
-  };
-
-  /**
-   * Typing where click_at put the cursor. With a ref for the focused field, agent-desktop types into it. Without one, each
-   * character goes as one key press to the app: letters, digits, space and plain punctuation only, never Return, and never in a
-   * code editor (its focus may be a terminal). Physical either way. Typing is never retried: when typing into the ref fails,
-   * the error goes back, and the AI's next type_text without ref for this click uses key presses.
-   */
-  const typeAtPoint = async (text: string): Promise<string> => {
-    const refused = typeRefusal(text);
-    if (refused || !point) return refused ?? NEEDS_REF;
-    const { app, windowId, focus } = point;
-    const field = focus.element ?? typedField(app);
-    if (focus.ref) {
-      const result = await exec("type", [focus.ref, HEADED_FLAG, "--", cleanText(text)], ACT_MS + Math.min(40_000, text.length * 40));
-      if (result.ok) {
-        [lastField, typed] = [field, true];
-        return done(result);
-      }
-      // Same click, no ref: the next type_text without ref types as key presses.
-      point = { ...point, focus: { ...focus, ref: null } };
-      if (result.retry === "safe") return `${errorLine(result)} Nothing was typed. To type it as key presses instead, call type_text without ref again.`;
-      // Part of the text may be in the field.
-      [lastField, typed] = [field, true];
-      return `${errorLine(result)} Take a screenshot before typing again: type_text without ref now types as key presses.`;
-    }
-    const { keys } = keysFor(text);
-    for (const [index, key] of keys.entries()) {
-      const result = control.reason() ? null : await exec("press", [key, ...scope({ app, window_id: windowId }), HEADED_FLAG], ACT_MS);
-      if (result?.ok) continue;
-      // Part of the text may be in the field now.
-      if (index > 0 || result?.retry !== "safe") [lastField, typed] = [field, true];
-      return result ? `${errorLine(result)} ${index} of ${keys.length} characters were typed: look before typing again.` : STOPPED;
-    }
-    [lastField, typed] = [field, true];
-    return `Typed ${keys.length} characters as key presses (not checked). Check with a screenshot before pressing Return.`;
-  };
   const gateFor = (command: string, ref: string, extra: Partial<GateAction> & { effect?: Effect }) => (): GateAction => ({ command, target: refs.get(ref) ?? null, lastField, ...extra });
 
   return {
@@ -984,7 +685,6 @@ export function computerTools(deps: ComputerToolDeps) {
           if (!input.app && !input.root) return "Error: give app (or a root ref).";
           const invalid = badApp(input.app) ?? badWindow(input.window_id) ?? (input.root ? badRef(input.root) : null);
           if (invalid) return invalid;
-          lookedAt(input.app);
           const skeleton = !!input.skeleton && !input.surface && !input.root;
           // Only a whole window can read thin; a region or a menu is small by nature.
           const whole = !input.root && !input.surface;
@@ -1014,7 +714,6 @@ export function computerTools(deps: ComputerToolDeps) {
           if (shown.focused) lastField = shown.focused;
           const shownWindow = isRecord(result.data) && isRecord(result.data.window) ? str(result.data.window.id) : "";
           if (/^w-[A-Za-z0-9-]{1,40}$/.test(shownWindow)) windows.add(shownWindow);
-          lookedAt(shown.app);
           currentApp = shown.app ?? (input.app ? cleanApp(input.app) : currentApp);
           const notes = whole
             ? [
@@ -1045,7 +744,6 @@ export function computerTools(deps: ComputerToolDeps) {
           const invalid = badApp(input.app) ?? badWindow(input.window_id) ?? (input.root ? badRef(input.root) : null);
           if (invalid) return invalid;
           if (input.role && !/^[A-Za-z]{2,30}$/.test(input.role)) return "Error: role is one word, for example button.";
-          lookedAt(input.app);
           const args = [
             ...(input.root ? [`--root=${input.root}`] : scope(input)),
             ...(input.surface && !input.root ? [`--surface=${input.surface}`] : []),
@@ -1078,39 +776,6 @@ export function computerTools(deps: ComputerToolDeps) {
           const result = (IS_PROPERTIES as readonly string[]).includes(property ?? "") ? await readOnce("is", args) : await readOnce("get", args);
           return result.ok ? formatRead(result.data) : errorLine(result, true);
         }),
-    }),
-
-    screenshot: tool({
-      description:
-        "Last resort: a picture of one app's window, only after snapshot or find of that app showed nothing usable (a canvas, an image, a tree that stays empty). It gives no refs and costs far more than a snapshot. Use it with click_at.",
-      inputSchema: z.object({ app: appSchema, window_id: windowSchema.optional() }),
-      execute: (input) =>
-        step("screenshot", `Looking at ${shortName(input.app, 30)}…`, async (): Promise<ScreenshotOutput> => {
-          const invalid = badApp(input.app) ?? badWindow(input.window_id);
-          if (invalid) return { text: invalid };
-          if (!looked.has(appKey(cleanApp(input.app) ?? ""))) return { text: LOOK_FIRST };
-          const result = await exec("screenshot", scope(input), READ_MS);
-          if (!result.ok) return { text: result.code === "PERM_DENIED" ? "Error PERM_DENIED: Screen Recording is off for Bee. Use snapshot instead." : errorLine(result, true) };
-          const image = screenshotData(result.data);
-          if (!image) return { text: "Error: no picture came back. Use snapshot instead." };
-          // Its size, so click_at can place a spot in it on screen.
-          const size = pngSize(image);
-          const app = cleanApp(input.app);
-          // On a Mac, the display's scale and the opaque window inside its shadow. On Windows the picture and the window's
-          // bounds are both physical pixels, so scale_factor (the display's DPI scale) is not used.
-          const mac = deps.platform === "mac";
-          const scale = mac ? shotScale(result.data) : null;
-          const content = mac && size ? await opaqueRect(image).catch(() => null) : null;
-          if (mac && size) debugLog.debug("computer", "screenshot-window", { size, scale, content });
-          if (app) shots.set(appKey(app), size ? { ...size, scale, content, windowId: input.window_id } : null);
-          return { text: `Screenshot of ${clip(input.app, 40)}.`, image };
-        }),
-      toModelOutput: ({ output }) => {
-        const shot = typeof output === "string" ? { text: output } : (output as ScreenshotOutput);
-        return shot.image
-          ? { type: "content", value: [{ type: "text", text: shot.text }, { type: "file", data: { type: "data", data: shot.image }, mediaType: "image/png" }] }
-          : { type: "text", value: shot.text };
-      },
     }),
 
     list_apps: tool({
@@ -1152,54 +817,16 @@ export function computerTools(deps: ComputerToolDeps) {
       execute: ({ ref, effect }) => step("click", label(ref, "Clicking", "Clicking…"), async () => badRef(ref) ?? onRef("click", ref)(), gateFor("click", ref, { effect })),
     }),
 
-    click_at: tool({
-      description:
-        "Fallback: click a spot in an app's window by where it is in your latest screenshot of that app, only when snapshot and find give no ref for it. A real mouse click. After clicking into a text field, type_text without ref types there.",
-      inputSchema: z.object({
-        app: appSchema,
-        window_id: windowSchema.optional(),
-        x: z.number().int().min(0).max(1000).describe("Across the screenshot: 0 is its left edge, 1000 its right edge."),
-        y: z.number().int().min(0).max(1000).describe("Down the screenshot: 0 is its top edge, 1000 its bottom edge."),
-        target: z.string().min(1).max(80).describe("What is at that spot, as you see it: message box, Send button, Chat tab."),
-        effect: effectSchema,
-      }),
-      execute: (input) =>
-        step(
-          "click_at",
-          `Clicking ${shortName(input.target, 30)}…`,
-          () => clickAt(input),
-          // The gate has no tree here: what the AI says it clicks, the app, and whether the run has typed (core/computer-gate.ts).
-          (): GateAction =>
-            clickRefusal(input)
-              ? { command: "none" }
-              : { command: "click-at", target: { role: "", name: input.target, context: { app: cleanApp(input.app) ?? "", ancestors: [], nearby: [], field: null } }, effect: input.effect, typed, lastField },
-        ),
-    }),
-
     type_text: tool({
-      description:
-        "Type text into a text field, as keystrokes. A line break presses Return, which sends in most chat apps. Without ref, it types where click_at just put the cursor: no line breaks (use press_key for Return), always real keys.",
-      inputSchema: z.object({
-        ref: refSchema.optional().describe("The text field's ref. Leave it out only right after click_at into a text field."),
-        text: z.string().min(1).max(4000),
-        effect: effectSchema,
-        physical: physicalSchema,
-      }),
+      description: "Type text into the text field with this ref, as keystrokes. A line break presses Return, which sends in most chat apps.",
+      inputSchema: z.object({ ref: refSchema, text: z.string().min(1).max(4000), effect: effectSchema, physical: physicalSchema }),
       execute: ({ ref, text, effect, physical }) =>
-        ref !== undefined
-          ? step(
-              "type_text",
-              label(ref, "Typing in", "Typing…"),
-              async () => badRef(ref) ?? onRef("type", ref, [...(physical ? [HEADED_FLAG] : []), "--", cleanText(text)], ACT_MS + Math.min(40_000, text.length * 40))(),
-              gateFor("type", ref, { effect, text }),
-            )
-          : step(
-              "type_text",
-              "Typing…",
-              () => typeAtPoint(text),
-              // A step that will be refused types nothing, so there is nothing to confirm.
-              (): GateAction => (typeRefusal(text) ? { command: "none" } : { command: "type", target: point?.focus.element ?? null, text, effect, lastField }),
-            ),
+        step(
+          "type_text",
+          label(ref, "Typing in", "Typing…"),
+          async () => badRef(ref) ?? onRef("type", ref, [...(physical ? [HEADED_FLAG] : []), "--", cleanText(text)], ACT_MS + Math.min(40_000, text.length * 40))(),
+          gateFor("type", ref, { effect, text }),
+        ),
     }),
 
     set_value: tool({
@@ -1265,9 +892,7 @@ export function computerTools(deps: ComputerToolDeps) {
             if (shellElement(lastField)) return SHELL_MESSAGE;
             currentApp = cleanApp(input.app) ?? currentApp;
             const result = await exec("press", [keys, ...scope(input), ...(input.physical ? [HEADED_FLAG] : [])], ACT_MS);
-            // Letter keys can type a draft just as type_text does, so a later click_at asks first (it may hit Send).
-            if (editsText(keys) && (result.ok || result.retry !== "safe")) typed = true;
-            if (!keepsFocus(keys)) [lastField, point] = [null, null];
+            if (!keepsFocus(keys)) lastField = null;
             return result.ok ? `${formatDone(result.data)} Check the result with a snapshot.` : errorLine(result);
           },
           () => ({ command: "press", keys: input.keys.trim().toLowerCase().replace(/\s*\+\s*/g, "+"), lastField, effect: input.effect }),
@@ -1281,7 +906,7 @@ export function computerTools(deps: ComputerToolDeps) {
         step("open_app", `Opening ${shortName(name, 30)}…`, async () => {
           if (offLimitsApp(name)) return OFF_LIMITS_MESSAGE;
           const result = await deps.desktop.openApp(name);
-          if (result.ok) [currentApp, lastField, point] = [name, null, null];
+          if (result.ok) [currentApp, lastField] = [name, null];
           return desktopLine(result);
         }),
     }),
@@ -1293,7 +918,7 @@ export function computerTools(deps: ComputerToolDeps) {
         step("focus_window", `Switching to ${shortName(app, 30)}…`, async () => {
           if (offLimitsApp(app)) return OFF_LIMITS_MESSAGE;
           const result = await deps.desktop.focusWindow({ app, ...(title ? { title } : {}) });
-          if (result.ok) [currentApp, lastField, point] = [app, null, null];
+          if (result.ok) [currentApp, lastField] = [app, null];
           return desktopLine(result);
         }),
     }),
@@ -1304,7 +929,7 @@ export function computerTools(deps: ComputerToolDeps) {
       execute: ({ url }) =>
         step("open_url", "Opening the link…", async () => {
           const result = await deps.desktop.openUrl(url);
-          if (result.ok) [lastField, point] = [null, null];
+          if (result.ok) lastField = null;
           return desktopLine(result);
         }),
     }),
@@ -1318,7 +943,7 @@ export function computerTools(deps: ComputerToolDeps) {
           if (!app) return "Error: that is not an app name. Check list_apps.";
           if (offLimitsApp(app) || ["finder", "explorer", "file explorer", "dock", "windows explorer"].includes(appKey(app))) return "Error: Bee does not quit that app.";
           const result = await exec("close-app", [app], ACT_MS);
-          if (result.ok) [lastField, point] = [null, null];
+          if (result.ok) lastField = null;
           return done(result);
         }),
     }),
@@ -1349,6 +974,6 @@ export function computerTools(deps: ComputerToolDeps) {
 
 /** The tools' names, for the prompt and the activity labels (renderer/src/island.ts). */
 export const COMPUTER_TOOL_NAMES = [
-  "snapshot", "find", "read", "screenshot", "list_apps", "list_windows", "click", "click_at", "type_text", "set_value", "focus", "select_option", "set_state",
-  "scroll", "press_key", "open_app", "focus_window", "open_url", "close_app", "wait",
+  "snapshot", "find", "read", "list_apps", "list_windows", "click", "type_text", "set_value", "focus", "select_option", "set_state", "scroll", "press_key",
+  "open_app", "focus_window", "open_url", "close_app", "wait",
 ] as const;

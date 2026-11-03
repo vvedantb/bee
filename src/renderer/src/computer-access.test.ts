@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { ACCESS_NEEDS_ACCESSIBILITY, ACCESS_NEEDS_SCREEN_RECORDING, ACCESS_UNSUPPORTED, computerAccessMessage } from "./computer-access";
+import { ACCESS_NEEDS_ACCESSIBILITY, ACCESS_UNSUPPORTED, computerAccessMessage } from "./computer-access";
 
 describe("computerAccessMessage", () => {
   const mac = { supported: true, platform: "mac", accessibility: "granted", screenRecording: "granted" } as const;
 
-  it("says what macOS still has to allow: Accessibility first, then Screen Recording", () => {
+  it("says what macOS still has to allow: Accessibility only, since computer use never takes a picture", () => {
     expect(computerAccessMessage({ ...mac, accessibility: "denied", screenRecording: "denied" })).toBe(ACCESS_NEEDS_ACCESSIBILITY);
-    expect(computerAccessMessage({ ...mac, screenRecording: "denied" })).toBe(ACCESS_NEEDS_SCREEN_RECORDING);
+    expect(computerAccessMessage({ ...mac, screenRecording: "denied" })).toBeNull();
     expect(ACCESS_NEEDS_ACCESSIBILITY).toMatch(/Privacy & Security → Accessibility/);
   });
 
@@ -19,6 +19,6 @@ describe("computerAccessMessage", () => {
 
   it("says where computer use works", () => {
     expect(computerAccessMessage({ supported: false, platform: "other", accessibility: "unknown", screenRecording: "unknown" })).toBe(ACCESS_UNSUPPORTED);
-    for (const text of [ACCESS_UNSUPPORTED, ACCESS_NEEDS_ACCESSIBILITY, ACCESS_NEEDS_SCREEN_RECORDING]) expect(text).not.toMatch(/claude|haiku|anthropic|clerk/i);
+    for (const text of [ACCESS_UNSUPPORTED, ACCESS_NEEDS_ACCESSIBILITY]) expect(text).not.toMatch(/claude|haiku|anthropic|clerk|screen recording/i);
   });
 });
