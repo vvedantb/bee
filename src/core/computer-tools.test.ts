@@ -1,10 +1,13 @@
+import { deflateSync } from "node:zlib";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HEADED_FLAG, type AgentDesktopResult, type ComputerRun, type ComputerUseCommand } from "./agent-desktop-envelope";
-import { createRunControl, type RunControl } from "./computer-control";
+import { createRunControl, type ComputerPlatform, type RunControl } from "./computer-control";
 import { shellElement, type Element } from "./computer-gate";
 import {
-  CONFIRM_LABEL, STOPPED, computerTools, errorLine, formatMatches, formatSnapshot, keysFor, offLimitsApp, pngSize, screenPoint, thinTree, type ConfirmRequest,
+  CONFIRM_LABEL, STOPPED, computerTools, editsText, errorLine, formatMatches, formatSnapshot, keysFor, offLimitsApp, pngSize, screenPoint, shotScale, thinTree,
+  type ConfirmRequest,
 } from "./computer-tools";
+import { opaqueRect, type PixelRect } from "./png-opaque";
 import { setDebugSink, type DebugEvent } from "./debug-log";
 import type { DesktopActions } from "./desktop-actions";
 
@@ -48,7 +51,9 @@ const desktop: DesktopActions = {
   openUrl: async (url) => ({ ok: true, message: `Opened ${url}` }),
 };
 
-function setup(options: { askFirst?: boolean; confirm?: (request: ConfirmRequest, signal: AbortSignal) => Promise<boolean>; run?: ComputerRun; control?: RunControl } = {}) {
+function setup(
+  options: { askFirst?: boolean; confirm?: (request: ConfirmRequest, signal: AbortSignal) => Promise<boolean>; run?: ComputerRun; control?: RunControl; platform?: ComputerPlatform } = {},
+) {
   const fake = fakeRun();
   const run = options.run ?? fake.run;
   const control = options.control ?? createRunControl();
@@ -58,7 +63,7 @@ function setup(options: { askFirst?: boolean; confirm?: (request: ConfirmRequest
     run,
     desktop,
     control,
-    platform: "mac",
+    platform: options.platform ?? "mac",
     askFirst: () => options.askFirst ?? true,
     confirm: async (request, signal) => {
       asked.push(request);
@@ -76,6 +81,81 @@ beforeEach(() => {
   vi.spyOn(console, "debug").mockImplementation(() => undefined);
 });
 afterEach(() => vi.restoreAllMocks());
+
+/** CRC-32 for PNG chunks. */
+const crc32 = (bytes: Buffer) => {
+  let crc = ~0;
+  for (const byte of bytes) {
+    crc ^= byte;
+    for (let bit = 0; bit < 8; bit++) crc = (crc >>> 1) ^ (0xedb88320 & -(crc & 1));
+  }
+  return ~crc >>> 0;
+};
+
+/**
+ * A real RGBA PNG (base64) of a macOS window screenshot as screencapture -l takes it: the opaque window at `content`, with
+ * rounded corners, in a semi-transparent shadow over the rest. Rows use every PNG filter in turn, as encoders do.
+ */
+function windowPng(width: number, height: number, content: PixelRect, radius = 20): string {
+  const rows: Buffer[] = [];
+  let previous = Buffer.alloc(width * 4);
+  const paeth = (a: number, b: number, c: number) => {
+    const p = a + b - c;
+    const [pa, pb, pc] = [Math.abs(p - a), Math.abs(p - b), Math.abs(p - c)];
+    return pa <= pb && pa <= pc ? a : pb <= pc ? b : c;
+  };
+  for (let y = 0; y < height; y++) {
+    const row = Buffer.alloc(width * 4);
+    for (let x = 0; x < width; x++) {
+      const [dx, dy] = [Math.max(content.x - x, 0, x - (content.x + content.width - 1)), Math.max(content.y - y, 0, y - (content.y + content.height - 1))];
+      const inside = dx === 0 && dy === 0;
+      // Rounded corners: transparent outside a circle in each corner.
+      const cx = Math.max(content.x + radius - x, 0, x - (content.x + content.width - 1 - radius));
+      const cy = Math.max(content.y + radius - y, 0, y - (content.y + content.height - 1 - radius));
+      const corner = cx > 0 && cy > 0 && cx * cx + cy * cy > radius * radius;
+      const alpha = inside && !corner ? 255 : Math.max(0, 120 - 3 * Math.max(dx, dy));
+      row.set([(x * 7) & 255, (y * 3) & 255, 90, alpha], x * 4);
+    }
+    const filter = y % 5;
+    const out = Buffer.alloc(width * 4 + 1);
+    out[0] = filter;
+    for (let i = 0; i < row.length; i++) {
+      const [a, b, c] = [i >= 4 ? (row[i - 4] ?? 0) : 0, previous[i] ?? 0, i >= 4 ? (previous[i - 4] ?? 0) : 0];
+      const predict = [0, a, b, (a + b) >> 1, paeth(a, b, c)][filter] ?? 0;
+      out[i + 1] = ((row[i] ?? 0) - predict) & 255;
+    }
+    rows.push(out);
+    previous = row;
+  }
+  const chunk = (type: string, data: Buffer) => {
+    const body = Buffer.concat([Buffer.from(type, "ascii"), data]);
+    const length = Buffer.alloc(4);
+    length.writeUInt32BE(data.length);
+    const crc = Buffer.alloc(4);
+    crc.writeUInt32BE(crc32(body));
+    return Buffer.concat([length, body, crc]);
+  };
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(width, 0);
+  header.writeUInt32BE(height, 4);
+  header.set([8, 6, 0, 0, 0], 8);
+  const deflated = deflateSync(Buffer.concat(rows));
+  // Two IDAT chunks, as large PNGs have.
+  const half = Math.floor(deflated.length / 2);
+  const signature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  return Buffer.concat([signature, chunk("IHDR", header), chunk("IDAT", deflated.subarray(0, half)), chunk("IDAT", deflated.subarray(half)), chunk("IEND", Buffer.alloc(0))]).toString("base64");
+}
+
+// A macOS window shadow in points: the same each side, offset down 10 pt (screencapture -l, as agent-desktop takes it).
+const SHADOW = { side: 28, top: 18, bottom: 38 };
+/** A shadowed Mac screenshot of a window of w × h pt at scale s: the picture's size and where the window is in it. */
+const macShot = (w: number, h: number, s: number) => ({
+  width: (w + 2 * SHADOW.side) * s,
+  height: (h + SHADOW.top + SHADOW.bottom) * s,
+  content: { x: SHADOW.side * s, y: SHADOW.top * s, width: w * s, height: h * s },
+});
+/** A spot in a picture's pixels, as click_at's 0 to 1000. */
+const spot = (shot: { width: number; height: number }, px: number, py: number) => [Math.round((px / shot.width) * 1000), Math.round((py / shot.height) * 1000)] as const;
 
 describe("formatSnapshot", () => {
   it("lists elements with refs, one line each, and remembers what each ref is", () => {
@@ -760,23 +840,125 @@ describe("click_at and typing without a ref", () => {
   };
   const found = (match: Record<string, unknown>): AgentDesktopResult => ({ ok: true, data: { snapshot_id: "s9", matches: [match] } });
 
-  it("reads a PNG's size, and places a spot in a screenshot on screen (Retina, a moved window, a shadow)", () => {
+  it("reads a PNG's size and a Mac screenshot's scale", () => {
     expect(pngSize(png(2560, 1600))).toEqual({ width: 2560, height: 1600 });
     expect(pngSize("A".repeat(200))).toBeNull();
     expect(pngSize("!!")).toBeNull();
+    expect(shotScale({ data: "x", scale_factor: 2 })).toBe(2);
+    for (const bad of [{ scale_factor: 0 }, { scale_factor: "2" }, { scale_factor: Number.NaN }, null, "x"]) expect(shotScale(bad)).toBeNull();
+  });
+
+  it("finds the opaque window inside a Mac screenshot's shadow, past the rounded corners", async () => {
+    for (const [w, h, s] of [[1280, 800, 2], [400, 300, 1], [500, 350, 2], [1440, 900, 1]] as const) {
+      const shot = macShot(w, h, s);
+      expect(await opaqueRect(windowPng(shot.width, shot.height, shot.content, 10 * s)), `${w}x${h}@${s}x`).toEqual(shot.content);
+    }
+    // No alpha to read: a header only, not a PNG, or nothing opaque.
+    expect(await opaqueRect(png(2560, 1600))).toBeNull();
+    expect(await opaqueRect("!!")).toBeNull();
+    expect(await opaqueRect(windowPng(100, 80, { x: 200, y: 200, width: 10, height: 10 }))).toBeNull();
+  });
+
+  /** screenPoint for a spot at picture pixels (px, py), against where it is on screen; within a point, for the 0–1000 grid. */
+  const expectNear = (point: ReturnType<typeof screenPoint>, x: number, y: number) => {
+    expect(point).toMatchObject({ x: expect.any(Number), y: expect.any(Number) });
+    const { x: gotX, y: gotY } = point as { x: number; y: number };
+    expect(Math.abs(gotX - x), `x ${gotX} for ${x}`).toBeLessThanOrEqual(1);
+    expect(Math.abs(gotY - y), `y ${gotY} for ${y}`).toBeLessThanOrEqual(1);
+  };
+
+  it("places a spot in a shadowed Mac screenshot on screen, at 2x and 1x and for small windows", () => {
+    for (const [w, h, s] of [[1280, 800, 2], [1280, 800, 1], [400, 300, 1], [500, 350, 2], [300, 200, 2]] as const) {
+      const bounds = { x: 100, y: 50, width: w, height: h };
+      const shot = macShot(w, h, s);
+      const label = `${w}x${h}@${s}x`;
+      for (const withAlpha of [true, false]) {
+        // With the window the PNG showed, and without (no alpha read): the display's scale and the shadow's usual shape.
+        const given = withAlpha ? { ...shot, scale: s } : { width: shot.width, height: shot.height, scale: s, content: null };
+        // The window's middle, a spot 30 pt in from its top left, and one 20 pt in from its bottom right.
+        for (const [ptX, ptY] of [[w / 2, h / 2], [30, 30], [w - 20, h - 20]] as const) {
+          const [x, y] = spot(shot, shot.content.x + ptX * s, shot.content.y + ptY * s);
+          expectNear(screenPoint(given, bounds, x, y, "mac"), 100 + ptX, 50 + ptY);
+        }
+        // In the shadow, above, left of and below the window.
+        expect(screenPoint(given, bounds, 500, 2, "mac"), label).toBe("outside");
+        expect(screenPoint(given, bounds, 2, 500, "mac"), label).toBe("outside");
+        expect(screenPoint(given, bounds, 500, 998, "mac"), label).toBe("outside");
+      }
+      // An older agent-desktop with no scale_factor: the whole scale that fits.
+      const [x, y] = spot(shot, shot.content.x + 30 * s, shot.content.y + 30 * s);
+      expectNear(screenPoint({ width: shot.width, height: shot.height }, bounds, x, y, "mac"), 130, 80);
+    }
+    // A screenshot taken without a shadow (a full-screen window): the picture is the window.
     const bounds = { x: 100, y: 50, width: 1280, height: 800 };
-    expect(screenPoint({ width: 1280, height: 800 }, bounds, 500, 500)).toEqual({ x: 740, y: 450 });
-    expect(screenPoint({ width: 2560, height: 1600 }, bounds, 500, 900)).toEqual({ x: 740, y: 770 });
-    expect(screenPoint({ width: 2560, height: 1600 }, { ...bounds, x: -1280 }, 0, 0)).toEqual({ x: -1280, y: 50 });
-    expect(screenPoint({ width: 2560, height: 1600 }, bounds, 1000, 1000)).toEqual({ x: 1379, y: 849 });
-    // A shadow 40 px each side round a 2x picture.
-    expect(screenPoint({ width: 2640, height: 1680 }, bounds, 500, 500)).toEqual({ x: 740, y: 450 });
-    expect(screenPoint({ width: 2640, height: 1680 }, bounds, 0, 0)).toBe("outside");
-    // Windows at 150%, and a window whose bounds include an invisible 7 px border the picture leaves out.
-    expect(screenPoint({ width: 1920, height: 1200 }, bounds, 500, 500)).toEqual({ x: 740, y: 450 });
-    expect(screenPoint({ width: 1906, height: 1033 }, { x: 0, y: 0, width: 1920, height: 1040 }, 0, 0)).toEqual({ x: 7, y: 4 });
-    // The window was resized since.
-    expect(screenPoint({ width: 2560, height: 1600 }, { ...bounds, width: 900 }, 500, 500)).toBe("resized");
+    expect(screenPoint({ width: 2560, height: 1600, scale: 2 }, bounds, 500, 500, "mac")).toEqual({ x: 740, y: 450 });
+    expect(screenPoint({ width: 2560, height: 1600 }, { ...bounds, x: -1280 }, 0, 0, "mac")).toEqual({ x: -1280, y: 50 });
+    // The far edges stay one in, on the window.
+    expect(screenPoint({ width: 2560, height: 1600, scale: 2 }, bounds, 1000, 1000, "mac")).toEqual({ x: 1379, y: 849 });
+  });
+
+  it("refuses a Mac screenshot that no longer fits the window", () => {
+    const shot = { ...macShot(1280, 800, 2), scale: 2 };
+    const bounds = { x: 100, y: 50, width: 1280, height: 800 };
+    // Narrower or shorter by far more than a shadow, or a 1x picture said to be 2x.
+    expect(screenPoint(shot, { ...bounds, width: 900 }, 500, 500, "mac")).toBe("resized");
+    expect(screenPoint(shot, { ...bounds, height: 600 }, 500, 500, "mac")).toBe("resized");
+    expect(screenPoint({ ...macShot(1280, 800, 1), scale: 2 }, bounds, 500, 500, "mac")).toBe("resized");
+    // Wider than the picture.
+    expect(screenPoint({ width: 2560, height: 1600, scale: 2 }, { ...bounds, width: 1400 }, 500, 500, "mac")).toBe("resized");
+    // The alpha reading does not fit (a translucent sidebar), but the shadow's usual shape does: still placed.
+    expect(screenPoint({ ...shot, content: { x: 400, y: 36, width: 2160, height: 1600 } }, bounds, 500, 500, "mac")).toEqual({ x: 740, y: 460 });
+  });
+
+  it("places a spot in a Windows screenshot 1:1, inside the invisible resize border, at any scaling", () => {
+    // 100%: GetWindowRect counts a 7 px border left, right and below that the picture leaves out.
+    expect(screenPoint({ width: 1906, height: 1033 }, { x: 0, y: 0, width: 1920, height: 1040 }, 0, 0, "windows")).toEqual({ x: 7, y: 0 });
+    // 125% and 150% (9 px and 11 px borders), the picture in physical pixels like the bounds. scale_factor is never divided by.
+    for (const [border, scale] of [[9, 1.25], [11, 1.5], [14, 2]] as const) {
+      const bounds = { x: 200, y: 100, width: 1600, height: 1000 };
+      const shot = { width: 1600 - 2 * border, height: 1000 - border, scale };
+      for (const [px, py] of [[0, 0], [791, 495], [1500, 900]] as const) {
+        const [x, y] = spot(shot, px, py);
+        expectNear(screenPoint(shot, bounds, x, y, "windows"), 200 + border + (x / 1000) * shot.width, 100 + (y / 1000) * shot.height);
+      }
+    }
+    // Maximised at 150%: the border is outside the screen on every side.
+    expect(screenPoint({ width: 2560, height: 1440 }, { x: -11, y: -11, width: 2582, height: 1462 }, 0, 0, "windows")).toEqual({ x: 0, y: 0 });
+    expect(screenPoint({ width: 2560, height: 1440 }, { x: -11, y: -11, width: 2582, height: 1462 }, 500, 500, "windows")).toEqual({ x: 1280, y: 720 });
+    // A picture the size of the bounds (the older capture): the same.
+    expect(screenPoint({ width: 1600, height: 1000 }, { x: 200, y: 100, width: 1600, height: 1000 }, 500, 500, "windows")).toEqual({ x: 1000, y: 600 });
+    // Resized since, or a picture at another scale than the bounds.
+    expect(screenPoint({ width: 1600, height: 1000 }, { x: 200, y: 100, width: 1300, height: 1000 }, 500, 500, "windows")).toBe("resized");
+    expect(screenPoint({ width: 1600, height: 1000 }, { x: 200, y: 100, width: 1700, height: 1000 }, 500, 500, "windows")).toBe("resized");
+    expect(screenPoint({ width: 1920, height: 1200 }, { x: 100, y: 50, width: 1280, height: 800 }, 500, 500, "windows")).toBe("resized");
+  });
+
+  it("clicks the window under a spot in a shadowed Retina screenshot, through the tools", async () => {
+    const shot = macShot(1280, 800, 2);
+    const image = windowPng(shot.width, shot.height, shot.content);
+    const { run, commands } = teamsRun(INTERNAL, ({ command }) => (command === "screenshot" ? { ok: true, data: { data: image, format: "png", width: shot.width, height: shot.height, scale_factor: 2 } } : null));
+    const { call } = setup({ run, askFirst: false });
+    await call("screenshot", { app: TEAMS });
+    // 600 pt across and 700 pt down the window, which sits at 100, 50.
+    const [x, y] = spot(shot, shot.content.x + 1200, shot.content.y + 1400);
+    await call("click_at", { app: TEAMS, x, y, target: "message box", effect: "none" });
+    const click = commands().find(([command]) => command === "mouse-click")?.[1] ?? "";
+    const [clickX, clickY] = click.replace("--xy=", "").split(",").map(Number);
+    expect(Math.abs((clickX ?? 0) - 700)).toBeLessThanOrEqual(1);
+    expect(Math.abs((clickY ?? 0) - 750)).toBeLessThanOrEqual(1);
+  });
+
+  it("clicks 1:1 on Windows, whatever scale_factor says", async () => {
+    const bounds = { x: 200, y: 100, width: 1600, height: 1000 };
+    const { run, commands } = teamsRun(INTERNAL, ({ command }) => {
+      if (command === "screenshot") return { ok: true, data: { data: png(1582, 991), width: 1582, height: 991, scale_factor: 1.25 } };
+      if (command === "list-windows") return { ok: true, data: { windows: [{ ...WINDOW, bounds }] } };
+      return null;
+    });
+    const { call } = setup({ run, askFirst: false, platform: "windows" });
+    await call("screenshot", { app: TEAMS });
+    await call("click_at", { app: TEAMS, x: 0, y: 0, target: "message box", effect: "none" });
+    expect(commands().find(([command]) => command === "mouse-click")).toEqual(["mouse-click", "--xy=209,100", HEADED_FLAG]);
   });
 
   it("turns text into key presses: Shift for capitals, names for plain punctuation, nothing it would have to guess", () => {
@@ -854,6 +1036,35 @@ describe("click_at and typing without a ref", () => {
     }
   });
 
+  it("never types again on its own when typing into the focused field fails; the AI's next type_text uses key presses", async () => {
+    for (const failure of [{ ok: false, code: "ACTION_FAILED", retry: "safe" }, { ok: false, code: "ACTION_FAILED", retry: "unsafe" }] as AgentDesktopResult[]) {
+      const { run, commands } = teamsRun(found(COMPOSE), ({ command }) => (command === "type" ? failure : null));
+      const { call } = setup({ run, askFirst: false });
+      await call("screenshot", { app: TEAMS });
+      await call("click_at", { app: TEAMS, x: 500, y: 900, target: "message box", effect: "none" });
+      const line = await call("type_text", { text: "Hi", effect: "none" });
+      expect(line).toMatch(failure.ok ? /never/ : failure.retry === "safe" ? /Nothing was typed\. .*type_text without ref again/ : /may still have happened.*Take a screenshot before typing again/);
+      // One type, and no key presses after it.
+      expect(commands().filter(([command]) => command === "type" || command === "press")).toEqual([["type", "@s9:e3", HEADED_FLAG, "--", "Hi"]]);
+      // The next type_text, a new step, types as key presses where the click put the cursor.
+      expect(await call("type_text", { text: "Hi", effect: "none" })).toMatch(/^Typed 2 characters as key presses/);
+      expect(commands().filter(([command]) => command === "type" || command === "press").map(([command, key]) => `${command} ${key}`)).toEqual(["type @s9:e3", "press shift+h", "press i"]);
+    }
+  });
+
+  it("types no line or paragraph breaks and no tabs without a ref, through the focused field's ref or as key presses", async () => {
+    for (const focused of [found(COMPOSE), INTERNAL]) {
+      for (const text of ["a\rb", "a\nb", "a\u0085b", "a\u2028b", "a\u2029b", "a\u000bb", "a\u000cb", "a\tb"]) {
+        const { run, calls } = teamsRun(focused);
+        const { call } = setup({ run, askFirst: false });
+        await call("screenshot", { app: TEAMS });
+        await call("click_at", { app: TEAMS, x: 500, y: 900, target: "message box", effect: "none" });
+        expect(await call("type_text", { text, effect: "none" }), JSON.stringify(text)).toMatch(/no line breaks or tabs/);
+        expect(calls.filter(({ command }) => command === "press" || command === "type")).toEqual([]);
+      }
+    }
+  });
+
   it("forgets where click_at put the cursor once a key, a ref action or an app switch may have moved it", async () => {
     const { run } = teamsRun();
     const { call } = setup({ run, askFirst: false });
@@ -926,6 +1137,35 @@ describe("click_at and typing without a ref: Confirm still asks", () => {
     expect(await call("click_at", { app: TEAMS, x: 960, y: 900, target: "Send arrow", effect: "none" })).toBe(STOPPED);
     expect(asked.at(-1)).toMatchObject({ kind: "send", question: "Send this?" });
     expect(commands.filter((command) => command === "mouse-click")).toHaveLength(2);
+  });
+
+  it("asks before a click once press_key may have typed a draft, but not after keys that only move", async () => {
+    for (const keys of ["h", "shift+h", "space", "comma", "delete", "backspace", "cmd+v", "ctrl+v", "return", "f5"]) {
+      const { runner } = run();
+      const { call, asked } = setup({ run: runner });
+      await call("screenshot", { app: TEAMS });
+      await call("click_at", { app: TEAMS, x: 500, y: 900, target: "message box", effect: "none" });
+      await call("press_key", { keys, app: TEAMS, effect: "none" });
+      asked.length = 0;
+      await call("click_at", { app: TEAMS, x: 500, y: 900, target: "message box", effect: "none" });
+      expect(asked.map((request) => request.kind), keys).toEqual(["send"]);
+    }
+    for (const keys of ["tab", "shift+tab", "escape", "down", "left", "pageup", "end", "cmd+up", "alt+left", "shift"]) {
+      const { runner } = run();
+      const { call, asked } = setup({ run: runner });
+      await call("screenshot", { app: TEAMS });
+      await call("click_at", { app: TEAMS, x: 500, y: 900, target: "message box", effect: "none" });
+      await call("press_key", { keys, app: TEAMS, effect: "none" });
+      await call("click_at", { app: TEAMS, x: 500, y: 900, target: "message box", effect: "none" });
+      expect(asked, keys).toEqual([]);
+    }
+  });
+
+  it("counts every key that is not pure movement or a modifier as typing", () => {
+    for (const keys of ["a", "shift+a", "1", "space", "period", "return", "shift+return", "delete", "backspace", "cmd+v", "ctrl+z", "cmd+w", "f5", "insert"]) expect(editsText(keys), keys).toBe(true);
+    for (const keys of ["tab", "shift+tab", "esc", "escape", "up", "down", "left", "right", "pageup", "pagedown", "home", "end", "shift+down", "cmd+left", "ctrl+end", "shift", "cmd+shift"]) {
+      expect(editsText(keys), keys).toBe(false);
+    }
   });
 
   it("asks nothing for a step it will refuse, even when the AI says it sends", async () => {

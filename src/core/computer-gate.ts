@@ -108,7 +108,7 @@ const CONTEXT_DEPTH = 3;
 
 const ENTER = new Set(["return", "enter", "numpadenter", "kpenter"]);
 const DELETE_KEYS = new Set(["delete", "backspace", "forwarddelete", "del"]);
-const MODIFIERS = new Set(["cmd", "command", "meta", "ctrl", "control", "alt", "option", "shift", "win", "super"]);
+export const MODIFIERS = new Set(["cmd", "command", "meta", "ctrl", "control", "alt", "option", "shift", "win", "super"]);
 // Send shortcuts outside a Return: Outlook (Windows) and Apple Mail.
 const SEND_KEYS = new Set(["alt+s", "option+s", "cmd+shift+d", "command+shift+d"]);
 // Keys after which focus may be somewhere else: Return, Tab, Escape, function keys.

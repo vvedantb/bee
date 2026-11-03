@@ -249,11 +249,20 @@ export const MESSAGE_MAX = 160;
 const QUOTED = /(^|[\s(:=,[])["'`“‘].*?["'`”’](?=$|[\s),.:;!?\]])/g;
 const PATH = /(?:[A-Za-z]:\\|\\\\|~?\/)[^\s'"`]*/g;
 const LINK = /\b(?:https?|file):\/\/\S+/gi;
+// A home folder (macOS /Users/<name>, Linux /home/<name>, Windows C:\Users\<name>, either slash) and what follows it. A user
+// name can hold spaces, so the name runs to the next slash (or to the end, when none follows) and the rest of the path to a
+// space, as PATH does.
+const HOME = /(?:\b[A-Za-z]:)?[\\/](?:Users|home|Documents and Settings)[\\/][^\\/'"`\r\n]+(?:[\\/][^\s'"`]*)?/gi;
+// A secret by its name (token=…, api_key: …, password=…), an Authorization value, and any long run of hex or base64 with a
+// digit in it (a key, a session id).
+const SECRET_PAIR = /\b([\w-]*(?:token|key|secret|password|passwd|pwd|credential|authorization)[\w-]*)\s*[=:]\s*(?:"[^"]*"|'[^']*'|[^\s,;&]+)/gi;
+const BEARER = /\b(Bearer|Basic)\s+[\w.~+/=-]+/gi;
+const LONG_TOKEN = /(?<![\w+/=-])(?=[\w+/=-]*\d)(?=[\w+/=-]*[A-Za-z])[\w+/-]{32,}={0,2}/g;
 const EMAIL = /\b[\w.+-]+@[\w-]+\.[\w.-]+\b/g;
 
 /**
  * agent-desktop's error message, safe to log and to show the AI: one line, no control characters, anything quoted (names and
- * titles), any path, link or email address replaced, cut to MESSAGE_MAX. Undefined when there is nothing left.
+ * titles), any path (a home folder whole, with its user name), link, email address or secret replaced, cut to MESSAGE_MAX. Undefined when there is nothing left.
  */
 export function safeMessage(raw: unknown): string | undefined {
   if (typeof raw !== "string") return undefined;
@@ -262,8 +271,12 @@ export function safeMessage(raw: unknown): string | undefined {
     .replace(/[\u0000-\u001f\u007f\u2028\u2029]/g, " ")
     .replace(LINK, "<link>")
     .replace(EMAIL, "<email>")
+    .replace(HOME, "<path>")
+    .replace(BEARER, "$1 <secret>")
+    .replace(SECRET_PAIR, "$1=<secret>")
     .replace(QUOTED, "$1'…'")
     .replace(PATH, "<path>")
+    .replace(LONG_TOKEN, "<secret>")
     .replace(/\s+/g, " ")
     .trim();
   if (!line) return undefined;

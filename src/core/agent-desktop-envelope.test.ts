@@ -235,6 +235,34 @@ describe("parseEnvelope", () => {
     for (const empty of ["", "   ", 42, null, undefined]) expect(safeMessage(empty)).toBeUndefined();
   });
 
+  it("takes out a home folder whole, with a user name that has spaces, on macOS, Linux and Windows", () => {
+    for (const [message, kept] of [
+      ["state root C:\\Users\\Vedant B\\AppData\\Local\\agent-desktop is locked", "state root <path> is locked"],
+      ["state root c:/Users/Vedant B/AppData/x is locked", "state root <path> is locked"],
+      ["open /Users/vedant b/Library/Caches/x.json: permission denied", "open <path> permission denied"],
+      ["open /home/sam smith/.config/agent-desktop/state failed", "open <path> failed"],
+      ["owned by C:\\Users\\Vedant B", "owned by <path>"],
+      ["cannot read C:\\Documents and Settings\\Sam Lee\\x.ini", "cannot read <path>"],
+    ] as const) {
+      const line = safeMessage(message) ?? "";
+      expect(line, message).toBe(kept);
+      for (const name of ["Vedant", "vedant", "B\\", "b/", "sam", "Sam", "smith", "Lee"]) expect(line, message).not.toContain(name);
+    }
+  });
+
+  it("takes out secrets: named values, Authorization headers and long hex or base64 runs", () => {
+    expect(safeMessage("request failed: token=abc123 key: zzz password='a b c' api_key=XYZ secret=s3")).toBe(
+      "request failed: token=<secret> key=<secret> password=<secret> api_key=<secret> secret=<secret>",
+    );
+    expect(safeMessage("Authorization: Bearer eyJhbGciOi.payload.sig rejected")).toBe("Authorization=<secret> <secret> rejected");
+    expect(safeMessage("got Bearer abc.def-ghi back")).toBe("got Bearer <secret> back");
+    expect(safeMessage("session 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08 expired")).toBe("session <secret> expired");
+    expect(safeMessage("blob aGVsbG8gd29ybGQgdGhpcyBpcyBhIGxvbmcgYmFzZTY0IHN0cmluZw== bad")).toBe("blob <secret> bad");
+    // Ordinary words, codes and short ids stay.
+    expect(safeMessage("observation_incomplete_due_to_renderer_activation")).toBe("observation_incomplete_due_to_renderer_activation");
+    expect(safeMessage("ref @s8f3k2p9:e12 is stale after 1200 ms")).toBe("ref @s8f3k2p9:e12 is stale after 1200 ms");
+  });
+
   it("reads the envelope after stray lines, and reports unreadable output", () => {
     expect(parseEnvelope(`warning: something\n${raw("find-count-leave.json").trim()}\n`)).toEqual({ ok: true, data: { count: 1 } });
     expect(parseEnvelope("")).toEqual({ ok: false, code: "BAD_OUTPUT" });

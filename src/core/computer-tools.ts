@@ -5,11 +5,12 @@ import {
 } from "./agent-desktop-envelope";
 import { awaitAnswer, CONFIRM_TIMEOUT_MS, type ComputerPlatform, type IrreversibleKind, type RunControl } from "./computer-control";
 import {
-  EFFECTS, LABEL_MAX, WINDOW_ROLES, confirmDetail, confirmQuestion, focusAfterClick, insideOf, isNavField, isTextEntry, keepsFocus, keysLabel, needsConfirm,
+  EFFECTS, LABEL_MAX, MODIFIERS, WINDOW_ROLES, confirmDetail, confirmQuestion, focusAfterClick, insideOf, isNavField, isTextEntry, keepsFocus, keysLabel, needsConfirm,
   shellElement, shortName, type Effect, type Element, type GateAction, type TreeContext,
 } from "./computer-gate";
 import { APP_NAME_MAX, WINDOW_TITLE_MAX, appKey, isBlockedApp, type DesktopActionResult, type DesktopActions } from "./desktop-actions";
 import { debugLog, errorData, msSince } from "./debug-log";
+import { opaqueRect, type PixelRect } from "./png-opaque";
 import type { LunaToolActivity } from "./luna";
 
 // The AI's computer tools, for a direct request only ("Bee, send Sam a message in Discord"): never in a meeting tip turn. They
@@ -406,6 +407,12 @@ export function screenshotData(data: unknown): string | null {
   return null;
 }
 
+/** agent-desktop's scale_factor for a screenshot (1 or 2 on a Mac), or null. */
+export function shotScale(data: unknown): number | null {
+  const scale = isRecord(data) ? data.scale_factor : undefined;
+  return typeof scale === "number" && Number.isFinite(scale) && scale >= 1 && scale <= 4 ? scale : null;
+}
+
 /** A PNG's width and height in pixels, from its header (the first 24 bytes), or null. */
 export function pngSize(base64: string): { width: number; height: number } | null {
   let head: string;
@@ -424,35 +431,74 @@ export function pngSize(base64: string): { width: number; height: number } | nul
 export type ScreenPoint = { x: number; y: number } | "resized" | "outside";
 
 /**
- * A spot in a window's screenshot, x and y from 0 to 1000 across and down the picture (so it does not matter how the AI's
- * picture was scaled on the way), as a screen point inside the window's bounds now. The picture can be larger than the bounds
- * (2x on a Retina display) and can carry an even margin (a window shadow). "resized": the picture no longer fits the window.
- * "outside": the spot is in the margin, off the window.
+ * A window's screenshot as click_at places spots in it: its size in pixels; on a Mac, the display's scale (agent-desktop's
+ * scale_factor) and the opaque window inside the shadow when the PNG showed it (core/png-opaque.ts).
  */
-export function screenPoint(shot: { width: number; height: number }, bounds: AdBounds, x: number, y: number): ScreenPoint {
-  const [sx, sy] = [shot.width / bounds.width, shot.height / bounds.height];
-  const whole = Math.round(Math.min(sx, sy));
-  let scale: number;
-  let [mx, my] = [0, 0];
-  if (whole >= 1 && Math.abs(Math.min(sx, sy) - whole) <= 0.1 * whole) {
-    // A whole scale (1x, 2x) with an even margin: a shadow around the picture, or a thin border the picture leaves out. Margins
-    // that differ much across and down mean the window changed size.
-    scale = whole;
-    mx = (shot.width - bounds.width * scale) / 2;
-    my = (shot.height - bounds.height * scale) / 2;
-    if (Math.abs(mx) > shot.width * 0.15 || Math.abs(my) > shot.height * 0.15 || Math.abs(mx - my) > 0.03 * Math.max(shot.width, shot.height)) return "resized";
-  } else if (Math.abs(sx - sy) <= 0.03 * Math.max(sx, sy)) {
-    // Another scale (125%, 150%), the same both ways.
-    scale = (sx + sy) / 2;
-  } else {
-    return "resized";
-  }
-  if (scale < 0.25 || scale > 4) return "resized";
-  const px = bounds.x + ((x / 1000) * shot.width - mx) / scale;
-  const py = bounds.y + ((y / 1000) * shot.height - my) / scale;
-  if (px < bounds.x || py < bounds.y || px > bounds.x + bounds.width || py > bounds.y + bounds.height) return "outside";
-  // Whole numbers, one in from the far edges so the click stays on the window.
-  return { x: Math.min(Math.round(px), Math.floor(bounds.x + bounds.width) - 1), y: Math.min(Math.round(py), Math.floor(bounds.y + bounds.height) - 1) };
+export type Shot = { width: number; height: number; scale?: number | null; content?: PixelRect | null };
+
+// macOS window shadows (screencapture -l, which agent-desktop uses and cannot turn off): about the same each side, and offset
+// down by about 10 pt, so the top margin is that much under half the vertical margin and the bottom that much over. A shadow
+// wider than SHADOW_MAX pt a side, or margins across and down that differ by more than SHADOW_SLACK pt, mean the window
+// changed size since.
+const SHADOW_DROP = 10;
+const SHADOW_MAX = 80;
+const SHADOW_SLACK = 8;
+// Windows: list-windows bounds are GetWindowRect, which counts the invisible resize border (7 px at 100%, about 11 px at 150%)
+// left, right and below; the picture (Windows Graphics Capture) is the visible frame without it. A maximised window has the
+// border above too. Both are physical pixels, so the scale is 1. BORDER_MAX px a side covers every scaling Windows offers.
+const BORDER_MAX = 32;
+
+/** The window's place in its picture: left and top edges in pixels, and pixels per screen unit across and down. Null: resized. */
+type Placement = { left: number; top: number; sx: number; sy: number };
+
+/** On a Mac: from the opaque window the PNG showed, when it fits the bounds at the display's scale both ways. */
+function macContent(shot: Shot, bounds: AdBounds): Placement | null {
+  const { content, scale } = shot;
+  if (!content) return null;
+  const [sx, sy] = [content.width / bounds.width, content.height / bounds.height];
+  // One or two pixels of the window's thin edge can read as shadow.
+  const fits = (pixels: number, units: number, s: number) => Math.abs(pixels - units * s) <= 3 + 0.01 * pixels;
+  const s = scale ?? Math.round(sx);
+  if (s < 1 || !fits(content.width, bounds.width, s) || !fits(content.height, bounds.height, s)) return null;
+  return { left: content.x, top: content.y, sx, sy };
+}
+
+/** On a Mac without a usable alpha reading: the display's scale (or the whole scale that fits) and the shadow's usual shape. */
+function macShadow(shot: Shot, bounds: AdBounds): Placement | null {
+  const fit = [3, 2, 1].find((s) => bounds.width * s <= shot.width + 2 && bounds.height * s <= shot.height + 2);
+  const s = shot.scale ?? fit;
+  if (!s) return null;
+  const across = (shot.width - bounds.width * s) / 2;
+  const down = shot.height - bounds.height * s;
+  if (across < -s || down < -2 * s || across > SHADOW_MAX * s || Math.abs(down - 2 * across) > SHADOW_SLACK * s) return null;
+  return { left: across, top: Math.max(0, down / 2 - Math.min(SHADOW_DROP * s, down / 2)), sx: s, sy: s };
+}
+
+/** On Windows: physical pixels both, the picture inside the bounds by the invisible border. */
+function windowsFrame(shot: Shot, bounds: AdBounds): Placement | null {
+  const side = (bounds.width - shot.width) / 2;
+  const down = bounds.height - shot.height;
+  if (side < -1 || side > BORDER_MAX || down < side - 2 || down > 2 * side + 2) return null;
+  // Below only (down ≈ side), or above and below too for a maximised window (down ≈ 2 × side).
+  return { left: -side, top: -Math.min(down, Math.max(0, down - side)), sx: 1, sy: 1 };
+}
+
+/**
+ * A spot in a window's screenshot, x and y from 0 to 1000 across and down the picture (so it does not matter how the AI's
+ * picture was scaled on the way), as a screen point inside the window's bounds now. On a Mac the picture is in pixels (2x on a
+ * Retina display) and carries the window's shadow; on Windows it is the window without its invisible border. "resized": the
+ * picture no longer fits the window. "outside": the spot is off the window (in the shadow).
+ */
+export function screenPoint(shot: Shot, bounds: AdBounds, x: number, y: number, platform: ComputerPlatform): ScreenPoint {
+  if (bounds.width < 1 || bounds.height < 1) return "resized";
+  const place = platform === "mac" ? (macContent(shot, bounds) ?? macShadow(shot, bounds)) : windowsFrame(shot, bounds);
+  if (!place) return "resized";
+  const px = bounds.x + ((x / 1000) * shot.width - place.left) / place.sx;
+  const py = bounds.y + ((y / 1000) * shot.height - place.top) / place.sy;
+  if (px < bounds.x - 0.5 || py < bounds.y - 0.5 || px > bounds.x + bounds.width || py > bounds.y + bounds.height) return "outside";
+  // Whole numbers inside the bounds, one in from the far edges so the click stays on the window.
+  const clamp = (value: number, start: number, size: number) => Math.max(Math.ceil(start), Math.min(Math.round(value), Math.floor(start + size) - 1));
+  return { x: clamp(px, bounds.x, bounds.width), y: clamp(py, bounds.y, bounds.height) };
 }
 
 // Unshifted punctuation by the key name agent-desktop press takes; each is sent with the key that types it in the keyboard
@@ -473,6 +519,16 @@ export function keysFor(text: string): { keys: string[]; odd: string[] } {
     else odd.add(char);
   }
   return { keys, odd: [...odd] };
+}
+
+// Keys that only move or select (with any modifiers), or a modifier alone. Every other key may type or change a draft.
+const MOVE_KEYS = /^(?:tab|escape|esc|up|down|left|right|arrowup|arrowdown|arrowleft|arrowright|pageup|pagedown|home|end)$/;
+
+/** Whether pressing these keys (normalised, as return or cmd+w) may type or change text. When unsure, it may. */
+export function editsText(keys: string): boolean {
+  const parts = keys.split("+");
+  const key = parts.at(-1) ?? "";
+  return !(parts.every((part) => MODIFIERS.has(part)) || (MOVE_KEYS.test(key) && parts.slice(0, -1).every((part) => MODIFIERS.has(part))));
 }
 
 /** A text the AI gave for typing or a name: no control characters other than tabs and line breaks. */
@@ -508,7 +564,10 @@ const textTarget = (target: string) => TEXT_TARGET.test(target) && !CONTROL_TARG
 const EMBEDS_SHELL = /\b(?:code|visual studio|cursor|windsurf|zed|xcode|intellij|pycharm|webstorm|goland|rider|clion|phpstorm|rubymine|android studio|sublime text|eclipse|netbeans)\b/i;
 
 const NEEDS_REF = "Error: give a ref from this task's latest snapshot or find. If the app gives no refs, take a screenshot, click the field with click_at, then call type_text without ref.";
-const NO_BREAKS = "Error: without a ref, type_text types no line breaks. Type the text, then use press_key: return sends in most chat apps, shift+return adds a line.";
+const NO_BREAKS = "Error: without a ref, type_text types no line breaks or tabs. Type the text, then use press_key: return sends in most chat apps, shift+return adds a line.";
+// Line and paragraph breaks of every kind, and tabs: without a ref Bee cannot see the field, and a break may send the draft
+// and a tab may move focus somewhere else.
+const BREAKS = /[\t\n\v\f\r\u0085\u2028\u2029]/;
 const UNREADABLE = "Error: Bee could not read that snapshot. Take a skeleton snapshot, then root one region; or take a screenshot and use click_at.";
 const THIN_NOTE = "Few elements came back: the app may still be loading. Wait, then snapshot again; or take a screenshot and use click_at.";
 
@@ -529,8 +588,8 @@ export function computerTools(deps: ComputerToolDeps) {
   // whether this run has typed or set any text (a click at a point may then send a draft, so it asks).
   let point: Point | null = null;
   let typed = false;
-  // The size of the latest screenshot of each app (by appKey), for click_at. Null: the picture's size could not be read.
-  const shots = new Map<string, { width: number; height: number; windowId: string | undefined } | null>();
+  // The latest screenshot of each app (by appKey), for click_at: its size, scale and window. Null: its size could not be read.
+  const shots = new Map<string, (Shot & { windowId: string | undefined }) | null>();
   // The app the run last read or acted in, for the Confirm prompt's detail.
   let currentApp: string | null = null;
   let chain: Promise<unknown> = Promise.resolve();
@@ -717,7 +776,7 @@ export function computerTools(deps: ComputerToolDeps) {
     if (!window) return windowId ? "Error: that window is gone. Check list_windows." : "Error: that app has several windows. Pass window_id from list_windows, and take the screenshot with it.";
     for (const item of open) windows.add(item.id);
     if (!window.bounds) return "Error: Bee cannot tell where that window is on screen. Use snapshot and refs instead.";
-    const spot = screenPoint(shot, window.bounds, input.x, input.y);
+    const spot = screenPoint(shot, window.bounds, input.x, input.y, deps.platform);
     if (spot === "resized") return "Error: the window changed size since the screenshot. Take a new screenshot.";
     if (spot === "outside") return "Error: that spot is outside the window. Check the screenshot.";
     const result = await exec("mouse-click", [`--xy=${spot.x},${spot.y}`, HEADED_FLAG], ACT_MS);
@@ -741,7 +800,7 @@ export function computerTools(deps: ComputerToolDeps) {
   /** Why typing where click_at put the cursor cannot run now, or null. Read when the step runs, so a refused step asks nothing. */
   const typeRefusal = (text: string): string | null => {
     if (!point) return NEEDS_REF;
-    if (/[\r\n]/.test(text)) return NO_BREAKS;
+    if (BREAKS.test(text)) return NO_BREAKS;
     const { focus, target } = point;
     if (focus.kind === "other") return "Error: focus is not in a text field. click_at the text field itself first.";
     if (focus.kind === "unknown" && !textTarget(target)) return "Error: click_at did not say it clicked a text field. click_at the text field itself first.";
@@ -750,9 +809,10 @@ export function computerTools(deps: ComputerToolDeps) {
   };
 
   /**
-   * Typing where click_at put the cursor. With a ref for the focused field, agent-desktop types into it. Without one (or when
-   * that was never delivered), each character goes as one key press to the app: letters, digits, space and plain punctuation
-   * only, never Return, and never in a code editor (its focus may be a terminal). Physical either way.
+   * Typing where click_at put the cursor. With a ref for the focused field, agent-desktop types into it. Without one, each
+   * character goes as one key press to the app: letters, digits, space and plain punctuation only, never Return, and never in a
+   * code editor (its focus may be a terminal). Physical either way. Typing is never retried: when typing into the ref fails,
+   * the error goes back, and the AI's next type_text without ref for this click uses key presses.
    */
   const typeAtPoint = async (text: string): Promise<string> => {
     const refused = typeRefusal(text);
@@ -761,18 +821,23 @@ export function computerTools(deps: ComputerToolDeps) {
     const field = focus.element ?? typedField(app);
     if (focus.ref) {
       const result = await exec("type", [focus.ref, HEADED_FLAG, "--", cleanText(text)], ACT_MS + Math.min(40_000, text.length * 40));
-      if (result.ok) [lastField, typed] = [field, true];
-      if (result.ok || result.retry !== "safe") return done(result);
-      debugLog.info("computer", "type-as-keys", { code: result.code });
-      const refusedKeys = keysRefusal(app, text);
-      if (refusedKeys) return `${errorLine(result)} ${refusedKeys}`;
+      if (result.ok) {
+        [lastField, typed] = [field, true];
+        return done(result);
+      }
+      // Same click, no ref: the next type_text without ref types as key presses.
+      point = { ...point, focus: { ...focus, ref: null } };
+      if (result.retry === "safe") return `${errorLine(result)} Nothing was typed. To type it as key presses instead, call type_text without ref again.`;
+      // Part of the text may be in the field.
+      [lastField, typed] = [field, true];
+      return `${errorLine(result)} Take a screenshot before typing again: type_text without ref now types as key presses.`;
     }
     const { keys } = keysFor(text);
     for (const [index, key] of keys.entries()) {
       const result = control.reason() ? null : await exec("press", [key, ...scope({ app, window_id: windowId }), HEADED_FLAG], ACT_MS);
       if (result?.ok) continue;
       // Part of the text may be in the field now.
-      if (index > 0) [lastField, typed] = [field, true];
+      if (index > 0 || result?.retry !== "safe") [lastField, typed] = [field, true];
       return result ? `${errorLine(result)} ${index} of ${keys.length} characters were typed: look before typing again.` : STOPPED;
     }
     [lastField, typed] = [field, true];
@@ -906,7 +971,13 @@ export function computerTools(deps: ComputerToolDeps) {
           // Its size, so click_at can place a spot in it on screen.
           const size = pngSize(image);
           const app = cleanApp(input.app);
-          if (app) shots.set(appKey(app), size ? { ...size, windowId: input.window_id } : null);
+          // On a Mac, the display's scale and the opaque window inside its shadow. On Windows the picture and the window's
+          // bounds are both physical pixels, so scale_factor (the display's DPI scale) is not used.
+          const mac = deps.platform === "mac";
+          const scale = mac ? shotScale(result.data) : null;
+          const content = mac && size ? await opaqueRect(image).catch(() => null) : null;
+          if (mac && size) debugLog.debug("computer", "screenshot-window", { size, scale, content });
+          if (app) shots.set(appKey(app), size ? { ...size, scale, content, windowId: input.window_id } : null);
           return { text: `Screenshot of ${clip(input.app, 40)}.`, image };
         }),
       toModelOutput: ({ output }) => {
@@ -1080,6 +1151,8 @@ export function computerTools(deps: ComputerToolDeps) {
             if (shellElement(lastField)) return SHELL_MESSAGE;
             currentApp = cleanApp(input.app) ?? currentApp;
             const result = await exec("press", [keys, ...scope(input), ...(input.physical ? [HEADED_FLAG] : [])], ACT_MS);
+            // Letter keys can type a draft just as type_text does, so a later click_at asks first (it may hit Send).
+            if (editsText(keys) && (result.ok || result.retry !== "safe")) typed = true;
             if (!keepsFocus(keys)) [lastField, point] = [null, null];
             return result.ok ? `${formatDone(result.data)} Check the result with a snapshot.` : errorLine(result);
           },
