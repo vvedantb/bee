@@ -15,6 +15,7 @@ import {
   parseFindCount,
   parseSnapshotTree,
   parseWindows,
+  safeMessage,
 } from "./agent-desktop-envelope";
 
 const raw = (name: string) => readFileSync(new URL(`../../test/fixtures/agent-desktop/${name}`, import.meta.url), "utf8");
@@ -120,6 +121,34 @@ describe("assertComputerUse", () => {
     expect(() => assertComputerUse("screenshot", ["--screen=0"])).toThrow(/not allowed/);
   });
 
+  it("allows the mouse only for one left click at one screen point, always physical", () => {
+    expect(() => assertComputerUse("mouse-click", ["--xy=640,812", HEADED_FLAG])).not.toThrow();
+    expect(() => assertComputerUse("mouse-click", ["--xy=-1280,40", HEADED_FLAG])).not.toThrow();
+    // Never headless (agent-desktop refuses it anyway), never without a point.
+    expect(() => assertComputerUse("mouse-click", ["--xy=640,812"])).toThrow(/not allowed/);
+    expect(() => assertComputerUse("mouse-click", [HEADED_FLAG])).toThrow(/not allowed/);
+    expect(() => assertComputerUse("mouse-click", [])).toThrow(/not allowed/);
+    // No other button, double click, held modifier, ref, path or text.
+    for (const extra of ["--button=right", "--count=2", "--modifiers=cmd", "--session=a", "--trace=/tmp/t", "--screenshot=/tmp/x.html"]) {
+      expect(() => assertComputerUse("mouse-click", ["--xy=1,1", HEADED_FLAG, extra]), extra).toThrow(/not allowed/);
+    }
+    for (const point of ["640", "640,", "a,b", "1.5,2", "640, 812", "99999,1", "1,2,3", "$(x),1"]) {
+      expect(() => assertComputerUse("mouse-click", [`--xy=${point}`, HEADED_FLAG]), point).toThrow(/not allowed/);
+    }
+    expect(() => assertComputerUse("mouse-click", ["--xy", "1,1", HEADED_FLAG])).toThrow();
+    expect(() => assertComputerUse("mouse-click", ["@s8f3k2p9:e1", "--xy=1,1", HEADED_FLAG])).toThrow(/not allowed/);
+    expect(() => assertComputerUse("mouse-click", ["--xy=1,1", HEADED_FLAG, "--", "x"])).toThrow(/not allowed/);
+    // Every other pointer command is still refused.
+    for (const command of ["mouse-move", "mouse-wheel", "mouse-down", "mouse-up", "drag", "hover", "double-click", "triple-click", "right-click"]) {
+      expect(() => assertComputerUse(command, ["--xy=1,1", HEADED_FLAG]), command).toThrow(/not allowed/);
+    }
+  });
+
+  it("lets find look for what has focus, and no other state", () => {
+    expect(() => assertComputerUse("find", ["--app=Microsoft Teams", "--state=focused", "--limit=5", "--timeout-ms=6000"])).not.toThrow();
+    for (const state of ["enabled", "focused=false", "secure", ""]) expect(() => assertComputerUse("find", ["--app=Teams", `--state=${state}`]), state).toThrow(/not allowed/);
+  });
+
   it("allows physical input only on press, type and focus", () => {
     expect(() => assertComputerUse("press", ["return", "--app=Slack", HEADED_FLAG])).not.toThrow();
     expect(() => assertComputerUse("type", [REF, HEADED_FLAG, "--", "hi"])).not.toThrow();
@@ -172,10 +201,66 @@ describe("parseEnvelope", () => {
     expect(parseEnvelope(raw("find-count-leave.json"))).toEqual({ ok: true, data: { count: 1 } });
   });
 
-  it("keeps only the error code, never the message", () => {
-    const result = parseEnvelope(raw("error-perm-denied.json"));
-    expect(result).toEqual({ ok: false, code: "PERM_DENIED" });
-    expect(JSON.stringify(result)).not.toContain("Accessibility permission");
+  it("keeps the code, whether a retry is safe, the kind, and a short redacted message", () => {
+    expect(parseEnvelope(raw("error-perm-denied.json"))).toEqual({ ok: false, code: "PERM_DENIED", message: "Accessibility permission not granted", retry: "safe" });
+    const internal = parseEnvelope(
+      JSON.stringify({
+        version: "2.5",
+        ok: false,
+        command: "snapshot",
+        error: {
+          code: "INTERNAL",
+          message: "Accessibility deadline exhausted before IPC reading 'Chat | Sam Lee | Microsoft Teams' at /Users/sam/Library/x",
+          suggestion: "Retry with a larger timeout",
+          details: { kind: "observation_incomplete", window_title: "Chat | Sam Lee | Microsoft Teams" },
+          disposition: { delivery: "not_delivered", retry: "safe" },
+        },
+      }),
+    );
+    expect(internal).toEqual({ ok: false, code: "INTERNAL", message: "Accessibility deadline exhausted before IPC reading '…' at <path>", retry: "safe", kind: "observation_incomplete" });
+    expect(JSON.stringify(internal)).not.toMatch(/Sam Lee|\/Users/);
+    // Odd shapes keep the code alone.
+    expect(parseEnvelope('{"ok":false,"error":{"code":"TIMEOUT","message":42,"disposition":"safe","details":{"kind":"Not A Token"}}}')).toEqual({ ok: false, code: "TIMEOUT" });
+  });
+
+  it("redacts names, titles, paths, links and addresses in a message, and cuts it short", () => {
+    expect(safeMessage("No running application matches 'Microsoft Teams'")).toBe("No running application matches '…'");
+    expect(safeMessage("Multiple windows matched the saved title 'Sam's chat | Teams'")).toBe("Multiple windows matched the saved title '…'");
+    expect(safeMessage("the app's tree is not ready")).toBe("the app's tree is not ready");
+    expect(safeMessage("Display changed from “Left” to “Right”")).toBe("Display changed from '…' to '…'");
+    expect(safeMessage("state root C:\\Users\\sam\\.agent-desktop is owned by another user")).toBe("state root <path> is owned by another user");
+    expect(safeMessage("see https://example.com/x?token=1 or write to sam@example.com")).toBe("see <link> or write to <email>");
+    expect(safeMessage("line one\nline\u0000two")).toBe("line one line two");
+    expect(safeMessage("x".repeat(500))).toHaveLength(160);
+    for (const empty of ["", "   ", 42, null, undefined]) expect(safeMessage(empty)).toBeUndefined();
+  });
+
+  it("takes out a home folder whole, with a user name that has spaces, on macOS, Linux and Windows", () => {
+    for (const [message, kept] of [
+      ["state root C:\\Users\\Vedant B\\AppData\\Local\\agent-desktop is locked", "state root <path> is locked"],
+      ["state root c:/Users/Vedant B/AppData/x is locked", "state root <path> is locked"],
+      ["open /Users/vedant b/Library/Caches/x.json: permission denied", "open <path> permission denied"],
+      ["open /home/sam smith/.config/agent-desktop/state failed", "open <path> failed"],
+      ["owned by C:\\Users\\Vedant B", "owned by <path>"],
+      ["cannot read C:\\Documents and Settings\\Sam Lee\\x.ini", "cannot read <path>"],
+    ] as const) {
+      const line = safeMessage(message) ?? "";
+      expect(line, message).toBe(kept);
+      for (const name of ["Vedant", "vedant", "B\\", "b/", "sam", "Sam", "smith", "Lee"]) expect(line, message).not.toContain(name);
+    }
+  });
+
+  it("takes out secrets: named values, Authorization headers and long hex or base64 runs", () => {
+    expect(safeMessage("request failed: token=abc123 key: zzz password='a b c' api_key=XYZ secret=s3")).toBe(
+      "request failed: token=<secret> key=<secret> password=<secret> api_key=<secret> secret=<secret>",
+    );
+    expect(safeMessage("Authorization: Bearer eyJhbGciOi.payload.sig rejected")).toBe("Authorization=<secret> <secret> rejected");
+    expect(safeMessage("got Bearer abc.def-ghi back")).toBe("got Bearer <secret> back");
+    expect(safeMessage("session 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08 expired")).toBe("session <secret> expired");
+    expect(safeMessage("blob aGVsbG8gd29ybGQgdGhpcyBpcyBhIGxvbmcgYmFzZTY0IHN0cmluZw== bad")).toBe("blob <secret> bad");
+    // Ordinary words, codes and short ids stay.
+    expect(safeMessage("observation_incomplete_due_to_renderer_activation")).toBe("observation_incomplete_due_to_renderer_activation");
+    expect(safeMessage("ref @s8f3k2p9:e12 is stale after 1200 ms")).toBe("ref @s8f3k2p9:e12 is stale after 1200 ms");
   });
 
   it("reads the envelope after stray lines, and reports unreadable output", () => {
@@ -199,7 +284,7 @@ describe("list parsers", () => {
 
   it("reads list-windows from data.windows or a bare array", () => {
     const mac = parseWindows(data("list-windows-mac.json"));
-    expect(mac[3]).toEqual({ id: "w-2002", title: "Zoom Meeting", app: "zoom.us", pid: 1302, focused: true });
+    expect(mac[3]).toEqual({ id: "w-2002", title: "Zoom Meeting", app: "zoom.us", pid: 1302, focused: true, bounds: { x: 0, y: 25, width: 1440, height: 875 } });
     const win = parseWindows(data("list-windows-win.json"));
     expect(win.map((window) => window.app)).toEqual(["ms-teams", "ms-teams", "Zoom", "msedge", "msedge", "explorer"]);
   });

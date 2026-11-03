@@ -29,7 +29,15 @@ function turnsModel(turns: Turn[]) {
 const SNAPSHOT = {
   app: "Discord",
   window: { id: "w-1", title: "Discord" },
-  tree: { role: "window", children: [{ role: "textfield", name: "Message @sam", ref_id: "@s1:e1" }, { role: "button", name: "Send", ref_id: "@s1:e2" }] },
+  tree: {
+    role: "window",
+    children: [
+      { role: "textfield", name: "Message @sam", ref_id: "@s1:e1" },
+      { role: "button", name: "Send", ref_id: "@s1:e2" },
+      { role: "button", name: "Inbox", ref_id: "@s1:e3" },
+      { role: "button", name: "Help", ref_id: "@s1:e4" },
+    ],
+  },
 };
 
 const desktop: DesktopActions = {
