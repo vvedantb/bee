@@ -2,7 +2,8 @@ import { z } from "zod";
 
 // agent-desktop (npm, Apache-2.0) prints one JSON envelope per command: { version, ok: true, command, data } or
 // { ok: false, error: { code, message, disposition } }. Pure parsing here; main/agent-desktop.ts runs the binary.
-// Error messages and payloads can hold window titles and names, so only the error code is kept.
+// Error messages can hold window titles and names: an error keeps its code, whether a retry is safe, and the message cut short
+// with anything quoted, any path, link or address taken out (safeMessage).
 
 /** The only commands Bee runs. Each one observes; none clicks, types, focuses or moves anything. */
 export const READ_ONLY_COMMANDS = ["list-apps", "list-windows", "snapshot", "find", "get", "permissions", "status", "version"] as const;
@@ -60,20 +61,22 @@ export function assertDesktopAction(command: string, args: readonly string[]): a
 /**
  * Computer use for a direct request ("Bee, send Sam a message in Slack", core/computer-use.ts): the commands the AI's computer
  * tools run, on their own runner (main/agent-desktop.ts createAgentDesktopComputerRunner). The meeting window reader never gets
- * it. No clipboard, notifications, mouse, drag, batch, sessions, traces or launch (apps open through the desktop actions).
+ * it. No clipboard, notifications, drag, hover, batch, sessions, traces or launch (apps open through the desktop actions). The
+ * mouse only for one left click at one point, always physical (mouse-click --xy --headed): the way in when an app's tree
+ * cannot be read.
  */
 export const COMPUTER_USE_COMMANDS = [
   "snapshot", "find", "get", "is", "screenshot", "list-apps", "list-windows", "permissions",
   "click", "type", "set-value", "clear", "focus", "select", "check", "uncheck", "expand", "collapse", "scroll", "scroll-to", "press",
-  "close-app", "wait",
+  "mouse-click", "close-app", "wait",
 ] as const;
 export type ComputerUseCommand = (typeof COMPUTER_USE_COMMANDS)[number];
 
-/** agent-desktop's flag for physical input. Only press, type and focus may take it (assertComputerUse), when the AI asks. */
+/** agent-desktop's flag for physical input. Only press, type, focus and mouse-click may take it (assertComputerUse). */
 export const HEADED_FLAG = "--headed";
 
 // What a flag value or positional may be. Value flags are always "--flag=value", so a value can never read as a flag.
-type ValueKind = "ref" | "app" | "window" | "text" | "role" | "ms" | "count" | "keys" | readonly string[];
+type ValueKind = "ref" | "app" | "window" | "text" | "role" | "ms" | "count" | "keys" | "point" | readonly string[];
 type CommandSpec = {
   /** Value flags (a kind) and bare switches (true). */
   flags: Record<string, ValueKind | true>;
@@ -84,6 +87,8 @@ type CommandSpec = {
   text?: true;
   /** May take HEADED_FLAG. */
   headed?: true;
+  /** Flags (HEADED_FLAG too) that must be there. */
+  required?: readonly string[];
 };
 
 const SURFACES = ["window", "focused", "menu", "menubar", "sheet", "popover", "alert"] as const;
@@ -95,7 +100,11 @@ const onRef = (extra: Partial<CommandSpec> = {}): CommandSpec => ({ flags: ACTIO
 const COMPUTER_SPECS: Record<ComputerUseCommand, CommandSpec> = {
   snapshot: { flags: { ...SCOPE, "--max-depth": "count", "--interactive-only": true, "--compact": true, "--skeleton": true }, positionals: [] },
   find: {
-    flags: { ...SCOPE, "--role": "role", "--name": "text", "--text": "text", "--value": "text", "--description": "text", "--exact": true, "--first": true, "--limit": "count" },
+    flags: {
+      ...SCOPE, "--role": "role", "--name": "text", "--text": "text", "--value": "text", "--description": "text", "--exact": true, "--first": true, "--limit": "count",
+      // Only to find what has keyboard focus after a click at a point.
+      "--state": ["focused"],
+    },
     positionals: [],
   },
   get: { flags: { "--property": ["text", "value", "title", "role", "states"] }, positionals: ["ref"] },
@@ -119,6 +128,8 @@ const COMPUTER_SPECS: Record<ComputerUseCommand, CommandSpec> = {
   "scroll-to": onRef(),
   // Never --force: agent-desktop refuses quit and lock shortcuts without it.
   press: { flags: { "--app": "app", "--window-id": "window" }, positionals: ["keys"], headed: true },
+  // One left click at one screen point, physical. Never --button, --count or --modifiers.
+  "mouse-click": { flags: { "--xy": "point" }, positionals: [], headed: true, required: ["--xy", HEADED_FLAG] },
   // Never --force: the app quits gracefully, and agent-desktop refuses protected system processes.
   "close-app": { flags: {}, positionals: ["app"] },
   wait: { flags: { "--window": "text", "--text": "text", "--app": "app", "--event": EVENTS, "--timeout": "ms", "--menu": true, "--menu-closed": true }, positionals: ["ms"], min: 1 },
@@ -129,6 +140,8 @@ export const REF_PATTERN = /^@[A-Za-z0-9]{1,40}:e\d{1,6}$/;
 const CONTROL = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/;
 // Waits and timeouts: at most a minute.
 const MAX_MS = 60_000;
+// A screen point: whole numbers, negative to the left of or above the main display.
+const MAX_POINT = 32_767;
 
 function validValue(kind: ValueKind, value: string): boolean {
   if (Array.isArray(kind)) return kind.includes(value);
@@ -150,13 +163,18 @@ function validValue(kind: ValueKind, value: string): boolean {
     case "keys":
       // return, cmd+w, ctrl+shift+tab: letters and digits joined by "+". Punctuation goes by name (comma, period).
       return value.length <= 40 && /^[A-Za-z0-9]{1,12}(?:\+[A-Za-z0-9]{1,12}){0,4}$/.test(value);
+    case "point": {
+      const match = /^(-?\d{1,5}),(-?\d{1,5})$/.exec(value);
+      return !!match && Math.abs(Number(match[1])) <= MAX_POINT && Math.abs(Number(match[2])) <= MAX_POINT;
+    }
   }
   return false;
 }
 
 /**
  * Throws for any command, flag or argument outside the computer-use set. Called before every spawn on that runner. Value flags
- * must be "--flag=value"; free text must follow "--"; only press, type and focus may take HEADED_FLAG.
+ * must be "--flag=value"; free text must follow "--"; only press, type, focus and mouse-click may take HEADED_FLAG, and
+ * mouse-click must.
  */
 export function assertComputerUse(command: string, args: readonly string[]): asserts command is ComputerUseCommand {
   if (!(COMPUTER_USE_COMMANDS as readonly string[]).includes(command)) throw new Error(`agent-desktop command not allowed: ${command}`);
@@ -184,6 +202,8 @@ export function assertComputerUse(command: string, args: readonly string[]): ass
     }
     if (value === null || !validValue(kind, value)) throw new Error(`agent-desktop flag value not allowed: ${flag}`);
   }
+  const missing = spec.required?.find((flag) => !seen.has(flag));
+  if (missing) throw new Error(`agent-desktop arguments not allowed for ${command}: needs ${missing}`);
   const fewest = spec.positionals.length - (spec.min ?? 0);
   if (positionals.length < fewest || positionals.length > spec.positionals.length) throw new Error(`agent-desktop arguments not allowed for ${command}`);
   positionals.forEach((value, index) => {
@@ -193,8 +213,15 @@ export function assertComputerUse(command: string, args: readonly string[]): ass
   if (spec.text ? dash < 0 || after.length !== 1 || !validValue("text", after[0] ?? "") : dash >= 0) throw new Error(`agent-desktop text not allowed for ${command}`);
 }
 
-/** ok: the command's data. Otherwise a short code safe for logs (agent-desktop's own, or SPAWN_FAILED, TIMEOUT_LOCAL, BAD_OUTPUT). */
-export type AgentDesktopResult = { ok: true; data: unknown } | { ok: false; code: string };
+/**
+ * A failed command: a short code safe for logs (agent-desktop's own, or SPAWN_FAILED, TIMEOUT_LOCAL, BAD_OUTPUT, ABORTED,
+ * REFUSED); agent-desktop's message cut short and redacted (safeMessage); whether a retry is safe ("safe": it was never
+ * delivered); and its details.kind ("observation_incomplete", "actionability_timeout").
+ */
+export type AgentDesktopFailure = { ok: false; code: string; message?: string; retry?: string; kind?: string };
+
+/** ok: the command's data. */
+export type AgentDesktopResult = { ok: true; data: unknown } | AgentDesktopFailure;
 
 /**
  * A computer-use command on its own runner (main/agent-desktop.ts). signal: Stop or a newer request kills the command in
@@ -204,10 +231,44 @@ export type ComputerRun = (command: ComputerUseCommand, args: string[], options?
 
 const envelopeSchema = z.union([
   z.object({ ok: z.literal(true), data: z.unknown() }),
-  z.object({ ok: z.literal(false), error: z.object({ code: z.string() }) }),
+  z.object({
+    ok: z.literal(false),
+    error: z.object({ code: z.string(), message: z.unknown().optional(), disposition: z.unknown().optional(), details: z.unknown().optional() }),
+  }),
 ]);
 
 const safeCode = (code: string): string => (/^[A-Z][A-Z0-9_]{0,39}$/.test(code) ? code : "ERROR");
+/** A snake_case token ("safe", "observation_incomplete"), or undefined. */
+const token = (value: unknown): string | undefined => (typeof value === "string" && /^[a-z][a-z0-9_]{0,39}$/.test(value) ? value : undefined);
+const field = (holder: unknown, key: string): unknown => (isRecord(holder) ? holder[key] : undefined);
+
+/** How much of agent-desktop's message is kept. */
+export const MESSAGE_MAX = 160;
+// Quoted text (an app name, a window title, a ref): from a quote after a space or the start to the first quote before a space,
+// punctuation or the end, so "app's" stays and "'Sam's chat'" goes whole.
+const QUOTED = /(^|[\s(:=,[])["'`“‘].*?["'`”’](?=$|[\s),.:;!?\]])/g;
+const PATH = /(?:[A-Za-z]:\\|\\\\|~?\/)[^\s'"`]*/g;
+const LINK = /\b(?:https?|file):\/\/\S+/gi;
+const EMAIL = /\b[\w.+-]+@[\w-]+\.[\w.-]+\b/g;
+
+/**
+ * agent-desktop's error message, safe to log and to show the AI: one line, no control characters, anything quoted (names and
+ * titles), any path, link or email address replaced, cut to MESSAGE_MAX. Undefined when there is nothing left.
+ */
+export function safeMessage(raw: unknown): string | undefined {
+  if (typeof raw !== "string") return undefined;
+  const line = raw
+    .slice(0, 2000)
+    .replace(/[\u0000-\u001f\u007f\u2028\u2029]/g, " ")
+    .replace(LINK, "<link>")
+    .replace(EMAIL, "<email>")
+    .replace(QUOTED, "$1'…'")
+    .replace(PATH, "<path>")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!line) return undefined;
+  return line.length > MESSAGE_MAX ? `${line.slice(0, MESSAGE_MAX - 1).trimEnd()}…` : line;
+}
 
 /** The envelope in stdout. One JSON document is expected; failing that, the last line that parses. */
 export function parseEnvelope(stdout: string): AgentDesktopResult {
@@ -223,13 +284,21 @@ export function parseEnvelope(stdout: string): AgentDesktopResult {
     }
     const parsed = envelopeSchema.safeParse(json);
     if (!parsed.success) continue;
-    return parsed.data.ok ? { ok: true, data: parsed.data.data } : { ok: false, code: safeCode(parsed.data.error.code) };
+    if (parsed.data.ok) return { ok: true, data: parsed.data.data };
+    const { error } = parsed.data;
+    const message = safeMessage(error.message);
+    const retry = token(field(error.disposition, "retry"));
+    const kind = token(field(error.details, "kind"));
+    return { ok: false, code: safeCode(error.code), ...(message ? { message } : {}), ...(retry ? { retry } : {}), ...(kind ? { kind } : {}) };
   }
   return { ok: false, code: "BAD_OUTPUT" };
 }
 
 export type AdApp = { name: string; pid: number | null; bundleId: string | null };
-export type AdWindow = { id: string; title: string; app: string; pid: number | null; focused: boolean };
+/** A rectangle in screen coordinates: points on macOS, physical pixels on Windows (the same space mouse-click --xy takes). */
+export type AdBounds = { x: number; y: number; width: number; height: number };
+/** bounds: where the window is on screen, when agent-desktop says. */
+export type AdWindow = { id: string; title: string; app: string; pid: number | null; focused: boolean; bounds?: AdBounds };
 /** One accessibility node. Text fields are "" when absent. */
 export type AdNode = { role: string; name: string; value: string; description: string; children: AdNode[] };
 export type AccessState = "granted" | "denied" | "not_required" | "unknown";
@@ -253,6 +322,14 @@ export function parseApps(data: unknown): AdApp[] {
   });
 }
 
+/** `{ x, y, width, height }` with finite numbers and a positive size, or undefined. */
+export function parseBounds(value: unknown): AdBounds | undefined {
+  if (!isRecord(value)) return undefined;
+  const [x, y, width, height] = [value.x, value.y, value.width, value.height];
+  if (![x, y, width, height].every((item) => typeof item === "number" && Number.isFinite(item))) return undefined;
+  return (width as number) > 0 && (height as number) > 0 ? { x: x as number, y: y as number, width: width as number, height: height as number } : undefined;
+}
+
 /** list-windows: `{ id, title, app_name, pid, bounds, is_focused, accessible }` rows. Rows without an id or app are dropped. */
 export function parseWindows(data: unknown): AdWindow[] {
   return listOf(data, "windows").flatMap((item): AdWindow[] => {
@@ -260,7 +337,8 @@ export function parseWindows(data: unknown): AdWindow[] {
     const id = typeof item.id === "number" ? String(item.id) : text(item.id);
     const app = text(item.app_name) || text(item.app) || (isRecord(item.app) ? text(item.app.name) : "");
     if (!id || !app.trim()) return [];
-    return [{ id, title: text(item.title), app: app.trim(), pid: pid(item.pid), focused: item.is_focused === true }];
+    const bounds = parseBounds(item.bounds);
+    return [{ id, title: text(item.title), app: app.trim(), pid: pid(item.pid), focused: item.is_focused === true, ...(bounds ? { bounds } : {}) }];
   });
 }
 

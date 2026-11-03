@@ -85,7 +85,7 @@ describe("main: direct request handler", () => {
 describe("main: computer use for a direct request", () => {
   const usage = { inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 }, outputTokens: { total: 1, text: 1, reasoning: undefined } };
   type Turn = { tool: string; input: unknown } | { text: string };
-  const SNAPSHOT = { app: "Discord", window: { id: "w-1", title: "Discord" }, tree: { role: "window", children: [{ role: "button", name: "Send", ref_id: "@s1:e2" }] } };
+  const SNAPSHOT = { app: "Discord", window: { id: "w-1", title: "Discord" }, tree: { role: "window", children: [{ role: "button", name: "Send", ref_id: "@s1:e2" }, ...["Inbox", "Help", "Channels"].map((name, index) => ({ role: "button", name, ref_id: `@s1:e${index + 3}` }))] } };
 
   /** The loop's model plays turns in order; no network. */
   const gatewayFor = (turns: Turn[]): (() => BeeGateway) => {

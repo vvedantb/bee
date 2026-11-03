@@ -193,7 +193,7 @@ describe("buildLunaPrompt for a direct request", () => {
 
 describe("runDirectCommand: computer use", () => {
   type Turn = { tool: string; input: unknown } | { text: string };
-  const SNAPSHOT = { app: "Discord", window: { id: "w-1", title: "Discord" }, tree: { role: "window", children: [{ role: "button", name: "Send", ref_id: "@s1:e2" }] } };
+  const SNAPSHOT = { app: "Discord", window: { id: "w-1", title: "Discord" }, tree: { role: "window", children: [{ role: "button", name: "Send", ref_id: "@s1:e2" }, ...["Inbox", "Help", "Channels"].map((name, index) => ({ role: "button", name, ref_id: `@s1:e${index + 3}` }))] } };
 
   /** Luna streams (the answer path); the loop generates. Each records its calls. */
   function bothModel(args: { stream?: Chunk[][]; turns?: Turn[] }) {

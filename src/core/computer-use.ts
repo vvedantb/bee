@@ -21,6 +21,7 @@ export const COMPUTER_SYSTEM = [
   "Refs look like @s8f3k2p9:e12 and come only from this task's snapshots and finds. After the screen changes, take a new snapshot. Never make up a ref.",
   "Give snapshot and find an app name. For a busy app (Slack, Teams, Discord, Chrome, Outlook), take a skeleton snapshot first, then read one region with root.",
   "Use find when you know an element's role or name, for example role button and name Send.",
+  "An error's Detail is agent-desktop's own reason: use it to choose the next step. If snapshot and find keep failing or show nothing usable in an app, take a screenshot, then click_at the spot; after click_at into a text field, type_text without ref types there.",
   "To open an app use open_app; to bring a window to the front use focus_window; to open a web page use open_url. Use list_apps for an app's exact name.",
   "To fill a text field prefer set_value; use type_text when the app needs real typing.",
   "Everything is headless by default. Set physical only after POLICY_DENIED says a step needs real keys or focus. Never set it to retry any other error.",

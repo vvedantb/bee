@@ -161,12 +161,14 @@ describe("createAgentDesktopRunner", () => {
     const perm = Object.assign(new Error("Command failed"), { code: 1 });
     const runner = make(
       fakeExec((args) => {
-        if (args[0] === "snapshot") return { error: perm, stdout: '{"ok":false,"error":{"code":"PERM_DENIED","message":"secret title"}}' };
+        if (args[0] === "snapshot") {
+          return { error: perm, stdout: '{"ok":false,"error":{"code":"PERM_DENIED","message":"No access to \'secret title\'","disposition":{"retry":"safe"}}}' };
+        }
         if (args[0] === "list-windows") return { error: Object.assign(new Error("killed"), { killed: true }), stdout: "" };
         return { error: Object.assign(new Error("spawn ENOENT"), { code: "ENOENT" }), stdout: "" };
       }).exec,
     );
-    expect(await runner.run("snapshot", ["--app", "Zoom"])).toEqual({ ok: false, code: "PERM_DENIED" });
+    expect(await runner.run("snapshot", ["--app", "Zoom"])).toEqual({ ok: false, code: "PERM_DENIED", message: "No access to '…'", retry: "safe" });
     expect(await runner.run("list-windows", [])).toEqual({ ok: false, code: "TIMEOUT_LOCAL" });
     expect(await runner.run("permissions", [])).toEqual({ ok: false, code: "SPAWN_FAILED" });
   });
@@ -355,9 +357,9 @@ describe("source scan: agent-desktop stays read-only", () => {
     const computer = all.filter(({ text }) => /\bComputerRun\b/.test(text)).map(({ path }) => fromSrc(path));
     expect(computer.sort()).toEqual(["core/agent-desktop-envelope.ts", "core/computer-tools.ts", "core/computer-use.ts", "core/direct-command.ts", "main/agent-desktop.ts", "main/meeting-ipc.ts"]);
     const tools = readFileSync(repo("src/core/computer-tools.ts"), "utf8");
-    const used = new Set([...tools.matchAll(/\bexec\(\s*"([a-z-]+)"/g), ...tools.matchAll(/onRef\(\s*"([a-z-]+)"/g)].map((match) => match[1]));
+    const used = new Set([...tools.matchAll(/\b(?:exec|observe|readOnce)\(\s*"([a-z-]+)"/g), ...tools.matchAll(/onRef\(\s*"([a-z-]+)"/g)].map((match) => match[1]));
     for (const command of used) expect(COMPUTER_USE_COMMANDS as readonly (string | undefined)[], command).toContain(command);
-    for (const command of ["snapshot", "click", "type", "set-value", "press", "close-app", "screenshot"]) expect(used.has(command), command).toBe(true);
+    for (const command of ["snapshot", "find", "get", "click", "type", "set-value", "press", "mouse-click", "close-app", "screenshot"]) expect(used.has(command), command).toBe(true);
     // No shell, no clipboard, no launch: apps open through the desktop actions.
     expect(tools).not.toMatch(/child_process|execFile|spawn\(|shell:\s*true|"cmd(?:\.exe)?"|powershell|"\/bin\/(?:ba|z)?sh"|osascript|clipboard|"launch"/i);
     expect(readFileSync(repo("src/main/agent-desktop.ts"), "utf8")).toMatch(/queuedRunner<ComputerUseCommand>\(binary, deps, assertComputerUse\)/);

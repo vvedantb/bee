@@ -33,7 +33,10 @@ export type Element = {
 };
 
 export type GateAction = {
-  /** The agent-desktop command: click, type, press… Only click, select, type, set-value and press can need a confirm. */
+  /**
+   * The agent-desktop command: click, type, press… Only click, select, type, set-value, press and click-at (a click at a
+   * screen point, click_at) can need a confirm.
+   */
   command: string;
   effect?: Effect;
   /** The element acted on. Null or absent: unknown (a ref the run never saw does not run). */
@@ -44,6 +47,8 @@ export type GateAction = {
   text?: string;
   /** Where keyboard focus is, as far as Bee knows: the field written last, or what a snapshot showed focused. Null: unknown. */
   lastField?: Element | null;
+  /** click-at: this run has typed or set text, so a draft may be waiting for a click to send it. */
+  typed?: boolean;
 };
 
 // Words that commit something. Whole words, so "Posts", "Sender", "Orders" and "Deleted items" do not count. Deleting comes
@@ -192,6 +197,20 @@ export function elementKind(target: Element | null | undefined): IrreversibleKin
 }
 
 /**
+ * What a click at a screen point commits. Bee has no tree there, only what the AI says it is clicking (target.name) and the app
+ * (target.context.app). A commit word in it asks as that, whatever the effect. A click the AI does not name, and any click once
+ * the run has typed (a misplaced click may send the draft), asks too: send in a messaging or email app, buy in a shop, else
+ * submit. Only a named click before anything is typed (into a message box, onto a tab) goes without asking: there the AI's word
+ * is all Bee has.
+ */
+function pointKind({ target, typed }: GateAction): IrreversibleKind | null {
+  const own = target ? namedKind([target.name, target.description].filter(Boolean).join(" | ")) : null;
+  if (own) return own;
+  if (target && !typed && !unlabelled(target)) return null;
+  return (target?.context ? placeKind(target.context) : null) ?? "submit";
+}
+
+/**
  * What a key press commits. Return (with any modifier) sends in a message box and presses whatever else has focus; only a
  * search or address box makes it a navigation. Space presses a focused control. Delete keys delete outside a text field.
  */
@@ -222,6 +241,8 @@ export function irreversibleKind(action: GateAction): IrreversibleKind | null {
   switch (action.command) {
     case "click":
       return elementKind(action.target);
+    case "click-at":
+      return pointKind(action);
     case "select":
       return namedKind(action.text ?? "") ?? elementKind(action.target);
     case "press":
@@ -296,6 +317,11 @@ export function confirmDetail(action: GateAction, app: string | null): string {
       return `Choose “${shortName(action.text ?? "")}”${where}`;
     case "set-value":
       return `Fill in ${target}${where}`;
+    case "click-at": {
+      // The app the click is in, which may not be the one the run last used.
+      const place = action.target?.context?.app || app;
+      return `Click ${action.target?.name ? `“${shortName(action.target.name)}”` : "a spot on screen"}${place ? ` in ${shortName(place, 24)}` : ""}`;
+    }
     default:
       return `Click ${target}${where}`;
   }

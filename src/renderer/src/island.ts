@@ -28,6 +28,7 @@ const ACTIVITY_LABELS = new Map([
   ["list_apps", "Checking open apps…"],
   ["list_windows", "Checking open windows…"],
   ["click", "Clicking…"],
+  ["click_at", "Clicking…"],
   ["type_text", "Typing…"],
   ["set_value", "Typing…"],
   ["clear", "Clearing a field…"],
