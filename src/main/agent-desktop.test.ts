@@ -18,7 +18,8 @@ import {
 
 const root = new URL("../../", import.meta.url);
 const repo = (path: string) => fileURLToPath(new URL(path, root));
-const ENVELOPE = '{"version":"2.5","ok":true,"command":"version","data":{"version":"1.0.2"}}';
+// agent-desktop 1.1.0's own reply to version (envelope 2.6), less its os and target.
+const ENVELOPE = '{"version":"2.6","ok":true,"command":"version","data":{"version":"1.1.0"}}';
 
 describe("platformBinaryNames", () => {
   it("names the bundled binary and macOS helper per platform", () => {
@@ -85,6 +86,15 @@ describe("package.json packaging", () => {
     for (const entry of agentDesktop(build.win.extraResources)) expect(existsSync(repo(expand(entry.from, "x64"))), entry.from).toBe(true);
   });
 
+  it("installs agent-desktop 1.1 or later (envelope 2.6, refs that prove their identity), as package.json asks", () => {
+    const manifest = JSON.parse(readFileSync(repo("package.json"), "utf8"));
+    expect(manifest.dependencies["agent-desktop"]).toBe("^1.1.0");
+    const installed = JSON.parse(readFileSync(repo("node_modules/agent-desktop/package.json"), "utf8")).version as string;
+    const [major, minor] = installed.split(".").map(Number);
+    expect(major, installed).toBe(1);
+    expect(minor, installed).toBeGreaterThanOrEqual(1);
+  });
+
   it("keeps every OS's binaries out of app.asar", () => {
     expect(build.files).toContain("!node_modules/agent-desktop{,/**}");
     expect(build.extraResources).toBeUndefined();
@@ -142,7 +152,7 @@ describe("createAgentDesktopRunner", () => {
   it("runs a read-only command headless in a private state folder, and parses the envelope", async () => {
     const fake = fakeExec(() => ({ stdout: ENVELOPE }));
     const runner = make(fake.exec);
-    expect(await runner.run("version", [], { timeoutMs: 1234 })).toEqual({ ok: true, data: { version: "1.0.2" } });
+    expect(await runner.run("version", [], { timeoutMs: 1234 })).toEqual({ ok: true, data: { version: "1.1.0" } });
     const call = fake.calls[0];
     expect(call?.file).toBe("/bin/agent-desktop");
     expect(call?.args).toEqual(["version"]);
@@ -266,6 +276,31 @@ describe("lockPrivateStateDirAcl", () => {
       rmSync(temp, { recursive: true, force: true });
     }
   });
+
+  it("is applied to the desktop action and computer-use runners' own state folders too, before their first command", async () => {
+    const temp = mkdtempSync(join(tmpdir(), "bee-ad-test-"));
+    try {
+      const exec: ExecFile = (_file, _args, _options, callback) => callback(null, ENVELOPE);
+      const binary = { path: "/bin/agent-desktop", macHelper: null };
+      const actionAcl = vi.fn();
+      const computerAcl = vi.fn();
+      const action = createAgentDesktopActionRunner(binary, { exec, env: {}, tempDir: () => temp, lockAcl: actionAcl });
+      const computer = createAgentDesktopComputerRunner(binary, { exec, env: {}, tempDir: () => temp, lockAcl: computerAcl });
+      await action.run("list-apps", []);
+      await computer.run("snapshot", ["--interactive-only", "--compact", "--app=Microsoft Teams", "--timeout-ms=12000"]);
+      await computer.run("click", ["@s8f3k2p9:e2"]);
+      expect(actionAcl).toHaveBeenCalledTimes(1);
+      expect(computerAcl).toHaveBeenCalledTimes(1);
+      // Two folders, each its own: snapshot refs never leave the computer-use runner's.
+      const [actionDir, computerDir] = [String(actionAcl.mock.calls[0]?.[0]), String(computerAcl.mock.calls[0]?.[0])];
+      expect(actionDir.startsWith(temp) && computerDir.startsWith(temp)).toBe(true);
+      expect(actionDir).not.toBe(computerDir);
+      action.cleanup();
+      computer.cleanup();
+    } finally {
+      rmSync(temp, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("createAgentDesktopActionRunner", () => {
@@ -358,9 +393,9 @@ describe("createAgentDesktopComputerRunner", () => {
     expect(calls.map((call) => [call.args[0], call.killed])).toEqual([["snapshot", true]]);
   });
 
-  it("refuses clipboard, launch, mouse, batch and forced commands before any process starts", () => {
+  it("refuses screenshots, clipboard, launch, mouse, batch and forced commands before any process starts", () => {
     const { runner, calls } = make();
-    for (const command of ["clipboard-get", "clipboard-set", "launch", "mouse-click", "drag", "batch", "session", "notification-action"]) {
+    for (const command of ["screenshot", "clipboard-get", "clipboard-set", "launch", "mouse-click", "drag", "batch", "session", "notification-action"]) {
       expect(() => runner.run(command as never, []), command).toThrow(/not allowed/);
     }
     expect(() => runner.run("press", ["cmd+q", "--app=Discord", "--force"])).toThrow(/not allowed/);
@@ -434,7 +469,9 @@ describe("source scan: agent-desktop stays read-only", () => {
     const tools = readFileSync(repo("src/core/computer-tools.ts"), "utf8");
     const used = new Set([...tools.matchAll(/\b(?:exec|observe|readOnce)\(\s*"([a-z-]+)"/g), ...tools.matchAll(/onRef\(\s*"([a-z-]+)"/g)].map((match) => match[1]));
     for (const command of used) expect(COMPUTER_USE_COMMANDS as readonly (string | undefined)[], command).toContain(command);
-    for (const command of ["snapshot", "find", "get", "click", "type", "set-value", "press", "mouse-click", "close-app", "screenshot"]) expect(used.has(command), command).toBe(true);
+    for (const command of ["snapshot", "find", "get", "click", "type", "set-value", "press", "close-app"]) expect(used.has(command), command).toBe(true);
+    // The tree only: no picture and no click at a point.
+    for (const command of ["screenshot", "mouse-click"]) expect(tools, command).not.toContain(`"${command}"`);
     // No shell, no clipboard, no launch: apps open through the desktop actions.
     expect(tools).not.toMatch(/child_process|execFile|spawn\(|shell:\s*true|"cmd(?:\.exe)?"|powershell|"\/bin\/(?:ba|z)?sh"|osascript|clipboard|"launch"/i);
     expect(readFileSync(repo("src/main/agent-desktop.ts"), "utf8")).toMatch(/queuedRunner<ComputerUseCommand>\(binary, deps, assertComputerUse\)/);

@@ -1,11 +1,10 @@
-import { tool, type ModelMessage } from "ai";
+import type { ModelMessage } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
-import { z } from "zod";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ComputerRun } from "./agent-desktop-envelope";
+import type { AgentDesktopResult, ComputerRun } from "./agent-desktop-envelope";
 import { createRunControl, type RunControl } from "./computer-control";
-import { computerTools } from "./computer-tools";
-import { COMPUTER_SYSTEM, SCREENSHOTS_KEPT, computerAccess, dropOldScreenshots, endedWhere, finalLine, runComputerUse, wantsComputerUse } from "./computer-use";
+import { CANNOT_CONTROL, computerTools } from "./computer-tools";
+import { COMPUTER_SYSTEM, computerAccess, endedWhere, finalLine, runComputerUse, wantsComputerUse } from "./computer-use";
 import type { DesktopActions } from "./desktop-actions";
 
 // The computer-use loop with a mock model and a fake agent-desktop: no network, no OS. Each model call is one turn.
@@ -165,6 +164,95 @@ describe("runComputerUse", () => {
     expect(COMPUTER_SYSTEM).toMatch(/exactly one short line/);
     expect(COMPUTER_SYSTEM).not.toMatch(/claude|haiku|anthropic|clerk|gpt/i);
   });
+
+  it("tells the AI to work through the tree, find first, and stop plainly when the tree gives it nothing to act on", () => {
+    expect(COMPUTER_SYSTEM).toMatch(/Work through the app's accessibility tree/);
+    expect(COMPUTER_SYSTEM).toMatch(/When you know an element's role or name, find it first/);
+    expect(COMPUTER_SYSTEM).toMatch(/Bee already waits for a slow app/);
+    expect(COMPUTER_SYSTEM).toMatch(/The accessibility tree is the only way you can see or act/);
+    expect(COMPUTER_SYSTEM).toMatch(/still show no usable control for the step .* stop and say Bee cannot control that app/);
+    expect(COMPUTER_SYSTEM).toMatch(/identical twins, stop and say Bee cannot tell which one to use/);
+    expect(COMPUTER_SYSTEM).not.toMatch(/screenshot|click_at|picture|image/i);
+  });
+});
+
+describe("runComputerUse: snapshots and refs only", () => {
+  const TEAMS = "Microsoft Teams";
+  const done: AgentDesktopResult = { ok: true, data: { disposition: { delivery: "delivered_verified" } } };
+  const INTERNAL: AgentDesktopResult = { ok: false, code: "INTERNAL", message: "Accessibility deadline exhausted before IPC", retry: "safe" };
+  const prompted = (turns: Turn[]) => {
+    const prompts: ModelMessage[][] = [];
+    let calls = 0;
+    const model = new MockLanguageModelV4({
+      doGenerate: async (options) => {
+        prompts.push(options.prompt as ModelMessage[]);
+        const turn = turns[Math.min(calls, turns.length - 1)] ?? { text: "" };
+        calls += 1;
+        return "tool" in turn
+          ? { content: [{ type: "tool-call", toolCallId: `c${calls}`, toolName: turn.tool, input: JSON.stringify(turn.input) }], finishReason: { unified: "tool-calls", raw: undefined }, usage, warnings: [] }
+          : { content: [{ type: "text", text: turn.text }], finishReason: { unified: "stop", raw: undefined }, usage, warnings: [] };
+      },
+    });
+    return { model, prompts };
+  };
+  // File or image parts anywhere in what the model was sent.
+  const pictures = (messages: readonly ModelMessage[]) => (JSON.stringify(messages).match(/"type":"(?:file|image)"|image\//g) ?? []).length;
+
+  it("sends a Teams message on the tree alone: find, set_value, find, click, with no picture", async () => {
+    const commands: string[][] = [];
+    const run: ComputerRun = async (command, args) => {
+      commands.push([command, ...args]);
+      if (command !== "find") return done;
+      return args.includes("--role=textfield")
+        ? { ok: true, data: { snapshot_id: "s5", matches: [{ role: "textfield", name: "Type a message", ref_id: "@s5:e1" }] } }
+        : { ok: true, data: { snapshot_id: "s6", matches: [{ role: "button", name: "Send", ref_id: "@s6:e2" }] } };
+    };
+    const { model, prompts } = prompted([
+      { tool: "find", input: { app: TEAMS, role: "textfield" } },
+      { tool: "set_value", input: { ref: "@s5:e1", value: "Running late", effect: "none" } },
+      { tool: "find", input: { app: TEAMS, role: "button", name: "Send" } },
+      { tool: "click", input: { ref: "@s6:e2", effect: "send" } },
+      { text: "Sent the message in Teams.\nEnded: Microsoft Teams, Chat" },
+    ]);
+    const control = createRunControl({ maxSteps: 30 });
+    const tools = computerTools({ run, desktop, control, platform: "windows", askFirst: () => false, confirm: async () => true });
+    const result = await runComputerUse({ model, command: "send Sam running late in Teams", tools, control, platform: "windows", maxSteps: 30 });
+    expect(result).toEqual({ line: "Sent the message in Teams.", stopped: false, steps: 4, error: false, endedWhere: "Microsoft Teams, Chat" });
+    expect(commands.map(([command]) => command)).toEqual(["find", "set-value", "find", "click"]);
+    expect(commands[1]).toEqual(["set-value", "@s5:e1", "--", "Running late"]);
+    expect(prompts.map(pictures)).toEqual([0, 0, 0, 0, 0]);
+    // The Windows line: write headless with set_value; type_text and focus always need physical.
+    const system = JSON.stringify(prompts[0]?.[0]);
+    expect(system).toContain("This is Windows.");
+    expect(system).toMatch(/Prefer set_value: type_text and focus always need physical here, so set it on them/);
+  });
+
+  it("stops with a plain line when Teams' tree stays empty once Bee has waited: no picture, no click at a point", async () => {
+    const empty = { app: TEAMS, window: { id: "w-7", title: "Microsoft Teams" }, snapshot_id: "s7", complete: true, tree: { role: "window", name: TEAMS, children: [] } };
+    const commands: string[] = [];
+    const run: ComputerRun = async (command) => {
+      commands.push(command);
+      if (command === "snapshot") return { ok: true, data: empty };
+      return command === "find" ? { ok: true, data: { matches: [] } } : done;
+    };
+    const { model, prompts } = prompted([
+      { tool: "snapshot", input: { app: TEAMS } },
+      { tool: "find", input: { app: TEAMS, role: "textfield" } },
+      { tool: "snapshot", input: { app: TEAMS, skeleton: true } },
+      { text: "Bee cannot control Microsoft Teams: it shows no controls.\nEnded: Microsoft Teams" },
+    ]);
+    const control = createRunControl({ maxSteps: 30 });
+    const tools = computerTools({ run, desktop, control, platform: "windows", askFirst: () => false, confirm: async () => true });
+    const result = await runComputerUse({ model, command: "send Sam running late in Teams", tools, control, platform: "windows", maxSteps: 30 });
+    expect(result).toEqual({ line: "Bee cannot control Microsoft Teams: it shows no controls.", stopped: false, steps: 3, error: false, endedWhere: "Microsoft Teams" });
+    // The tree only: each whole-window read ran twice (Bee waited for the app), and nothing was clicked or typed.
+    expect(commands).toEqual(["snapshot", "snapshot", "find", "snapshot", "snapshot"]);
+    // What the AI read: stop and say so. Never a picture, and never a hint to take one.
+    const seen = JSON.stringify(prompts.at(-1));
+    expect(seen).toContain(`If those show nothing usable either, ${CANNOT_CONTROL}.`);
+    expect(seen).not.toMatch(/screenshot|click_at/i);
+    expect(prompts.map(pictures)).toEqual([0, 0, 0, 0]);
+  });
 });
 
 describe("wantsComputerUse", () => {
@@ -230,54 +318,13 @@ describe("computerAccess", () => {
   });
 });
 
-describe("computer use: where it ended, and old screenshots", () => {
-  const shot = (id: string): ModelMessage => ({
-    role: "tool",
-    content: [{ type: "tool-result", toolCallId: id, toolName: "screenshot", output: { type: "content", value: [{ type: "text", text: `shot ${id}` }, { type: "file", data: { type: "data", data: "AAAA" }, mediaType: "image/png" }] } }],
-  });
-  const images = (messages: readonly ModelMessage[]) => (JSON.stringify(messages).match(/image\/png/g) ?? []).length;
-
+describe("computer use: where it ended, and earlier turns", () => {
   it("reads the Ended line, and leaves it out of the island's line", () => {
     const text = "Opened the team usage page.\nEnded: vercel.com/acme/~/usage, 404";
     expect(finalLine(text)).toBe("Opened the team usage page.");
     expect(endedWhere(text)).toBe("vercel.com/acme/~/usage, 404");
     expect(endedWhere("Done.")).toBe("");
     expect(COMPUTER_SYSTEM).toContain('starting with "Ended: "');
-  });
-
-  it("keeps only the newest two screenshots, newest last", () => {
-    const messages: ModelMessage[] = [{ role: "user", content: "go" }, shot("a"), shot("b"), shot("c")];
-    const kept = dropOldScreenshots(messages);
-    expect(SCREENSHOTS_KEPT).toBe(2);
-    expect(images(kept)).toBe(2);
-    expect(JSON.stringify(kept[1])).toContain("An older screenshot, removed");
-    expect(JSON.stringify(kept[3])).toContain("image/png");
-    // Nothing to cut: the same array back.
-    const few = [shot("a")];
-    expect(dropOldScreenshots(few)).toBe(few);
-  });
-
-  it("drops old screenshots before each step of a long run", async () => {
-    const prompts: ModelMessage[][] = [];
-    let calls = 0;
-    const model = new MockLanguageModelV4({
-      doGenerate: async (options) => {
-        prompts.push(options.prompt as ModelMessage[]);
-        calls += 1;
-        return calls <= 4
-          ? { content: [{ type: "tool-call", toolCallId: `s${calls}`, toolName: "screenshot", input: "{}" }], finishReason: { unified: "tool-calls", raw: undefined }, usage, warnings: [] }
-          : { content: [{ type: "text", text: "Looked four times." }], finishReason: { unified: "stop", raw: undefined }, usage, warnings: [] };
-      },
-    });
-    const screenshot = tool({
-      inputSchema: z.object({}),
-      execute: async () => "AAAA",
-      toModelOutput: ({ output }) => ({ type: "content", value: [{ type: "file", data: { type: "data", data: output }, mediaType: "image/png" }] }),
-    });
-    const control = createRunControl({ maxSteps: 10 });
-    const result = await runComputerUse({ model, command: "look", tools: { screenshot }, control, platform: "mac", maxSteps: 10 });
-    expect(result.line).toBe("Looked four times.");
-    expect(prompts.map(images)).toEqual([0, 1, 2, 2, 2]);
   });
 
   it("sends earlier turns before the request", async () => {

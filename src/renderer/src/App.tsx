@@ -458,7 +458,7 @@ function UpdateSection({ update }: { update: UpdateState }) {
   );
 }
 
-// Settings → computer use: on a Mac, Accessibility (required) and Screen Recording (for pictures of a window) for Bee.
+// Settings → computer use: on a Mac, Accessibility for Bee. Computer use never needs Screen Recording.
 function ComputerAccessSection({ access }: { access: BeeState["computerAccess"] }) {
   useEffect(() => {
     void actions.refreshComputerAccess();
@@ -481,9 +481,6 @@ function ComputerAccessSection({ access }: { access: BeeState["computerAccess"] 
         <div className="row actions">
           <Button type="button" variant="secondary" size="sm" onClick={() => void recheck(actions.openAccessibilitySettings)()}>
             Open Accessibility settings
-          </Button>
-          <Button type="button" variant="secondary" size="sm" onClick={() => void recheck(actions.openScreenRecordingSettings)()}>
-            Open Screen Recording settings
           </Button>
         </div>
       ) : null}

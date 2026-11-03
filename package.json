@@ -32,7 +32,7 @@
     "@clerk/electron": "^0.0.47",
     "@modelcontextprotocol/sdk": "^1.32.1",
     "@vvedantb/server": "^0.7.1",
-    "agent-desktop": "^1.0.2",
+    "agent-desktop": "^1.1.0",
     "ai": "^7.0.116",
     "electron-store": "^8.2.0",
     "zod": "^4.6.5"
@@ -195,7 +195,7 @@
         "LSUIElement": true,
         "NSMicrophoneUsageDescription": "Bee listens to your microphone during meetings to transcribe speech and suggest tips. Audio is sent only for transcription.",
         "NSAudioCaptureUsageDescription": "Bee can hear the Microsoft Teams app, and only Teams, during a call when someone in it does not have Bee, to transcribe it. Optional; turn it off in Settings.",
-        "NSScreenCaptureUsageDescription": "Bee hears the Microsoft Teams app's sound, and only Teams, during a call when someone in it does not have Bee. macOS counts app audio as Screen Recording. When you ask Bee to use an app for you, it may also take a picture of that app's window for the AI to see. Bee never records video of your screen."
+        "NSScreenCaptureUsageDescription": "Bee hears the Microsoft Teams app's sound, and only Teams, during a call when someone in it does not have Bee. macOS counts app audio as Screen Recording. Bee never records video of your screen."
       }
     },
     "linux": {

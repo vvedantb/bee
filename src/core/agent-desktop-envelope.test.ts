@@ -8,6 +8,7 @@ import {
   assertComputerUse,
   assertDesktopAction,
   assertReadOnly,
+  identityUnproven,
   parseAccessibility,
   parsePermission,
   parseApps,
@@ -87,7 +88,6 @@ describe("assertComputerUse", () => {
     expect(() => assertComputerUse("find", ["--app=Google Chrome", "--role=button", "--name=Close tab", "--exact", "--limit=15"])).not.toThrow();
     expect(() => assertComputerUse("get", [REF, "--property=title"])).not.toThrow();
     expect(() => assertComputerUse("is", [REF, "--property=checked"])).not.toThrow();
-    expect(() => assertComputerUse("screenshot", ["--app=Discord"])).not.toThrow();
     for (const command of ["click", "clear", "check", "uncheck", "expand", "collapse", "scroll-to"]) expect(() => assertComputerUse(command, [REF]), command).not.toThrow();
     expect(() => assertComputerUse("type", [REF, "--", "hi Sam"])).not.toThrow();
     expect(() => assertComputerUse("set-value", [REF, "--", "-5 apples\nand pears"])).not.toThrow();
@@ -101,9 +101,9 @@ describe("assertComputerUse", () => {
     expect(() => assertComputerUse("permissions", [])).not.toThrow();
   });
 
-  it("refuses clipboard, notifications, mouse, drag, batch, sessions, launch and every other command", () => {
+  it("refuses screenshots, clipboard, notifications, mouse, drag, batch, sessions, launch and every other command", () => {
     for (const command of [
-      "clipboard-get", "clipboard-set", "clipboard-clear", "batch", "launch", "mouse-click", "mouse-move", "mouse-wheel", "drag", "hover",
+      "screenshot", "clipboard-get", "clipboard-set", "clipboard-clear", "batch", "launch", "mouse-click", "mouse-move", "mouse-wheel", "drag", "hover",
       "double-click", "right-click", "key-down", "notification-action", "dismiss-all-notifications", "list-notifications", "session", "trace",
       "cursor-overlay", "open-system-surface", "skills", "move-window", "resize-window", "status", "focus-window", "toggle",
     ]) {
@@ -117,36 +117,18 @@ describe("assertComputerUse", () => {
     for (const flag of ["--trace=/tmp/t", "--trace-strict", "--session=abc", "--debug", "--screenshot=/tmp/x.html", "--wait-for=button:OK", "--agent-id=a", "--include-bounds"]) {
       expect(() => assertComputerUse("snapshot", ["--app=Discord", flag]), flag).toThrow(/not allowed/);
     }
-    expect(() => assertComputerUse("screenshot", ["--app=Discord", "/tmp/out.png"])).toThrow(/arguments not allowed/);
-    expect(() => assertComputerUse("screenshot", ["--screen=0"])).toThrow(/not allowed/);
   });
 
-  it("allows the mouse only for one left click at one screen point, always physical", () => {
-    expect(() => assertComputerUse("mouse-click", ["--xy=640,812", HEADED_FLAG])).not.toThrow();
-    expect(() => assertComputerUse("mouse-click", ["--xy=-1280,40", HEADED_FLAG])).not.toThrow();
-    // Never headless (agent-desktop refuses it anyway), never without a point.
-    expect(() => assertComputerUse("mouse-click", ["--xy=640,812"])).toThrow(/not allowed/);
-    expect(() => assertComputerUse("mouse-click", [HEADED_FLAG])).toThrow(/not allowed/);
-    expect(() => assertComputerUse("mouse-click", [])).toThrow(/not allowed/);
-    // No other button, double click, held modifier, ref, path or text.
-    for (const extra of ["--button=right", "--count=2", "--modifiers=cmd", "--session=a", "--trace=/tmp/t", "--screenshot=/tmp/x.html"]) {
-      expect(() => assertComputerUse("mouse-click", ["--xy=1,1", HEADED_FLAG, extra]), extra).toThrow(/not allowed/);
+  it("works through the tree only: no screenshot, no mouse and no focus search, whatever the arguments", () => {
+    for (const command of ["screenshot", "mouse-click"]) expect(COMPUTER_USE_COMMANDS as readonly string[], command).not.toContain(command);
+    for (const args of [[], ["--app=Discord"], ["--app=Discord", "--window-id=w-1"], ["--screen=0"], ["--app=Discord", "/tmp/out.png"]]) {
+      expect(() => assertComputerUse("screenshot", args), args.join(" ")).toThrow(/command not allowed/);
     }
-    for (const point of ["640", "640,", "a,b", "1.5,2", "640, 812", "99999,1", "1,2,3", "$(x),1"]) {
-      expect(() => assertComputerUse("mouse-click", [`--xy=${point}`, HEADED_FLAG]), point).toThrow(/not allowed/);
+    for (const command of ["mouse-click", "mouse-move", "mouse-wheel", "mouse-down", "mouse-up", "drag", "hover", "double-click", "triple-click", "right-click"]) {
+      for (const args of [[], ["--xy=640,812"], ["--xy=640,812", HEADED_FLAG]]) expect(() => assertComputerUse(command, args), `${command} ${args.join(" ")}`).toThrow(/command not allowed/);
     }
-    expect(() => assertComputerUse("mouse-click", ["--xy", "1,1", HEADED_FLAG])).toThrow();
-    expect(() => assertComputerUse("mouse-click", ["@s8f3k2p9:e1", "--xy=1,1", HEADED_FLAG])).toThrow(/not allowed/);
-    expect(() => assertComputerUse("mouse-click", ["--xy=1,1", HEADED_FLAG, "--", "x"])).toThrow(/not allowed/);
-    // Every other pointer command is still refused.
-    for (const command of ["mouse-move", "mouse-wheel", "mouse-down", "mouse-up", "drag", "hover", "double-click", "triple-click", "right-click"]) {
-      expect(() => assertComputerUse(command, ["--xy=1,1", HEADED_FLAG]), command).toThrow(/not allowed/);
-    }
-  });
-
-  it("lets find look for what has focus, and no other state", () => {
-    expect(() => assertComputerUse("find", ["--app=Microsoft Teams", "--state=focused", "--limit=5", "--timeout-ms=6000"])).not.toThrow();
-    for (const state of ["enabled", "focused=false", "secure", ""]) expect(() => assertComputerUse("find", ["--app=Teams", `--state=${state}`]), state).toThrow(/not allowed/);
+    // find --state=focused was only for learning what a click at a point had focused.
+    for (const state of ["focused", "enabled", ""]) expect(() => assertComputerUse("find", ["--app=Microsoft Teams", `--state=${state}`]), state).toThrow(/not allowed/);
   });
 
   it("allows physical input only on press, type and focus", () => {
@@ -223,6 +205,28 @@ describe("parseEnvelope", () => {
     expect(parseEnvelope('{"ok":false,"error":{"code":"TIMEOUT","message":42,"disposition":"safe","details":{"kind":"Not A Token"}}}')).toEqual({ ok: false, code: "TIMEOUT" });
   });
 
+  it("reads agent-desktop 1.1's envelope 2.6: identity kinds, and whether waiting can help", () => {
+    // agent-desktop 1.1.0's own output for a bare ref.
+    const bare =
+      '{"version":"2.6","ok":false,"command":"click","error":{"code":"INVALID_ARGS","message":"Invalid ref_id \'@e1\': expected @<snapshot_id>:e<N>","suggestion":"Use the snapshot-qualified ref that snapshot prints, for example @s8f3k2p9:e1. A bare @eN ref is not accepted.","disposition":{"delivery":"not_delivered","retry":"safe"}}}';
+    expect(parseEnvelope(bare)).toEqual({ ok: false, code: "INVALID_ARGS", message: "Invalid ref_id '…': expected @<snapshot_id>:e<N>", retry: "safe" });
+    const twin = { code: "AMBIGUOUS_TARGET", message: "ref not proven unique", details: { kind: "identity_not_unique" }, disposition: { delivery: "not_delivered", retry: "safe" } };
+    expect(parseEnvelope(JSON.stringify({ version: "2.6", ok: false, command: "click", error: twin }))).toEqual({ ok: false, code: "AMBIGUOUS_TARGET", message: "ref not proven unique", retry: "safe", kind: "identity_not_unique" });
+    // details.retryable: false means waiting cannot change the outcome; anything else is left out.
+    const final = { code: "ACTION_FAILED", details: { kind: "live_read_incomplete", retryable: false }, disposition: { delivery: "not_delivered", retry: "safe" } };
+    expect(parseEnvelope(JSON.stringify({ version: "2.6", ok: false, error: final }))).toEqual({ ok: false, code: "ACTION_FAILED", retry: "safe", kind: "live_read_incomplete", retryable: false });
+    expect(parseEnvelope(JSON.stringify({ ok: false, error: { code: "TIMEOUT", details: { retryable: true } } }))).toEqual({ ok: false, code: "TIMEOUT" });
+    expect(parseEnvelope(JSON.stringify({ ok: false, error: { code: "TIMEOUT", details: { retryable: "false" } } }))).toEqual({ ok: false, code: "TIMEOUT" });
+  });
+
+  it("tells a snapshot that could not prove its refs (identity_unproven) from one that did", () => {
+    const snapshot = (extra: Record<string, unknown>) => parseEnvelope(JSON.stringify({ version: "2.6", ok: true, command: "snapshot", data: { snapshot_id: "s1", complete: true, ref_count: 3, tree: {}, ...extra } }));
+    const unproven = snapshot({ identity_unproven: true });
+    expect(unproven.ok && identityUnproven(unproven.data)).toBe(true);
+    for (const result of [snapshot({}), snapshot({ identity_unproven: false }), snapshot({ identity_unproven: "true" })]) expect(result.ok && identityUnproven(result.data)).toBe(false);
+    for (const odd of [null, "x", 1, [], { data: { identity_unproven: true } }]) expect(identityUnproven(odd)).toBe(false);
+  });
+
   it("redacts names, titles, paths, links and addresses in a message, and cuts it short", () => {
     expect(safeMessage("No running application matches 'Microsoft Teams'")).toBe("No running application matches '…'");
     expect(safeMessage("Multiple windows matched the saved title 'Sam's chat | Teams'")).toBe("Multiple windows matched the saved title '…'");
@@ -284,7 +288,7 @@ describe("list parsers", () => {
 
   it("reads list-windows from data.windows or a bare array", () => {
     const mac = parseWindows(data("list-windows-mac.json"));
-    expect(mac[3]).toEqual({ id: "w-2002", title: "Zoom Meeting", app: "zoom.us", pid: 1302, focused: true, bounds: { x: 0, y: 25, width: 1440, height: 875 } });
+    expect(mac[3]).toEqual({ id: "w-2002", title: "Zoom Meeting", app: "zoom.us", pid: 1302, focused: true });
     const win = parseWindows(data("list-windows-win.json"));
     expect(win.map((window) => window.app)).toEqual(["ms-teams", "ms-teams", "Zoom", "msedge", "msedge", "explorer"]);
   });
