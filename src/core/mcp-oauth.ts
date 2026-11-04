@@ -33,21 +33,29 @@ export const mcpOAuthStateSchema = z.object({
 });
 export type McpOAuthState = z.infer<typeof mcpOAuthStateSchema>;
 
+/**
+ * The redirect a background provider registers with: the same refresh-only loopback @vvedantb/server reports as its redirectUrl.
+ * Authorization servers such as Eva and Clerk reject dynamic registration with no redirect_uris. Nothing listens here and the
+ * provider never opens a browser; interactive Connect registers again with its own loopback port.
+ */
+export const REFRESH_ONLY_REDIRECT_URL = "http://127.0.0.1/callback";
+
 export type McpOAuthProviderOptions = {
   storage: McpOAuthStorage;
-  /** Where the browser comes back to. Set only for the interactive Connect flow: without it the provider never starts a sign-in. */
+  /** Where the browser comes back to. Set for the interactive Connect flow; without it, REFRESH_ONLY_REDIRECT_URL is registered instead. */
   redirectUrl?: string;
   /** Opens the authorization URL. Required with redirectUrl. */
   redirectToAuthorization?: (url: URL) => void | Promise<void>;
 };
 
 /**
- * Interactive (redirectUrl set): may register a client and open the browser. Not interactive: uses what is stored (and refreshes it);
+ * Interactive (redirectUrl and redirectToAuthorization set): may register a client and open the browser. Not interactive: uses what is stored (and refreshes it);
  * a 401 that needs a new sign-in fails fast with "Sign in from the Connectors tab". Both can save client information, so dynamic
  * registration never fails for want of somewhere to keep the result. Tokens are saved as the SDK returns them (no `obtained_at`).
  */
 export function createMcpOAuthProvider(options: McpOAuthProviderOptions): McpOAuthProvider {
-  return createProvider({ ...options, clientName: "Bee", signInRequiredMessage: "Sign in from the Connectors tab", clientRegistration: "always", stampObtainedAt: false });
+  // A redirectUrl without redirectToAuthorization stays non-interactive: it only fills redirect_uris for registration.
+  return createProvider({ ...options, redirectUrl: options.redirectUrl ?? REFRESH_ONLY_REDIRECT_URL, clientName: "Bee", signInRequiredMessage: "Sign in from the Connectors tab", clientRegistration: "always", stampObtainedAt: false });
 }
 
 /** Signs in to one server: connects as bee 1.0.0 first, and on 401 awaits `code` and exchanges it. A server that needs no sign-in resolves at once. */

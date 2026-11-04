@@ -294,7 +294,7 @@ describe("pinned behaviour", () => {
     expect(background.redirectUrl).toBe("http://127.0.0.1/callback");
     const metadata = { client_name: "Bee", token_endpoint_auth_method: "none", grant_types: ["authorization_code", "refresh_token"], response_types: ["code"] };
     expect(interactive.clientMetadata).toStrictEqual({ ...metadata, redirect_uris: [REDIRECT] });
-    expect(background.clientMetadata).toStrictEqual({ ...metadata, redirect_uris: [] });
+    expect(background.clientMetadata).toStrictEqual({ ...metadata, redirect_uris: ["http://127.0.0.1/callback"] });
   });
 
   it("a non-interactive provider registers on a 401, saves the client, then fails with the Connectors message", async () => {
@@ -305,10 +305,13 @@ describe("pinned behaviour", () => {
     await expect(attempt).rejects.toBeInstanceOf(UnauthorizedError);
     await expect(attempt).rejects.toThrow(new Error("Sign in from the Connectors tab"));
     expect(calls.filter((call) => call.method === "POST").map((call) => call.url)).toEqual([`${AS}/register`]);
+    // Eva and Clerk reject registration without a redirect_uri, so the background provider sends the refresh-only loopback.
+    const register = calls.find((call) => call.url === `${AS}/register`);
+    expect(JSON.parse(register?.body ?? "{}").redirect_uris).toStrictEqual(["http://127.0.0.1/callback"]);
     expect(storage.state()).toStrictEqual({
       clientInformation: {
         client_name: "Bee",
-        redirect_uris: [],
+        redirect_uris: ["http://127.0.0.1/callback"],
         token_endpoint_auth_method: "none",
         grant_types: ["authorization_code", "refresh_token"],
         response_types: ["code"],
@@ -318,12 +321,47 @@ describe("pinned behaviour", () => {
     });
   });
 
+  it("a background provider passes registration at a server that rejects empty redirect_uris (as Eva does) and asks for sign-in", async () => {
+    const storage = memoryStorage();
+    const provider = createMcpOAuthProvider({ storage });
+    const { fetchFn } = fakeFetch({
+      ...discovery,
+      [`POST ${AS}/register`]: (call) => {
+        const body = JSON.parse(call.body);
+        if (!Array.isArray(body.redirect_uris) || body.redirect_uris.length === 0) return json({ error: "At least one redirect_uri is required" }, 400);
+        return json({ ...body, client_id: "eva-client" }, 201);
+      },
+    });
+    const attempt = auth(provider, { serverUrl: MCP_URL, fetchFn });
+    await expect(attempt).rejects.toThrow(new Error("Sign in from the Connectors tab"));
+    await expect(attempt).rejects.not.toThrow(/redirect_uri/);
+    expect(storage.state()?.clientInformation).toMatchObject({ client_id: "eva-client", redirect_uris: ["http://127.0.0.1/callback"] });
+  });
+
+  it("interactive Connect registers again with its own loopback after a background registration", async () => {
+    const storage = memoryStorage();
+    const opened: URL[] = [];
+    let registrations = 0;
+    const { fetchFn, calls } = fakeFetch({
+      ...discovery,
+      [`POST ${AS}/register`]: (call) => json({ ...JSON.parse(call.body), client_id: `client-${++registrations}` }, 201),
+    });
+    await expect(auth(createMcpOAuthProvider({ storage }), { serverUrl: MCP_URL, fetchFn })).rejects.toThrow(new Error("Sign in from the Connectors tab"));
+    const interactive = createMcpOAuthProvider({ storage, redirectUrl: REDIRECT, redirectToAuthorization: (url) => void opened.push(url) });
+    await expect(auth(interactive, { serverUrl: MCP_URL, fetchFn })).resolves.toBe("REDIRECT");
+    const bodies = calls.filter((call) => call.url === `${AS}/register`).map((call) => JSON.parse(call.body).redirect_uris);
+    expect(bodies).toStrictEqual([["http://127.0.0.1/callback"], [REDIRECT]]);
+    expect(opened).toHaveLength(1);
+    expect(opened[0]?.searchParams.get("redirect_uri")).toBe(REDIRECT);
+    expect(storage.state()?.clientInformation).toMatchObject({ client_id: "client-2", redirect_uris: [REDIRECT] });
+  });
+
   it("fills redirect_uris on a saved client only when the server left them out", () => {
     const storage = memoryStorage();
     void createMcpOAuthProvider({ storage, redirectUrl: REDIRECT, redirectToAuthorization: () => undefined }).saveClientInformation?.({ client_id: "a" });
     expect(storage.state()).toStrictEqual({ clientInformation: { client_id: "a", redirect_uris: [REDIRECT] } });
     void createMcpOAuthProvider({ storage }).saveClientInformation?.({ client_id: "b" });
-    expect(storage.state()).toStrictEqual({ clientInformation: { client_id: "b", redirect_uris: undefined } });
+    expect(storage.state()).toStrictEqual({ clientInformation: { client_id: "b", redirect_uris: ["http://127.0.0.1/callback"] } });
     void createMcpOAuthProvider({ storage }).saveClientInformation?.({ client_id: "c", redirect_uris: ["x"] });
     expect(storage.state()).toStrictEqual({ clientInformation: { client_id: "c", redirect_uris: ["x"] } });
   });

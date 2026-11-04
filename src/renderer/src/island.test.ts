@@ -40,6 +40,7 @@ describe("mcpErrorNote", () => {
   it("asks for a new sign-in when the error is about signing in, else shows a short reason, on one line", () => {
     expect(mcpErrorNote([{ server: "Eva", error: "Sign in from the Connectors tab" }])).toBe("Eva unavailable: sign in again from Connectors");
     expect(mcpErrorNote([{ server: "Eva", error: "not signed in" }])).toBe("Eva unavailable: sign in again from Connectors");
+    expect(mcpErrorNote([{ server: "Eva", error: "at least one redirect_uri is required" }])).toBe("Eva unavailable: sign in again from Connectors");
     const note = mcpErrorNote([
       { server: "vmem", error: "Connecting timed out\nafter 10 s" },
       { server: "Big", error: "y".repeat(200) },
