@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MOCK_TOKEN, startHangingServer, startMockMcpServer } from "../../test/helpers/mock-mcp-server";
-import { VMEM_TOOL_ALLOWLIST, connectMcp, createMcpPool, loadMcpTools, lunaToolsFor, mcpConfigHash, resultText, mcpSlug, mcpUrlError, parseMcpArgs, parseMcpEnv, testMcpServer, type McpConnection, type McpServerConfig } from "./mcp";
+import { VMEM_TOOL_ALLOWLIST, connectMcp, createMcpPool, loadMcpTools, lunaToolsFor, mcpConfigHash, resultText, mcpSlug, mcpUrlError, parseMcpArgs, parseMcpEnv, readServerInfo, testMcpServer, type McpConnection, type McpServerConfig } from "./mcp";
 
 const cleanup: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -35,6 +35,18 @@ describe("connect and list", () => {
     const result = await testMcpServer(http("vmem", server.url));
     expect(result).toMatchObject({ ok: true });
     expect(result.ok && result.tools.map((tool) => tool.name).sort()).toEqual(["boom", "echo", "wobble"]);
+  });
+
+  it("returns what the server reported in initialize: name, website and the best icon for a dark UI", async () => {
+    const server = await mock();
+    const result = await testMcpServer(http("anything", server.url));
+    expect(result.ok && result.serverInfo).toEqual({ name: "mock", websiteUrl: "https://mock.example.com/", iconUrl: "https://mock.example.com/dark.png" });
+  });
+
+  it("reads serverInfo loosely", () => {
+    expect(readServerInfo(undefined)).toBeUndefined();
+    expect(readServerInfo({ version: "1" })).toBeUndefined();
+    expect(readServerInfo({ name: "x", websiteUrl: "javascript:alert(1)", icons: "nope" })).toEqual({ name: "x", websiteUrl: undefined, iconUrl: undefined });
   });
 
   it("reports a refused connection as a short error", async () => {
@@ -320,7 +332,7 @@ describe("tool list cache and lazy connection", () => {
     const echo = entry.tools.find((item) => item.name === "echo");
     expect(JSON.stringify(echo?.inputSchema)).not.toMatch(/propertyNames|\$schema/);
     expect(echo?.inputSchema).toMatchObject({ type: "object", properties: { text: { type: "string" } } });
-    expect(Object.keys(entry).sort()).toEqual(["configHash", "fetchedAt", "tools"]);
+    expect(Object.keys(entry).sort()).toEqual(["configHash", "fetchedAt", "serverInfo", "tools"]);
     expect(JSON.stringify(entry)).not.toMatch(/s3cret-token-VALUE|env-VALUE-123/);
     await pool.closeAll();
   });
@@ -485,8 +497,8 @@ describe("vmem tool allowlist", () => {
     for (const name of ["list_tables", "count_table", "query_table", "query_docs", "get_or_create_daily_note"]) expect(VMEM_TOOL_ALLOWLIST).not.toContain(name);
   });
 
-  it("sends only allowlisted vmem tools, by name or by vmem host, and counts only those", async () => {
-    for (const config of [http("vmem", "https://example.com/mcp"), http("Memory", "https://vmem.projectv.uk/mcp")]) {
+  it("sends only allowlisted vmem tools when the server reported the name vmem, whatever its display name, and counts only those", async () => {
+    for (const config of [http("vmem", "https://example.com/mcp", { serverInfoName: "vmem" }), http("Memory", "https://example.com/mcp", { serverInfoName: "VMEM" })]) {
       const mcp = await loadMcpTools([config], { pool: listing(["memory_search", "files_get", "list_tables", "delete_everything", "admin_tool_1"]) });
       const prefix = mcpSlug(config.name).toLowerCase();
       expect(Object.keys(mcp.tools).sort()).toEqual([`${prefix}__files_get`, `${prefix}__memory_search`]);
@@ -494,8 +506,15 @@ describe("vmem tool allowlist", () => {
     }
   });
 
+  it("never keys off the display name or the URL host", async () => {
+    for (const config of [http("vmem", "https://example.com/mcp"), http("Memory", "https://vmem.projectv.uk/mcp")]) {
+      const mcp = await loadMcpTools([config], { pool: listing(many) });
+      expect(Object.keys(mcp.tools)).toHaveLength(many.length);
+    }
+  });
+
   it("still drops allowlisted tools the user switched off", async () => {
-    const mcp = await loadMcpTools([http("vmem", "https://example.com/mcp", { disabledTools: ["memory_get"] })], { pool: listing(many) });
+    const mcp = await loadMcpTools([http("vmem", "https://example.com/mcp", { serverInfoName: "vmem", disabledTools: ["memory_get"] })], { pool: listing(many) });
     expect(Object.keys(mcp.tools)).not.toContain("vmem__memory_get");
     expect(mcp.servers[0]?.toolCount).toBe(VMEM_TOOL_ALLOWLIST.length - 1);
   });
@@ -507,7 +526,7 @@ describe("vmem tool allowlist", () => {
 
   it("keeps every vmem tool when vmem lists none on the list, so the connector never goes silent", () => {
     const tools = [{ name: "echo" }, { name: "wobble" }];
-    expect(lunaToolsFor({ name: "vmem" }, tools)).toEqual(tools);
-    expect(lunaToolsFor({ name: "vmem" }, [...tools, { name: "memory_search" }])).toEqual([{ name: "memory_search" }]);
+    expect(lunaToolsFor({ serverInfoName: "vmem" }, tools)).toEqual(tools);
+    expect(lunaToolsFor({ serverInfoName: "vmem" }, [...tools, { name: "memory_search" }])).toEqual([{ name: "memory_search" }]);
   });
 });

@@ -11,28 +11,10 @@ export function mcpSlug(name: string): string {
   return slug || "mcp";
 }
 
-const VMEM_HOSTS = ["vmem.vedantb.com", "vmem.projectv.uk"];
-
-/** True for the user's vmem connector: a server named vmem, or one whose URL host is a vmem host. Callers check `enabled`. */
-export function isVmemConnector(server: { name: string; url?: string }): boolean {
-  if (mcpSlug(server.name).toLowerCase() === "vmem") return true;
-  try {
-    const host = new URL(server.url ?? "").hostname.toLowerCase();
-    return VMEM_HOSTS.some((vmem) => host === vmem || host.endsWith(`.${vmem}`));
-  } catch {
-    return false;
-  }
-}
-
-const EVA_HOSTS = ["eva.vedantb.com", "dazzling-dogfish-581.eu-west-1.convex.site"];
-
-/** True for the user's Eva connector: a server named eva, or one whose URL host is an Eva host. Callers check `enabled`. */
-export function isEvaConnector(server: { name: string; url?: string }): boolean {
-  if (mcpSlug(server.name).toLowerCase() === "eva") return true;
-  try {
-    const host = new URL(server.url ?? "").hostname.toLowerCase();
-    return EVA_HOSTS.some((eva) => host === eva || host.endsWith(`.${eva}`));
-  } catch {
-    return false;
-  }
+/**
+ * True for a vmem connector: the name the server reported in MCP initialize (`serverInfo.name`, stored as serverInfoName)
+ * is vmem, ignoring case. Never keyed off the URL or the display name. Callers check `enabled`.
+ */
+export function isVmemConnector(server: { serverInfoName?: string }): boolean {
+  return Boolean(server.serverInfoName) && mcpSlug(server.serverInfoName ?? "").toLowerCase() === "vmem";
 }

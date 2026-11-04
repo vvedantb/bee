@@ -8,7 +8,17 @@ export const MOCK_TOKEN = "WOBBLEMCP-4417";
 
 /** The mock server's tools. wobble returns a distinct token a model cannot guess. */
 export function buildMockMcpServer(): McpServer {
-  const server = new McpServer({ name: "mock", version: "1.0.0" });
+  // serverInfo icons (MCP 2025-11-25): Bee should pick the dark one and never the http: one.
+  const server = new McpServer({
+    name: "mock",
+    version: "1.0.0",
+    websiteUrl: "https://mock.example.com/",
+    icons: [
+      { src: "https://mock.example.com/light.png", theme: "light", sizes: ["32x32"] },
+      { src: "http://mock.example.com/dark-insecure.png", theme: "dark" },
+      { src: "https://mock.example.com/dark.png", theme: "dark", sizes: ["64x64"] },
+    ],
+  });
   server.registerTool("echo", { description: "Echo the text back", inputSchema: { text: z.string() } }, async ({ text }) => ({
     content: [{ type: "text", text: `echo: ${text}` }],
   }));

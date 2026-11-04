@@ -1,9 +1,7 @@
-import { IconPlug } from "@tabler/icons-react";
-import { Button, Checkbox, Input, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Textarea } from "@vvedantb/ui";
-import { useState, type FormEvent } from "react";
+import { Avatar, AvatarFallback, AvatarImage, Button, Checkbox, Input, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Textarea } from "@vvedantb/ui";
+import { useEffect, useState, type FormEvent } from "react";
 import type { McpSave, McpServerView } from "../../shared/ipc";
-import { isEvaConnector, isVmemConnector } from "../../shared/mcp-names";
-import { Favicon } from "./Favicon";
+import { faviconHostOf, safeIconSrc } from "../../shared/mcp-icons";
 import { SecretField } from "./SecretField";
 import { actions, type McpTestState } from "./store";
 
@@ -44,6 +42,8 @@ function McpForm({ server, error, onDone }: { server: McpServerView | null; erro
       save.url = formString(form, "url");
       save.auth = { type: authType, headerName: authType === "header" ? formString(form, "headerName") : undefined };
       save.secret = formString(form, "secret") || undefined;
+      // Sent every time, so an emptied box clears the override.
+      save.iconOverride = formString(form, "iconOverride")?.trim() ?? "";
     } else {
       save.command = formString(form, "command");
       save.args = formString(form, "args");
@@ -56,7 +56,7 @@ function McpForm({ server, error, onDone }: { server: McpServerView | null; erro
     <form className="settings mcp-form" onSubmit={(event) => void onSubmit(event)}>
       <label>
         Name
-        <Input className="h-9" name="name" defaultValue={server?.name} placeholder="vmem" maxLength={40} required spellCheck={false} />
+        <Input className="h-9" name="name" defaultValue={server?.name} placeholder="My server" maxLength={40} required spellCheck={false} />
         <span className="muted">The AI sees its tools as name__tool.</span>
       </label>
       <label>
@@ -75,8 +75,13 @@ function McpForm({ server, error, onDone }: { server: McpServerView | null; erro
         <>
           <label>
             URL
-            <Input className="h-9" name="url" defaultValue={server?.url} placeholder="https://clear-bear-690.eu-west-1.convex.site/mcp" required spellCheck={false} />
+            <Input className="h-9" name="url" defaultValue={server?.url} placeholder="https://example.com/mcp" required spellCheck={false} />
             <span className="muted">https, or http on localhost.</span>
+          </label>
+          <label>
+            Icon URL (optional)
+            <Input className="h-9" name="iconOverride" defaultValue={server?.iconOverride} placeholder="https://example.com/icon.png" spellCheck={false} />
+            <span className="muted">https or data:image. Leave empty to use the icon the server provides.</span>
           </label>
           <label>
             Authentication
@@ -176,44 +181,78 @@ function McpDetails({ server, test }: { server: McpServerView; test: McpTestStat
   );
 }
 
-// Connectors Bee offers by name. Connect saves the server enabled and signs in through the system browser (MCP OAuth).
-type Preset = { name: string; url: string; domain: string; matches: (server: McpServerView) => boolean };
-const PRESETS: Preset[] = [
-  { name: "vmem", url: "https://clear-bear-690.eu-west-1.convex.site/mcp", domain: "vmem.projectv.uk", matches: isVmemConnector },
-  { name: "Eva", url: "https://dazzling-dogfish-581.eu-west-1.convex.site/mcp", domain: "eva.vedantb.com", matches: isEvaConnector },
-];
-
-function hostOf(url: string | undefined): string | null {
-  try {
-    return new URL(url ?? "").hostname || null;
-  } catch {
-    return null;
+// Favicons by host and https icon URLs, as data URLs from main (CSP allows no remote images). Remembered for this window.
+const favicons = new Map<string, Promise<string | null>>();
+function faviconFor(host: string): Promise<string | null> {
+  let icon = favicons.get(host);
+  if (!icon) {
+    icon = window.bee.getFavicon(host).catch(() => null);
+    favicons.set(host, icon);
   }
+  return icon;
+}
+const httpsIcons = new Map<string, Promise<string | null>>();
+function httpsIconFor(url: string): Promise<string | null> {
+  let icon = httpsIcons.get(url);
+  if (!icon) {
+    icon = window.bee.getHttpsIcon(url).catch(() => null);
+    httpsIcons.set(url, icon);
+  }
+  return icon;
 }
 
-function ConnectorIcon({ domain }: { domain: string | null }) {
-  return <span className="connector-icon">{domain ? <Favicon domain={domain} /> : <IconPlug size={14} stroke={1.75} aria-hidden />}</span>;
-}
-
-type ConnectorRowProps = { name: string; domain: string | null; connected: boolean; busy: boolean; onToggle: () => void; onOpen?: () => void };
-
-// One line: icon, name, Connect or Disconnect. A custom row's name opens its edit panel.
-function ConnectorRow({ name, domain, connected, busy, onToggle, onOpen }: ConnectorRowProps) {
-  const label = (
-    <>
-      <ConnectorIcon domain={domain} />
-      <strong>{name}</strong>
-    </>
+/**
+ * A connector's icon: the user's Icon URL, else the icon the server reported (serverInfo.icons), else the favicon of its
+ * website, else of its URL host (not *.convex.site), else the first letter of its name. https: srcs are fetched in main.
+ */
+function ConnectorIcon({ server }: { server: McpServerView }) {
+  const direct = safeIconSrc(server.iconOverride) ?? safeIconSrc(server.iconUrl);
+  const httpsDirect = direct?.startsWith("https:") ? direct : null;
+  const dataDirect = direct?.startsWith("data:") ? direct : null;
+  const hosts = dataDirect || httpsDirect ? [] : [faviconHostOf(server.websiteUrl), server.transport === "http" ? faviconHostOf(server.url) : null].filter((host): host is string => Boolean(host));
+  const hostKey = [...new Set(hosts)].join(" ");
+  const [resolved, setResolved] = useState<string | null>(dataDirect);
+  useEffect(() => {
+    let live = true;
+    setResolved(dataDirect);
+    if (dataDirect) return;
+    void (async () => {
+      if (httpsDirect) {
+        const icon = await httpsIconFor(httpsDirect);
+        if (live) setResolved(icon);
+        return;
+      }
+      for (const host of hostKey ? hostKey.split(" ") : []) {
+        const icon = await faviconFor(host);
+        if (icon) {
+          if (live) setResolved(icon);
+          return;
+        }
+      }
+      if (live) setResolved(null);
+    })();
+    return () => {
+      live = false;
+    };
+  }, [dataDirect, httpsDirect, hostKey]);
+  return (
+    <Avatar className="connector-icon h-5 w-5 rounded-md border-0 bg-transparent">
+      {resolved ? <AvatarImage src={resolved} alt="" className="object-contain" /> : null}
+      <AvatarFallback className="rounded-md text-[11px] font-semibold uppercase">{server.name.trim().charAt(0) || "?"}</AvatarFallback>
+    </Avatar>
   );
+}
+
+type ConnectorRowProps = { server: McpServerView; connected: boolean; busy: boolean; onToggle: () => void; onOpen: () => void };
+
+// One line: icon, name, Connect or Disconnect. The name opens the edit panel.
+function ConnectorRow({ server, connected, busy, onToggle, onOpen }: ConnectorRowProps) {
   return (
     <li className="connector">
-      {onOpen ? (
-        <Button type="button" variant="ghost" className="connector-main h-auto justify-start gap-2.5 p-0 text-foreground hover:bg-transparent" onClick={onOpen}>
-          {label}
-        </Button>
-      ) : (
-        <span className="connector-main">{label}</span>
-      )}
+      <Button type="button" variant="ghost" className="connector-main h-auto justify-start gap-2.5 p-0 text-foreground hover:bg-transparent" onClick={onOpen}>
+        <ConnectorIcon server={server} />
+        <strong>{server.name}</strong>
+      </Button>
       <Button type="button" variant={connected ? "ghost" : "default"} size="sm" disabled={busy} onClick={onToggle}>
         {connected ? "Disconnect" : "Connect"}
       </Button>
@@ -221,7 +260,7 @@ function ConnectorRow({ name, domain, connected, busy, onToggle, onOpen }: Conne
   );
 }
 
-/** The Connectors tab: one clean row per connector, with advanced setup behind Add custom or a custom row. Secrets never come back. */
+/** The Connectors tab: one row per saved server, with setup behind Add custom or a click on a row. Secrets never come back. */
 export function Connectors(props: { servers: McpServerView[]; tests: Record<string, McpTestState>; error: string | null }) {
   // "new", a server id, or null (list only).
   const [editing, setEditing] = useState<string | null>(null);
@@ -237,10 +276,6 @@ export function Connectors(props: { servers: McpServerView[]; tests: Record<stri
     }
   }
 
-  // Connect saves a preset enabled when it is new, then signs in. Disconnect removes the server and its tokens, so Connect is a fresh add.
-  const connectPreset = (preset: Preset, saved: McpServerView | undefined) =>
-    actions.connectMcpServer({ name: preset.name, enabled: true, transport: "http", url: preset.url, auth: { type: "none" } }, saved?.id);
-
   if (editing) {
     return (
       <section>
@@ -252,28 +287,13 @@ export function Connectors(props: { servers: McpServerView[]; tests: Record<stri
     );
   }
 
-  const custom = props.servers.filter((server) => !PRESETS.some((preset) => preset.matches(server)));
   return (
     <section>
       <h2>Connectors</h2>
       <ul className="connector-list">
-        {PRESETS.map((preset) => {
-          const saved = props.servers.find(preset.matches);
-          // Signed in, not just saved: a server that is enabled but has no tokens still offers Connect.
-          const connected = Boolean(saved?.enabled && saved.hasAuth);
-          return (
-            <ConnectorRow
-              key={preset.name}
-              name={preset.name}
-              domain={preset.domain}
-              connected={connected}
-              busy={busy === preset.name}
-              onToggle={() => void run(preset.name, () => (connected && saved ? actions.removeMcpServer(saved.id) : connectPreset(preset, saved)))}
-            />
-          );
-        })}
-        {custom.map((server) => {
-          // An HTTP server with no stored secret signs in with OAuth, like a preset; other rows just switch on and off.
+        {props.servers.map((server) => {
+          // An HTTP server with auth "none" signs in with MCP OAuth and counts as connected once tokens are stored; other rows just switch on and off.
+          // Disconnect removes the server and its tokens.
           const oauth = server.transport === "http" && server.auth.type === "none";
           const connected = oauth ? server.enabled && server.hasAuth : server.enabled;
           const connect = () =>
@@ -283,8 +303,7 @@ export function Connectors(props: { servers: McpServerView[]; tests: Record<stri
           return (
             <ConnectorRow
               key={server.id}
-              name={server.name}
-              domain={server.transport === "http" ? hostOf(server.url) : null}
+              server={server}
               connected={connected}
               busy={busy === server.id}
               onToggle={() => void run(server.id, () => (connected ? actions.removeMcpServer(server.id) : connect()))}
@@ -293,6 +312,7 @@ export function Connectors(props: { servers: McpServerView[]; tests: Record<stri
           );
         })}
       </ul>
+      {props.servers.length === 0 ? <p className="muted">No connectors yet. Add an MCP server to give the AI its tools.</p> : null}
       {props.error ? <p className="error">{props.error}</p> : null}
       <div className="actions row">
         <Button type="button" variant="link" size="sm" onClick={() => setEditing("new")}>

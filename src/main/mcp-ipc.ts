@@ -75,7 +75,7 @@ export function registerMcpIpc(settings: SettingsStore, vmem: VmemSearch, pool: 
     await pool.invalidate(id);
     const outcome = await testMcpServer(signedIn, undefined, pool);
     if (!outcome.ok) throw new Error(outcome.error);
-    settings.mcpRecordTools(id, outcome.tools);
+    settings.mcpRecordTools(id, outcome.tools, outcome.serverInfo);
     const views = settings.mcpSetEnabled({ id, enabled: true });
     vmem.refresh();
     return views;
@@ -87,6 +87,9 @@ export function registerMcpIpc(settings: SettingsStore, vmem: VmemSearch, pool: 
     if (!config) return { ok: false, error: "That server no longer exists" };
     const outcome = await testMcpServer(config, undefined, pool);
     if (!outcome.ok) return { ok: false, error: outcome.error };
-    return { ok: true, tools: settings.mcpRecordTools(config.id, outcome.tools) };
+    const tools = settings.mcpRecordTools(config.id, outcome.tools, outcome.serverInfo);
+    // The reported name may make (or stop making) this server vmem.
+    vmem.refresh();
+    return { ok: true, tools };
   });
 }

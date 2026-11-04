@@ -6,10 +6,11 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { jsonSchema, tool, type ToolSet } from "ai";
 import { MCP_MAX_TOOLS, type McpServer } from "../shared/ipc";
+import { pickServerIcon } from "../shared/mcp-icons";
 import { isVmemConnector, mcpSlug } from "../shared/mcp-names";
 import { sanitizeMcpSchema } from "./mcp-schema";
 
-export { isEvaConnector, isVmemConnector, mcpSlug } from "../shared/mcp-names";
+export { isVmemConnector, mcpSlug } from "../shared/mcp-names";
 
 export const MCP_CONNECT_TIMEOUT_MS = 10_000;
 export const MCP_CALL_TIMEOUT_MS = 15_000;
@@ -40,13 +41,34 @@ export type McpServerConfig = {
   authProvider?: OAuthClientProvider;
   /** Listed tools the user switched off. Tools not listed yet stay on. */
   disabledTools?: string[];
+  /** The name the server last reported in MCP initialize (serverInfo.name). Identifies vmem (isVmemConnector). */
+  serverInfoName?: string;
 };
 
 export type McpToolInfo = { name: string; description: string };
 
+/** What a server said about itself in MCP initialize: its name, website and the icon Bee shows (https: or data:, dark theme first). */
+export type McpServerInfo = { name: string; websiteUrl?: string; iconUrl?: string };
+
+/** Reads `client.getServerVersion()` loosely: an older or odd server may leave fields out. undefined without a name. */
+export function readServerInfo(implementation: unknown): McpServerInfo | undefined {
+  if (!implementation || typeof implementation !== "object") return undefined;
+  const info = implementation as { name?: unknown; websiteUrl?: unknown; icons?: unknown };
+  const name = typeof info.name === "string" ? info.name.trim().slice(0, 200) : "";
+  if (!name) return undefined;
+  let websiteUrl: string | undefined;
+  try {
+    const url = typeof info.websiteUrl === "string" ? new URL(info.websiteUrl) : null;
+    if (url && (url.protocol === "https:" || url.protocol === "http:") && url.href.length <= 2000) websiteUrl = url.href;
+  } catch {
+    // Not a URL: leave it out.
+  }
+  return { name, websiteUrl, iconUrl: pickServerIcon(info.icons) ?? undefined };
+}
+
 /**
  * The vmem tools Bee sends to the AI. vmem lists about 94 tools (some 25k tokens of schemas a turn); Bee needs only its memory,
- * artifact and file read and search tools. Table, query and daily-note tools belong to other connectors such as Eva, not vmem.
+ * artifact and file read and search tools. Table, query and daily-note tools belong to other connectors, not vmem.
  * Names without the vmem__ prefix; names vmem does not list are ignored. Other connectors send all their tools.
  */
 export const VMEM_TOOL_ALLOWLIST: readonly string[] = [
@@ -66,7 +88,7 @@ export const VMEM_TOOL_ALLOWLIST: readonly string[] = [
  * The listed tools Luna gets for one server: for vmem, only VMEM_TOOL_ALLOWLIST. If vmem lists none of them (renamed tools),
  * all of its tools stay, so the connector never goes silent.
  */
-export function lunaToolsFor<T extends { name: string }>(config: { name: string; url?: string }, tools: readonly T[]): readonly T[] {
+export function lunaToolsFor<T extends { name: string }>(config: { serverInfoName?: string }, tools: readonly T[]): readonly T[] {
   if (!isVmemConnector(config)) return tools;
   const allowed = tools.filter((item) => VMEM_TOOL_ALLOWLIST.includes(item.name));
   return allowed.length > 0 ? allowed : tools;
@@ -144,6 +166,8 @@ function makeTransport(config: McpServerConfig): Transport {
 
 export type McpConnection = {
   tools: Array<McpToolInfo & { inputSchema: Record<string, unknown> }>;
+  /** From MCP initialize. undefined when the server sent no name. */
+  serverInfo?: McpServerInfo;
   /** Wall time of the connect and of the tool listing, for perf logs. */
   timingsMs?: { connect: number; list: number };
   /** `maxChars` caps the text; Luna's tools keep the default, internal callers that parse the output raise it. */
@@ -180,6 +204,7 @@ export async function connectMcp(config: McpServerConfig, timeoutMs = MCP_CONNEC
     const t0 = performance.now();
     await withTimeout(client.connect(makeTransport(config)), timeoutMs, "Connecting");
     const t1 = performance.now();
+    const serverInfo = readServerInfo(client.getServerVersion());
     const tools: McpConnection["tools"] = [];
     let cursor: string | undefined;
     do {
@@ -198,6 +223,7 @@ export async function connectMcp(config: McpServerConfig, timeoutMs = MCP_CONNEC
     }
     return {
       tools: tools.slice(0, MCP_MAX_TOOLS),
+      serverInfo,
       timingsMs: { connect: t1 - t0, list: t2 - t1 },
       call: async (name, args, callTimeoutMs = MCP_CALL_TIMEOUT_MS, maxChars) => {
         const result = await withTimeout(
@@ -220,15 +246,15 @@ export async function testMcpServer(
   config: McpServerConfig,
   timeoutMs?: number,
   pool?: McpPool,
-): Promise<{ ok: true; tools: McpToolInfo[] } | { ok: false; error: string }> {
+): Promise<{ ok: true; tools: McpToolInfo[]; serverInfo?: McpServerInfo } | { ok: false; error: string }> {
   try {
     if (pool) {
       const entry = await pool.refresh(config, timeoutMs);
-      return { ok: true, tools: entry.tools.map(({ name, description }) => ({ name, description })) };
+      return { ok: true, tools: entry.tools.map(({ name, description }) => ({ name, description })), serverInfo: entry.serverInfo };
     }
     const connection = await connectMcp(config, timeoutMs);
     await connection.close();
-    return { ok: true, tools: connection.tools.map(({ name, description }) => ({ name, description })) };
+    return { ok: true, tools: connection.tools.map(({ name, description }) => ({ name, description })), serverInfo: connection.serverInfo };
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : "Connection failed" };
   }
@@ -258,7 +284,7 @@ export function mcpConfigHash(config: McpServerConfig): string {
 
 /** What the model needs to call a tool: no connection, no credentials. The schema is already sanitised. */
 export type McpCachedTool = { name: string; description: string; inputSchema: Record<string, unknown> };
-export type McpToolCache = { configHash: string; tools: McpCachedTool[]; fetchedAt: number };
+export type McpToolCache = { configHash: string; tools: McpCachedTool[]; fetchedAt: number; serverInfo?: McpServerInfo };
 
 export type McpPool = {
   /** Tool list for a server: from the cache when it matches, else connect and list (which fills the cache). A stale list is returned at once and refreshed in the background. */
@@ -291,6 +317,7 @@ export function createMcpPool(options: { idleMs?: number; ttlMs?: number; connec
     const entry: McpToolCache = {
       configHash: mcpConfigHash(config),
       fetchedAt: now(),
+      serverInfo: connection.serverInfo,
       tools: connection.tools.map((item) => ({ name: item.name, description: item.description, inputSchema: sanitizeMcpSchema(item.inputSchema) })),
     };
     caches.set(config.id, entry);
@@ -428,7 +455,7 @@ export async function loadMcpTools(
       continue;
     }
     const { config, entry } = outcome;
-    // Lowercase, so the "Eva" preset's tools are eva__… whatever case the name was saved in.
+    // Lowercase, so a server saved as "Eva" names its tools eva__… whatever case the name was saved in.
     const slug = mcpSlug(config.name).toLowerCase();
     let toolCount = 0;
     for (const item of lunaToolsFor(config, entry.tools)) {

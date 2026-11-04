@@ -1,6 +1,6 @@
 import { safeExternalUrl } from "./url-safety";
 
-// Site icons for link chips, fetched in main (the renderer's CSP allows no remote images) and handed over as data URLs.
+// Site icons for link chips and connectors, fetched and cached in main and handed over as data URLs.
 // Order: /favicon.ico, then the homepage's <link rel="icon">, then a favicon service. Any failure gives null (a globe in the UI).
 
 export const FAVICON_TIMEOUT_MS = 1000;
@@ -70,12 +70,8 @@ export function parseIconLinks(html: string, baseUrl: string): string[] {
   return [...icons, ...touch];
 }
 
-/** Resolver with a memory cache and an injected disk store. Fetch is injected for tests. */
-export function createFaviconResolver(args: { fetch: FetchLike; store?: FaviconStore; now?: () => number; timeoutMs?: number }) {
-  const now = args.now ?? Date.now;
-  const memory = new Map<string, string | null>();
-  const pending = new Map<string, Promise<string | null>>();
-
+/** Shared fetch helpers for favicons and connector https icons. Fetch is injected for tests. */
+function createImageFetch(args: { fetch: FetchLike; timeoutMs?: number }) {
   // Follows redirects by hand so every hop passes safeExternalUrl (no redirect to loopback).
   async function get(url: string): Promise<Response | null> {
     let current = safeExternalUrl(url);
@@ -108,6 +104,44 @@ export function createFaviconResolver(args: { fetch: FetchLike; store?: FaviconS
       return null;
     }
   }
+
+  return { get, image };
+}
+
+/**
+ * Fetches one https image URL as a data URL for the Connectors tab (serverInfo.icons / Icon URL).
+ * The renderer's CSP allows no remote images. Concurrent calls for one URL share one fetch; failures last for the session.
+ */
+export function createHttpsImageFetcher(args: { fetch: FetchLike; timeoutMs?: number }) {
+  const { image } = createImageFetch(args);
+  const memory = new Map<string, string | null>();
+  const pending = new Map<string, Promise<string | null>>();
+
+  return async function httpsImage(src: string): Promise<string | null> {
+    const url = safeExternalUrl(src.trim());
+    if (!url || !url.startsWith("https:")) return null;
+    if (memory.has(url)) return memory.get(url) ?? null;
+    let run = pending.get(url);
+    if (!run) {
+      run = image(url)
+        .catch(() => null)
+        .then((value) => {
+          memory.set(url, value);
+          return value;
+        })
+        .finally(() => pending.delete(url));
+      pending.set(url, run);
+    }
+    return run;
+  };
+}
+
+/** Resolver with a memory cache and an injected disk store. Fetch is injected for tests. */
+export function createFaviconResolver(args: { fetch: FetchLike; store?: FaviconStore; now?: () => number; timeoutMs?: number }) {
+  const now = args.now ?? Date.now;
+  const memory = new Map<string, string | null>();
+  const pending = new Map<string, Promise<string | null>>();
+  const { get, image } = createImageFetch(args);
 
   async function pageIcons(host: string): Promise<string[]> {
     try {

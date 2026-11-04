@@ -2,8 +2,8 @@ import { app, ipcMain } from "electron";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
-import { createFaviconResolver, type FaviconStore } from "../core/favicon";
-import { IPC, faviconRequestSchema } from "../shared/ipc";
+import { createFaviconResolver, createHttpsImageFetcher, type FaviconStore } from "../core/favicon";
+import { IPC, faviconRequestSchema, httpsIconRequestSchema } from "../shared/ipc";
 
 const entrySchema = z.object({ dataUrl: z.string().startsWith("data:image/"), savedAt: z.number() });
 
@@ -25,11 +25,13 @@ function diskStore(dir: string): FaviconStore {
   };
 }
 
-/** Link chip icons. The renderer's CSP allows no remote images, so main fetches and returns data URLs. */
+/** Link chip and connector icons. The renderer's CSP allows no remote images, so main fetches and returns data URLs. */
 export function registerFaviconIpc(): void {
   const favicon = createFaviconResolver({
     fetch: (url, init) => fetch(url, init),
     store: diskStore(join(app.getPath("userData"), "favicons")),
   });
+  const httpsIcon = createHttpsImageFetcher({ fetch: (url, init) => fetch(url, init) });
   ipcMain.handle(IPC.getFavicon, (_event, payload) => favicon(faviconRequestSchema.parse(payload)));
+  ipcMain.handle(IPC.getHttpsIcon, (_event, payload) => httpsIcon(httpsIconRequestSchema.parse(payload)));
 }

@@ -208,8 +208,75 @@ describe("settings MCP servers", () => {
   });
 });
 
+describe("settings MCP server info, icons and migration", () => {
+  const custom = { name: "Notes", enabled: true, transport: "http" as const, url: "https://notes.example.com/mcp", auth: { type: "none" as const } };
+
+  it("saves what the server reported, keeps OAuth tokens, and forgets it on a new URL", () => {
+    crypto.on = true;
+    const store = create();
+    const id = store.mcpSave(custom)[0]?.id as string;
+    store.mcpOAuthStorage(id).save({ tokens: { access_token: "a", token_type: "Bearer" } });
+    store.mcpRecordTools(id, [{ name: "echo", description: "" }], { name: "notes", websiteUrl: "https://notes.example.com/", iconUrl: "https://notes.example.com/i.png" });
+    expect(store.mcpList()[0]).toMatchObject({ serverInfoName: "notes", websiteUrl: "https://notes.example.com/", iconUrl: "https://notes.example.com/i.png", hasAuth: true });
+    expect(store.mcpConfig(id)?.serverInfoName).toBe("notes");
+    // An unsafe icon is never stored.
+    store.mcpRecordTools(id, [], { name: "notes", iconUrl: "javascript:alert(1)" });
+    expect(store.mcpList()[0]?.iconUrl).toBeUndefined();
+    store.mcpRecordTools(id, [], { name: "notes", iconUrl: "https://notes.example.com/i.png" });
+    // A re-save on the same URL keeps it; a new URL may be another server.
+    expect(store.mcpSave({ ...custom, id })[0]).toMatchObject({ serverInfoName: "notes", hasAuth: true });
+    const moved = store.mcpSave({ ...custom, id, url: "https://other.example.com/mcp" })[0];
+    expect([moved?.serverInfoName, moved?.websiteUrl, moved?.iconUrl]).toEqual([undefined, undefined, undefined]);
+  });
+
+  it("saves, keeps and clears the Icon URL override, https: or data:image only", () => {
+    const store = create();
+    const id = store.mcpSave({ ...custom, iconOverride: "https://cdn.example.com/n.png" })[0]?.id as string;
+    expect(store.mcpList()[0]?.iconOverride).toBe("https://cdn.example.com/n.png");
+    expect(store.mcpSave({ ...custom, id })[0]?.iconOverride).toBe("https://cdn.example.com/n.png");
+    expect(() => store.mcpSave({ ...custom, id, iconOverride: "http://cdn.example.com/n.png" })).toThrow(/Icon URL/);
+    expect(() => store.mcpSave({ ...custom, id, iconOverride: "javascript:alert(1)" })).toThrow(/Icon URL/);
+    expect(store.mcpSave({ ...custom, id, iconOverride: "data:image/png;base64,AAAA" })[0]?.iconOverride).toBe("data:image/png;base64,AAAA");
+    expect(store.mcpSave({ ...custom, id, iconOverride: "" })[0]?.iconOverride).toBeUndefined();
+  });
+
+  it("gives servers saved before serverInfoName one from their name or a former preset host, once, keeping ids and tokens", () => {
+    crypto.on = true;
+    const seed = create();
+    const ids = [
+      { name: "vmem", url: "https://clear-bear-690.eu-west-1.convex.site/mcp" },
+      { name: "Eva", url: "https://dazzling-dogfish-581.eu-west-1.convex.site/mcp" },
+      { name: "Memory", url: "https://vmem.projectv.uk/mcp" },
+      { name: "Tasks", url: "https://dazzling-dogfish-581.eu-west-1.convex.site/mcp" },
+      { name: "Other", url: "https://other.example.com/mcp" },
+    ].map(({ name, url }) => {
+      const id = seed.mcpSave({ ...custom, name, url }).at(-1)?.id as string;
+      seed.mcpOAuthStorage(id).save({ tokens: { access_token: `tok-${name}`, token_type: "Bearer" } });
+      return id;
+    });
+    const before = JSON.parse(onDisk());
+    // Bee's save never sets serverInfoName from a name or URL, so nothing is vmem yet.
+    expect(seed.view().vmemConnected).toBe(false);
+
+    const store = create();
+    const after = JSON.parse(onDisk());
+    expect(after.mcpServers.map((server: { id: string }) => server.id)).toEqual(ids);
+    expect(after.mcpServers.map((server: { serverInfoName?: string }) => server.serverInfoName)).toEqual(["vmem", "Eva", "vmem", "Eva", undefined]);
+    expect(after.mcpSecrets).toBe(before.mcpSecrets);
+    expect(store.mcpOAuthStorage(ids[2] as string).load()?.tokens?.access_token).toBe("tok-Memory");
+    expect(store.view().vmemConnected).toBe(true);
+    expect(store.vmemConfig()?.id).toBe(ids[0]);
+
+    // After that, what the server reports wins and hosts are never read again.
+    store.mcpRecordTools(ids[2] as string, [], { name: "memory-server" });
+    expect(create().mcpList()[2]?.serverInfoName).toBe("memory-server");
+  });
+});
+
 describe("settings personalised links", () => {
-  const vmemPreset = { name: "vmem", enabled: true, transport: "http" as const, url: "https://vmem.vedantb.com/mcp", auth: { type: "none" as const } };
+  const vmemPreset = { name: "vmem", enabled: true, transport: "http" as const, url: "https://vmem.example.com/mcp", auth: { type: "none" as const } };
+  // vmem is what the server reports in MCP initialize, recorded on connect or test.
+  const reportVmem = (store: ReturnType<typeof create>, id: string) => store.mcpRecordTools(id, [], { name: "vmem" });
 
   it("is off by default, with no vmem connector", () => {
     expect(create().view()).toMatchObject({ personalisedLinks: false, vmemConnected: false });
@@ -218,11 +285,11 @@ describe("settings personalised links", () => {
 
   it("defaults on when an enabled vmem MCP server exists, and off again when it goes", () => {
     const store = create();
-    store.mcpSave(vmemPreset);
+    const id = store.mcpSave(vmemPreset)[0]?.id as string;
+    reportVmem(store, id);
     expect(store.view()).toMatchObject({ personalisedLinks: true, vmemConnected: true });
     expect(store.linkSettings()).toEqual({ enabled: true, hasVmem: true });
-    expect(store.vmemConfig()).toMatchObject({ name: "vmem", url: "https://vmem.vedantb.com/mcp" });
-    const id = store.mcpList()[0]?.id as string;
+    expect(store.vmemConfig()).toMatchObject({ name: "vmem", url: "https://vmem.example.com/mcp", serverInfoName: "vmem" });
     store.mcpSetEnabled({ id, enabled: false });
     expect(store.view()).toMatchObject({ personalisedLinks: false, vmemConnected: false });
     expect(store.vmemConfig()).toBeUndefined();
@@ -231,19 +298,20 @@ describe("settings personalised links", () => {
     expect(store.linkSettings()).toEqual({ enabled: false, hasVmem: false });
   });
 
-  it("finds the connector by URL host as well as by name, and ignores other servers", () => {
+  it("finds the connector by the name the server reported, never by its display name or URL host", () => {
     const store = create();
-    store.mcpSave({ ...vmemPreset, name: "Memory" });
+    const id = store.mcpSave({ ...vmemPreset, name: "Memory" })[0]?.id as string;
+    expect(store.view().vmemConnected).toBe(false);
+    reportVmem(store, id);
     expect(store.view().vmemConnected).toBe(true);
-    store.mcpRemove(store.mcpList()[0]?.id as string);
-    // Named eva on an unrelated host: an Eva connector, not vmem.
-    store.mcpSave({ ...vmemPreset, name: "eva", url: "https://eva.example.com/mcp" });
+    store.mcpRemove(id);
+    store.mcpSave({ ...vmemPreset, url: "https://vmem.vedantb.com/mcp" });
     expect(store.view()).toMatchObject({ personalisedLinks: false, vmemConnected: false });
   });
 
   it("persists the toggle once set, whatever the connector's state", () => {
     const store = create();
-    store.mcpSave(vmemPreset);
+    reportVmem(store, store.mcpSave(vmemPreset)[0]?.id as string);
     store.save({ personalisedLinks: false });
     expect(create().view().personalisedLinks).toBe(false);
     expect(JSON.parse(onDisk()).personalisedLinks).toBe(false);
