@@ -14,6 +14,7 @@ function contentSecurityPolicy(devUrl: string | undefined): string {
     "default-src 'self'",
     `script-src 'self' 'unsafe-inline'${devScript} ${fapi} https://challenges.cloudflare.com`,
     `connect-src 'self' ${fapi}${devConnect}`,
+    // Favicons and connector icons are fetched in main and handed over as data URLs (see favicon-ipc.ts).
     "img-src 'self' https://img.clerk.com data:",
     "style-src 'self' 'unsafe-inline'",
     "worker-src 'self' blob:",

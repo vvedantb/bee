@@ -7,7 +7,8 @@ import { clampInterfaceScale, type SavedPosition } from "../core/interface-scale
 import { clampMotionPreference } from "../core/motion-preference";
 import { normalizeFsRoots } from "../core/fs-sandbox";
 import { createMcpOAuthProvider, hasMcpOAuthTokens, mcpOAuthStateSchema, type McpOAuthStorage } from "../core/mcp-oauth";
-import { isVmemConnector, mcpSlug, mcpUrlError, parseMcpArgs, parseMcpEnv, type McpServerConfig } from "../core/mcp";
+import { isVmemConnector, mcpSlug, mcpUrlError, parseMcpArgs, parseMcpEnv, type McpServerConfig, type McpServerInfo } from "../core/mcp";
+import { safeIconSrc } from "../shared/mcp-icons";
 import {
   MCP_MAX_SERVERS,
   MCP_MAX_TOOLS,
@@ -68,6 +69,29 @@ type SecretName = "gatewayApiKey";
 
 export type SettingsStore = ReturnType<typeof createSettingsStore>;
 
+// One-time migration only: hosts of the removed vmem and Eva presets. Never used to identify a server after that.
+const LEGACY_SERVER_HOSTS: ReadonlyArray<{ serverInfoName: string; hosts: readonly string[] }> = [
+  { serverInfoName: "vmem", hosts: ["vmem.vedantb.com", "vmem.projectv.uk"] },
+  { serverInfoName: "Eva", hosts: ["eva.vedantb.com", "dazzling-dogfish-581.eu-west-1.convex.site"] },
+];
+
+/**
+ * The serverInfoName a server saved before Bee stored one gets once: from a display name that slugs to vmem or eva,
+ * or from a URL on a former preset host. undefined when neither fits. Same id, so OAuth tokens and secrets stay.
+ */
+export function legacyServerInfoName(server: { name: string; url?: string }): string | undefined {
+  const slug = mcpSlug(server.name).toLowerCase();
+  if (slug === "vmem") return "vmem";
+  if (slug === "eva") return "Eva";
+  let host = "";
+  try {
+    host = new URL(server.url ?? "").hostname.toLowerCase();
+  } catch {
+    return undefined;
+  }
+  return LEGACY_SERVER_HOSTS.find((legacy) => legacy.hosts.some((known) => host === known || host.endsWith(`.${known}`)))?.serverInfoName;
+}
+
 function storageMode(): SettingsView["secretStorage"] {
   if (!safeStorage.isEncryptionAvailable()) return "memory";
   // Linux without a keyring falls back to a hard-coded key: encrypted, but weak.
@@ -119,6 +143,24 @@ export function createSettingsStore(args: {
   // The Claude OAuth token was removed. Rewriting through the schema drops the stored key from old files.
   try {
     if ("claudeOAuthToken" in JSON.parse(readFileSync(path, "utf8"))) write(read());
+  } catch {
+    // Missing or corrupt file: nothing to migrate.
+  }
+
+  // Connector presets were removed. A server saved before Bee stored serverInfoName gets one once (legacyServerInfoName),
+  // so a saved vmem keeps its identity. Servers keep their id, so mcpSecrets (tokens) are untouched. Runs only on a readable file.
+  try {
+    JSON.parse(readFileSync(path, "utf8"));
+    const file = read();
+    let migrated = false;
+    const mcpServers = file.mcpServers.map((server) => {
+      if (server.serverInfoName) return server;
+      const serverInfoName = legacyServerInfoName(server);
+      if (!serverInfoName) return server;
+      migrated = true;
+      return { ...server, serverInfoName };
+    });
+    if (migrated) write({ ...file, mcpServers });
   } catch {
     // Missing or corrupt file: nothing to migrate.
   }
@@ -198,7 +240,15 @@ export function createSettingsStore(args: {
       transport: input.transport,
       auth: { type: "none" },
       tools: existing?.tools,
+      serverInfoName: existing?.serverInfoName,
+      websiteUrl: existing?.websiteUrl,
+      iconUrl: existing?.iconUrl,
+      iconOverride: existing?.iconOverride,
     };
+    if (input.iconOverride !== undefined) {
+      if (input.iconOverride && !safeIconSrc(input.iconOverride)) throw new Error("Icon URL must start with https: or data:image");
+      next.iconOverride = input.iconOverride || undefined;
+    }
     let auth = previous.auth;
     let env = previous.env;
     let oauth = previous.oauth;
@@ -227,8 +277,13 @@ export function createSettingsStore(args: {
       auth = undefined;
       oauth = undefined;
     }
-    // A different endpoint or command lists different tools: forget the old list.
-    if (existing && (existing.url !== next.url || existing.command !== next.command || existing.transport !== next.transport)) next.tools = undefined;
+    // A different endpoint or command lists different tools and may be a different server: forget the old list and what it reported.
+    if (existing && (existing.url !== next.url || existing.command !== next.command || existing.transport !== next.transport)) {
+      next.tools = undefined;
+      next.serverInfoName = undefined;
+      next.websiteUrl = undefined;
+      next.iconUrl = undefined;
+    }
 
     secrets[id] = { auth, env, oauth };
     const servers = existing ? file.mcpServers.map((server) => (server.id === id ? next : server)) : [...file.mcpServers, next];
@@ -256,8 +311,11 @@ export function createSettingsStore(args: {
     return mcpList();
   }
 
-  /** Saves a fresh tool list. Tools seen before keep their switch; new ones start on. */
-  function mcpRecordTools(id: string, listed: ReadonlyArray<{ name: string; description: string }>): McpTool[] {
+  /**
+   * Saves a fresh tool list. Tools seen before keep their switch; new ones start on. With serverInfo (from MCP initialize),
+   * also saves the reported name, website and icon. Secrets and tokens are untouched.
+   */
+  function mcpRecordTools(id: string, listed: ReadonlyArray<{ name: string; description: string }>, serverInfo?: McpServerInfo): McpTool[] {
     const file = read();
     const server = file.mcpServers.find((item) => item.id === id);
     if (!server) return [];
@@ -267,7 +325,10 @@ export function createSettingsStore(args: {
       description: item.description.slice(0, 300),
       enabled: known.get(item.name) ?? true,
     }));
-    write({ ...file, mcpServers: file.mcpServers.map((item) => (item.id === id ? { ...item, tools } : item)) });
+    const reported = serverInfo
+      ? { serverInfoName: serverInfo.name, websiteUrl: serverInfo.websiteUrl, iconUrl: safeIconSrc(serverInfo.iconUrl) ?? undefined }
+      : {};
+    write({ ...file, mcpServers: file.mcpServers.map((item) => (item.id === id ? { ...item, tools, ...reported } : item)) });
     return tools;
   }
 
@@ -300,6 +361,7 @@ export function createSettingsStore(args: {
       oauthSignedIn: hasMcpOAuthTokens(secret?.oauth),
       authProvider: server.transport === "http" ? createMcpOAuthProvider({ storage: mcpOAuthStorage(server.id) }) : undefined,
       disabledTools: server.tools?.filter((item) => !item.enabled).map((item) => item.name),
+      serverInfoName: server.serverInfoName,
     };
   }
 

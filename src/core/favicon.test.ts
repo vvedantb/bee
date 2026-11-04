@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { FAVICON_MAX_BYTES, FAVICON_TTL_MS, createFaviconResolver, faviconHost, parseIconLinks, type FaviconEntry, type FaviconStore } from "./favicon";
+import { FAVICON_MAX_BYTES, FAVICON_TTL_MS, createFaviconResolver, createHttpsImageFetcher, faviconHost, parseIconLinks, type FaviconEntry, type FaviconStore } from "./favicon";
 
 const PNG = new Uint8Array([137, 80, 78, 71, 1, 2, 3]);
 const PNG_URL = `data:image/png;base64,${Buffer.from(PNG).toString("base64")}`;
@@ -130,5 +130,29 @@ describe("createFaviconResolver", () => {
     const store: FaviconStore = { read: async () => Promise.reject(new Error("io")), write: async () => Promise.reject(new Error("io")) };
     const fetch = fakeFetch({ "https://example.com/favicon.ico": () => image() });
     expect(await createFaviconResolver({ fetch, store })("example.com")).toBe(PNG_URL);
+  });
+});
+
+describe("createHttpsImageFetcher", () => {
+  it("returns a data URL for an https image and refuses other schemes", async () => {
+    const fetch = fakeFetch({ "https://cdn.example.com/i.png": () => image() });
+    const httpsImage = createHttpsImageFetcher({ fetch });
+    expect(await httpsImage("https://cdn.example.com/i.png")).toBe(PNG_URL);
+    expect(await httpsImage("http://cdn.example.com/i.png")).toBeNull();
+    expect(await httpsImage("javascript:alert(1)")).toBeNull();
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("shares one fetch for concurrent calls and remembers a miss", async () => {
+    const fetch = fakeFetch({ "https://cdn.example.com/i.png": () => image() });
+    const httpsImage = createHttpsImageFetcher({ fetch });
+    await Promise.all([httpsImage("https://cdn.example.com/i.png"), httpsImage("https://cdn.example.com/i.png")]);
+    await httpsImage("https://cdn.example.com/i.png");
+    expect(fetch).toHaveBeenCalledTimes(1);
+    const miss = fakeFetch({});
+    const empty = createHttpsImageFetcher({ fetch: miss });
+    expect(await empty("https://missing.example/x.png")).toBeNull();
+    expect(await empty("https://missing.example/x.png")).toBeNull();
+    expect(miss).toHaveBeenCalledTimes(1);
   });
 });

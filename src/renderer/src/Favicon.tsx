@@ -1,7 +1,7 @@
 import { IconWorld } from "@tabler/icons-react";
 import { useEffect, useState } from "react";
 
-// Icons come from main as data URLs (the CSP allows no remote images). Remembered per domain for this window.
+// Icons come from main as data URLs, so link chips never fetch from the renderer. Remembered per domain for this window.
 const known = new Map<string, string | null>();
 
 /** A site's icon. A globe shows first and when there is none, so chips never wait on it. */

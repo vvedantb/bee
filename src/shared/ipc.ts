@@ -3,6 +3,7 @@ import { DEBUG_LEVELS } from "../core/debug-log";
 import { INTERFACE_SCALES } from "../core/interface-scale";
 import { MOTION_PREFERENCES } from "../core/motion-preference";
 import { TEAMS_AUDIO_FAILURES } from "../core/teams-audio-protocol";
+import { MCP_ICON_MAX_CHARS } from "./mcp-icons";
 
 // One place for every channel name and payload shape crossing the IPC boundary.
 export const IPC = {
@@ -37,6 +38,8 @@ export const IPC = {
   openExternalUrl: "bee:shell:open-url",
   enrichLinks: "bee:links:enrich",
   getFavicon: "bee:favicon:get",
+  /** One https image URL in, a data URL (or null) out. Used for connector icons (serverInfo.icons / Icon URL). */
+  getHttpsIcon: "bee:icon:get",
   meetingContext: "bee:meeting:context",
   clearMeetingMemory: "bee:meeting:clear-memory",
   meetingWindowCaptions: "bee:meeting-window:captions",
@@ -595,6 +598,13 @@ export const mcpServerSchema = z.object({
   envKeys: z.array(z.string().max(200)).max(50).optional(),
   auth: mcpAuthSchema,
   tools: z.array(mcpToolSchema).max(MCP_MAX_TOOLS).optional(),
+  // What the server reported in MCP initialize (serverInfo), saved on connect, test or sign-in. A bad value reads as unset,
+  // so it never drops the server list. serverInfoName identifies vmem (isVmemConnector); iconUrl is the chosen https: or data: icon.
+  serverInfoName: z.string().max(200).optional().catch(undefined),
+  websiteUrl: z.string().max(2000).optional().catch(undefined),
+  iconUrl: z.string().max(MCP_ICON_MAX_CHARS).optional().catch(undefined),
+  // The user's Icon URL (https: or data:). Wins over iconUrl.
+  iconOverride: z.string().max(2000).optional().catch(undefined),
 });
 export type McpServer = z.infer<typeof mcpServerSchema>;
 
@@ -616,6 +626,8 @@ export const mcpSaveSchema = z.object({
   auth: mcpAuthSchema,
   // Bearer token, or the value of the custom header.
   secret: z.string().max(4000).optional(),
+  // Icon URL override, https: or data:. Omitted = unchanged, "" = clear.
+  iconOverride: z.string().trim().max(2000).optional(),
 });
 export type McpSave = z.infer<typeof mcpSaveSchema>;
 
@@ -660,3 +672,6 @@ export const enrichLinksResultSchema = z.object({ chips: z.array(linkChipSchema)
 // Favicons: a domain in, a data URL (or null) out. Fetched and cached in main.
 export const faviconRequestSchema = z.string().max(253);
 export const faviconResultSchema = z.string().max(200_000).nullable();
+// Connector https icons: a full https URL in, a data URL (or null) out. Same size cap as favicons.
+export const httpsIconRequestSchema = z.string().url().max(2000);
+export const httpsIconResultSchema = faviconResultSchema;
