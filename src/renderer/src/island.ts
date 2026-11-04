@@ -60,7 +60,8 @@ const MCP_REASON_CHARS = 60;
 export function mcpErrorNote(errors: ReadonlyArray<{ server: string; error: string }> | undefined): string | null {
   if (!errors || errors.length === 0) return null;
   const reason = (error: string) => {
-    if (/sign(?:ed)?[\s-]?in/i.test(error)) return "sign in again from Connectors";
+    // A failed client registration (e.g. "at least one redirect_uri is required") is also fixed by signing in again.
+    if (/sign(?:ed)?[\s-]?in|redirect_uri/i.test(error)) return "sign in again from Connectors";
     const line = error.replace(/\s+/g, " ").trim();
     return line.length > MCP_REASON_CHARS ? `${line.slice(0, MCP_REASON_CHARS - 1).trimEnd()}…` : line || "failed to connect";
   };
