@@ -321,6 +321,32 @@ describe("settings personalised links", () => {
     expect(create().linkSettings()).toEqual({ enabled: true, hasVmem: true });
   });
 
+  it("defaults sending finished sessions on only with an enabled vmem connector, and keeps the user's choice", () => {
+    const store = create();
+    expect(store.view().sendSessionsToVmem).toBe(false);
+    expect(store.transcriptSettings()).toEqual({ enabled: false, config: undefined, listed: false });
+    const id = store.mcpSave({ ...vmemPreset, name: "Memory" })[0]?.id as string;
+    // Not vmem until the server says so.
+    expect(store.view().sendSessionsToVmem).toBe(false);
+    store.mcpRecordTools(id, [{ name: "memory_search", description: "" }], { name: "vmem" });
+    expect(store.view().sendSessionsToVmem).toBe(true);
+    expect(store.transcriptSettings()).toMatchObject({ enabled: true, config: { id, serverInfoName: "vmem" }, listed: false });
+    store.mcpRecordTools(id, [{ name: "memory_search", description: "" }, { name: "transcript_submit", description: "" }], { name: "vmem" });
+    expect(store.transcriptSettings().listed).toBe(true);
+    // The user switched the tool off in Connectors.
+    store.mcpSetEnabled({ id, tool: "transcript_submit", enabled: false });
+    expect(store.transcriptSettings().listed).toBe(false);
+    store.mcpSetEnabled({ id, tool: "transcript_submit", enabled: true });
+    store.save({ sendSessionsToVmem: false });
+    expect(JSON.parse(onDisk()).sendSessionsToVmem).toBe(false);
+    expect(create().view().sendSessionsToVmem).toBe(false);
+    expect(create().transcriptSettings()).toMatchObject({ enabled: false, listed: true });
+    store.mcpSetEnabled({ id, enabled: false });
+    expect(store.transcriptSettings()).toEqual({ enabled: false, config: undefined, listed: false });
+    store.save({ sendSessionsToVmem: true });
+    expect(store.view().sendSessionsToVmem).toBe(true);
+  });
+
   it("leaves no vmem key or base URL behind", () => {
     writeFileSync(join(dir, "settings.json"), JSON.stringify({ meetingMode: false, vmemApiKey: "old-PLAINTEXT", vmemBaseUrl: "https://x.convex.site" }));
     const store = create();

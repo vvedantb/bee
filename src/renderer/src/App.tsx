@@ -553,6 +553,13 @@ function SettingsTab({ state, settings }: { state: BeeState; settings: SettingsV
         onCheckedChange={(personalisedLinks) => void actions.saveSettings({ personalisedLinks })}
       />
       <SettingRow
+        id="send-sessions-to-vmem"
+        label="Send finished sessions to vmem"
+        description="Send finished meetings and conversations to vmem so it can learn from them."
+        checked={settings.sendSessionsToVmem}
+        onCheckedChange={(sendSessionsToVmem) => void actions.saveSettings({ sendSessionsToVmem })}
+      />
+      <SettingRow
         id="meeting-mode"
         label="Meeting mode"
         description="Hidden from screen sharing, kept on top."

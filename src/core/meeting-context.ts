@@ -70,6 +70,8 @@ export type MeetingContext = {
   remember: (args: { meetingId?: number; summaryMarkdown: string; usedLlm: boolean; tips: readonly string[] }) => boolean;
   /** Deletes all saved meetings. Returns how many. */
   clearMemory: () => number;
+  /** The detected name of a meeting (by id, else the current one), for a finished session's title. Undefined when unknown. */
+  subject?: (meetingId?: number) => string | undefined;
 };
 
 export function createMeetingContext(deps: MeetingContextDeps): MeetingContext {
@@ -269,6 +271,10 @@ export function createMeetingContext(deps: MeetingContextDeps): MeetingContext {
     brief() {
       const settings = deps.settings();
       return settings.enabled && current && !current.ended ? current.brief?.text : undefined;
+    },
+    subject(meetingId) {
+      const meeting = meetingId === undefined ? current : [current, ...recent].find((item) => item?.id === meetingId);
+      return meeting?.identity?.subject || undefined;
     },
     remember({ meetingId, summaryMarkdown, usedLlm, tips }) {
       const settings = deps.settings();

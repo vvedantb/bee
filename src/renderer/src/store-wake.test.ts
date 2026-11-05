@@ -2,7 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   commandRequestSchema,
   computerAnswerSchema,
+  conversationEndedSchema,
   pipelineRequestSchema,
+  type ConversationEnded,
   type CommandRequest,
   type FollowUpRequest,
   type FollowUpResult,
@@ -50,6 +52,7 @@ const SETTINGS: SettingsView = {
   gatewayKeySource: "saved",
   personalisedLinks: false,
   vmemConnected: false,
+  sendSessionsToVmem: false,
   meetingMode: false,
   interfaceScale: 1,
   motionPreference: "on",
@@ -96,6 +99,7 @@ async function loadStore(
   const summaries: MeetingSummaryRequest[] = [];
   const stops: Array<string | number> = [];
   const answers: ComputerAnswer[] = [];
+  const ended: ConversationEnded[] = [];
   let tickLines: SessionLine[] = [];
   let captions: (payload: MeetingWindowCaptions) => void = () => undefined;
   let computerUpdate: (update: ComputerUpdate) => void = () => undefined;
@@ -133,6 +137,9 @@ async function loadStore(
       runCommand: async (request: CommandRequest) => {
         commands.push(commandRequestSchema.parse(request));
         return options.command ? options.command(request) : result(["Opened Teams"]);
+      },
+      conversationEnded: async (request: ConversationEnded) => {
+        ended.push(conversationEndedSchema.parse(request));
       },
       writeMeetingSummary: async (request: MeetingSummaryRequest) => {
         summaries.push(request);
@@ -182,7 +189,7 @@ async function loadStore(
     computerUpdate(update);
     await vi.advanceTimersByTimeAsync(0);
   };
-  return { store, say, caption, fromTeammate, fromComputer, pipeline, commands, published, cancelled, stops, answers, summaries, state: () => store.getBeeState() };
+  return { store, say, caption, fromTeammate, fromComputer, pipeline, commands, published, cancelled, stops, answers, summaries, ended, state: () => store.getBeeState() };
 }
 
 describe("store: Bee wake word", () => {
@@ -496,6 +503,30 @@ describe("store: Bee's history and the conversation window", () => {
     expect(store.beeHistory()).toEqual([]);
     await say("Bee, open Slack");
     expect(commands.at(-1)?.history).toBeUndefined();
+  });
+
+  it("sends the finished conversation to main after ten idle minutes, with the setting on", async () => {
+    const { say, ended } = await loadStore({ command: opened, settings: { sendSessionsToVmem: true } });
+    await say("Bee, open Vercel usage");
+    await say("Bee, open the team usage");
+    expect(ended).toEqual([]);
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    expect(ended).toHaveLength(1);
+    expect(ended[0]?.exchanges.map((exchange) => exchange.request)).toEqual(["open Vercel usage", "open the team usage"]);
+  });
+
+  it("sends nothing with the setting off, or when the meeting ends", async () => {
+    const off = await loadStore();
+    await off.say("Bee, open Teams");
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    expect(off.ended).toEqual([]);
+    vi.resetModules();
+    const on = await loadStore({ settings: { sendSessionsToVmem: true } });
+    await on.say("Let's pick up the Acme renewal.");
+    await on.say("Bee, open Teams");
+    await on.store.actions.endMeeting();
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    expect(on.ended).toEqual([]);
   });
 
   it("clears the history and closes the window when the meeting ends", async () => {
