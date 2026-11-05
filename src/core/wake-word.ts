@@ -80,7 +80,7 @@ export function isForBee(verdict: FollowUpVerdict | null): boolean {
 export const CONVERSATION_QUESTION_MS = 120_000;
 
 // "Thanks", "that's all", "never mind": the user is done with Bee. Only the whole phrase counts.
-const CLOSE = /^(?:(?:ok|okay|yeah|yes|yep|great|perfect|cool|nice|right|good|lovely|brilliant)[\s,.!]+)*(?:thanks|thank you|thanks bee|thank you bee|cheers|ta|that's all|that is all|that's it|that is it|that'll do|all good|we're good|done|i'm done|got it|bye|bye bee)(?:[\s,.!]+(?:thanks|thank you|bee|for now|then))*[\s.!]*$/i;
+const CLOSE = /^(?:(?:ok|okay|yeah|yes|yep|no|nope|nah|great|perfect|cool|nice|right|good|lovely|brilliant)[\s,.!]+)*(?:thanks|thank you|thanks bee|thank you bee|cheers|ta|that's all|that is all|that's it|that is it|that'll do|all good|we're good|done|i'm done|got it|bye|bye bee)(?:[\s,.!]+(?:thanks|thank you|bee|for now|then))*[\s.!]*$/i;
 
 /** The phrase ends the conversation with Bee: "thanks", "that's all", "OK, got it". */
 export function isConversationClose(text: string): boolean {
@@ -101,28 +101,44 @@ const FOLLOW_VERB = /^(?:(?:so|and|ok|okay|then|now|just|please)[\s,]+)*(?:open|
 const CONNECTOR = /\bvmem\b|\b(?:use|using|search|try|check|query|ask|with|via|in|from|through)\s+(?:the\s+|my\s+|your\s+|bee['’]?s\s+)?(?:mcp|connectors?|[\p{L}\p{N}-]+\s+connectors?)\b/iu;
 // A short answer to Bee's question ("Which team?" → "the Acme one", "Acme").
 const SHORT_ANSWER_WORDS = 5;
+// Bee offering to do more: "say if you want those counted too", "Bee can also count staging", "want Bee to…?".
+const OFFER =
+  /\b(?:say (?:if|so|the word)|if you(?:'d|['’]d| would)? (?:want|like|need|prefer)|want (?:me|bee) to|shall (?:i|bee)|should (?:i|bee)|would you like|do you want|(?:bee|i) can also|(?:bee|i) could also|let (?:me|bee) know)\b/i;
+// Yes or no to Bee's question or offer: "Yes.", "Yes, I do.", "Yes, can we do that?", "ok, go ahead", "nope". Never "okay" or
+// "please" alone at the start ("Okay, let's move on" is for the meeting).
+const YES_NO =
+  /^(?:(?:ok|okay)[\s,]+)?(?:yes|yeah|yep|yup|yes please|sure|go ahead|do it|please do|correct|absolutely|definitely|of course|no|nope|nah)\b/i;
+const YES_NO_WORDS = 8;
+
+/** Bee's reply asks a question or offers to do more: a short yes or no is an answer to it. */
+export function replyInvitesAnswer(reply: string | null | undefined): boolean {
+  return !!reply && (reply.includes("?") || OFFER.test(reply));
+}
 
 const words = (text: string) => text.split(/\s+/).filter(Boolean).length;
 
 /**
  * Why the phrase looks addressed to Bee in the conversation window, or null: one of Bee's connectors, second person, a
  * correction, a pointer at what Bee just did, an instruction or question, or a short answer when Bee's last reply asked a
- * question. Heuristic only.
+ * question or offered to do more (replyInvitesAnswer). Heuristic only.
  */
 export function looksAddressedToBee(text: string, lastBee?: { request: string; reply: string } | null): string | null {
   const line = text.replace(/\s+/g, " ").trim();
   if (!line) return null;
-  // A bare "no" is an answer only to Bee's question; otherwise it is likely for someone in the meeting.
-  if (/^(?:no|nope|nah)[.!]*$/i.test(line)) return lastBee?.reply.includes("?") ? "answer" : null;
+  const invites = replyInvitesAnswer(lastBee?.reply);
+  // A bare "no" is an answer only to Bee's question or offer; otherwise it is likely for someone in the meeting.
+  if (/^(?:no|nope|nah)[.!]*$/i.test(line)) return invites ? "answer" : null;
   if (CONNECTOR.test(line)) return "connector";
   if (SECOND_PERSON.test(line)) return "second-person";
   if (CORRECTION.test(line)) return "correction";
   if (FOLLOW_VERB.test(line)) return "instruction";
   if (STRONG_REFERENCE.test(line)) return "reference";
+  // "Yes, I do", "ok do it": yes or no to Bee's question or offer. Without one, it is likely for someone in the meeting.
+  if (invites && YES_NO.test(line) && words(line) <= YES_NO_WORDS) return "answer";
   // "Yeah", "it is", "okay then": filler is never for Bee on its own.
   if (isFiller(line)) return null;
   if (REFERENCE.test(line) && words(line) <= 12) return "reference";
-  if (lastBee && lastBee.reply.includes("?") && words(line) <= SHORT_ANSWER_WORDS) return "answer";
+  if (invites && words(line) <= SHORT_ANSWER_WORDS) return "answer";
   return null;
 }
 
@@ -136,6 +152,21 @@ export function namesParticipant(text: string, participants: readonly string[] =
     if (line.includes(` ${first} `)) return name;
   }
   return null;
+}
+
+/** Just after the conversation closed ("thanks", silence), a clear desktop request without "Bee" reopens it for this long. */
+export const REOPEN_WINDOW_MS = 45_000;
+
+// "Open Teams", "I said open teams", "Can you open the Teams app please": a desktop verb at the very start, after polite or
+// repeat words. Not "open question…", "start with…", "open to ideas": those are meeting talk.
+const REOPEN =
+  /^(?:(?:i said|i asked you to|just|please|bee|ok|okay|so|now|and|then|can you|could you|would you|will you)[\s,.!]+)*(?:open|launch|start|close|quit|switch to|bring up|show me|focus on|focus)\s+(?!(?:with|by|question|questions|issue|issues|item|items|to|on|off|up|for|about|it up|the floor|the meeting|the call|the discussion)\b)[\p{L}\p{N}]/iu;
+const REOPEN_WORDS = 12;
+
+/** The phrase is a clear desktop request on its own ("open Teams", "I said open teams"), short enough to be for Bee. */
+export function isReopenCommand(text: string): boolean {
+  const line = text.replace(/\s+/g, " ").trim();
+  return words(line) <= REOPEN_WORDS && REOPEN.test(line);
 }
 
 /**
@@ -157,7 +188,8 @@ export type LineRoute =
  * synced lines always go to the meeting, even when they start with "Bee", "Bee, stop" included: nobody else can start or stop
  * what Bee does on the computer. armed: the last mic phrase was "Bee" alone, so this one is the request. conversationOpen: a
  * request was answered moments ago (CONVERSATION_WINDOW_MS), so a phrase without "Bee" can still be for Bee. othersSpoke: someone
- * else spoke since that answer, so a phrase that is not clearly for Bee is a reply to them.
+ * else spoke since that answer, so a phrase that is not clearly for Bee is a reply to them. recentlyClosed: the window closed
+ * moments ago (REOPEN_WINDOW_MS), so a clear desktop request ("open Teams") reopens it; used only while the window is shut.
  */
 export function routeLine(args: {
   text: string;
@@ -168,6 +200,7 @@ export function routeLine(args: {
   lastBee?: { request: string; reply: string } | null;
   participants?: readonly string[];
   othersSpoke?: boolean;
+  recentlyClosed?: boolean;
 }): LineRoute {
   if (!args.enabled || args.source !== "mic") return { kind: "meeting" };
   const command = wakeCommand(args.text);
@@ -175,7 +208,10 @@ export function routeLine(args: {
   const text = args.text.trim();
   const request = command ?? (args.armed && !isFiller(text) ? text : null);
   if (request !== null) return isStopCommand(request) ? { kind: "stop" } : { kind: "command", command: request };
-  if (!args.conversationOpen) return { kind: "meeting" };
+  if (!args.conversationOpen) {
+    const reopen = args.recentlyClosed && !args.othersSpoke && isReopenCommand(text) && !namesParticipant(text, args.participants);
+    return reopen ? { kind: "command", command: text, followUp: true, reason: "reopen" } : { kind: "meeting" };
+  }
   if (isStopCommand(text)) return { kind: "stop" };
   if (isConversationClose(text)) return { kind: "close" };
   if (namesParticipant(text, args.participants)) return { kind: "meeting", reason: "names-participant" };

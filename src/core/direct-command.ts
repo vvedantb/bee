@@ -2,15 +2,16 @@ import { tool, type ModelMessage } from "ai";
 import { z } from "zod";
 import type { PipelineResult } from "../shared/ipc";
 import type { ComputerRun } from "./agent-desktop-envelope";
-import { commandFallbackReply, historyMessages, type BeeExchange } from "./bee-history";
-import { COMPUTER_MAX_STEPS, createRunControl, stopLine, type ComputerPlatform, type RunControl } from "./computer-control";
+import { assistantMessage, cleanForHistory, commandFallbackReply, historySummariser, userMessage, type Summarise } from "./bee-history";
+import { createRunControl, stopLine, type ComputerPlatform, type RunControl } from "./computer-control";
 import { computerTools, type ConfirmRequest } from "./computer-tools";
 import { computerAccess, runComputerUse, wantsComputerUse, type ComputerSkills } from "./computer-use";
 import { debugLog, errorData } from "./debug-log";
-import { COMMAND_MODEL, NO_GATEWAY_KEY, type BeeGateway } from "./gateway";
+import { COMMAND_MODEL, GUIDE_MODEL, NO_GATEWAY_KEY, type BeeGateway } from "./gateway";
 import type { McpTools } from "./mcp";
 import { routeCommand, type DesktopActionResult, type DesktopActions } from "./desktop-actions";
 import { desktopTools } from "./desktop-tools";
+import { screenNames, spelledName } from "./known-names";
 import { guideWithLuna, noteCitation, type LunaToolActivity, type TipFields } from "./luna";
 import type { Snippet } from "./notes";
 import { loadMcp } from "./pipeline";
@@ -23,9 +24,9 @@ import { needsWebSearch, type SearchLocation } from "./web-search";
 // ("send Sam a message in Discord", core/computer-use.ts wantsComputerUse) runs the computer-use loop. Anything else goes to
 // Luna with the desktop tools, and use_computer to hand a task on screen over to the loop. The result has the pipeline's
 // shape, so the island shows it like tips: action lines first ("Opened Teams"), then the reply, or the loop's one last line.
-// No Jev: there is no meeting turn to rank notes for. The last few exchanges with Bee (core/bee-history.ts) go to the AI as
-// earlier turns, so a follow-up ("the team one") carries on from the last request. The result also says which lines were
-// actions and where computer use left the screen, for the next request's history.
+// No Jev: there is no meeting turn to rank notes for. Bee's whole history (core/bee-history.ts: every earlier request with the AI's
+// text, tool calls and results) goes to the AI before the request, so a follow-up ("the team one", "yes") carries on from there.
+// Each request's own messages go back to main through onTurn, to be added to that history.
 
 const RETRIEVE_LIMIT = 5;
 const GUIDE_NOTE_LIMIT = 3;
@@ -68,7 +69,7 @@ export type ComputerHost = {
   onStep?: (label: string) => void;
   /** The run's controls, so main can stop it (the Stop button, "Bee, stop"). */
   onControl?: (control: RunControl) => void;
-  /** Limits, for tests. */
+  /** A step limit, for tests. None by default: the loop guard, Stop and the clock end a run. */
   maxSteps?: number;
   maxMs?: number;
 };
@@ -94,23 +95,33 @@ async function runComputerCommand(args: {
   gateway: BeeGateway;
   signal?: AbortSignal;
   onActivity?: (activity: LunaToolActivity) => void;
+  summarise?: Summarise;
+  knownNames?: readonly string[];
+  /** The run's messages for Bee's history (core/bee-history.ts), without the request. */
+  onMessages?: (messages: ModelMessage[]) => void;
 }): Promise<PipelineResult> {
   const { host } = args;
-  const maxSteps = host.maxSteps ?? COMPUTER_MAX_STEPS;
+  const maxSteps = host.maxSteps;
   const control = createRunControl({ maxSteps, maxMs: host.maxMs, signal: args.signal });
   host.onControl?.(control);
   const started = performance.now();
   // The first step line shows the island's Stop button at once, before the access check.
   host.onStep?.("Starting…");
   try {
-    debugLog.info("computer", "run-start", { platform: host.platform, maxSteps, maxMs: host.maxMs ?? null, askFirst: host.askFirst(), command: args.command });
+    debugLog.info("computer", "run-start", { platform: host.platform, maxSteps: maxSteps ?? null, maxMs: host.maxMs ?? null, askFirst: host.askFirst(), command: args.command });
     if (host.platform === "mac") {
       const access = await computerAccess(host.run, control.signal);
       debugLog.info("computer", "access", access);
-      if (control.reason()) return lineResult(stopLine(control.reason() ?? "user", { platform: host.platform }));
+      if (control.reason()) {
+        const line = stopLine(control.reason() ?? "user", { platform: host.platform });
+        args.onMessages?.([assistantMessage(line)]);
+        return lineResult(line);
+      }
       if (access.accessibility === "denied") {
         console.debug("perf computer access=denied");
-        return lineResult(stopLine("permission", { platform: host.platform }));
+        const line = stopLine("permission", { platform: host.platform });
+        args.onMessages?.([assistantMessage(line)]);
+        return lineResult(line);
       }
     }
     const tools = computerTools({
@@ -128,14 +139,19 @@ async function runComputerCommand(args: {
       command: args.command,
       transcript: args.transcript,
       history: args.history,
+      summarise: args.summarise,
+      ...(args.knownNames?.length ? { knownNames: args.knownNames } : {}),
       tools,
       control,
       platform: host.platform,
-      maxSteps,
+      ...(maxSteps !== undefined ? { maxSteps } : {}),
       ...(host.skills ? { skills: host.skills } : {}),
     });
     const guide = performance.now() - started;
     debugLog.info("computer", "run-end", { ...outcome, reason: control.reason(), declined: control.declined(), ms: Math.round(guide) });
+    // What the AI did, tool calls and results included, then the line the island shows when it differs (a stop).
+    const said = outcome.messages.length > 0 && !outcome.stopped && !outcome.error ? outcome.messages : [...outcome.messages, assistantMessage(outcome.line)];
+    args.onMessages?.(said);
     const where = outcome.endedWhere ? { endedWhere: outcome.endedWhere } : {};
     if (outcome.error) return { ...lineResult(outcome.line, { guide, lunaTotal: guide }), tips: [], tipSources: [], guideError: outcome.line, ...where };
     return { ...lineResult(outcome.line, { guide, lunaTotal: guide }), ...where };
@@ -149,8 +165,14 @@ export async function runDirectCommand(args: {
   command: string;
   /** The latest meeting lines, as background for a request about the meeting. Never answered as tips. */
   transcript?: string[];
-  /** The last few exchanges with Bee, oldest first: earlier turns for the AI. */
-  history?: readonly BeeExchange[];
+  /** Bee's history (core/bee-history.ts), oldest first: every earlier turn, sent whole to the AI. */
+  history?: readonly ModelMessage[];
+  /** Called once with this request's messages (the request, the AI's text, tool calls and results), cleaned for the history. */
+  onTurn?: (messages: ModelMessage[]) => void;
+  /** Names Bee should know (core/known-names.ts), for the AI. */
+  knownNames?: readonly string[];
+  /** Names learned from this request: a spelling the user gave, chat names read on screen. Main adds them to Settings. */
+  onLearnNames?: (names: string[]) => void;
   meetingBrief?: string;
   meetingTerms?: string;
   searchLocation?: SearchLocation;
@@ -169,8 +191,24 @@ export async function runDirectCommand(args: {
 }): Promise<PipelineResult> {
   const command = args.command.replace(/\s+/g, " ").trim();
   const route = routeCommand(command);
-  const history = historyMessages(args.history ?? []);
-  debugLog.info("ai", "command-route", { command, route, history: args.history?.length ?? 0, computer: Boolean(args.computer), desktop: Boolean(args.actions), wantsComputer: wantsComputerUse(command) });
+  const history = args.history ?? [];
+  let recorded = false;
+  const record = (messages: readonly ModelMessage[]) => {
+    if (recorded) return;
+    recorded = true;
+    const turn = cleanForHistory([userMessage(command), ...messages]);
+    args.onTurn?.(turn);
+    // Names to keep: a spelling the user just gave, and chat names in the tool results and the AI's reply.
+    const learned = [...(spelledName(command) ? [spelledName(command) as string] : []), ...screenNames(JSON.stringify(turn.slice(1)).replace(/\\"/g, '"'))];
+    if (learned.length > 0) {
+      debugLog.info("ai", "names-learned", { names: learned });
+      args.onLearnNames?.(learned);
+    }
+  };
+  // Near the window, the oldest messages fold into a summary written by the fast model (core/bee-history.ts).
+  const gateway = args.gateway;
+  const summarise: Summarise | undefined = gateway ? (messages, signal) => historySummariser(gateway.languageModel(GUIDE_MODEL))(messages, signal) : undefined;
+  debugLog.info("ai", "command-route", { command, route, history: history.length, computer: Boolean(args.computer), desktop: Boolean(args.actions), wantsComputer: wantsComputerUse(command) });
   if (route.kind !== "ai" && args.actions) {
     const tool = FAST_TOOL[route.kind];
     const actions = args.actions;
@@ -185,6 +223,14 @@ export async function runDirectCommand(args: {
       args.onActivity?.({ tool, phase: "end" });
     }
     debugLog.info("desktop", "fast-action", { route, result });
+    // The quick action as a real tool call and result, like the AI's own, so the next request sees what was done.
+    const toolCallId = `bee_fast_${Date.now().toString(36)}`;
+    const input = route.kind === "open-url" ? { url: route.url } : route.kind === "open-app" ? { name: route.name } : { app: route.name };
+    record([
+      { role: "assistant", content: [{ type: "tool-call", toolCallId, toolName: tool, input }] },
+      { role: "tool", content: [{ type: "tool-result", toolCallId, toolName: tool, output: { type: "text", value: result.message } }] },
+      assistantMessage(result.message),
+    ]);
     console.debug(`perf command fast ${route.kind} ok=${result.ok ? 1 : 0}`);
     return { notes: [], rankSource: "fallback", rankError: null, tips: [result.message], tipSources: [null], sources: [], guideError: null, actions: [result.message], timingsMs: timings() };
   }
@@ -192,7 +238,9 @@ export async function runDirectCommand(args: {
   // A task on screen goes straight to the loop: it needs no notes, connectors or web search.
   const computer = args.computer && args.actions && args.gateway ? { host: args.computer, actions: args.actions, gateway: args.gateway } : null;
   const loop = () =>
-    computer ? runComputerCommand({ ...computer, command, transcript: args.transcript, history, signal: args.signal, onActivity: args.onActivity }) : Promise.reject(new Error("no computer use"));
+    computer
+      ? runComputerCommand({ ...computer, command, transcript: args.transcript, history, signal: args.signal, onActivity: args.onActivity, summarise, knownNames: args.knownNames, onMessages: record })
+      : Promise.reject(new Error("no computer use"));
   if (computer && wantsComputerUse(command)) {
     console.debug("perf command computer");
     return loop();
@@ -205,6 +253,7 @@ export async function runDirectCommand(args: {
   const guideNotes = candidates.slice(0, GUIDE_NOTE_LIMIT);
   const notes = candidates.map((note, index) => ({ ...note, jevScore: null, cite: index < GUIDE_NOTE_LIMIT ? noteCitation(index) : null }));
   if (!args.gateway) {
+    record([assistantMessage(`Error: ${NO_GATEWAY_KEY}`)]);
     return { notes, rankSource: "fallback", rankError: NO_GATEWAY_KEY, tips: [], tipSources: [], sources: [], guideError: NO_GATEWAY_KEY, timingsMs: timings({ retrieve: retrieveMs }) };
   }
 
@@ -259,6 +308,8 @@ export async function runDirectCommand(args: {
     desktopTools: tools,
     computerUse: computer !== null,
     historyMessages: history,
+    summarise,
+    knownNames: args.knownNames,
     onActivity: args.onActivity,
     onPartial: (partial) => {
       if (handOver.signal.aborted) return;
@@ -277,9 +328,14 @@ export async function runDirectCommand(args: {
   void mcp?.close().catch(() => undefined).finally(() => console.debug(`perf mcp-close ${Math.round(performance.now() - closeStarted)}ms`));
   console.debug(`perf command actions=${actionLines.length} mcp ${Math.round(mcpMs)}ms guide ${Math.round(guideMs)}ms`);
   // No reply and no action (NONE, or no text at all) never leaves the island blank: a short line or a question back instead.
-  const silent = actionLines.length === 0 && guide.tips.length === 0 && (guide.error === null || guide.empty === true);
+  const silent = actionLines.length === 0 && guide.tips.length === 0 && !guide.loop && (guide.error === null || guide.empty === true);
   if (silent) debugLog.info("ai", "command-fallback", { command, empty: guide.empty ?? false });
   const shown = silent ? { tips: [commandFallbackReply(command)], tipSources: [null] } : joinLines(actionLines, guide);
+  // The AI's own messages, then what the island showed when the AI wrote nothing (a fallback, a stop or an error).
+  const shownText = shown.tips.join("\n");
+  const lastText = guide.messages?.at(-1)?.role === "assistant" && guide.tips.length > 0;
+  const closing = lastText ? [] : [assistantMessage(guide.error && !silent ? `${shownText ? `${shownText}\n` : ""}Error: ${guide.error}` : shownText || "(no reply)")];
+  record([...(guide.messages ?? []), ...closing]);
   return {
     notes,
     rankSource: "fallback",

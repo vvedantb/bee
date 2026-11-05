@@ -1,5 +1,8 @@
 import { MockLanguageModelV4 } from "ai/test";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { ComputerRun } from "../core/agent-desktop-envelope";
 import type { DesktopActions } from "../core/desktop-actions";
 import type { BeeGateway } from "../core/gateway";
@@ -23,6 +26,8 @@ vi.mock("./notes", () => ({ loadSnippets: () => [], isNotePath: () => false, wri
 
 const { IPC } = await import("../shared/ipc");
 const { registerMeetingIpc } = await import("./meeting-ipc");
+const { createBeeHistoryStore } = await import("./bee-history-store");
+type BeeHistoryStore = import("./bee-history-store").BeeHistoryStore;
 
 const event = { sender: { isDestroyed: () => false, send: () => undefined } };
 
@@ -213,7 +218,7 @@ describe("main: computer use for a direct request", () => {
 describe("main: Bee's history and the follow-up check", () => {
   const usage = { inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 }, outputTokens: { total: 1, text: 1, reasoning: undefined } };
 
-  function setupWithModel(reply: string, options: { key?: boolean } = {}) {
+  function setupWithModel(reply: string, options: { key?: boolean; history?: BeeHistoryStore; learned?: string[][] } = {}) {
     electron.handlers.clear();
     const prompts: string[] = [];
     const model = new MockLanguageModelV4({
@@ -234,6 +239,9 @@ describe("main: Bee's history and the follow-up check", () => {
       desktop: { openApp: async (name) => ({ ok: true, message: `Opened ${name}` }), focusWindow: async ({ app }) => ({ ok: true, message: `Focused ${app}` }), openUrl: async (url) => ({ ok: true, message: url }) },
       wakeWordEnabled: () => true,
       computer: { platform: "windows", run: async () => ({ ok: true, data: {} }), askFirst: () => false, cleanup: () => undefined },
+      ...(options.history ? { history: options.history } : {}),
+      knownNames: () => ["Zuzanna Szczepaniak-Moody"],
+      learnNames: (names) => options.learned?.push(names),
     });
     const handler = (channel: string) => {
       const found = electron.handlers.get(channel);
@@ -243,20 +251,38 @@ describe("main: Bee's history and the follow-up check", () => {
     return { handler, prompts };
   }
 
-  const history = [{ request: "open Vercel usage", reply: "", actions: ["Opened https://vercel.com/acme/~/usage"], at: 1 }];
-
-  it("passes the history through to the AI as earlier turns, and returns where computer use ended", async () => {
-    const { handler, prompts } = setupWithModel("Opened the team usage.\nEnded: vercel.com/acme/~/usage, 404");
-    const result = (await handler(IPC.runCommand)({ command: "click the team usage tab", history, runId: 3, sessionToken: "signed-in" })) as { tips: string[]; endedWhere?: string };
-    expect(result).toMatchObject({ tips: ["Opened the team usage."], endedWhere: "vercel.com/acme/~/usage, 404" });
-    expect(prompts[0]).toContain("open Vercel usage");
-    expect(prompts[0]).toContain("Done: Opened https://vercel.com/acme/~/usage");
+  it("sends main's saved history to the AI, tool calls and results included, and saves each request to disk", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "bee-history-ipc-"));
+    try {
+      const path = join(dir, "bee-history.json");
+      const store = createBeeHistoryStore({ path });
+      const learned: string[][] = [];
+      const { handler, prompts } = setupWithModel("Opened the team usage.\nEnded: vercel.com/acme/~/usage, 404", { history: store, learned });
+      await handler(IPC.runCommand)({ command: "open https://vercel.com/acme/~/usage", runId: 2, sessionToken: "signed-in" });
+      await vi.waitFor(() => expect(store.messages().length).toBeGreaterThan(0));
+      const result = (await handler(IPC.runCommand)({ command: "click the team usage tab", runId: 3, sessionToken: "signed-in" })) as { tips: string[]; endedWhere?: string };
+      expect(result).toMatchObject({ tips: ["Opened the team usage."], endedWhere: "vercel.com/acme/~/usage, 404" });
+      expect(prompts[0]).toContain("open https://vercel.com/acme/~/usage");
+      expect(prompts[0]).toContain("tool-call");
+      expect(prompts[0]).toContain("Zuzanna Szczepaniak-Moody");
+      await vi.waitFor(() => expect(createBeeHistoryStore({ path }).messages().filter((message) => message.role === "user")).toHaveLength(2));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
-  it("refuses more than six exchanges", async () => {
-    const { handler } = setupWithModel("Done.");
+  it("ignores a history from an older renderer: the AI's history is main's", async () => {
+    const { handler, prompts } = setupWithModel("Done.");
     const many = Array.from({ length: 7 }, (_, index) => ({ request: `r${index}`, reply: "", at: index }));
-    await expect(handler(IPC.runCommand)({ command: "open Teams", history: many, sessionToken: "signed-in" })).rejects.toThrow();
+    await handler(IPC.runCommand)({ command: "close Slack", history: many, sessionToken: "signed-in" });
+    expect(prompts[0]).not.toContain("r6");
+  });
+
+  it("passes on names learned from a spelling correction", async () => {
+    const learned: string[][] = [];
+    const { handler } = setupWithModel("Done.", { learned });
+    await handler(IPC.runCommand)({ command: "you spelt it wrong, it's Z U Z A N N A, message her", sessionToken: "signed-in" });
+    expect(learned).toEqual([["Zuzanna"]]);
   });
 
   it("answers the follow-up check from the model, and null without a key", async () => {

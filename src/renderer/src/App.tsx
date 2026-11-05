@@ -500,6 +500,7 @@ function SettingsTab({ state, settings }: { state: BeeState; settings: SettingsV
     const saved = await actions.saveSettings({
       gatewayApiKey: gatewayApiKey || undefined,
       fsRoots: formString(form, "fsRoots").split(/\r?\n/),
+      knownNames: formString(form, "knownNames").split(/\r?\n/),
     });
     if (saved) setFormKey(formKey + 1);
   }
@@ -520,6 +521,10 @@ function SettingsTab({ state, settings }: { state: BeeState; settings: SettingsV
         <label>
           Extra folders the AI may read (one absolute path per line)
           <Textarea name="fsRoots" rows={3} defaultValue={settings.fsRoots.join("\n")} spellCheck={false} />
+        </label>
+        <label>
+          Names Bee should know (one per line). Bee also adds names you spell out and chat names it reads on screen.
+          <Textarea name="knownNames" rows={3} defaultValue={settings.knownNames.join("\n")} spellCheck={false} />
         </label>
         <p className="muted">
           Notes folder: <code>{settings.notesDir}</code>{" "}

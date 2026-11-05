@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isConfirmWords, isStopCommand, routeLine, wakeCommand, type LineSource } from "./wake-word";
+import { REOPEN_WINDOW_MS, isConfirmWords, isReopenCommand, isStopCommand, routeLine, wakeCommand, type LineSource } from "./wake-word";
 
 describe("wakeCommand", () => {
   it("takes the request after Bee, with or without a comma", () => {
@@ -156,5 +156,63 @@ describe("routeLine: who can start or stop computer use", () => {
   it("has no spoken Confirm: \"Bee, confirm\" is a request, never an answer to a prompt", () => {
     expect(routeLine({ text: "Bee, confirm", source: "mic", enabled: true })).toEqual({ kind: "command", command: "confirm" });
     expect(routeLine({ text: "Bee, stop", source: "mic", enabled: false })).toEqual({ kind: "meeting" });
+  });
+});
+
+// Owner log (0.3.36): after "Okay, thanks." closed the window, "Open teams." and "I said open teams." went to the meeting.
+describe("routeLine: reopen just after the window closed", () => {
+  const closed = (text: string, extra: Partial<Parameters<typeof routeLine>[0]> = {}) =>
+    routeLine({ text, source: "mic", enabled: true, recentlyClosed: true, ...extra });
+
+  it("is under a minute", () => {
+    expect(REOPEN_WINDOW_MS).toBeGreaterThanOrEqual(45_000);
+    expect(REOPEN_WINDOW_MS).toBeLessThanOrEqual(60_000);
+  });
+
+  it("takes a clear desktop request without Bee", () => {
+    for (const text of [
+      "open Teams",
+      "Open teams.",
+      "Can you open the Teams app please",
+      "Can you open the Teams app please and",
+      "I said open teams.",
+      "please open Slack",
+      "just launch Outlook",
+      "switch to Chrome",
+      "bring up the calendar",
+      "close Spotify",
+    ]) {
+      expect(closed(text), text).toEqual({ kind: "command", command: text, followUp: true, reason: "reopen" });
+    }
+  });
+
+  it("leaves meeting talk in the meeting", () => {
+    for (const text of [
+      "we should open the doc later",
+      "open question about the budget",
+      "let's open with the agenda",
+      "Can we start with the numbers",
+      "start by reviewing the forecast",
+      "I'm open to ideas",
+      "Can you share the deck?",
+      "so what do you think about Friday",
+      "open the floor to questions from the team and anyone else who joined late today",
+    ]) {
+      expect(closed(text), text).toEqual({ kind: "meeting" });
+    }
+    expect(closed("can you open the doc Sam", { participants: ["Sam Lee"] })).toEqual({ kind: "meeting" });
+  });
+
+  it("needs the recent close, the user's mic and nobody else speaking", () => {
+    expect(routeLine({ text: "open Teams", source: "mic", enabled: true })).toEqual({ kind: "meeting" });
+    expect(closed("open Teams", { othersSpoke: true })).toEqual({ kind: "meeting" });
+    expect(closed("open Teams", { source: "caption" })).toEqual({ kind: "meeting" });
+    expect(closed("open Teams", { enabled: false })).toEqual({ kind: "meeting" });
+  });
+
+  it("isReopenCommand is short and verb-first", () => {
+    expect(isReopenCommand("Open teams.")).toBe(true);
+    expect(isReopenCommand("open question about the budget")).toBe(false);
+    expect(isReopenCommand("open the Teams app and then the Outlook app and then the calendar please")).toBe(false);
   });
 });

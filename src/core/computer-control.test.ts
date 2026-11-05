@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ACCESSIBILITY_LINE, COMPUTER_MAX_STEPS, ComputerStopped, awaitAnswer, createRunControl, stopLine } from "./computer-control";
+import { ACCESSIBILITY_LINE, ComputerStopped, awaitAnswer, createRunControl, stopLine } from "./computer-control";
 
 // Computer use's loop controls with fake timers: steps, the wall clock (paused while a Confirm waits), and stop.
 
@@ -63,10 +63,14 @@ describe("createRunControl", () => {
     expect([control.reason(), control.declined()]).toEqual(["declined", "send"]);
   });
 
-  it("defaults to a bounded number of steps", () => {
+  it("has no step limit by default: only a stop ends it", () => {
     const control = createRunControl();
-    for (let index = 0; index < COMPUTER_MAX_STEPS; index += 1) expect(control.step()).toBe(true);
+    for (let index = 0; index < 500; index += 1) expect(control.step()).toBe(true);
+    expect(control.reason()).toBeNull();
+    control.stop("loop");
     expect(control.step()).toBe(false);
+    expect(control.reason()).toBe("loop");
+    control.dispose();
   });
 });
 
@@ -100,11 +104,13 @@ describe("stopLine", () => {
   it("ends a stopped run with one short line", () => {
     expect(stopLine("user")).toBe("Stopped.");
     expect(stopLine("steps", { maxSteps: 12 })).toBe("Stopped after 12 steps.");
+    expect(stopLine("steps")).toBe("Stopped.");
+    expect(stopLine("loop")).toBe("Stopped: Bee kept repeating the same step.");
     expect(stopLine("time")).toBe("Stopped: that took too long.");
     expect(stopLine("permission", { platform: "mac" })).toBe(ACCESSIBILITY_LINE);
     expect(stopLine("permission", { platform: "windows" })).toMatch(/administrator/);
     expect(stopLine("declined", { declined: "send" })).toBe("Cancelled. Nothing was sent.");
     expect(stopLine("declined", { declined: "delete" })).toBe("Cancelled. Nothing was deleted.");
-    for (const reason of ["user", "steps", "time", "permission", "declined"] as const) expect(stopLine(reason)).not.toMatch(/claude|haiku|anthropic|clerk/i);
+    for (const reason of ["user", "steps", "time", "permission", "declined", "loop"] as const) expect(stopLine(reason)).not.toMatch(/claude|haiku|anthropic|clerk/i);
   });
 });

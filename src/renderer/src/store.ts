@@ -6,11 +6,12 @@ import { detectLinks, mergeChips, sourceChips, visibleChips, type LinkChip } fro
 import { MAX_STEERING_TIPS, isFiller, isNewTurn, isQuestion, mergeTips, recentRestarts, runDelayMs, tipCap, tipKey, waitsForRun } from "../../core/steering";
 import { mergeLines, pipelineText, summaryTranscript, type SessionLine } from "../../core/sync-lines";
 import { TEAMS_AUDIO_SPEAKER, TEAMS_AUDIO_SPEAKER_ID, teamsAudioEcho, teamsAudioPlan, teamsAudioReplaced, type TeamsAudioPlan } from "../../core/teams-audio";
-import { HISTORY_IDLE_MS, addExchange, commandFallbackReply, liveHistory, type BeeExchange } from "../../core/bee-history";
-import { CONVERSATION_QUESTION_MS, CONVERSATION_WINDOW_MS, OTHERS_QUIET_MS, WAKE_FOLLOW_MS, isConfirmWords, isForBee, routeLine } from "../../core/wake-word";
+import { CONVERSATION_IDLE_MS, addExchange, commandFallbackReply, type BeeExchange } from "../../core/bee-history";
+import { CONVERSATION_QUESTION_MS, CONVERSATION_WINDOW_MS, OTHERS_QUIET_MS, REOPEN_WINDOW_MS, WAKE_FOLLOW_MS, isConfirmWords, isForBee, replyInvitesAnswer, routeLine } from "../../core/wake-word";
 import type { TeamsAudioFailure } from "../../core/teams-audio-protocol";
 import {
   COMMAND_MAX_CHARS,
+  CONVERSATION_EXCHANGES_MAX,
   SESSION_TRANSCRIPT_MAX,
   clampTip,
   type ComputerAccessView,
@@ -277,11 +278,13 @@ let wakeArmedUntil = 0;
 let commandRun: number | null = null;
 let commandHold: ReturnType<typeof setTimeout> | undefined;
 let parkedLines: SessionLine[] = [];
-// Bee's history (core/bee-history.ts): the last few requests and what Bee did, sent with each new request as earlier turns.
-// Separate from the meeting session: never in the summary, meeting memory or the Teams sync. Cleared after HISTORY_IDLE_MS
-// with no exchange, and when the meeting ends.
-let history: BeeExchange[] = [];
-let historyTimer: ReturnType<typeof setTimeout> | undefined;
+// The conversation so far for vmem's transcript (core/bee-history.ts BeeExchange): the requests and what Bee did since it was
+// last sent. Only a session boundary: Bee's history for the AI lives in main (bee-history.json), whole and forever, and this
+// never clears it. Sent after CONVERSATION_IDLE_MS with no exchange, or once it reaches CONVERSATION_EXCHANGES_MAX; dropped when
+// the meeting ends (the meeting's own send covers it). Separate from the meeting session: never in the summary, meeting memory or
+// the Teams sync.
+let conversation: BeeExchange[] = [];
+let conversationIdleTimer: ReturnType<typeof setTimeout> | undefined;
 // The conversation window after a request (BeeState.conversationOpen): when it ends, Bee's last exchange for the routing and
 // the follow-up check, when the last exchange ended, and when someone else (caption, Teams audio, teammate) was last heard.
 let conversationUntil = 0;
@@ -289,6 +292,8 @@ let conversationTimer: ReturnType<typeof setTimeout> | undefined;
 let lastBee: { request: string; reply: string } | null = null;
 let lastExchangeAt = 0;
 let lastOtherSpeakerAt = 0;
+// When the window last closed on "thanks", silence, stop or dismiss: a clear desktop request soon after reopens it (REOPEN_WINDOW_MS).
+let conversationClosedAt = 0;
 // "Bee, stop" for this run: its result opens no conversation window.
 let stoppedRun: number | null = null;
 // The Teams audio capture while it runs, and guards while it opens and while main is asked for its status.
@@ -823,12 +828,13 @@ function participantNames(): string[] {
 
 /**
  * Opens (or restarts) the conversation window after an exchange with Bee: CONVERSATION_WINDOW_MS, or CONVERSATION_QUESTION_MS
- * while Bee's reply asks a question. It closes on silence, "thanks", "Bee, stop", a reply to someone else, a participant's
+ * while Bee's reply asks a question or offers to do more. It closes on silence, "thanks", "Bee, stop", a reply to someone else, a participant's
  * name, the island's dismiss button or the end of the meeting (closeConversation).
  */
 function openConversation(): void {
-  const ms = lastBee?.reply.includes("?") ? CONVERSATION_QUESTION_MS : CONVERSATION_WINDOW_MS;
+  const ms = replyInvitesAnswer(lastBee?.reply) ? CONVERSATION_QUESTION_MS : CONVERSATION_WINDOW_MS;
   conversationUntil = Date.now() + ms;
+  conversationClosedAt = 0;
   clearTimeout(conversationTimer);
   conversationTimer = setTimeout(() => closeConversation("silence"), ms);
   debugLog.info("wake", "conversation-open", { ms, question: ms === CONVERSATION_QUESTION_MS });
@@ -840,29 +846,35 @@ function closeConversation(reason: string): void {
   conversationTimer = undefined;
   const open = conversationUntil > 0;
   conversationUntil = 0;
+  // A new request, the end of the meeting or a turn back to the meeting: no reopen without "Bee".
+  const final = ["request", "meeting-end", "reply-to-others", "names-participant"].includes(reason);
+  if (final) conversationClosedAt = 0;
   if (!open) return;
+  if (!final) conversationClosedAt = Date.now();
   debugLog.info("wake", "conversation-closed", { reason });
   if (state.conversationOpen) set({ conversationOpen: false });
 }
 
-/** One more exchange in Bee's history, and the idle clock restarts. */
+/** One more exchange in the conversation for vmem, and the idle clock restarts. The AI's history is main's (it saves each request). */
 function rememberExchange(exchange: BeeExchange): void {
-  history = addExchange(liveHistory(history, exchange.at), exchange);
+  conversation = addExchange(conversation, exchange);
   lastBee = { request: exchange.request, reply: [exchange.reply, ...(exchange.actions ?? [])].filter(Boolean).join(" ") };
   lastExchangeAt = exchange.at;
-  clearTimeout(historyTimer);
-  historyTimer = setTimeout(() => clearHistory("idle"), HISTORY_IDLE_MS);
+  clearTimeout(conversationIdleTimer);
+  if (conversation.length >= CONVERSATION_EXCHANGES_MAX) endConversation("full");
+  else conversationIdleTimer = setTimeout(() => endConversation("idle"), CONVERSATION_IDLE_MS);
 }
 
-function clearHistory(reason: string): void {
-  clearTimeout(historyTimer);
-  historyTimer = undefined;
-  if (history.length > 0) debugLog.info("wake", "history-cleared", { reason, exchanges: history.length });
-  // An idle clear ends a conversation: main may send it to vmem (it checks the setting and holds the connector's secrets).
+/** A session boundary for vmem only: Bee's history for the AI (main) is never cleared here. */
+function endConversation(reason: string): void {
+  clearTimeout(conversationIdleTimer);
+  conversationIdleTimer = undefined;
+  if (conversation.length > 0) debugLog.info("wake", "conversation-ended", { reason, exchanges: conversation.length });
+  // Idle or full ends a conversation: main may send it to vmem (it checks the setting and holds the connector's secrets).
   // Not on meeting-end: the meeting's own send covers that session.
-  if (reason === "idle" && history.length > 0 && (state.settings?.sendSessionsToVmem ?? false)) sendConversation(history);
-  history = [];
-  lastBee = null;
+  if (reason !== "meeting-end" && conversation.length > 0 && (state.settings?.sendSessionsToVmem ?? false)) sendConversation(conversation);
+  conversation = [];
+  if (reason === "meeting-end") lastBee = null;
 }
 
 /** Fire and forget: a failure is logged and never reaches the user. */
@@ -876,9 +888,9 @@ function sendConversation(exchanges: readonly BeeExchange[]): void {
   })();
 }
 
-/** Bee's history as it stands now, oldest first (tests). */
-export function beeHistory(): BeeExchange[] {
-  return liveHistory(history, Date.now());
+/** The conversation not yet sent to vmem, oldest first (tests). */
+export function beeConversation(): BeeExchange[] {
+  return [...conversation];
 }
 
 /**
@@ -893,11 +905,13 @@ function takeWakeLine(text: string): boolean {
   const armed = now < wakeArmedUntil;
   const conversationOpen = enabled && now < conversationUntil && commandRun === null;
   const othersSpoke = lastOtherSpeakerAt > lastExchangeAt;
-  const route = routeLine({ text, source: "mic", enabled, armed, conversationOpen, lastBee, participants: participantNames(), othersSpoke });
+  const recentlyClosed =
+    enabled && commandRun === null && !conversationOpen && conversationClosedAt > 0 && now - conversationClosedAt < REOPEN_WINDOW_MS;
+  const route = routeLine({ text, source: "mic", enabled, armed, conversationOpen, lastBee, participants: participantNames(), othersSpoke, recentlyClosed });
   wakeArmedUntil = route.kind === "wake" ? now + WAKE_FOLLOW_MS : 0;
   // The local debug log keeps the words that woke Bee, and the meeting lines that nearly did (a likely miss or false trigger).
-  if (route.kind !== "meeting" || NEAR_WAKE.test(text) || conversationOpen) {
-    debugLog.info("wake", route.kind === "meeting" ? "near-miss" : route.kind, { text, route, enabled, armed, conversationOpen, othersSpoke });
+  if (route.kind !== "meeting" || NEAR_WAKE.test(text) || conversationOpen || recentlyClosed) {
+    debugLog.info("wake", route.kind === "meeting" ? "near-miss" : route.kind, { text, route, enabled, armed, conversationOpen, othersSpoke, recentlyClosed });
   }
   if (route.kind === "meeting") {
     // A reply to someone else, or a name from the meeting: the user has turned back to the meeting.
@@ -980,8 +994,9 @@ async function stopCommand(): Promise<void> {
  * Runs a direct request in main (core/direct-command.ts) and shows the reply in the island as the answer to the user: action
  * lines first ("Opened Teams"), then the AI's reply. It takes the island like a new turn: the meeting run in flight is dropped
  * (its lines stay in the session), and meeting lines wait until the reply has been on screen for COMMAND_HOLD_MS. The reply is
- * not a meeting answer: it is not kept for the summary or meeting memory, nor sent as context for later tips. It does go into
- * Bee's own history (rememberExchange), sent with the next requests as earlier turns, and opens the conversation window.
+ * not a meeting answer: it is not kept for the summary or meeting memory, nor sent as context for later tips. Main adds it to
+ * Bee's own history (bee-history.json), sent whole with the next requests; here it joins the conversation for vmem
+ * (rememberExchange) and opens the conversation window.
  */
 async function runCommand(command: string): Promise<void> {
   const previous = latestRun;
@@ -1045,12 +1060,9 @@ async function runCommand(command: string): Promise<void> {
   try {
     // The meeting so far, as background for a request about it ("what did Priya just say").
     const recent = state.session.lines.slice(-PIPELINE_WINDOW).map(pipelineText);
-    // Bee's history: earlier turns for the AI, so "the team one" follows on from the last request.
-    const earlier = liveHistory(history, Date.now());
     const reply = await window.bee.runCommand({
       command: command.slice(0, COMMAND_MAX_CHARS),
       ...(recent.length > 0 ? { transcript: recent } : {}),
-      ...(earlier.length > 0 ? { history: earlier } : {}),
       runId: run,
       sessionToken: await sessionToken(),
     });
@@ -1401,7 +1413,8 @@ async function startMic({ transcribe, onFrame }: MicOptions): Promise<void> {
       transcribe,
       ...phraseCallbacks,
       onError: (error) => {
-        debugLog.warn("audio", "mic-error", { error });
+        // Each phrase clears the error with null: log only a real one.
+        if (error) debugLog.warn("audio", "mic-error", { error });
         setMic({ error });
       },
     });
@@ -1746,9 +1759,10 @@ export const actions = {
    */
   async endMeeting(options: { auto?: boolean } = {}): Promise<void> {
     const ended = state.session;
-    // Bee's history and the conversation window end with the meeting, even one with no lines to save.
+    // The conversation window and the conversation for vmem end with the meeting, even one with no lines to save. Bee's history
+    // for the AI (main) carries on.
     closeConversation("meeting-end");
-    clearHistory("meeting-end");
+    endConversation("meeting-end");
     if (ended.lines.length === 0 || state.summary.saving) return;
     debugLog.info("meeting", "end", { auto: options.auto ?? false, lines: ended.lines.length, tips: ended.tips.length, meetingId: sessionMeetingId });
     // An automatic save leaves the mic alone: the next meeting may be starting. It is not retried if it fails.

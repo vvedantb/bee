@@ -2,7 +2,7 @@ import { createGateway, type GatewayProvider } from "@ai-sdk/gateway";
 
 // The model behind Luna's meeting tips, the follow-up check and meeting summaries: fast, thinking off.
 export const GUIDE_MODEL = "anthropic/claude-haiku-5.5";
-// The model behind direct requests to Bee ("Bee, …") and computer use: it chains tool calls and thinks briefly first.
+// The model behind direct requests to Bee ("Bee, …") and computer use: it chains tool calls and thinks first.
 export const COMMAND_MODEL = "anthropic/claude-sonnet-5.5";
 export const JEV_MODEL = "typesafe-ai/jev";
 // Gateway also lists this model as spacexai/grok-stt; both ids resolve.
@@ -53,18 +53,19 @@ function anthropicRouting(tier: GatewayTier, options: { web: boolean }): Gateway
   return { ...gatewayTier(tier).gateway, ...routing };
 }
 
-/** Thinking tokens per command step: enough to plan the next tool call, small enough to keep replies quick. */
-export const COMMAND_THINKING_BUDGET = 1500;
-
 /**
- * Brief extended thinking for a COMMAND_MODEL call (direct requests and computer use), so the model plans before it answers or
- * calls the next tool. Thinking tokens count against maxOutputTokens, so those calls raise it. Never send to tips (GUIDE_MODEL).
+ * Thinking for a COMMAND_MODEL call (direct requests and computer use), so the model plans before it answers or calls the next
+ * tool. COMMAND_MODEL (claude-sonnet-5*) always thinks adaptively: the installed @ai-sdk/anthropic marks it
+ * supportsAdaptiveThinking, warns that budget-based thinking ({ type: "enabled", budgetTokens }) is not supported and rewrites it
+ * to adaptive (the 0.3.36 debug log had that warning on every step). So the depth is set with `effort`, not a token budget:
+ * "high" is the "think harder" lever. Checked against the installed package's model caps and option schema; no live Gateway
+ * call (no key in CI). Thinking tokens count against maxOutputTokens, so those calls raise it. Never send to tips (GUIDE_MODEL).
  */
-export const ANTHROPIC_BRIEF_THINKING = { anthropic: { thinking: { type: "enabled", budgetTokens: COMMAND_THINKING_BUDGET } } } as const;
+export const ANTHROPIC_COMMAND_THINKING = { anthropic: { thinking: { type: "adaptive" }, effort: "high" } } as const;
 
-/** Like guideProviderOptions, with brief thinking on. Cache markers stay on the messages (ANTHROPIC_CACHE). */
-export function commandProviderOptions(tier: GatewayTier, options: { web: boolean }): { gateway: GatewayRouting } & typeof ANTHROPIC_BRIEF_THINKING {
-  return { gateway: anthropicRouting(tier, options), ...ANTHROPIC_BRIEF_THINKING };
+/** Like guideProviderOptions, with adaptive thinking at high effort. Cache markers stay on the messages (ANTHROPIC_CACHE). */
+export function commandProviderOptions(tier: GatewayTier, options: { web: boolean }): { gateway: GatewayRouting } & typeof ANTHROPIC_COMMAND_THINKING {
+  return { gateway: anthropicRouting(tier, options), ...ANTHROPIC_COMMAND_THINKING };
 }
 
 /**

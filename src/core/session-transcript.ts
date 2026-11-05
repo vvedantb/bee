@@ -6,9 +6,9 @@ import { redactSecretValues } from "./debug-redact";
 //
 // Bee has two finished-session seams, and only these two count:
 // - A meeting: the lines said and the AI's tips, sent when its summary is written (main/meeting-ipc.ts writeMeetingSummary).
-// - A conversation: the user's direct requests to Bee and what the AI did (BeeExchange, core/bee-history.ts), sent when that
-//   history clears after HISTORY_IDLE_MS idle. A history cleared because a meeting ended is not sent: it is not a finished
-//   conversation the user walked away from, and the meeting send covers that session.
+// - A conversation: the user's direct requests to Bee and what the AI did (BeeExchange, core/bee-history.ts), sent after
+//   CONVERSATION_IDLE_MS with no exchange (or CONVERSATION_EXCHANGES_MAX of them). That is only a session boundary: Bee's
+//   history for the AI is kept whole. A conversation that ends with a meeting is not sent: the meeting send covers it.
 //
 // Secrets are taken out with the debug log's value patterns plus a "password: …" rule, and the text is cut under vmem's 1.5 MB.
 

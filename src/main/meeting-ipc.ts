@@ -6,6 +6,7 @@ import type { ComputerPlatform, RunControl } from "../core/computer-control";
 import { computerAccess, computerSkills } from "../core/computer-use";
 import { debugLog, errorData, msSince } from "../core/debug-log";
 import type { DesktopActions } from "../core/desktop-actions";
+import { historySummariser } from "../core/bee-history";
 import { runDirectCommand, type ComputerHost } from "../core/direct-command";
 import { classifyFollowUp } from "../core/follow-up";
 import { loadMcpTools, type McpPool, type McpServerConfig } from "../core/mcp";
@@ -39,6 +40,7 @@ import {
 } from "../shared/ipc";
 import { assertSignedIn } from "./auth";
 import { isNotePath, loadSnippets, writeMeetingSummaryFile } from "./notes";
+import type { BeeHistoryStore } from "./bee-history-store";
 import type { VmemTranscripts } from "./vmem-transcript-queue";
 
 /**
@@ -68,7 +70,12 @@ export function registerMeetingIpc(args: { notesDir: string; fsRoots: () => stri
    */
   computer?: { platform: ComputerPlatform; run: ComputerRun; askFirst: () => boolean; cleanup: () => void };
   /** Finished sessions to vmem (main/vmem-transcript-queue.ts). It checks the setting and the connector itself. */
-  transcripts?: VmemTranscripts }): void {
+  transcripts?: VmemTranscripts;
+  /** Bee's history of direct requests on disk (main/bee-history-store.ts). Absent: each request starts with none. */
+  history?: BeeHistoryStore;
+  /** Names Bee should know (Settings, core/known-names.ts), read per request, and the names a request taught it. */
+  knownNames?: () => string[];
+  learnNames?: (names: string[]) => void }): void {
   const createGateway = args.gateway ?? createBeeGateway;
   // One controller per run in flight. The renderer cancels a run when a newer line supersedes it.
   const runs = new Map<string, AbortController>();
@@ -260,11 +267,13 @@ export function registerMeetingIpc(args: { notesDir: string; fsRoots: () => stri
     const computer = args.computer ? computerHost(args.computer, event.sender, request.runId) : null;
     if (computer) computerRuns += 1;
     const started = performance.now();
+    // Bee's whole history, read from main's copy (the renderer no longer sends one).
+    const history = args.history?.messages() ?? [];
     debugLog.info("ai", "command-start", {
       runId: request.runId,
       command: request.command,
       transcript: request.transcript,
-      history: request.history ?? [],
+      history: history.length,
       meetingBrief: meetingBrief ?? null,
       hasKey: Boolean(apiKey),
       desktop: Boolean(args.desktop),
@@ -274,7 +283,14 @@ export function registerMeetingIpc(args: { notesDir: string; fsRoots: () => stri
       const result = await runDirectCommand({
         command: request.command,
         transcript: request.transcript,
-        history: request.history,
+        history,
+        // Saved after each request, cancelled ones included, so the next request knows what happened.
+        onTurn: (turn) => {
+          if (!args.history) return;
+          void args.history.append(turn, apiKey ? historySummariser(createGateway(apiKey).languageModel(GUIDE_MODEL)) : undefined);
+        },
+        knownNames: args.knownNames?.(),
+        onLearnNames: args.learnNames,
         meetingBrief,
         meetingTerms: meetingTerms(windowContext) || undefined,
         searchLocation: searchLocation({ timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone, locale: app.getSystemLocale() }),
@@ -392,8 +408,9 @@ export function registerMeetingIpc(args: { notesDir: string; fsRoots: () => stri
     return { path, usedLlm: summary.usedLlm, error: summary.error };
   });
 
-  // Finished session 2 of 2: a conversation of direct requests, when the renderer's history clears after HISTORY_IDLE_MS idle
-  // (store.ts clearHistory("idle")). A history cleared by a meeting ending is not sent; the meeting above covers it.
+  // Finished session 2 of 2: a conversation of direct requests, when the renderer sees no exchange with Bee for
+  // CONVERSATION_IDLE_MS (store.ts endConversation("idle")). Bee's own history (bee-history.json) is never cleared by this. A
+  // conversation that ends with a meeting is not sent; the meeting above covers it.
   ipcMain.handle(IPC.conversationEnded, (_event, payload) => {
     const { sessionToken, exchanges } = conversationEndedSchema.parse(payload);
     assertSignedIn(sessionToken);

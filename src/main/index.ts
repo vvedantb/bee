@@ -17,6 +17,7 @@ import { createMeetingContext } from "../core/meeting-context";
 import { createMeetingMemoryStore } from "../core/meeting-memory";
 import { searchMcpNotes } from "../core/meeting-search";
 import { createVmemSearch } from "../core/vmem-history";
+import { createBeeHistoryStore } from "./bee-history-store";
 import { createDebugLog, settingsChange, type DebugLogWriter } from "./debug-log";
 import { registerDebugLogIpc } from "./debug-log-ipc";
 import { createAgentDesktopActionRunner, createAgentDesktopComputerRunner, createAgentDesktopRunner, resolveAgentDesktop } from "./agent-desktop";
@@ -428,8 +429,13 @@ if (clerk.isPrimaryInstance) {
     setTimeout(() => transcripts.kick(), 10_000).unref?.();
     powerMonitor.on("resume", () => transcripts.kick());
     app.on("will-quit", () => transcripts.stop());
+    // Bee's history of direct requests (core/bee-history.ts), kept forever in the user data folder and compacted near the window.
+    const beeHistory = createBeeHistoryStore({ path: join(userDataDir, "bee-history.json") });
     registerMeetingIpc({
       transcripts,
+      history: beeHistory,
+      knownNames: settings.knownNames,
+      learnNames: settings.learnNames,
       notesDir,
       fsRoots: settings.fsRoots,
       mcpConfigs: settings.mcpConfigs,

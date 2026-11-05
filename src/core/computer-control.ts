@@ -1,17 +1,18 @@
-// Loop controls for computer use ("Bee, send Sam a message in Slack", core/computer-use.ts): a step limit, a time limit, and
+// Loop controls for computer use ("Bee, send Sam a message in Slack", core/computer-use.ts): a time limit, and
 // stop (the user said "Bee, stop", pressed Stop, cancelled a confirm, or a newer request came). Pure: timers only, no Electron
 // or OS, so tests drive it with fake timers.
 
 import { debugLog } from "./debug-log";
 
-/** Why a run ended early. user: Stop, "Bee, stop" or a newer request. declined: the user did not confirm an action. */
-export type StopReason = "user" | "steps" | "time" | "permission" | "declined";
+/**
+ * Why a run ended early. user: Stop, "Bee, stop" or a newer request. declined: the user did not confirm an action. loop: the same
+ * tool call kept giving the same result (core/loop-guard.ts). steps: only with a step limit, which tests set.
+ */
+export type StopReason = "user" | "steps" | "time" | "permission" | "declined" | "loop";
 
 /** What can need a confirm (core/computer-gate.ts): sending, deleting, buying, submitting a form. */
 export type IrreversibleKind = "send" | "delete" | "buy" | "submit";
 
-/** Tool steps one request may take: enough for "open Discord, message Sam, close the tab", not a runaway loop. */
-export const COMPUTER_MAX_STEPS = 30;
 /** Wall clock for one request, not counting time spent waiting for the user's Confirm. */
 export const COMPUTER_MAX_MS = 3 * 60_000;
 /** How long a Confirm waits for a tap. No answer reads as Cancel. */
@@ -24,7 +25,7 @@ export type RunControl = {
   /** The kind of action the user did not confirm, when reason is declined. */
   declined: () => IrreversibleKind | null;
   steps: () => number;
-  /** Counts one tool step. Over the limit, or once stopped, returns false (and stops the run with "steps"). */
+  /** Counts one tool step. Once stopped, or over a step limit when one was set, returns false (and stops the run with "steps"). */
   step: () => boolean;
   stop: (reason: StopReason, declined?: IrreversibleKind) => void;
   /** Runs work with the clock paused, so time spent waiting for a Confirm tap does not count. */
@@ -41,9 +42,13 @@ export class ComputerStopped extends Error {
   }
 }
 
-/** A run's controls. parent: the request's own signal (a newer request or the renderer cancelling it) stops it as "user". */
+/**
+ * A run's controls. parent: the request's own signal (a newer request or the renderer cancelling it) stops it as "user". No step
+ * limit unless maxSteps is given (tests): a run goes on until the AI is done, the user stops it, the clock runs out or the loop
+ * guard trips (core/loop-guard.ts).
+ */
 export function createRunControl(args: { maxSteps?: number; maxMs?: number; signal?: AbortSignal } = {}): RunControl {
-  const maxSteps = args.maxSteps ?? COMPUTER_MAX_STEPS;
+  const maxSteps = args.maxSteps ?? Number.POSITIVE_INFINITY;
   const controller = new AbortController();
   let reason: StopReason | null = null;
   let declined: IrreversibleKind | null = null;
@@ -151,7 +156,9 @@ export function stopLine(reason: StopReason, detail: { maxSteps?: number; declin
     case "user":
       return "Stopped.";
     case "steps":
-      return `Stopped after ${detail.maxSteps ?? COMPUTER_MAX_STEPS} steps.`;
+      return detail.maxSteps !== undefined && Number.isFinite(detail.maxSteps) ? `Stopped after ${detail.maxSteps} steps.` : "Stopped.";
+    case "loop":
+      return "Stopped: Bee kept repeating the same step.";
     case "time":
       return "Stopped: that took too long.";
     case "permission":

@@ -88,6 +88,8 @@ export const settingsViewSchema = z.object({
   // The local debug log folder (main/debug-log.ts), beside the notes folder. Logs stay on this computer and are never deleted.
   logsDir: z.string(),
   fsRoots: z.array(z.string()),
+  // Names Bee should know (core/known-names.ts): typed here or learned from spelling corrections and chat names on screen.
+  knownNames: z.array(z.string()),
   // Meeting context (core/meeting-context.ts). All on by default. Calendar and memory only matter while the master switch is on.
   meetingContextEnabled: z.boolean(),
   meetingCalendarEnabled: z.boolean(),
@@ -121,6 +123,8 @@ export const settingsUpdateSchema = z.object({
   sendSessionsToVmem: z.boolean().optional(),
   // Extra absolute folders Luna may read; replaces the saved list.
   fsRoots: z.array(z.string().max(1000)).max(20).optional(),
+  // Names Bee should know; replaces the saved list (core/known-names.ts KNOWN_NAMES_MAX, NAME_MAX_CHARS).
+  knownNames: z.array(z.string().max(200)).max(400).optional(),
   meetingContextEnabled: z.boolean().optional(),
   meetingCalendarEnabled: z.boolean().optional(),
   meetingMemoryEnabled: z.boolean().optional(),
@@ -188,8 +192,10 @@ export type PipelineRequest = z.infer<typeof pipelineRequestSchema>;
 // the conversation window after one. It is never a meeting line: not in the session, the summary, meeting memory or the Teams
 // sync. The reply comes back as a PipelineResult.
 export const COMMAND_MAX_CHARS = 2000;
-// One earlier exchange with Bee (core/bee-history.ts BeeExchange), oldest first. The store keeps at most HISTORY_MAX.
-export const HISTORY_ITEMS_MAX = 6;
+// One exchange with Bee (core/bee-history.ts BeeExchange), for vmem's conversation transcript only: the AI gets Bee's whole
+// history from main (main/bee-history-store.ts), never from the renderer. A conversation sends at most this many at once; the
+// store sends a longer one in parts.
+export const CONVERSATION_EXCHANGES_MAX = 50;
 export const beeExchangeSchema = z.object({
   request: z.string().max(COMMAND_MAX_CHARS),
   reply: z.string().max(COMMAND_MAX_CHARS),
@@ -202,18 +208,16 @@ export const commandRequestSchema = z.object({
   command: z.string().trim().min(1).max(COMMAND_MAX_CHARS),
   // The latest meeting lines, as background for a request about the meeting ("what did Priya just say"). Never answered as tips.
   transcript: z.array(z.string().max(2000)).max(8).optional(),
-  // The last few exchanges with Bee, sent to the AI as earlier turns ("the team one" after "open Vercel usage").
-  history: z.array(beeExchangeSchema).max(HISTORY_ITEMS_MAX).optional(),
   runId: runIdSchema.optional(),
   sessionToken: z.string().max(8000),
 });
 export type CommandRequest = z.infer<typeof commandRequestSchema>;
 
-// Renderer → main, fire and forget: Bee's history of direct requests cleared after HISTORY_IDLE_MS idle, so that conversation is
-// finished. Main sends it to vmem when "Send finished sessions to vmem" is on (main/vmem-transcript-queue.ts). The history holds
-// at most HISTORY_MAX exchanges, so that is what a conversation sends. Never sent when a meeting ends (the meeting is sent instead).
+// Renderer → main, fire and forget: a conversation of direct requests ended (no exchange with Bee for CONVERSATION_IDLE_MS, or
+// CONVERSATION_EXCHANGES_MAX reached). Main sends it to vmem when "Send finished sessions to vmem" is on
+// (main/vmem-transcript-queue.ts). Bee's own history is not cleared by it. Never sent when a meeting ends (the meeting is sent instead).
 export const conversationEndedSchema = z.object({
-  exchanges: z.array(beeExchangeSchema).min(1).max(HISTORY_ITEMS_MAX),
+  exchanges: z.array(beeExchangeSchema).min(1).max(CONVERSATION_EXCHANGES_MAX),
   sessionToken: z.string().max(8000),
 });
 export type ConversationEnded = z.infer<typeof conversationEndedSchema>;

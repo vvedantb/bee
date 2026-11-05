@@ -3,7 +3,8 @@ import { HEADED_FLAG, STDIN_FLAG, assertComputerUse, type AgentDesktopResult, ty
 import { createRunControl, type ComputerPlatform, type RunControl } from "./computer-control";
 import { shellElement, type Element } from "./computer-gate";
 import {
-  CANNOT_CONTROL, COMPUTER_TOOL_NAMES, CONFIRM_LABEL, STOPPED, computerTools, errorLine, formatDone, formatMatches, formatSnapshot, offLimitsApp, shallowTree, thinTree,
+  CANNOT_CONTROL, COMPUTER_TOOL_NAMES, CONFIRM_LABEL, STOPPED, computerTools, errorLine, findRole, formatDone, formatMatches, formatSnapshot, matchApp, offLimitsApp, shallowTree,
+  thinTree,
   type ConfirmRequest,
 } from "./computer-tools";
 import { setDebugSink, type DebugEvent } from "./debug-log";
@@ -672,7 +673,8 @@ describe("computerTools: a slow or failing tree (a Chromium or WebView2 app such
       const { run, calls } = timedRun(() => failure);
       const { call } = setup({ run, askFirst: false });
       await call("snapshot", { app: "Microsoft Teams" });
-      expect(calls, JSON.stringify(failure)).toHaveLength(1);
+      // APP_NOT_FOUND asks list-apps for the app's real name, but never reads the same name twice.
+      expect(calls.filter(({ command }) => command === "snapshot"), JSON.stringify(failure)).toHaveLength(1);
     }
     // A renderer that is still waking up reads again, whatever the code.
     const { run, calls } = timedRun(() => ({ ok: false, code: "ACTION_FAILED", retry: "safe", kind: "renderer_accessibility_activation_required" }));
@@ -1020,5 +1022,178 @@ describe("computerTools: the tree is the only way in", () => {
     for (const code of ["INTERNAL", "BAD_OUTPUT", "TIMEOUT", "TIMEOUT_LOCAL", "APP_UNRESPONSIVE"]) {
       expect(errorLine({ ok: false, code, retry: "safe" }, true), code).toContain(`If it keeps failing, ${CANNOT_CONTROL}.`);
     }
+  });
+});
+
+describe("computerTools: Teams on Windows (app names, focus for keys, ambiguous refs, find roles)", () => {
+  type Seen = { command: ComputerUseCommand; args: string[] };
+  const recorded = (reply: (call: Seen) => AgentDesktopResult) => {
+    const calls: Seen[] = [];
+    const run: ComputerRun = async (command, args) => {
+      const call = { command, args };
+      calls.push(call);
+      return reply(call);
+    };
+    return { run, calls };
+  };
+  const DONE: AgentDesktopResult = { ok: true, data: { disposition: { delivery: "delivered_verified" } } };
+  const APPS: AgentDesktopResult = { ok: true, data: { apps: [{ name: "Bee.exe" }, { name: "chrome.exe" }, { name: "ms-teams.exe" }] } };
+  const window = (id: string, children: unknown[]) => ({
+    app: "ms-teams.exe",
+    window: { id: "w-7", title: "Chat | Microsoft Teams" },
+    snapshot_id: id,
+    complete: true,
+    tree: { role: "window", children },
+  });
+  const controls = (id: string, extra: unknown[] = []) => [
+    { role: "combobox", name: "Search (Ctrl+E)", ref_id: `@${id}:e1` },
+    { role: "button", name: "Item 2", ref_id: `@${id}:e2` },
+    { role: "button", name: "Send", ref_id: `@${id}:e3` },
+    { role: "button", name: "New chat", ref_id: `@${id}:e4` },
+    { role: "treeitem", name: "Zuzanna", ref_id: `@${id}:e5` },
+    { role: "group", name: "Chat list", ref_id: `@${id}:e33`, children_count: 12 },
+    ...extra,
+  ];
+  const lines = (calls: Seen[]) => calls.map(({ command, args }) => [command, ...args.filter((arg) => !arg.startsWith("--timeout") && !["--interactive-only", "--compact"].includes(arg))].join(" "));
+
+  it("matches the name the AI gave to a running app's real name", () => {
+    const windows = ["Bee.exe", "chrome.exe", "ms-teams.exe", "ms-teams.exe"];
+    expect(matchApp("ms-teams.exe", windows)).toBe("ms-teams.exe");
+    expect(matchApp("MS-Teams.exe", windows)).toBe("ms-teams.exe");
+    expect(matchApp("Teams", windows)).toBe("ms-teams.exe");
+    expect(matchApp("Microsoft Teams", windows)).toBe("ms-teams.exe");
+    expect(matchApp("Chrome", windows)).toBe("chrome.exe");
+    expect(matchApp("Google Chrome", windows)).toBe("chrome.exe");
+    expect(matchApp("ms-teams.exe", ["Microsoft Teams", "Google Chrome"])).toBe("Microsoft Teams");
+    expect(matchApp("chrome", ["Microsoft Teams", "Google Chrome"])).toBe("Google Chrome");
+    // Several, or none: the name goes through as given.
+    expect(matchApp("Teams", ["ms-teams.exe", "teams-helper.exe"])).toBeNull();
+    expect(matchApp("Slack", windows)).toBeNull();
+    expect(matchApp("ms", windows)).toBeNull();
+  });
+
+  it("asks list-apps once when an app is not found by the name given, uses the real name, says so, and keeps it for the run", async () => {
+    const { run, calls } = recorded(({ command, args }) => {
+      if (command === "list-apps") return APPS;
+      if (args.includes("--app=ms-teams.exe")) return command === "snapshot" ? { ok: true, data: window("s7", controls("s7")) } : { ok: true, data: { matches: [] } };
+      return { ok: false, code: "APP_NOT_FOUND", message: "Application '…' was not found with exact process identity", retry: "safe" };
+    });
+    const { call } = setup({ run, askFirst: false, platform: "windows" });
+    const shown = String(await call("snapshot", { app: "Teams", skeleton: true }));
+    expect(shown).toMatch(/^Using ms-teams\.exe for Teams\.\s/);
+    expect(shown).toContain('combobox "Search (Ctrl+E)" @s7:e1');
+    expect(String(await call("find", { app: "Teams", name: "Zuzanna" }))).toMatch(/^Using ms-teams\.exe for Teams\. No matches/);
+    expect(await call("press_key", { keys: "escape", app: "Teams", effect: "none" })).toMatch(/^Using ms-teams\.exe for Teams\. Done/);
+    expect(lines(calls)).toEqual([
+      "snapshot --app=Teams --skeleton",
+      "list-apps",
+      "snapshot --app=ms-teams.exe --skeleton",
+      "find --app=ms-teams.exe --name=Zuzanna --limit=15",
+      "press escape --app=ms-teams.exe",
+    ]);
+    // The real name always: never a placeholder or a clipped one.
+    for (const { args } of calls) expect(args.join(" ")).not.toContain("…");
+    // An app list_apps showed is matched before anything runs.
+    const listed = recorded(({ command }) => (command === "list-apps" ? APPS : DONE));
+    const tools = setup({ run: listed.run, askFirst: false, platform: "windows" });
+    await tools.call("list_apps", {});
+    expect(await tools.call("list_windows", { app: "Chrome" })).toMatch(/^Using chrome\.exe for Chrome\. No windows\./);
+    expect(lines(listed.calls)).toEqual(["list-apps", "list-windows --app=chrome.exe"]);
+  });
+
+  it("focuses the field set_value wrote and presses once more when the app has no proven keyboard focus; or presses in a given ref", async () => {
+    const noFocus: AgentDesktopResult = { ok: false, code: "ACTION_FAILED", message: "Application has no verified keyboard focus for key delivery", retry: "safe" };
+    let presses = 0;
+    const { run, calls } = recorded(({ command }) => {
+      if (command === "snapshot") return { ok: true, data: window("s7", controls("s7")) };
+      if (command === "press") return (presses += 1) === 1 ? noFocus : DONE;
+      return DONE;
+    });
+    const { call } = setup({ run, askFirst: false, platform: "windows" });
+    await call("snapshot", { app: "ms-teams.exe" });
+    await call("set_value", { ref: "@s7:e1", value: "Zuzanna", effect: "none" });
+    expect(await call("press_key", { keys: "return", app: "ms-teams.exe", effect: "none" })).toMatch(/^Done/);
+    expect(lines(calls).slice(1)).toEqual(["set-value @s7:e1 --stdin", "press return --app=ms-teams.exe", "focus @s7:e1", "press return --app=ms-teams.exe"]);
+    // ref: focus it first, then press.
+    expect(await call("press_key", { keys: "return", app: "ms-teams.exe", ref: "@s7:e1", effect: "none", physical: true })).toMatch(/^Done/);
+    expect(lines(calls).slice(5)).toEqual([`focus @s7:e1 ${HEADED_FLAG}`, `press return --app=ms-teams.exe ${HEADED_FLAG}`]);
+    for (const { command, args } of calls) expect(() => assertComputerUse(command, args)).not.toThrow();
+    // A focus Windows refuses headless is said, and nothing is pressed again.
+    const refused = recorded(({ command }) =>
+      command === "snapshot" ? { ok: true, data: window("s7", controls("s7")) } : command === "press" ? noFocus : command === "focus" ? { ok: false, code: "POLICY_DENIED", retry: "safe" } : DONE,
+    );
+    const tools = setup({ run: refused.run, askFirst: false, platform: "windows" });
+    await tools.call("snapshot", { app: "ms-teams.exe" });
+    await tools.call("set_value", { ref: "@s7:e1", value: "Zuzanna", effect: "none" });
+    expect(await tools.call("press_key", { keys: "return", app: "ms-teams.exe", effect: "none" })).toMatch(/^Bee tried to focus the field first: Error POLICY_DENIED.*Error ACTION_FAILED/);
+    expect(refused.calls.filter(({ command }) => command === "press")).toHaveLength(1);
+    // No field written this run: nothing to focus.
+    const none = recorded(({ command }) => (command === "press" ? noFocus : DONE));
+    await setup({ run: none.run, askFirst: false, platform: "windows" }).call("press_key", { keys: "return", app: "ms-teams.exe", effect: "none" });
+    expect(lines(none.calls)).toEqual(["press return --app=ms-teams.exe"]);
+  });
+
+  it("reads the window again when a saved ref is refused as ambiguous, and uses the same element there only when it is the only one", async () => {
+    const ambiguous: AgentDesktopResult = { ok: false, code: "AMBIGUOUS_TARGET", kind: "identity_not_unique", message: "Saved ref was not proven unique when it was captured", retry: "safe" };
+    let reads = 0;
+    const region = { app: "ms-teams.exe", snapshot_id: "s9", tree: { role: "group", name: "Chat list", ref_id: "@s9:e1", children: [{ role: "treeitem", name: "Zuzanna", ref_id: "@s9:e2" }] } };
+    const { run, calls } = recorded(({ command, args }) => {
+      if (command === "snapshot" && args.some((arg) => arg.startsWith("--root=@s7"))) return ambiguous;
+      if (command === "snapshot" && args.includes("--root=@s8:e33")) return { ok: true, data: region };
+      if (command === "snapshot") return { ok: true, data: (reads += 1) === 1 ? window("s7", controls("s7")) : window("s8", controls("s8")) };
+      if (["click", "set-value"].includes(command) && args[0]?.startsWith("@s7")) return ambiguous;
+      return DONE;
+    });
+    const { call, asked } = setup({ run, platform: "windows" });
+    await call("snapshot", { app: "ms-teams.exe" });
+    const shown = String(await call("snapshot", { app: "ms-teams.exe", root: "@s7:e33" }));
+    expect(shown).toMatch(/^Bee read the window again; that region is now @s8:e33\./);
+    expect(shown).toContain('treeitem "Zuzanna" @s9:e2');
+    expect(lines(calls).slice(1)).toEqual(["snapshot --root=@s7:e33", "snapshot --app=ms-teams.exe --window-id=w-7", "snapshot --root=@s8:e33"]);
+    // An action that commits nothing runs once more on the same element from a new read.
+    calls.length = 0;
+    expect(await call("set_value", { ref: "@s7:e1", value: "Zuzanna", effect: "none" })).toBe("Done (delivered_verified). (Bee read the window again and used @s8:e1.)");
+    expect(lines(calls)).toEqual(["set-value @s7:e1 --stdin", "snapshot --app=ms-teams.exe --window-id=w-7", "set-value @s8:e1 --stdin"]);
+    // A send never runs again by itself: the AI acts on the new ref, through the gate.
+    const send = String(await call("click", { ref: "@s7:e3", effect: "send" }));
+    expect(send).toMatch(/^Error AMBIGUOUS_TARGET.*that element is now @s8:e3\. Use that ref\.$/);
+    expect(asked.map(({ detail }) => detail)).toEqual(["Click “Send” in ms-teams.exe"]);
+    expect(calls.filter(({ command }) => command === "click").map(({ args }) => args[0])).toEqual(["@s7:e3"]);
+  });
+
+  it("shows the new read of the window when the refused region has a twin", async () => {
+    const ambiguous: AgentDesktopResult = { ok: false, code: "AMBIGUOUS_TARGET", kind: "identity_not_unique", retry: "safe" };
+    let reads = 0;
+    const twins = [{ role: "group", name: "Chat list", ref_id: "@s8:e34", children_count: 3 }];
+    const { run, calls } = recorded(({ command, args }) => {
+      if (command === "snapshot" && args.some((arg) => arg.startsWith("--root="))) return ambiguous;
+      return { ok: true, data: (reads += 1) === 1 ? window("s7", controls("s7")) : window("s8", controls("s8", twins)) };
+    });
+    const { call } = setup({ run, askFirst: false, platform: "windows" });
+    await call("snapshot", { app: "ms-teams.exe" });
+    const shown = String(await call("snapshot", { root: "@s7:e33" }));
+    expect(shown).toMatch(/^@s7:e33 could not be told apart from another element, so Bee read the whole window again\. Use its refs\.\n/);
+    expect(shown).toContain('group "Chat list" @s8:e34');
+    expect(calls.filter(({ args }) => args.some((arg) => arg.startsWith("--root=")))).toHaveLength(1);
+  });
+
+  it("maps find roles to agent-desktop's, and answers an unknown role itself without running anything", async () => {
+    expect(findRole("TextBox")).toEqual({ role: "textfield" });
+    expect(findRole("text field")).toEqual({ role: "textfield" });
+    expect(findRole("hyperlink")).toEqual({ role: "link" });
+    expect(findRole("Button")).toEqual({ role: "button" });
+    expect(findRole("listitem", new Set(["button", "row"]))).toEqual({ role: "row" });
+    expect(findRole("listitem")).toEqual({ error: expect.stringMatching(/no listitem role.*treeitem, row, cell/) });
+    expect(findRole("widgetthing", new Set(["switch"]))).toEqual({ error: expect.stringMatching(/no widgetthing role\. Roles seen here: switch\. Roles: alert, .*treeitem/) });
+    expect(findRole("a+b")).toEqual({ error: "Error: role is one word, for example button." });
+    const { run, calls } = recorded(({ command }) => (command === "snapshot" ? { ok: true, data: window("s7", controls("s7")) } : { ok: true, data: { matches: [], roles_present: ["button", "combobox", "listbox"] } }));
+    const { call } = setup({ run, askFirst: false, platform: "windows" });
+    expect(await call("find", { app: "ms-teams.exe", role: "listitem" })).toMatch(/^Error: agent-desktop has no listitem role/);
+    expect(await call("find", { app: "ms-teams.exe", role: "blah" })).toMatch(/^Error: agent-desktop has no blah role/);
+    expect(calls).toEqual([]);
+    await call("snapshot", { app: "ms-teams.exe" });
+    expect(await call("find", { app: "ms-teams.exe", role: "listitem", name: "Zuzanna" })).toBe("Role treeitem for listitem. No matches. Roles here: button, combobox, listbox.");
+    expect(await call("find", { app: "ms-teams.exe", role: "textbox" })).toMatch(/^Role textfield for textbox\./);
+    expect(lines(calls).slice(1)).toEqual(["find --app=ms-teams.exe --role=treeitem --name=Zuzanna --limit=15", "find --app=ms-teams.exe --role=textfield --limit=15"]);
   });
 });

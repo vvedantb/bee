@@ -1,12 +1,13 @@
-import { simulateReadableStream } from "ai";
+import { simulateReadableStream, type ModelMessage } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { pipelineResultSchema } from "../shared/ipc";
+import { assistantMessage, userMessage } from "./bee-history";
 import { ACCESSIBILITY_LINE, type RunControl } from "./computer-control";
 import type { DesktopActions } from "./desktop-actions";
 import { runDirectCommand, type ComputerHost } from "./direct-command";
 import { COMMAND_MODEL, GUIDE_MODEL, type BeeGateway } from "./gateway";
-import { COMMAND_MAX_STEPS, LUNA_COMPUTER, LUNA_DIRECT_SYSTEM, LUNA_NO_COMPUTER, LUNA_SYSTEM, MAX_DIRECT_LINES, TIP_MAX_STEPS, buildLunaPrompt, guideWithLuna } from "./luna";
+import { COMMAND_MAX_OUTPUT_TOKENS, LUNA_COMPUTER, LUNA_DIRECT_SYSTEM, LUNA_NO_COMPUTER, LUNA_SYSTEM, MAX_DIRECT_LINES, TIP_MAX_STEPS, buildLunaPrompt, guideWithLuna } from "./luna";
 import { SEED_NOTES, chunkNotes } from "./notes";
 
 // A direct request ("Bee, …") with a mock model and fake desktop runners: no network, no OS. One model call per step.
@@ -170,7 +171,7 @@ describe("buildLunaPrompt for a direct request", () => {
 
   it("tells the AI to call tools, search again when results are thin, and chain calls, in up to five lines", () => {
     expect(MAX_DIRECT_LINES).toBe(5);
-    expect(COMMAND_MAX_STEPS).toBe(12);
+    // No step cap for a direct request (core/loop-guard.ts stops a loop); tips keep theirs.
     expect(TIP_MAX_STEPS).toBe(8);
     expect(LUNA_DIRECT_SYSTEM).toContain("call it in this turn. Never only say that Bee will look, search or check.");
     expect(LUNA_DIRECT_SYSTEM).toContain("try again with different terms or another tool before you answer");
@@ -311,28 +312,57 @@ describe("runDirectCommand: computer use", () => {
 });
 
 describe("runDirectCommand: Bee's history and no blank replies", () => {
-  const history = [
-    { request: "open Vercel usage", reply: "", actions: ["Opened https://vercel.com/acme/~/usage"], at: 1 },
-    { request: "open the team usage", reply: "Which team?", at: 2 },
+  // Real earlier turns: the request, the tool call and its result, and the replies.
+  const history: ModelMessage[] = [
+    userMessage("open Vercel usage"),
+    { role: "assistant", content: [{ type: "tool-call", toolCallId: "f1", toolName: "open_url", input: { url: "https://vercel.com/acme/~/usage" } }] },
+    { role: "tool", content: [{ type: "tool-result", toolCallId: "f1", toolName: "open_url", output: { type: "text", value: "Opened https://vercel.com/acme/~/usage" } }] },
+    assistantMessage("Opened https://vercel.com/acme/~/usage"),
+    userMessage("open the team usage"),
+    assistantMessage("Which team?"),
   ];
   type Prompt = Array<{ role: string; content: unknown; providerOptions?: unknown }>;
   const cacheMarks = (prompt: Prompt) => (JSON.stringify(prompt).match(/"cacheControl"/g) ?? []).length;
 
-  it("sends the history as earlier user and assistant turns before the request, within four cache breakpoints", async () => {
+  it("sends the whole history, tool calls and results included, before the request, within four cache breakpoints", async () => {
     const { model } = stepsModel([text("- The Acme team usage page is open.\n")]);
     const gateway = { languageModel: () => model } as unknown as BeeGateway;
     const result = await runDirectCommand({ command: "the Acme one", history, snippets, gateway, actions: fakeActions().actions });
     expect(result.tips).toEqual(["The Acme team usage page is open."]);
     const prompt = (model.doStreamCalls[0]?.prompt ?? []) as Prompt;
-    expect(prompt.map((message) => message.role)).toEqual(["system", "user", "assistant", "user", "assistant", "user"]);
+    expect(prompt.map((message) => message.role)).toEqual(["system", "user", "assistant", "tool", "assistant", "user", "assistant", "user"]);
     expect(JSON.stringify(prompt[1])).toContain("open Vercel usage");
-    expect(JSON.stringify(prompt[2])).toContain("Done: Opened https://vercel.com/acme/~/usage");
-    expect(JSON.stringify(prompt[4])).toContain("Which team?");
+    expect(JSON.stringify(prompt[2])).toContain("tool-call");
+    expect(JSON.stringify(prompt[3])).toContain("Opened https://vercel.com/acme/~/usage");
+    expect(JSON.stringify(prompt[6])).toContain("Which team?");
     // The current request is last, never in the history.
-    expect(JSON.stringify(prompt[5])).toContain("the Acme one");
+    expect(JSON.stringify(prompt[7])).toContain("the Acme one");
     // System, the end of the history, and the notes context: three, within Anthropic's four.
     expect(cacheMarks(prompt)).toBe(3);
-    expect(JSON.stringify(prompt[4])).toContain("cacheControl");
+    expect(JSON.stringify(prompt[6])).toContain("cacheControl");
+  });
+
+  it("hands back each request's own messages for the history: the request, tool calls, results and the reply", async () => {
+    const turns: ModelMessage[][] = [];
+    await runDirectCommand({
+      command: "get Figma up",
+      snippets,
+      gateway: stepsModel([toolCall("open_app", { name: "Figma" }), text("- Figma is open.\n")]).gateway,
+      actions: fakeActions().actions,
+      onTurn: (turn) => turns.push(turn),
+    });
+    expect(turns).toHaveLength(1);
+    const turn = turns[0] ?? [];
+    expect(turn.map((message) => message.role)).toEqual(["user", "assistant", "tool", "assistant"]);
+    expect(turn[0]).toEqual(userMessage("get Figma up"));
+    expect(JSON.stringify(turn[1])).toContain("open_app");
+    expect(JSON.stringify(turn[2])).toContain("Opened Figma");
+    expect(JSON.stringify(turn)).not.toContain("cacheControl");
+    // The quick path with no AI call is kept as a tool call and result too.
+    const fast: ModelMessage[][] = [];
+    await runDirectCommand({ command: "open Teams", snippets, gateway: null, actions: fakeActions().actions, onTurn: (turn) => fast.push(turn) });
+    expect(fast[0]?.map((message) => message.role)).toEqual(["user", "assistant", "tool", "assistant"]);
+    expect(JSON.stringify(fast[0])).toContain("Opened Teams");
   });
 
   it("keeps two breakpoints with no history", async () => {
@@ -381,14 +411,15 @@ describe("runDirectCommand: Bee's history and no blank replies", () => {
     const result = await runDirectCommand({ command: "click the team usage tab", history, snippets, gateway: { languageModel: () => model } as unknown as BeeGateway, actions: fakeActions().actions, computer });
     expect(result).toMatchObject({ tips: ["Opened the team usage page."], endedWhere: "vercel.com/acme/~/usage, 404" });
     const prompt = prompts[0] as Prompt;
-    expect(prompt.map((message) => message.role)).toEqual(["system", "user", "assistant", "user", "assistant", "user"]);
-    expect(JSON.stringify(prompt[2])).toContain("Opened https://vercel.com/acme/~/usage");
+    expect(prompt.map((message) => message.role)).toEqual(["system", "user", "assistant", "tool", "assistant", "user", "assistant", "user"]);
+    expect(JSON.stringify(prompt[3])).toContain("Opened https://vercel.com/acme/~/usage");
     expect(cacheMarks(prompt)).toBe(2);
   });
 });
 
-describe("runDirectCommand: the command model, brief thinking and caching", () => {
-  const THINKING = { anthropic: { thinking: { type: "enabled", budgetTokens: 1500 } } };
+describe("runDirectCommand: the command model, adaptive thinking and caching", () => {
+  // claude-sonnet-5* always thinks adaptively (installed @ai-sdk/anthropic): effort, never budgetTokens.
+  const THINKING = { anthropic: { thinking: { type: "adaptive" }, effort: "high" } };
   /** A gateway that records which model ids were asked for. */
   function idGateway(model: MockLanguageModelV4) {
     const ids: string[] = [];
@@ -401,7 +432,7 @@ describe("runDirectCommand: the command model, brief thinking and caching", () =
     return { gateway, ids };
   }
 
-  it("answers with COMMAND_MODEL, thinking briefly, with room to think and the cache markers kept", async () => {
+  it("answers with COMMAND_MODEL, thinking at high effort, with room to think and the cache markers kept", async () => {
     const { model } = stepsModel([text("- 15% of 18,000 is 2,700.\n")]);
     const { gateway, ids } = idGateway(model);
     await runDirectCommand({ command: "what's 15% of 18000?", snippets, gateway, actions: null });
@@ -410,11 +441,13 @@ describe("runDirectCommand: the command model, brief thinking and caching", () =
     expect(ids).not.toContain(GUIDE_MODEL);
     const call = model.doStreamCalls[0];
     expect(call?.providerOptions).toMatchObject({ gateway: { order: ["anthropic"] }, ...THINKING });
-    expect(call?.maxOutputTokens).toBe(3000);
+    expect(call?.maxOutputTokens).toBe(COMMAND_MAX_OUTPUT_TOKENS);
+    expect(COMMAND_MAX_OUTPUT_TOKENS).toBeGreaterThanOrEqual(12_000);
+    expect(JSON.stringify(call?.providerOptions)).not.toContain("budgetTokens");
     expect(JSON.stringify(call?.prompt)).toContain("cacheControl");
   });
 
-  it("runs computer use on COMMAND_MODEL with brief thinking and the cache markers kept", async () => {
+  it("runs computer use on COMMAND_MODEL with adaptive thinking and the cache markers kept", async () => {
     const model = new MockLanguageModelV4({
       doGenerate: async () => ({ content: [{ type: "text", text: "Sent the message." }], finishReason: { unified: "stop", raw: undefined }, usage, warnings: [] }),
     });
@@ -430,7 +463,7 @@ describe("runDirectCommand: the command model, brief thinking and caching", () =
     expect(ids).toEqual([COMMAND_MODEL]);
     const call = model.doGenerateCalls[0];
     expect(call?.providerOptions).toMatchObject({ gateway: { order: ["anthropic"] }, ...THINKING });
-    expect(call?.maxOutputTokens).toBeGreaterThan(1500);
+    expect(call?.maxOutputTokens).toBeGreaterThanOrEqual(12_000);
     expect(JSON.stringify(call?.prompt)).toContain("cacheControl");
   });
 
