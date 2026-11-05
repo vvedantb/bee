@@ -110,6 +110,7 @@ describe("main: computer use for a direct request", () => {
     const run: ComputerRun = async (command) => {
       commands.push(command);
       if (command === "permissions") return { ok: true, data: { accessibility: { state: "granted" }, screen_recording: { state: "denied" } } };
+      if (command === "skills") return { ok: true, data: { content: "# Guide\n\nAct on refs." } };
       return command === "snapshot" ? { ok: true, data: SNAPSHOT } : { ok: true, data: {} };
     };
     registerMeetingIpc({
@@ -168,10 +169,11 @@ describe("main: computer use for a direct request", () => {
     await ipc.answer({ runId: 7, id: (confirm?.id ?? 0) + 1, confirmed: true });
     await expect(ipc.answer({ runId: 7, id: confirm?.id, confirmed: "yes" })).rejects.toThrow();
     await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(ipc.commands).toEqual(["permissions", "snapshot"]);
+    // agent-desktop's guides load once, before the first step.
+    expect(ipc.commands).toEqual(["permissions", "skills", "skills", "snapshot"]);
     await ipc.answer({ runId: 7, id: confirm?.id, confirmed: true });
     expect((await running).tips).toEqual(["Sent the message."]);
-    expect(ipc.commands).toEqual(["permissions", "snapshot", "click"]);
+    expect(ipc.commands).toEqual(["permissions", "skills", "skills", "snapshot", "click"]);
     expect(ipc.cleaned()).toBe(1);
   });
 

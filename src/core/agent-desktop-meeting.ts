@@ -252,6 +252,45 @@ export function extractCaptionLines(tree: AdNode | null): { visible: boolean; li
   return { visible: false, lines: [] };
 }
 
+// ---- Skeleton and drill-down ----
+
+/** Regions drilled per read of a call window, at most. */
+export const DRILLS_MAX = 4;
+
+/**
+ * The refs to drill (snapshot --root) from a skeleton snapshot's data: nodes with both ref_id and children_count, which
+ * agent-desktop marks as drill targets. A region named like a roster or captions comes first; then the largest containers
+ * (the main content), up to `max`. Returned in tree order, so the drilled regions read in the order the window shows them.
+ */
+export function drillTargets(data: unknown, max = DRILLS_MAX): string[] {
+  const found: Array<{ ref: string; region: boolean; count: number; order: number }> = [];
+  let seen = 0;
+  const visit = (raw: unknown, depth: number): void => {
+    if (typeof raw !== "object" || raw === null || depth > 20 || seen >= 2000) return;
+    seen += 1;
+    const node = raw as Record<string, unknown>;
+    const text = (key: string) => (typeof node[key] === "string" ? (node[key] as string) : "");
+    const count = typeof node.children_count === "number" ? node.children_count : 0;
+    const ref = text("ref_id");
+    if (ref && count > 0 && !CONTROL_ROLE.test(text("role"))) {
+      const label = `${text("name")} ${text("description")}`;
+      found.push({ ref, region: ROSTER.test(label) || (CAPTION_REGION.test(label) && !CAPTION_CONTROL.test(text("name"))), count, order: found.length });
+    }
+    if (Array.isArray(node.children)) for (const child of node.children) visit(child, depth + 1);
+  };
+  if (typeof data === "object" && data !== null) visit((data as Record<string, unknown>).tree, 0);
+  return found
+    .sort((a, b) => Number(b.region) - Number(a.region) || b.count - a.count || a.order - b.order)
+    .slice(0, max)
+    .sort((a, b) => a.order - b.order)
+    .map((target) => target.ref);
+}
+
+/** Drilled regions under one root, so extractParticipants and extractCaptionLines read them as they read a whole window. */
+export function joinDrills(trees: readonly AdNode[]): AdNode {
+  return { role: "window", name: "", value: "", description: "", children: [...trees] };
+}
+
 // ---- Caption dedupe ----
 
 /** Lowercase words without punctuation, for comparing caption text across polls. */

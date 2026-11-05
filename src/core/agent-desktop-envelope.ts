@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 // agent-desktop (npm, Apache-2.0) prints one JSON envelope per command: { version, ok: true, command, data } or
-// { ok: false, error: { code, message, disposition, details } }. Envelope 2.6 (agent-desktop 1.1). Pure parsing here;
+// { ok: false, error: { code, message, disposition, details } }. Envelope 2.6 (agent-desktop 1.2). Pure parsing here;
 // main/agent-desktop.ts runs the binary.
 // Error messages can hold window titles and names: an error keeps its code, whether a retry is safe, and the message cut short
 // with anything quoted, any path, link or address taken out (safeMessage).
@@ -63,17 +63,19 @@ export function assertDesktopAction(command: string, args: readonly string[]): a
  * Computer use for a direct request ("Bee, send Sam a message in Slack", core/computer-use.ts): the commands the AI's computer
  * tools run, on their own runner (main/agent-desktop.ts createAgentDesktopComputerRunner). The meeting window reader never gets
  * it. Accessibility snapshots, refs and keys only: no screenshots, mouse, clipboard, notifications, drag, hover, batch, sessions,
- * traces or launch (apps open through the desktop actions).
+ * traces or launch (apps open through the desktop actions). skills reads agent-desktop's own guides, once per session.
  */
 export const COMPUTER_USE_COMMANDS = [
   "snapshot", "find", "get", "is", "list-apps", "list-windows", "permissions",
   "click", "type", "set-value", "clear", "focus", "select", "check", "uncheck", "expand", "collapse", "scroll", "scroll-to", "press",
-  "close-app", "wait",
+  "close-app", "wait", "skills",
 ] as const;
 export type ComputerUseCommand = (typeof COMPUTER_USE_COMMANDS)[number];
 
 /** agent-desktop's flag for physical input. Only press, type and focus may take it (assertComputerUse), when the AI asks. */
 export const HEADED_FLAG = "--headed";
+/** type and set-value read their text from stdin with this flag, so it never appears in argv. */
+export const STDIN_FLAG = "--stdin";
 
 // What a flag value or positional may be. Value flags are always "--flag=value", so a value can never read as a flag.
 type ValueKind = "ref" | "app" | "window" | "text" | "role" | "ms" | "count" | "keys" | readonly string[];
@@ -83,8 +85,13 @@ type CommandSpec = {
   /** Positionals before "--", in order. min: how many may be left out from the end (wait's milliseconds). */
   positionals: readonly ValueKind[];
   min?: number;
-  /** Free text after "--" (type, set-value, select): so text that starts with "-" is never a flag. */
+  /** Free text after "--" (select): so text that starts with "-" is never a flag. */
   text?: true;
+  /**
+   * Takes its text on stdin with --stdin, never after "--" (type, set-value): typed text, which may be a secret, is never in
+   * argv, a process list or a log.
+   */
+  stdin?: true;
   /** May take HEADED_FLAG. */
   headed?: true;
 };
@@ -92,6 +99,10 @@ type CommandSpec = {
 const SURFACES = ["window", "focused", "menu", "menubar", "sheet", "popover", "alert"] as const;
 const EVENTS = ["window-opened", "window-closed", "app-launched", "app-terminated", "focus-changed", "surface-appeared", "surface-dismissed"] as const;
 const ACTION = { "--timeout-ms": "ms" } as const;
+const PREDICATES = ["exists", "enabled", "visible", "actionable", "value"] as const;
+const WAIT_ACTIONS = ["click", "type", "set-value", "clear"] as const;
+/** The skills computer use loads once per session: `skills get desktop` and `skills get platform` (core/computer-use.ts). */
+export const COMPUTER_SKILLS = ["desktop", "platform"] as const;
 const SCOPE = { "--app": "app", "--window-id": "window", "--root": "ref", "--surface": SURFACES, "--timeout-ms": "ms" } as const;
 const onRef = (extra: Partial<CommandSpec> = {}): CommandSpec => ({ flags: ACTION, positionals: ["ref"], ...extra });
 
@@ -107,8 +118,8 @@ const COMPUTER_SPECS: Record<ComputerUseCommand, CommandSpec> = {
   "list-windows": { flags: { "--app": "app", "--timeout-ms": "ms" }, positionals: [] },
   permissions: { flags: {}, positionals: [] },
   click: onRef(),
-  type: onRef({ text: true, headed: true }),
-  "set-value": onRef({ text: true }),
+  type: onRef({ stdin: true, headed: true }),
+  "set-value": onRef({ stdin: true }),
   clear: onRef(),
   focus: onRef({ headed: true }),
   select: onRef({ text: true }),
@@ -122,7 +133,17 @@ const COMPUTER_SPECS: Record<ComputerUseCommand, CommandSpec> = {
   press: { flags: { "--app": "app", "--window-id": "window" }, positionals: ["keys"], headed: true },
   // Never --force: the app quits gracefully, and agent-desktop refuses protected system processes.
   "close-app": { flags: {}, positionals: ["app"] },
-  wait: { flags: { "--window": "text", "--text": "text", "--app": "app", "--event": EVENTS, "--timeout": "ms", "--menu": true, "--menu-closed": true }, positionals: ["ms"], min: 1 },
+  // --element waits on one ref (agent-desktop 1.2 predicates): --value only with --predicate value, --action only with actionable.
+  wait: {
+    flags: {
+      "--window": "text", "--text": "text", "--app": "app", "--event": EVENTS, "--timeout": "ms", "--menu": true, "--menu-closed": true,
+      "--element": "ref", "--predicate": PREDICATES, "--value": "text", "--action": WAIT_ACTIONS,
+    },
+    positionals: ["ms"],
+    min: 1,
+  },
+  // Read-only: the version-matched guides, checked first in assertComputerUse. Never list, path, --full or another skill.
+  skills: { flags: {}, positionals: [] },
 };
 
 /** A ref as agent-desktop prints it: @<snapshot id>:e<N>. A bare @e8 is refused by agent-desktop too. */
@@ -157,10 +178,15 @@ function validValue(kind: ValueKind, value: string): boolean {
 
 /**
  * Throws for any command, flag or argument outside the computer-use set. Called before every spawn on that runner. Value flags
- * must be "--flag=value"; free text must follow "--"; only press, type and focus may take HEADED_FLAG.
+ * must be "--flag=value"; free text must follow "--" (select), or go on stdin with --stdin (type, set-value); only press, type
+ * and focus may take HEADED_FLAG. skills only as `get desktop` or `get platform`.
  */
 export function assertComputerUse(command: string, args: readonly string[]): asserts command is ComputerUseCommand {
   if (!(COMPUTER_USE_COMMANDS as readonly string[]).includes(command)) throw new Error(`agent-desktop command not allowed: ${command}`);
+  if (command === "skills") {
+    if (args.length !== 2 || args[0] !== "get" || !(COMPUTER_SKILLS as readonly string[]).includes(args[1] ?? "")) throw new Error("agent-desktop arguments not allowed for skills");
+    return;
+  }
   const spec = COMPUTER_SPECS[command as ComputerUseCommand];
   const dash = args.indexOf("--");
   const before = dash < 0 ? args : args.slice(0, dash);
@@ -177,6 +203,7 @@ export function assertComputerUse(command: string, args: readonly string[]): ass
     if (seen.has(flag)) throw new Error(`agent-desktop flag repeated: ${flag}`);
     seen.add(flag);
     if (flag === HEADED_FLAG && spec.headed && value === null) continue;
+    if (flag === STDIN_FLAG && spec.stdin && value === null) continue;
     const kind = Object.hasOwn(spec.flags, flag) ? spec.flags[flag] : undefined;
     if (kind === undefined) throw new Error(`agent-desktop flag not allowed: ${flag}`);
     if (kind === true) {
@@ -191,7 +218,26 @@ export function assertComputerUse(command: string, args: readonly string[]): ass
     const kind = spec.positionals[index];
     if (!kind || !validValue(kind, value)) throw new Error(`agent-desktop argument not allowed for ${command}`);
   });
+  if (spec.stdin && !seen.has(STDIN_FLAG)) throw new Error(`agent-desktop text for ${command} goes on stdin: ${STDIN_FLAG}`);
   if (spec.text ? dash < 0 || after.length !== 1 || !validValue("text", after[0] ?? "") : dash >= 0) throw new Error(`agent-desktop text not allowed for ${command}`);
+  if (command === "wait") assertWaitElement(before);
+}
+
+// agent-desktop's own rules for wait --element, checked here so a bad mix never starts: --predicate, --value and --action need
+// --element, which takes no other mode; --value is required with predicate value and refused otherwise; --action only with
+// actionable.
+function assertWaitElement(args: readonly string[]): void {
+  const flags = new Map(args.filter((arg) => arg.startsWith("-")).map((arg) => [arg.split("=")[0] ?? arg, arg.slice(arg.indexOf("=") + 1)]));
+  const predicate = flags.get("--predicate") ?? "exists";
+  if (!flags.has("--element")) {
+    if (["--predicate", "--value", "--action"].some((flag) => flags.has(flag))) throw new Error("agent-desktop wait flags need --element");
+    return;
+  }
+  if (["--window", "--text", "--app", "--event", "--menu", "--menu-closed"].some((flag) => flags.has(flag)) || args.some((arg) => !arg.startsWith("-"))) {
+    throw new Error("agent-desktop wait --element takes no other mode");
+  }
+  if (flags.has("--value") !== (predicate === "value")) throw new Error("agent-desktop wait --value goes with --predicate=value only");
+  if (flags.has("--action") && predicate !== "actionable") throw new Error("agent-desktop wait --action goes with --predicate=actionable only");
 }
 
 /**
@@ -209,7 +255,10 @@ export type AgentDesktopResult = { ok: true; data: unknown } | AgentDesktopFailu
  * A computer-use command on its own runner (main/agent-desktop.ts). signal: Stop or a newer request kills the command in
  * flight; a queued one never starts (ABORTED).
  */
-export type ComputerRun = (command: ComputerUseCommand, args: string[], options?: { timeoutMs?: number; signal?: AbortSignal }) => Promise<AgentDesktopResult>;
+export type ComputerRun = (command: ComputerUseCommand, args: string[], options?: ComputerRunOptions) => Promise<AgentDesktopResult>;
+
+/** stdin: UTF-8 text written to the child's stdin, for type and set-value with --stdin. Never logged. */
+export type ComputerRunOptions = { timeoutMs?: number; signal?: AbortSignal; stdin?: string };
 
 const envelopeSchema = z.union([
   z.object({ ok: z.literal(true), data: z.unknown() }),
@@ -298,7 +347,7 @@ export function parseEnvelope(stdout: string): AgentDesktopResult {
 }
 
 /**
- * A snapshot that could not read the whole window in time to prove its refs unique (data.identity_unproven, agent-desktop
+ * A snapshot that could not read the whole window in time to prove its refs unique (data.identity_unproven, since agent-desktop
  * 1.1). On Windows and Linux, and on macOS for an element with no address, its refs fail with AMBIGUOUS_TARGET
  * (identity_not_unique) until a snapshot with a larger --timeout-ms reads the window whole.
  */

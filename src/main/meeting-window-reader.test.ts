@@ -20,6 +20,26 @@ function zoomSnapshot(extra: string[] = []): AgentDesktopResult {
 
 type Responder = (args: string[]) => AgentDesktopResult;
 
+/**
+ * agent-desktop's skeleton and drill-down over a whole-window fixture: --skeleton gives the window with each top-level region
+ * cut to a drill ref and its children_count; --root @sk:eN gives region N whole. Failures pass through.
+ */
+function drillable(full: Responder): Responder {
+  return (args) => {
+    const result = full(args);
+    if (!result.ok) return result;
+    const data = result.data as { tree: { role: string; name?: string; children: Array<{ role: string; name?: string; children?: unknown[] }> } };
+    const regions = data.tree.children;
+    if (args.includes("--skeleton")) {
+      const cut = regions.map((region, index) => ({ role: region.role, name: region.name, ...(region.children?.length ? { ref_id: `@sk:e${index}`, children_count: region.children.length } : {}) }));
+      return { ok: true, data: { ...data, tree: { role: data.tree.role, name: data.tree.name, children: cut } } };
+    }
+    const ref = args[args.indexOf("--root") + 1] ?? "";
+    const region = regions[Number(/^@sk:e(\d+)$/.exec(ref)?.[1] ?? -1)];
+    return region ? { ok: true, data: { ...data, tree: region } } : { ok: false, code: "STALE_REF" };
+  };
+}
+
 function fakeRun(responders: Partial<Record<ReadOnlyCommand, Responder>>) {
   const calls: Array<{ command: ReadOnlyCommand; args: string[] }> = [];
   const run: AgentDesktopRun = async (command, args) => {
@@ -28,7 +48,14 @@ function fakeRun(responders: Partial<Record<ReadOnlyCommand, Responder>>) {
     const respond = responders[command];
     return respond ? respond(args) : { ok: false, code: "UNEXPECTED" };
   };
-  return { run, calls, responders, count: (command: ReadOnlyCommand) => calls.filter((call) => call.command === command).length };
+  return {
+    run,
+    calls,
+    responders,
+    count: (command: ReadOnlyCommand) => calls.filter((call) => call.command === command).length,
+    // Reads of the call window: each one drills the first region, after a skeleton or with the refs kept from the last.
+    reads: () => calls.filter((call) => call.command === "snapshot" && call.args.includes("@sk:e0")).length,
+  };
 }
 
 function setup(options: { platform?: NodeJS.Platform; responders?: Partial<Record<ReadOnlyCommand, Responder>>; enabled?: boolean; run?: null } = {}) {
@@ -41,6 +68,8 @@ function setup(options: { platform?: NodeJS.Platform; responders?: Partial<Recor
     snapshot: () => zoomSnapshot(),
     ...options.responders,
   });
+  const snapshot = fake.responders.snapshot;
+  if (snapshot) fake.responders.snapshot = drillable(snapshot);
   const captions: CaptionLine[][] = [];
   const warnings: string[] = [];
   const debug: string[] = [];
@@ -98,6 +127,49 @@ describe("meeting window reader", () => {
     expect(reader.status()).toEqual({ state: "ready", app: "zoom", captions: true });
   });
 
+  it("maps the call window with a skeleton, then drills only its regions: never one deep snapshot of the window", async () => {
+    const { reader, fake, poll } = setup();
+    await poll();
+    await vi.advanceTimersByTimeAsync(0);
+    const snapshots = fake.calls.filter((call) => call.command === "snapshot").map((call) => call.args);
+    expect(snapshots.slice(0, 3)).toEqual([
+      ["--app", "zoom.us", "--window-id", "w-2002", "--skeleton", "-i", "--compact", "--timeout-ms", "2500"],
+      ["--root", "@sk:e0", "--compact", "--max-depth", "25", "--timeout-ms", "2500"],
+      ["--root", "@sk:e1", "--compact", "--max-depth", "25", "--timeout-ms", "2500"],
+    ]);
+    for (const args of snapshots) expect(args.includes("--skeleton") || args.includes("--root"), args.join(" ")).toBe(true);
+    expect(reader.context()?.participants).toEqual(["Dana Wu", "Eli Brown", "Fatima Khan"]);
+    // Captions show: the next read drills the same regions without a new skeleton.
+    await poll(1500);
+    const after = fake.calls.filter((call) => call.command === "snapshot").slice(3).map((call) => call.args[0]);
+    expect(after.length).toBeGreaterThan(0);
+    expect(after.every((flag) => flag === "--root")).toBe(true);
+  });
+
+  it("maps the window again when a kept region's ref goes stale, in the same read", async () => {
+    // The next drill of the first region fails once, as when the window changed under a kept ref.
+    let stale = false;
+    const { fake, reader, poll } = setup({
+      responders: {
+        snapshot: (args) => {
+          if (stale && args.includes("@sk:e0")) {
+            stale = false;
+            return { ok: false, code: "STALE_REF" };
+          }
+          return zoomSnapshot();
+        },
+      },
+    });
+    await poll();
+    await vi.advanceTimersByTimeAsync(0);
+    stale = true;
+    const before = fake.calls.length;
+    await poll(1500);
+    const args = fake.calls.slice(before).filter((call) => call.command === "snapshot").map((call) => call.args.find((arg) => arg === "--skeleton" || arg.startsWith("@sk:")));
+    expect(args.slice(0, 4)).toEqual(["@sk:e0", "--skeleton", "@sk:e0", "@sk:e1"]);
+    expect(reader.status().captions).toBe(true);
+  });
+
   it("sends only new, settled caption lines and polls about every 1.5 s while captions show", async () => {
     let extra: string[] = [];
     const { fake, captions, debug, poll } = setup({ responders: { snapshot: () => zoomSnapshot(extra) } });
@@ -113,19 +185,19 @@ describe("meeting window reader", () => {
     expect(debug).toContain("perf meeting-window caption lines +1");
     await poll(1500);
     expect(captions).toHaveLength(1);
-    const snapshots = fake.count("snapshot");
-    expect(snapshots).toBeGreaterThanOrEqual(3);
-    expect(snapshots).toBeLessThanOrEqual(5);
+    const reads = fake.reads();
+    expect(reads).toBeGreaterThanOrEqual(3);
+    expect(reads).toBeLessThanOrEqual(5);
   });
 
   it("backs off reading a call window that shows no captions", async () => {
     const { fake, poll } = setup({ responders: { snapshot: fixture("snapshot-teams-no-captions.json") } });
     await poll();
     await vi.advanceTimersByTimeAsync(0);
-    const start = fake.count("snapshot");
+    const start = fake.reads();
     for (let second = 0; second < 18; second += 3) await poll(3000);
     // 3 s, 6 s, 12 s… instead of every 1.5 s.
-    expect(fake.count("snapshot") - start).toBeLessThanOrEqual(3);
+    expect(fake.reads() - start).toBeLessThanOrEqual(3);
   });
 
   it("asks for Accessibility on macOS, checks again on its own, and reads once it is granted", async () => {
@@ -190,10 +262,10 @@ describe("meeting window reader", () => {
     const { fake, poll } = setup();
     await poll();
     await vi.advanceTimersByTimeAsync(0);
-    const before = fake.count("snapshot");
+    const before = fake.reads();
     await vi.advanceTimersByTimeAsync(120_000);
     // A few reads until the last reading is 20 s old, then none.
-    expect(fake.count("snapshot") - before).toBeLessThanOrEqual(14);
+    expect(fake.reads() - before).toBeLessThanOrEqual(14);
     const after = fake.count("snapshot");
     await vi.advanceTimersByTimeAsync(120_000);
     expect(fake.count("snapshot")).toBe(after);

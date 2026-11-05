@@ -7,10 +7,12 @@ import {
   captionKey,
   captionStep,
   detectMeetings,
+  drillTargets,
   echoesOwnLine,
   extractCaptionLines,
   extractParticipants,
   isPossibleTeamsCall,
+  joinDrills,
   isZoomCallTitle,
   meetingReading,
   meetingTerms,
@@ -282,5 +284,35 @@ describe("meetingTerms and meetingWindowBrief", () => {
     const many = Array.from({ length: 15 }, (_, index) => `Person ${String.fromCharCode(65 + index)}`);
     expect(meetingWindowBrief({ app: "teams", title: null, participants: many })).toContain("(+3 more)");
     expect(meetingWindowBrief({ app: "zoom", title: null, participants: [] })).toBe("");
+  });
+});
+
+describe("drillTargets", () => {
+  const cut = (ref: string, role: string, name: string, count: number) => ({ role, name, ref_id: ref, children_count: count });
+  const skeleton = (children: unknown[]) => ({ tree: { role: "window", name: "Acme renewal | Microsoft Teams", children } });
+
+  it("drills roster and captions regions first, then the largest containers, in tree order and up to the cap", () => {
+    const data = skeleton([
+      cut("@s1:e1", "toolbar", "Meeting controls", 8),
+      { role: "group", children: [cut("@s1:e2", "group", "Video gallery", 30), cut("@s1:e3", "group", "Live captions", 4)] },
+      cut("@s1:e4", "group", "Participants", 3),
+      cut("@s1:e5", "group", "", 12),
+      cut("@s1:e6", "button", "People", 2),
+      { role: "group", ref_id: "@s1:e7" },
+      cut("@s1:e8", "group", "Turn on live captions", 2),
+    ]);
+    expect(drillTargets(data)).toEqual(["@s1:e2", "@s1:e3", "@s1:e4", "@s1:e5"]);
+    expect(drillTargets(data, 2)).toEqual(["@s1:e3", "@s1:e4"]);
+    expect(drillTargets({ tree: { role: "window", children: [] } })).toEqual([]);
+    expect(drillTargets(null)).toEqual([]);
+  });
+
+  it("reads drilled regions as it reads a whole window", () => {
+    for (const name of ["snapshot-zoom-captions.json", "snapshot-teams-captions.json", "snapshot-teams-no-captions.json"]) {
+      const window = tree(name);
+      const joined = joinDrills(window?.children ?? []);
+      expect(extractParticipants(joined), name).toEqual(extractParticipants(window));
+      expect(extractCaptionLines(joined), name).toEqual(extractCaptionLines(window));
+    }
   });
 });

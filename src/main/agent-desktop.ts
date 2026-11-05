@@ -7,8 +7,10 @@ import {
   assertDesktopAction,
   assertReadOnly,
   parseEnvelope,
+  STDIN_FLAG,
   type AgentDesktopResult,
   type ComputerRun,
+  type ComputerRunOptions,
   type ComputerUseCommand,
   type DesktopActionCommand,
   type ReadOnlyCommand,
@@ -19,7 +21,8 @@ import {
 // for launching, focusing and listing apps only (assertDesktopAction). Computer use ("Bee, send Sam a message in Slack") gets a
 // third, for observing and acting on one element at a time (assertComputerUse). The first two are always headless; computer use
 // is headless unless the AI asks for physical keys on press, type or focus. One command at a time per runner, each with a
-// timeout. stdout is parsed and dropped: nothing it holds is logged. Spawn failures come back as codes, never as throws.
+// timeout. stdout is parsed and dropped: nothing it holds is logged. Spawn failures come back as codes, never as throws. Text
+// that computer use types or sets goes on the child's stdin (--stdin), never in argv, and is never logged.
 
 export type AgentDesktopBinary = { path: string; macHelper: string | null };
 
@@ -64,9 +67,21 @@ export type AgentDesktopRun = (command: ReadOnlyCommand, args: string[], options
 export type ExecFile = (
   file: string,
   args: string[],
-  options: { timeout: number; maxBuffer: number; windowsHide: boolean; env: NodeJS.ProcessEnv; encoding: "utf8"; signal?: AbortSignal },
+  options: { timeout: number; maxBuffer: number; windowsHide: boolean; env: NodeJS.ProcessEnv; encoding: "utf8"; signal?: AbortSignal; stdin?: string },
   callback: (error: (Error & { code?: unknown; killed?: boolean }) | null, stdout: string) => void,
 ) => void;
+
+/**
+ * execFile, plus `stdin` written to the child as UTF-8 and then closed. execFile already pipes stdin, so its timeout, kill,
+ * signal and buffer limit stay as they are. A child that exits before reading gives EPIPE on the pipe: ignored, as the
+ * callback reports the exit.
+ */
+const execWithStdin: ExecFile = (file, args, { stdin, ...options }, callback) => {
+  const child = execFile(file, args, options, callback);
+  if (stdin === undefined || !child.stdin) return;
+  child.stdin.on("error", () => undefined);
+  child.stdin.end(stdin, "utf8");
+};
 
 const DEFAULT_TIMEOUT_MS = 6000;
 // A dense call window snapshot can run to a few MB of JSON.
@@ -205,7 +220,7 @@ export function createAgentDesktopComputerRunner(binary: AgentDesktopBinary, dep
 
 /** Runs one command at a time after `allow` checks it (it throws, before any process starts, for anything else). */
 function queuedRunner<C extends string>(binary: AgentDesktopBinary, deps: RunnerDeps, allow: (command: string, args: readonly string[]) => void) {
-  const exec: ExecFile = deps.exec ?? (execFile as unknown as ExecFile);
+  const exec: ExecFile = deps.exec ?? execWithStdin;
   let home: string | null = null;
   let queue: Promise<unknown> = Promise.resolve();
 
@@ -217,7 +232,7 @@ function queuedRunner<C extends string>(binary: AgentDesktopBinary, deps: Runner
     return home;
   };
 
-  const spawn = (command: C, args: string[], timeoutMs: number, signal?: AbortSignal): Promise<AgentDesktopResult> =>
+  const spawn = (command: C, args: string[], timeoutMs: number, signal?: AbortSignal, stdin?: string): Promise<AgentDesktopResult> =>
     new Promise((resolve) => {
       // Stopped while it waited its turn: it never starts.
       if (signal?.aborted) {
@@ -232,7 +247,14 @@ function queuedRunner<C extends string>(binary: AgentDesktopBinary, deps: Runner
         return;
       }
       try {
-        const options = { timeout: timeoutMs, maxBuffer: MAX_BUFFER, windowsHide: true, env: childEnv(deps.env ?? process.env, dir, binary.macHelper), encoding: "utf8" as const };
+        const options = {
+          timeout: timeoutMs,
+          maxBuffer: MAX_BUFFER,
+          windowsHide: true,
+          env: childEnv(deps.env ?? process.env, dir, binary.macHelper),
+          encoding: "utf8" as const,
+          ...(stdin !== undefined ? { stdin } : {}),
+        };
         // The signal kills the command in flight (Stop, a newer request).
         exec(binary.path, [command, ...args], signal ? { ...options, signal } : options, (error, stdout) => {
           if (signal?.aborted) return resolve({ ok: false, code: "ABORTED" });
@@ -248,10 +270,14 @@ function queuedRunner<C extends string>(binary: AgentDesktopBinary, deps: Runner
     });
 
   return {
-    run: (command: C, args: string[], options: { timeoutMs?: number; signal?: AbortSignal } = {}): Promise<AgentDesktopResult> => {
+    run: (command: C, args: string[], options: ComputerRunOptions = {}): Promise<AgentDesktopResult> => {
       // Throws on anything outside the runner's set, before a process starts.
       allow(command, args);
-      const result = queue.then(() => spawn(command, args, options.timeoutMs ?? DEFAULT_TIMEOUT_MS, options.signal));
+      // stdin goes with --stdin and only with it (assertComputerUse lets type and set-value take it): --stdin with no text would
+      // leave the child waiting on an open pipe until the timeout.
+      const dash = args.indexOf("--");
+      if ((dash < 0 ? args : args.slice(0, dash)).includes(STDIN_FLAG) !== (options.stdin !== undefined)) throw new Error("agent-desktop --stdin needs stdin text");
+      const result = queue.then(() => spawn(command, args, options.timeoutMs ?? DEFAULT_TIMEOUT_MS, options.signal, options.stdin));
       queue = result.catch(() => undefined);
       return result;
     },
