@@ -6,6 +6,7 @@ import { z } from "zod";
 import { clampInterfaceScale, type SavedPosition } from "../core/interface-scale";
 import { clampMotionPreference } from "../core/motion-preference";
 import { normalizeFsRoots } from "../core/fs-sandbox";
+import { mergeNames, normalizeNames } from "../core/known-names";
 import { createMcpOAuthProvider, hasMcpOAuthTokens, mcpOAuthStateSchema, type McpOAuthStorage } from "../core/mcp-oauth";
 import { canSubmitTranscripts } from "../core/vmem-transcript";
 import type { TranscriptSettings } from "./vmem-transcript-queue";
@@ -40,6 +41,8 @@ const fileSchema = z.object({
   // until then on only while an enabled vmem connector exists. A bad value reads as unset.
   sendSessionsToVmem: z.boolean().optional().catch(undefined),
   fsRoots: z.array(z.string()).default([]),
+  // Names Bee should know (core/known-names.ts): typed in Settings or learned from corrections and the screen. A bad value reads as none.
+  knownNames: z.array(z.string()).default([]).catch([]),
   // Meeting context: all on until the user switches them off.
   meetingContextEnabled: z.boolean().default(true).catch(true),
   meetingCalendarEnabled: z.boolean().default(true).catch(true),
@@ -128,6 +131,7 @@ export function createSettingsStore(args: {
       interfaceScale: 1,
       motionPreference: "on",
       fsRoots: [],
+      knownNames: [],
       meetingContextEnabled: true,
       meetingCalendarEnabled: true,
       meetingMemoryEnabled: true,
@@ -468,6 +472,7 @@ export function createSettingsStore(args: {
       notesDir: args.notesDir,
       logsDir: args.logsDir,
       fsRoots: read().fsRoots,
+      knownNames: normalizeNames(file.knownNames),
       meetingContextEnabled: file.meetingContextEnabled,
       meetingCalendarEnabled: file.meetingCalendarEnabled,
       meetingMemoryEnabled: file.meetingMemoryEnabled,
@@ -533,8 +538,23 @@ export function createSettingsStore(args: {
       if (invalid.length > 0) throw new Error(`Folders must be absolute paths: ${invalid.join(", ")}`);
       file = { ...file, fsRoots: roots };
     }
+    if (update.knownNames !== undefined) file = { ...file, knownNames: normalizeNames(update.knownNames) };
     write(file);
     return view();
+  }
+
+  // Read on each direct request, so a name typed in Settings or learned a moment ago is used at once.
+  function knownNames(): string[] {
+    return normalizeNames(read().knownNames);
+  }
+
+  /** Adds names Bee learned (a spelling correction, a chat name on screen). Main only; the list stays editable in Settings. */
+  function learnNames(names: readonly string[]): void {
+    if (names.length === 0) return;
+    const file = read();
+    const merged = mergeNames(file.knownNames, names);
+    if (JSON.stringify(merged) === JSON.stringify(file.knownNames)) return;
+    write({ ...file, knownNames: merged });
   }
 
   // Read on each pipeline run, so Settings changes apply without a restart.
@@ -550,5 +570,5 @@ export function createSettingsStore(args: {
     write({ ...read(), overlayPosition: position });
   }
 
-  return { view, save, meetingContext, readMeetingWindow, teamsAudioFallback, wakeWord, askBeforeSending, verboseLogging, overlayPosition, saveOverlayPosition, gatewayApiKey, savedGatewayApiKey, linkSettings, vmemConfig, transcriptSettings, fsRoots, mcpList, mcpSave, mcpRemove, mcpSignOut, mcpSetEnabled, mcpRecordTools, mcpConfigs, mcpSignedOut, mcpConfig, mcpOAuthStorage };
+  return { view, save, meetingContext, readMeetingWindow, teamsAudioFallback, wakeWord, askBeforeSending, verboseLogging, overlayPosition, saveOverlayPosition, gatewayApiKey, savedGatewayApiKey, linkSettings, vmemConfig, transcriptSettings, fsRoots, knownNames, learnNames, mcpList, mcpSave, mcpRemove, mcpSignOut, mcpSetEnabled, mcpRecordTools, mcpConfigs, mcpSignedOut, mcpConfig, mcpOAuthStorage };
 }

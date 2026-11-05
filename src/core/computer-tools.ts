@@ -5,7 +5,7 @@ import {
 } from "./agent-desktop-envelope";
 import { awaitAnswer, CONFIRM_TIMEOUT_MS, type ComputerPlatform, type IrreversibleKind, type RunControl } from "./computer-control";
 import {
-  EFFECTS, LABEL_MAX, WINDOW_ROLES, confirmDetail, confirmQuestion, focusAfterClick, insideOf, isNavField, isTextEntry, keepsFocus, keysLabel, needsConfirm, shellElement,
+  EFFECTS, LABEL_MAX, WINDOW_ROLES, confirmDetail, confirmQuestion, focusAfterClick, insideOf, irreversibleKind, isNavField, isTextEntry, keepsFocus, keysLabel, needsConfirm, shellElement,
   shortName, type Effect, type Element, type GateAction, type TreeContext,
 } from "./computer-gate";
 import { APP_NAME_MAX, WINDOW_TITLE_MAX, appKey, isBlockedApp, type DesktopActionResult, type DesktopActions } from "./desktop-actions";
@@ -505,6 +505,73 @@ const STATE_ACTIONS = {
   collapsed: { command: "collapse", verb: "Collapsing", line: "Collapsing…" },
 } as const satisfies Record<string, { command: ComputerUseCommand; verb: string; line: string }>;
 
+// find's roles as agent-desktop's snapshots name them (its find folds textarea, textbox and searchfield into textfield). An
+// unknown one is INVALID_ARGS ("Unknown role query"), so Bee maps common names, takes any role a read showed this run, and
+// answers anything else itself. A word with no one role (listitem) becomes whichever of its roles this run has seen.
+const FIND_ROLES = [
+  "alert", "application", "article", "button", "cell", "checkbox", "colorwell", "column", "combobox", "datefield", "dialog", "disclosure", "document", "group",
+  "grid", "gridcell", "heading", "image", "incrementor", "link", "list", "listbox", "menu", "menubar", "menubutton", "menuitem", "navigation", "outline",
+  "paragraph", "progressbar", "progressindicator", "radiobutton", "radiogroup", "region", "row", "scrollarea", "scrollbar", "search", "separator", "slider",
+  "statictext", "status", "switch", "tab", "table", "tablist", "tabpanel", "textfield", "timefield", "toolbar", "tooltip", "treeitem", "webarea", "window",
+];
+const ROLE_ALIASES: Record<string, string | readonly string[]> = {
+  textbox: "textfield", textarea: "textfield", searchfield: "textfield", searchbox: "textfield", edit: "textfield", input: "textfield", field: "textfield",
+  hyperlink: "link", anchor: "link", radio: "radiobutton", dropdown: "combobox", select: "combobox", tabitem: "tab", pagetab: "tab", img: "image",
+  picture: "image", graphic: "image", icon: "image", toggle: "switch", togglebutton: "switch", label: "statictext", text: "statictext",
+  spinbutton: "incrementor", stepper: "incrementor", menuitemcheckbox: "menuitem", menuitemradio: "menuitem", pushbutton: "button",
+  listitem: ["treeitem", "row", "cell", "menuitem"], item: ["treeitem", "row", "cell", "menuitem"], option: ["menuitem", "treeitem", "row", "cell"],
+};
+
+/** A role word as find takes it: lower case, no spaces, dashes or underscores ("List Item" is listitem). */
+const roleWord = (role: string) => role.toLowerCase().replace(/[\s_-]+/g, "");
+
+/**
+ * The role to pass find for the AI's word: a role agent-desktop has (or this run has seen), a common name mapped to one, or a
+ * word with several roles mapped to one this run has seen. Else an error line naming the roles to use, with no command run.
+ */
+export function findRole(asked: string, seen: ReadonlySet<string> = new Set()): { role: string } | { error: string } {
+  const word = roleWord(asked);
+  if (!/^[a-z]{2,30}$/.test(word)) return { error: "Error: role is one word, for example button." };
+  if (seen.has(word) || FIND_ROLES.includes(word)) return { role: word };
+  const alias = Object.hasOwn(ROLE_ALIASES, word) ? ROLE_ALIASES[word] : undefined;
+  if (typeof alias === "string") return { role: alias };
+  const choice = alias?.find((role) => seen.has(role));
+  if (choice) return { role: choice };
+  if (alias) return { error: `Error: agent-desktop has no ${word} role. Its items read as ${alias.join(", ")}: use the one a snapshot shows, or find by name.` };
+  const here = [...seen].filter((role) => /^[a-z]{2,30}$/.test(role)).slice(0, 20);
+  return { error: `Error: agent-desktop has no ${word} role. ${here.length > 0 ? `Roles seen here: ${here.join(", ")}. ` : ""}Roles: ${FIND_ROLES.join(", ")}.` };
+}
+
+/** An app name's words for matching: no .exe, no maker in front (Microsoft Teams, Google Chrome), letters and digits only. */
+const appWords = (name: string) =>
+  name.toLowerCase().trim().replace(/\.exe$/, "").replace(/^(?:microsoft|google|mozilla|apple)\s+/, "").replace(/[^a-z0-9]/g, "");
+
+/**
+ * The running app (as list-apps names it) the AI means: the same name, the same but for case, the same words (Chrome is
+ * chrome.exe, Google Chrome is chrome.exe), or the only one whose words contain them or sit in them (Teams is ms-teams.exe).
+ * Null when none, or several, match: agent-desktop wants the exact process identity on Windows.
+ */
+export function matchApp(name: string, running: readonly string[]): string | null {
+  const apps = [...new Set(running)];
+  if (apps.includes(name)) return name;
+  const only = (list: string[]) => (list.length === 1 ? (list[0] ?? null) : null);
+  const lower = apps.filter((app) => app.toLowerCase() === name.toLowerCase());
+  if (lower.length > 0) return lower[0] ?? null;
+  const key = appWords(name);
+  if (key.length < 2) return null;
+  const same = apps.filter((app) => appWords(app) === key);
+  if (same.length > 0) return only(same);
+  if (key.length < 3) return null;
+  return only(apps.filter((app) => {
+    const words = appWords(app);
+    return words.length >= 3 && (words.includes(key) || key.includes(words));
+  }));
+}
+
+const NO_FOCUS = /keyboard focus/i;
+const sidOf = (ref: string) => ref.slice(1, ref.indexOf(":"));
+type Scope = { app?: string | undefined; window_id?: string | undefined };
+
 const UNREADABLE = `Error: Bee could not read that snapshot. Take a skeleton snapshot, then root one region, or use find. If those fail too, ${CANNOT_CONTROL}.`;
 // What a whole-window read says when Bee's second read did not fix it. Bee has already waited for the app by then, so the AI
 // tries the tree another way, then stops: there is no other way in.
@@ -526,7 +593,20 @@ export function computerTools(deps: ComputerToolDeps) {
   let currentApp: string | null = null;
   const surfaceSchema = z.enum(SURFACES[deps.platform]);
   let chain: Promise<unknown> = Promise.resolve();
-  const remember = (ref: string, element: Element) => refs.set(ref, element);
+  // Running apps as list-apps last named them, and the names the AI gave that matched one (Teams: ms-teams.exe).
+  let running: string[] | null = null;
+  const matched = new Map<string, string>();
+  // Roles this run's reads showed, for find; and where each snapshot id read (app, window), to read it again for a refused ref.
+  const roles = new Set<string>();
+  const scopes = new Map<string, Scope>();
+  const remember = (ref: string, element: Element) => {
+    refs.set(ref, element);
+    if (element.role) roles.add(roleWord(element.role));
+  };
+  const refOf = (element: Element | null): string | null => {
+    for (const [ref, item] of refs) if (item === element) return ref;
+    return null;
+  };
 
   /** UI actions must not interleave: parallel tool calls run one after another, in the order the AI made them. */
   const serial = <T>(work: () => Promise<T>): Promise<T> => {
@@ -656,25 +736,111 @@ export function computerTools(deps: ComputerToolDeps) {
     const name = refs.get(ref)?.name;
     return name ? `${verb} ${shortName(name, 30)}…` : fallback;
   };
-  const scope = (args: { app?: string; window_id?: string }) => [...(args.app ? [`--app=${cleanApp(args.app)}`] : []), ...(args.window_id ? [`--window-id=${args.window_id}`] : [])];
+  const scope = (args: Scope) => [...(args.app ? [`--app=${cleanApp(args.app) ?? args.app}`] : []), ...(args.window_id ? [`--window-id=${args.window_id}`] : [])];
   const done = (result: AgentDesktopResult) => (result.ok ? formatDone(result.data) : errorLine(result));
   const desktopLine = (result: DesktopActionResult) => (result.ok ? `Done: ${result.message}.` : `Error: ${result.message}.`);
 
   /**
+   * Runs work with the app name agent-desktop knows: on Windows it wants the exact process identity (ms-teams.exe, not Teams).
+   * A name this run matched before, or one the last list-apps matched; on APP_NOT_FOUND, list-apps, match, and run once more.
+   * note says which name was used when it is not the AI's.
+   */
+  const withApp = async (asked: string | undefined, work: (app: string | undefined) => Promise<AgentDesktopResult>) => {
+    if (asked === undefined) return { result: await work(undefined), app: undefined, note: "" };
+    const name = cleanApp(asked) ?? asked;
+    const known = matched.get(name) ?? (running ? matchApp(name, running) : null);
+    let app = known && !offLimitsApp(known) ? known : name;
+    let result = await work(app);
+    if (!result.ok && result.code === "APP_NOT_FOUND" && !control.reason()) {
+      const listed = await exec("list-apps", [], READ_MS);
+      if (listed.ok) running = parseApps(listed.data).map((item) => item.name);
+      const found = running ? matchApp(name, running) : null;
+      if (found && found !== app && !offLimitsApp(found) && !control.reason()) {
+        debugLog.info("computer", "app-matched", { asked: name, app: found });
+        app = found;
+        result = await work(app);
+      }
+    }
+    if (result.ok && app !== name) matched.set(name, app);
+    return { result, app, note: app !== name ? `Using ${app} for ${name}. ` : "" };
+  };
+
+  /**
+   * A snapshot read as the AI sees it: its refs kept (never from an app Bee does not use), focus and window noted, and where it
+   * read kept per snapshot id. root: the ref a region was read under.
+   */
+  const take = (data: unknown, root: string | undefined, where: Scope): { ok: true; text: string; kept: Map<string, Element> } | { ok: false; text: string } => {
+    const kept = new Map<string, Element>();
+    const within = root ? refs.get(root) : undefined;
+    let shown: ReturnType<typeof formatSnapshot>;
+    try {
+      shown = formatSnapshot(data, (ref, item) => kept.set(ref, item), SNAPSHOT_CHARS, root && within ? { ref: root, element: within } : null);
+    } catch (error) {
+      debugLog.warn("computer", "snapshot-unreadable", { error: errorData(error) });
+      return { ok: false, text: UNREADABLE };
+    }
+    if (shown.app && offLimitsApp(shown.app)) return { ok: false, text: OFF_LIMITS_MESSAGE };
+    for (const [ref, item] of kept) remember(ref, item);
+    if (shown.focused) lastField = shown.focused;
+    const shownWindow = isRecord(data) && isRecord(data.window) ? str(data.window.id) : "";
+    const window = /^w-[A-Za-z0-9-]{1,40}$/.test(shownWindow) ? shownWindow : undefined;
+    if (window) windows.add(window);
+    const scope: Scope = { ...where, ...(where.window_id || !window ? {} : { window_id: window }) };
+    for (const ref of kept.keys()) if (!scopes.has(sidOf(ref))) scopes.set(sidOf(ref), scope);
+    currentApp = shown.app ?? where.app ?? currentApp;
+    return { ok: true, text: shown.text, kept };
+  };
+
+  /** The window a ref's snapshot read, read whole once more: its new refs, or null when Bee does not know where it read. */
+  const readAgain = async (ref: string) => {
+    const where = scopes.get(sidOf(ref));
+    if (!where?.app && !where?.window_id) return null;
+    deps.onStep?.("Looking again…");
+    const result = await observe(
+      "snapshot",
+      (budget, again) => ["--interactive-only", "--compact", ...scope(where), ...(again ? [`--max-depth=${DEEP_DEPTH}`] : []), `--timeout-ms=${budget}`],
+      settleWindow(false),
+    );
+    return result.ok ? take(result.data, undefined, where) : null;
+  };
+
+  /** The one ref in a new read with the same role, name and description as the old one; null for none, twins or no name. */
+  const twinOf = (old: Element | undefined, kept: Map<string, Element>): string | null => {
+    if (!old?.name.trim()) return null;
+    const same = [...kept].filter(([, item]) => item.role === old.role && item.name === old.name && (item.description ?? "") === (old.description ?? ""));
+    return same.length === 1 ? (same[0]?.[0] ?? null) : null;
+  };
+
+  /**
    * A ref action: check the ref, run it, and keep where focus is for Return. Never in a terminal or console. Once more when
    * agent-desktop could not check the element in time and says nothing was sent (resolution_identity_unknown). stdin: text for
-   * type and set-value, sent on the child's stdin with --stdin so it is never in argv or the logs.
+   * type and set-value, sent on the child's stdin with --stdin so it is never in argv or the logs. A ref refused as ambiguous
+   * (AMBIGUOUS_TARGET: nothing reached the app) is found again in a new read of its window by role and name; the action runs on
+   * it once more only when gate (the step's confirm gate) calls neither element a send, delete, buy or submit.
    */
-  const onRef = (command: ComputerUseCommand, ref: string, args: string[] = [], timeoutMs = ACT_MS, stdin?: string) => async () => {
+  const onRef = (command: ComputerUseCommand, given: string, args: string[] = [], timeoutMs = ACT_MS, stdin?: string, gate?: (ref: string) => GateAction) => async () => {
+    let ref = given;
     if (["click", "type", "set-value", "clear", "focus"].includes(command) && shellElement(refs.get(ref))) return SHELL_MESSAGE;
     let result = await exec(command, [ref, ...args], timeoutMs, stdin);
     if (!result.ok && result.kind === "resolution_identity_unknown" && result.retry === "safe" && !control.reason()) {
       debugLog.info("computer", "act-again", { command, kind: result.kind });
       result = await exec(command, [ref, ...args], timeoutMs, stdin);
     }
+    let note = "";
+    if (!result.ok && result.code === "AMBIGUOUS_TARGET" && !control.reason()) {
+      const fresh = await readAgain(ref);
+      const twin = fresh?.ok ? twinOf(refs.get(given), fresh.kept) : null;
+      debugLog.info("computer", "ambiguous-again", { command, kind: result.kind ?? null, found: !!twin });
+      if (twin && gate && (irreversibleKind(gate(given)) || irreversibleKind(gate(twin)))) return `${errorLine(result)} Bee read the window again: that element is now ${twin}. Use that ref.`;
+      if (twin && shellElement(refs.get(twin)) && ["click", "type", "set-value", "clear", "focus"].includes(command)) return SHELL_MESSAGE;
+      if (twin && !control.reason()) {
+        result = await exec(command, [twin, ...args], timeoutMs, stdin);
+        [ref, note] = [twin, ` (Bee read the window again and used ${twin}.)`];
+      }
+    }
     if (result.ok && ["type", "set-value", "clear", "focus"].includes(command)) lastField = refs.get(ref) ?? lastField;
     if (result.ok && command === "click") lastField = focusAfterClick(lastField, refs.get(ref));
-    return done(result);
+    return `${done(result)}${note}`;
   };
 
   const gateFor = (command: string, ref: string, extra: Partial<GateAction> & { effect?: Effect }) => (): GateAction => ({ command, target: refs.get(ref) ?? null, lastField, ...extra });
@@ -698,40 +864,39 @@ export function computerTools(deps: ComputerToolDeps) {
           const skeleton = !!input.skeleton && !input.surface && !input.root;
           // Only a whole window can read thin; a region or a menu is small by nature.
           const whole = !input.root && !input.surface;
-          const args = (budget: number, again: boolean) => [
+          const args = (app: string | undefined, root: string | undefined) => (budget: number, again: boolean) => [
             "--interactive-only",
             "--compact",
-            ...(input.root ? [`--root=${input.root}`] : scope(input)),
-            ...(input.surface && !input.root ? [`--surface=${input.surface}`] : []),
+            ...(root ? [`--root=${root}`] : scope({ app, window_id: input.window_id })),
+            ...(input.surface && !root ? [`--surface=${input.surface}`] : []),
             ...(skeleton ? ["--skeleton"] : []),
             ...(again && whole && !skeleton ? [`--max-depth=${DEEP_DEPTH}`] : []),
             `--timeout-ms=${budget}`,
           ];
-          const result = await observe("snapshot", args, whole ? settleWindow(skeleton) : undefined);
-          if (!result.ok) return errorLine(result, true);
-          // Refs from an app Bee never uses are dropped before the AI sees them.
-          const kept = new Map<string, Element>();
-          const within = input.root ? refs.get(input.root) : undefined;
-          let shown: ReturnType<typeof formatSnapshot>;
-          try {
-            shown = formatSnapshot(result.data, (ref, item) => kept.set(ref, item), SNAPSHOT_CHARS, input.root && within ? { ref: input.root, element: within } : null);
-          } catch (error) {
-            debugLog.warn("computer", "snapshot-unreadable", { error: errorData(error) });
-            return UNREADABLE;
+          const { result, app, note } = await withApp(input.root ? undefined : input.app, (name) => observe("snapshot", args(name, input.root), whole ? settleWindow(skeleton) : undefined));
+          const where: Scope = input.root ? (scopes.get(sidOf(input.root)) ?? {}) : { app, window_id: input.window_id };
+          // A region whose ref is refused as ambiguous: read the window again, and read the same element's region there when it is
+          // the only one with its role and name; else show the new read of the window.
+          if (!result.ok && input.root && result.code === "AMBIGUOUS_TARGET" && !control.reason()) {
+            const fresh = await readAgain(input.root);
+            if (!fresh?.ok) return fresh?.text ?? errorLine(result, true);
+            const twin = twinOf(refs.get(input.root), fresh.kept);
+            debugLog.info("computer", "ambiguous-again", { command: "snapshot", kind: result.kind ?? null, found: !!twin });
+            const region = twin && !control.reason() ? await observe("snapshot", args(undefined, twin)) : null;
+            const again = region?.ok && twin ? take(region.data, twin, where) : null;
+            if (again?.ok) return `Bee read the window again; that region is now ${twin}.\n${again.text}`;
+            return `${input.root} could not be told apart from another element, so Bee read the whole window again. Use its refs.\n${fresh.text}`;
           }
-          if (shown.app && offLimitsApp(shown.app)) return OFF_LIMITS_MESSAGE;
-          for (const [ref, item] of kept) remember(ref, item);
-          if (shown.focused) lastField = shown.focused;
-          const shownWindow = isRecord(result.data) && isRecord(result.data.window) ? str(result.data.window.id) : "";
-          if (/^w-[A-Za-z0-9-]{1,40}$/.test(shownWindow)) windows.add(shownWindow);
-          currentApp = shown.app ?? (input.app ? cleanApp(input.app) : currentApp);
+          if (!result.ok) return `${note}${errorLine(result, true)}`;
+          const shown = take(result.data, input.root, where);
+          if (!shown.ok) return shown.text;
           const notes = whole
             ? [
                 thinTree(result.data) ? THIN_NOTE : !skeleton && shallowTree(result.data) ? SHALLOW_NOTE : null,
                 unproven(result.data) ? UNPROVEN_NOTE : null,
-              ].filter((note) => note !== null)
+              ].filter((line) => line !== null)
             : [];
-          return [shown.text, ...notes].join("\n");
+          return `${note}${[shown.text, ...notes].join("\n")}`;
         }),
     }),
 
@@ -743,7 +908,7 @@ export function computerTools(deps: ComputerToolDeps) {
         window_id: windowSchema.optional(),
         root: refSchema.optional().describe("Search only inside this ref's region."),
         surface: surfaceSchema.optional(),
-        role: z.string().max(30).optional(),
+        role: z.string().max(30).optional().describe("A role as snapshots show it: button, textfield, link, checkbox, tab, menuitem, treeitem…"),
         name: z.string().max(200).optional(),
         text: z.string().max(200).optional().describe("Text anywhere in the element or inside it."),
         exact: z.boolean().optional(),
@@ -753,24 +918,31 @@ export function computerTools(deps: ComputerToolDeps) {
           if (!input.app && !input.root) return "Error: give app (or a root ref).";
           const invalid = badApp(input.app) ?? badWindow(input.window_id) ?? (input.root ? badRef(input.root) : null);
           if (invalid) return invalid;
-          if (input.role && !/^[A-Za-z]{2,30}$/.test(input.role)) return "Error: role is one word, for example button.";
-          const args = [
-            ...(input.root ? [`--root=${input.root}`] : scope(input)),
+          const role = input.role ? findRole(input.role, roles) : null;
+          if (role && "error" in role) return role.error;
+          const args = (app: string | undefined) => [
+            ...(input.root ? [`--root=${input.root}`] : scope({ app, window_id: input.window_id })),
             ...(input.surface && !input.root ? [`--surface=${input.surface}`] : []),
-            ...(input.role ? [`--role=${input.role}`] : []),
+            ...(role ? [`--role=${role.role}`] : []),
             ...(input.name ? [`--name=${cleanText(input.name)}`] : []),
             ...(input.text ? [`--text=${cleanText(input.text)}`] : []),
             ...(input.exact ? ["--exact"] : []),
             `--limit=${FIND_LIMIT}`,
           ];
-          const result = await observe("find", (budget) => [...args, `--timeout-ms=${budget}`]);
+          const { result, app, note } = await withApp(input.root ? undefined : input.app, (name) => observe("find", (budget) => [...args(name), `--timeout-ms=${budget}`]));
           // A match keeps where it sits when a snapshot showed it, or sits inside root when one was given.
           const inside = insideOf(input.root ? refs.get(input.root) : null);
+          const where: Scope = input.root ? (scopes.get(sidOf(input.root)) ?? {}) : { app, window_id: input.window_id };
           const found = (ref: string, item: Element) => {
             const context = refs.get(ref)?.context ?? inside;
             remember(ref, context ? { ...item, context } : item);
+            if (!scopes.has(sidOf(ref))) scopes.set(sidOf(ref), where);
           };
-          return result.ok ? formatMatches(result.data, found) : errorLine(result, true);
+          if (result.ok && isRecord(result.data) && Array.isArray(result.data.roles_present)) {
+            for (const present of result.data.roles_present.slice(0, 60)) if (typeof present === "string") roles.add(roleWord(present));
+          }
+          const mapped = role && input.role && role.role !== roleWord(input.role) ? `Role ${role.role} for ${roleWord(input.role)}. ` : "";
+          return `${note}${mapped}${result.ok ? formatMatches(result.data, found) : errorLine(result, true)}`;
         }),
     }),
 
@@ -797,6 +969,7 @@ export function computerTools(deps: ComputerToolDeps) {
           const result = await exec("list-apps", [], READ_MS);
           if (!result.ok) return errorLine(result, true);
           const names = parseApps(result.data).map((app) => app.name);
+          running = names;
           return names.length > 0 ? names.slice(0, 60).join(", ") : "No apps.";
         }),
     }),
@@ -808,24 +981,24 @@ export function computerTools(deps: ComputerToolDeps) {
         step("list_windows", "Checking open windows…", async () => {
           const invalid = badApp(input.app);
           if (invalid) return invalid;
-          const result = await exec("list-windows", scope(input), READ_MS);
-          if (!result.ok) return errorLine(result, true);
+          const { result, note } = await withApp(input.app, (app) => exec("list-windows", scope({ app }), READ_MS));
+          if (!result.ok) return `${note}${errorLine(result, true)}`;
           const listed = parseWindows(result.data)
             .filter((window) => !offLimitsApp(window.app))
             .slice(0, 40);
           for (const window of listed) windows.add(window.id);
-          return listed.length > 0
-            ? listed
-                .map((window) => `${window.id} ${quoted(window.app)} ${quoted(window.title)}${window.focused ? " (focused)" : ""}`)
-                .join("\n")
-            : "No windows.";
+          return `${note}${
+            listed.length > 0
+              ? listed.map((window) => `${window.id} ${quoted(window.app)} ${quoted(window.title)}${window.focused ? " (focused)" : ""}`).join("\n")
+              : "No windows."
+          }`;
         }),
     }),
 
     click: tool({
       description: "Click (press) the element with this ref.",
       inputSchema: z.object({ ref: refSchema, effect: effectSchema }),
-      execute: ({ ref, effect }) => step("click", label(ref, "Clicking", "Clicking…"), async () => badRef(ref) ?? onRef("click", ref)(), gateFor("click", ref, { effect })),
+      execute: ({ ref, effect }) => step("click", label(ref, "Clicking", "Clicking…"), async () => badRef(ref) ?? onRef("click", ref, [], ACT_MS, undefined, (to) => gateFor("click", to, { effect })())(), gateFor("click", ref, { effect })),
     }),
 
     type_text: tool({
@@ -835,7 +1008,9 @@ export function computerTools(deps: ComputerToolDeps) {
         step(
           "type_text",
           label(ref, "Typing in", "Typing…"),
-          async () => badRef(ref) ?? onRef("type", ref, [...(physical ? [HEADED_FLAG] : []), STDIN_FLAG], ACT_MS + Math.min(40_000, text.length * 40), cleanText(text))(),
+          async () =>
+            badRef(ref) ??
+            onRef("type", ref, [...(physical ? [HEADED_FLAG] : []), STDIN_FLAG], ACT_MS + Math.min(40_000, text.length * 40), cleanText(text), (to) => gateFor("type", to, { effect, text })())(),
           gateFor("type", ref, { effect, text }),
         ),
     }),
@@ -845,11 +1020,16 @@ export function computerTools(deps: ComputerToolDeps) {
       inputSchema: z.object({ ref: refSchema, value: z.string().max(4000), effect: effectSchema }),
       execute: ({ ref, value, effect }) =>
         value === ""
-          ? step("set_value", label(ref, "Clearing", "Clearing a field…"), async () => badRef(ref) ?? onRef("clear", ref)(), gateFor("clear", ref, { effect }))
+          ? step(
+              "set_value",
+              label(ref, "Clearing", "Clearing a field…"),
+              async () => badRef(ref) ?? onRef("clear", ref, [], ACT_MS, undefined, (to) => gateFor("clear", to, { effect })())(),
+              gateFor("clear", ref, { effect }),
+            )
           : step(
               "set_value",
               label(ref, "Typing in", "Typing…"),
-              async () => badRef(ref) ?? onRef("set-value", ref, [STDIN_FLAG], ACT_MS, cleanText(value))(),
+              async () => badRef(ref) ?? onRef("set-value", ref, [STDIN_FLAG], ACT_MS, cleanText(value), (to) => gateFor("set-value", to, { effect, text: value })())(),
               gateFor("set-value", ref, { effect, text: value }),
             ),
     }),
@@ -864,7 +1044,12 @@ export function computerTools(deps: ComputerToolDeps) {
       description: "Choose an option by its text in a list, dropdown or menu button.",
       inputSchema: z.object({ ref: refSchema, option: z.string().min(1).max(200), effect: effectSchema }),
       execute: ({ ref, option, effect }) =>
-        step("select_option", `Choosing ${shortName(option, 30)}…`, async () => badRef(ref) ?? onRef("select", ref, ["--", cleanText(option)])(), gateFor("select", ref, { effect, text: option })),
+        step(
+          "select_option",
+          `Choosing ${shortName(option, 30)}…`,
+          async () => badRef(ref) ?? onRef("select", ref, ["--", cleanText(option)], ACT_MS, undefined, (to) => gateFor("select", to, { effect, text: option })())(),
+          gateFor("select", ref, { effect, text: option }),
+        ),
     }),
 
     set_state: tool({
@@ -889,8 +1074,15 @@ export function computerTools(deps: ComputerToolDeps) {
 
     press_key: tool({
       description:
-        "Press keys in one app: return, escape, tab, delete, up, down, or a shortcut such as cmd+w (Mac) or ctrl+w (Windows) to close a tab. Punctuation by name: comma, period, slash.",
-      inputSchema: z.object({ keys: z.string().min(1).max(40), app: appSchema, window_id: windowSchema.optional(), effect: effectSchema, physical: physicalSchema }),
+        "Press keys in one app: return, escape, tab, delete, up, down, or a shortcut such as cmd+w (Mac) or ctrl+w (Windows) to close a tab. Punctuation by name: comma, period, slash. Give ref to press in one field (Return after set_value): Bee focuses it first.",
+      inputSchema: z.object({
+        keys: z.string().min(1).max(40),
+        app: appSchema,
+        window_id: windowSchema.optional(),
+        ref: refSchema.optional().describe("The field the keys are for, from the latest snapshot or find: Bee focuses it, then presses."),
+        effect: effectSchema,
+        physical: physicalSchema,
+      }),
       execute: (input) =>
         step(
           "press_key",
@@ -898,15 +1090,36 @@ export function computerTools(deps: ComputerToolDeps) {
           async () => {
             const keys = input.keys.trim().toLowerCase().replace(/\s*\+\s*/g, "+");
             if (!/^[a-z0-9]{1,12}(?:\+[a-z0-9]{1,12}){0,4}$/.test(keys)) return "Error: keys look like return or cmd+w.";
-            const invalid = badApp(input.app) ?? badWindow(input.window_id);
+            const invalid = badApp(input.app) ?? badWindow(input.window_id) ?? (input.ref ? badRef(input.ref) : null);
             if (invalid) return invalid;
-            if (shellElement(lastField)) return SHELL_MESSAGE;
-            currentApp = cleanApp(input.app) ?? currentApp;
-            const result = await exec("press", [keys, ...scope(input), ...(input.physical ? [HEADED_FLAG] : [])], ACT_MS);
+            if (shellElement(input.ref ? refs.get(input.ref) : lastField)) return SHELL_MESSAGE;
+            const headed = input.physical ? [HEADED_FLAG] : [];
+            if (input.ref) {
+              const focused = await exec("focus", [input.ref, ...headed], ACT_MS);
+              if (!focused.ok) return `Bee could not focus that field, so pressed nothing. ${errorLine(focused)}`;
+              lastField = refs.get(input.ref) ?? lastField;
+            }
+            const press = (app: string | undefined) => exec("press", [keys, ...scope({ app, window_id: input.window_id }), ...headed], ACT_MS);
+            let { result, app, note } = await withApp(input.app, press);
+            currentApp = app ?? currentApp;
+            // agent-desktop sends keys only where the app's keyboard focus is proven, and refuses before sending anything when it
+            // is not (a field written with set_value need not hold focus). Focus the field written last, then press once more.
+            const field = input.ref ? null : refOf(lastField);
+            if (!result.ok && result.code === "ACTION_FAILED" && (NO_FOCUS.test(result.message ?? "") || /focus/.test(result.kind ?? "")) && field && !control.reason()) {
+              const focused = await exec("focus", [field, ...headed], ACT_MS);
+              debugLog.info("computer", "press-after-focus", { focused: focused.ok });
+              if (!focused.ok) note = `${note}Bee tried to focus the field first: ${errorLine(focused)} `;
+              else if (!control.reason()) result = await press(app);
+            }
             if (!keepsFocus(keys)) lastField = null;
-            return result.ok ? `${formatDone(result.data)} Check the result with a snapshot.` : errorLine(result);
+            return `${note}${result.ok ? `${formatDone(result.data)} Check the result with a snapshot.` : errorLine(result)}`;
           },
-          () => ({ command: "press", keys: input.keys.trim().toLowerCase().replace(/\s*\+\s*/g, "+"), lastField, effect: input.effect }),
+          () => ({
+            command: "press",
+            keys: input.keys.trim().toLowerCase().replace(/\s*\+\s*/g, "+"),
+            lastField: (input.ref ? refs.get(input.ref) : undefined) ?? lastField,
+            effect: input.effect,
+          }),
         ),
     }),
 
@@ -953,9 +1166,9 @@ export function computerTools(deps: ComputerToolDeps) {
           const app = cleanApp(name);
           if (!app) return "Error: that is not an app name. Check list_apps.";
           if (offLimitsApp(app) || ["finder", "explorer", "file explorer", "dock", "windows explorer"].includes(appKey(app))) return "Error: Bee does not quit that app.";
-          const result = await exec("close-app", [app], ACT_MS);
+          const { result, note } = await withApp(app, (name) => exec("close-app", [name ?? app], ACT_MS));
           if (result.ok) lastField = null;
-          return done(result);
+          return `${note}${done(result)}`;
         }),
     }),
 
@@ -998,9 +1211,9 @@ export function computerTools(deps: ComputerToolDeps) {
           if (invalid) return invalid;
           const what = input.for_window ? [`--window=${cleanText(input.for_window)}`] : input.for_text ? [`--text=${cleanText(input.for_text)}`] : null;
           if (input.for_text && !input.app) return "Error: give app with for_text.";
-          const args = what ? [...what, ...scope(input), `--timeout=${timeout}`] : [String(input.ms ?? 1000)];
-          const result = await exec("wait", args, (what ? timeout : (input.ms ?? 1000)) + 5000);
-          return result.ok ? "Done." : errorLine(result);
+          const args = (app: string | undefined) => (what ? [...what, ...scope({ app }), `--timeout=${timeout}`] : [String(input.ms ?? 1000)]);
+          const { result, note } = await withApp(what ? input.app : undefined, (app) => exec("wait", args(app), (what ? timeout : (input.ms ?? 1000)) + 5000));
+          return `${note}${result.ok ? "Done." : errorLine(result)}`;
         }),
     }),
   };

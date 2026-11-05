@@ -8,6 +8,7 @@ import {
   isForBee,
   looksAddressedToBee,
   namesParticipant,
+  replyInvitesAnswer,
   routeLine,
   type LineSource,
 } from "./wake-word";
@@ -141,5 +142,64 @@ describe("isForBee", () => {
     expect(isForBee({ addressed: "bee", confidence: 0.69 })).toBe(false);
     expect(isForBee({ addressed: "meeting", confidence: 0.95 })).toBe(false);
     expect(isForBee(null)).toBe(false);
+  });
+});
+
+// Owner log (0.3.36): "Yes, I do." after "…say if you want those counted too" went to the meeting as filler.
+describe("routeLine: yes or no to Bee's question or offer", () => {
+  const offered = {
+    request: "how many users does Eva have",
+    reply: "Eva has 16 users in the production web app's users table. Bee only counted Eva itself. CarePulse and vmem keep separate user data, so say if you want those counted too.",
+  };
+  const asked = { request: "make a task", reply: "Which repo should the task go in, bee or eva?" };
+  const canAlso = { request: "count users", reply: "Bee can also count CarePulse, vmem or staging if you want." };
+
+  it("finds offers as well as questions", () => {
+    expect(replyInvitesAnswer(offered.reply)).toBe(true);
+    expect(replyInvitesAnswer(asked.reply)).toBe(true);
+    expect(replyInvitesAnswer(canAlso.reply)).toBe(true);
+    for (const reply of ["Say the word and Bee will send it.", "Want Bee to open it", "Shall Bee book it.", "Would you like the full list."]) {
+      expect(replyInvitesAnswer(reply), reply).toBe(true);
+    }
+    expect(replyInvitesAnswer(lastBee.reply)).toBe(false);
+    expect(replyInvitesAnswer("Opened Teams.")).toBe(false);
+    expect(replyInvitesAnswer(null)).toBe(false);
+  });
+
+  it("takes a short yes or no as an answer", () => {
+    const answers = ["Yes.", "Yes, I do.", "Yes, can we do that?", "yeah", "yep", "sure", "ok do it", "go ahead", "do it", "please do", "no", "nope"];
+    for (const bee of [offered, asked, canAlso]) {
+      for (const text of answers) {
+        expect(open(text, { lastBee: bee }), `${bee.reply}: ${text}`).toMatchObject({ kind: "command", command: text, followUp: true });
+      }
+    }
+    expect(open("Yes, I do.", { lastBee: offered })).toMatchObject({ reason: "answer" });
+    expect(open("Yes.", { lastBee: asked })).toMatchObject({ reason: "answer" });
+  });
+
+  it("never reads okay or please alone as yes to an offer", () => {
+    for (const text of ["Okay, let's move on to the budget item.", "Okay so the numbers look fine to me"]) {
+      expect(open(text, { lastBee: offered }), text).not.toMatchObject({ kind: "command", reason: "answer" });
+    }
+  });
+
+  it("still closes on thanks, no thanks included", () => {
+    for (const text of ["no thanks", "No, thank you.", "nope, thanks", "Okay, thanks."]) expect(open(text, { lastBee: offered }), text).toEqual({ kind: "close" });
+  });
+
+  it("leaves yes and no in the meeting when Bee neither asked nor offered", () => {
+    for (const text of ["Yes.", "Yes, I do.", "yeah", "sure", "No."]) {
+      expect(open(text), text).toMatchObject({ kind: "meeting" });
+    }
+  });
+
+  it("calls yes or no a reply to others once someone else spoke", () => {
+    for (const text of ["Yes.", "Yes, I do.", "nope"]) {
+      expect(open(text, { lastBee: offered, othersSpoke: true }), text).toEqual({ kind: "meeting", reason: "reply-to-others" });
+    }
+  });
+
+  it("keeps a correction strong after someone else spoke", () => {
+    expect(open("No, the team one", { lastBee: asked, othersSpoke: true })).toMatchObject({ kind: "command", reason: "correction" });
   });
 });

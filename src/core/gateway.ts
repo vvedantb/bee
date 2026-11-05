@@ -2,8 +2,14 @@ import { createGateway, type GatewayProvider } from "@ai-sdk/gateway";
 
 // The model behind Luna's meeting tips, the follow-up check and meeting summaries: fast, thinking off.
 export const GUIDE_MODEL = "anthropic/claude-haiku-5.5";
-// The model behind direct requests to Bee ("Bee, …") and computer use: it chains tool calls and thinks briefly first.
+// The model behind direct requests to Bee ("Bee, …") and computer use: it chains tool calls and thinks first.
 export const COMMAND_MODEL = "anthropic/claude-sonnet-5.5";
+// Context windows in tokens, from the Gateway catalog (ai-gateway.vercel.sh/v1/models) and Anthropic's docs. The 1M window is native
+// and the default for Sonnet 5.5 and Haiku 5.5: no beta header or provider option unlocks it, and the legacy context-1m-* beta header
+// must not be sent (Anthropic's Sonnet 5.5 migration guide says to remove it). Sonnet 5.5 has flat pricing across the window;
+// Haiku 5.5 bills input over 100k tokens at a higher tier (Gateway input_tiers), but its window is still 1M.
+export const COMMAND_CONTEXT_TOKENS = 1_000_000;
+export const GUIDE_CONTEXT_TOKENS = 1_000_000;
 export const JEV_MODEL = "typesafe-ai/jev";
 // Gateway also lists this model as spacexai/grok-stt; both ids resolve.
 export const STT_MODEL = "xai/grok-stt";
@@ -30,6 +36,9 @@ export const GUIDE_PROVIDER = "anthropic";
 /**
  * Turns off extended thinking for a GUIDE_MODEL call. Haiku thinks by default: a live Luna call spent its whole
  * output budget on reasoning and returned no text. The Gateway forwards `anthropic` options to Anthropic.
+ * Haiku 5.5 accepts `disabled`: the installed @ai-sdk/anthropic `getModelCapabilities` has no claude-haiku-5 entry that forces
+ * adaptive thinking (only Opus 5.x, Fable 5.x and Sonnet 5 strip `disabled`), so this stays the fast path for tips, the
+ * follow-up check, meeting summaries and the history summariser. Do not switch them to adaptive thinking with effort.
  * Never send this to a non-Anthropic model (Jev, STT).
  */
 export const ANTHROPIC_NO_THINKING = { anthropic: { thinking: { type: "disabled" } } } as const;
@@ -53,18 +62,19 @@ function anthropicRouting(tier: GatewayTier, options: { web: boolean }): Gateway
   return { ...gatewayTier(tier).gateway, ...routing };
 }
 
-/** Thinking tokens per command step: enough to plan the next tool call, small enough to keep replies quick. */
-export const COMMAND_THINKING_BUDGET = 1500;
-
 /**
- * Brief extended thinking for a COMMAND_MODEL call (direct requests and computer use), so the model plans before it answers or
- * calls the next tool. Thinking tokens count against maxOutputTokens, so those calls raise it. Never send to tips (GUIDE_MODEL).
+ * Thinking for a COMMAND_MODEL call (direct requests and computer use), so the model plans before it answers or calls the next
+ * tool. COMMAND_MODEL (claude-sonnet-5*) always thinks adaptively: the installed @ai-sdk/anthropic marks it
+ * supportsAdaptiveThinking, warns that budget-based thinking ({ type: "enabled", budgetTokens }) is not supported and rewrites it
+ * to adaptive (the 0.3.36 debug log had that warning on every step). So the depth is set with `effort`, not a token budget:
+ * "medium" (not "high") balances planning depth against latency and thinking tokens. Checked against the installed package's
+ * model caps and option schema; no live Gateway call (no key in CI). Thinking tokens count against maxOutputTokens, so those calls raise it. Never send to tips (GUIDE_MODEL).
  */
-export const ANTHROPIC_BRIEF_THINKING = { anthropic: { thinking: { type: "enabled", budgetTokens: COMMAND_THINKING_BUDGET } } } as const;
+export const ANTHROPIC_COMMAND_THINKING = { anthropic: { thinking: { type: "adaptive" }, effort: "medium" } } as const;
 
-/** Like guideProviderOptions, with brief thinking on. Cache markers stay on the messages (ANTHROPIC_CACHE). */
-export function commandProviderOptions(tier: GatewayTier, options: { web: boolean }): { gateway: GatewayRouting } & typeof ANTHROPIC_BRIEF_THINKING {
-  return { gateway: anthropicRouting(tier, options), ...ANTHROPIC_BRIEF_THINKING };
+/** Like guideProviderOptions, with adaptive thinking at medium effort. Cache markers stay on the messages (ANTHROPIC_CACHE). */
+export function commandProviderOptions(tier: GatewayTier, options: { web: boolean }): { gateway: GatewayRouting } & typeof ANTHROPIC_COMMAND_THINKING {
+  return { gateway: anthropicRouting(tier, options), ...ANTHROPIC_COMMAND_THINKING };
 }
 
 /**

@@ -19,6 +19,7 @@ import {
 } from "../../shared/ipc";
 import type { SessionLine } from "../../core/sync-lines";
 import type { startMicSession } from "./speech";
+import { REOPEN_WINDOW_MS } from "../../core/wake-word";
 
 // The "Bee" wake word in the store: own mic phrases that start with it go to window.bee.runCommand, never to the meeting
 // pipeline, the session, the summary or the Teams sync. Preload (window.bee), Clerk, the mic and speech-to-text are stubbed.
@@ -59,7 +60,7 @@ const SETTINGS: SettingsView = {
   secretStorage: "os",
   notesDir: "/notes",
   logsDir: "/logs",
-  fsRoots: [],
+  fsRoots: [], knownNames: [],
   meetingContextEnabled: false,
   meetingCalendarEnabled: false,
   meetingMemoryEnabled: false,
@@ -479,30 +480,29 @@ describe("store: Bee's history and the conversation window", () => {
   const opened = async (request: CommandRequest) =>
     request.command === "open Vercel usage" ? { ...result([USAGE_URL]), actions: [USAGE_URL] } : result([`Reply to ${request.command}`]);
 
-  it("sends earlier exchanges with each request, as history, never in the transcript", async () => {
+  it("never sends a history: main keeps Bee's whole history and sends it to the AI", async () => {
     const { say, commands } = await loadStore({ command: opened });
     await say("B, open Vercel usage");
     await say("Bee, open the team usage");
-    expect(commands[0]?.history).toBeUndefined();
-    expect(commands[1]).toMatchObject({ command: "open the team usage", history: [{ request: "open Vercel usage", reply: "", actions: [USAGE_URL] }] });
+    expect(commands.map((request) => Object.keys(request).includes("history"))).toEqual([false, false]);
+    expect(commands[1]).toMatchObject({ command: "open the team usage" });
     expect(commands[1]?.transcript).toBeUndefined();
   });
 
-  it("keeps at most six exchanges, dropping the oldest", async () => {
-    const { say, commands, store } = await loadStore();
+  it("keeps every exchange of the conversation for vmem: no turn cap", async () => {
+    const { say, store } = await loadStore();
     for (let index = 1; index <= 8; index++) await say(`Bee, what is ${index} plus ${index}?`);
-    expect(commands.at(-1)?.history?.map((item) => item.request)).toEqual([2, 3, 4, 5, 6, 7].map((index) => `what is ${index} plus ${index}?`));
-    expect(store.beeHistory()).toHaveLength(6);
+    expect(store.beeConversation().map((item) => item.request)).toEqual([1, 2, 3, 4, 5, 6, 7, 8].map((index) => `what is ${index} plus ${index}?`));
   });
 
-  it("clears the history after ten idle minutes", async () => {
+  it("ends the conversation for vmem after ten idle minutes, which never touches the AI's history", async () => {
     const { say, commands, store } = await loadStore();
     await say("Bee, open Teams");
-    expect(store.beeHistory()).toHaveLength(1);
+    expect(store.beeConversation()).toHaveLength(1);
     await vi.advanceTimersByTimeAsync(10 * 60_000);
-    expect(store.beeHistory()).toEqual([]);
+    expect(store.beeConversation()).toEqual([]);
     await say("Bee, open Slack");
-    expect(commands.at(-1)?.history).toBeUndefined();
+    expect(commands.at(-1)).not.toHaveProperty("history");
   });
 
   it("sends the finished conversation to main after ten idle minutes, with the setting on", async () => {
@@ -529,17 +529,17 @@ describe("store: Bee's history and the conversation window", () => {
     expect(on.ended).toEqual([]);
   });
 
-  it("clears the history and closes the window when the meeting ends", async () => {
+  it("ends the conversation for vmem and closes the window when the meeting ends", async () => {
     const { say, store, state } = await loadStore();
     await say("Let's pick up the Acme renewal.");
     await say("Bee, open Teams");
     expect(state().conversationOpen).toBe(true);
     await store.actions.endMeeting();
-    expect(store.beeHistory()).toEqual([]);
+    expect(store.beeConversation()).toEqual([]);
     expect(state().conversationOpen).toBe(false);
   });
 
-  it("takes a follow-up without Bee in the window, with the history, and keeps it out of the meeting", async () => {
+  it("takes a follow-up without Bee in the window, and keeps it out of the meeting", async () => {
     const { say, commands, pipeline, published, state } = await loadStore({ command: opened });
     await say("B, open Vercel usage");
     expect(state().conversationOpen).toBe(true);
@@ -547,7 +547,6 @@ describe("store: Bee's history and the conversation window", () => {
     expect(notchLine(state(), true).text).toBe(CONVERSATION_LABEL);
     await say("Why do you not go to the team usage?");
     expect(commands.map((request) => request.command)).toEqual(["open Vercel usage", "Why do you not go to the team usage?"]);
-    expect(commands[1]?.history?.[0]?.request).toBe("open Vercel usage");
     expect(state().session.lines).toEqual([]);
     expect(pipeline).toEqual([]);
     expect(published).toEqual([]);
@@ -655,6 +654,56 @@ describe("store: Bee's history and the conversation window", () => {
     const { say, state, store } = await loadStore({ command: async () => result([]) });
     await say("Bee, open the team one");
     expect(state().result?.tips).toEqual(["Which one?"]);
-    expect(store.beeHistory()[0]).toMatchObject({ request: "open the team one", reply: "Which one?" });
+    expect(store.beeConversation()[0]).toMatchObject({ request: "open the team one", reply: "Which one?" });
+  });
+
+  it("takes yes to Bee's offer as a follow-up, and holds the window open for it", async () => {
+    const offer = "Bee only counted Eva itself. CarePulse and vmem keep separate user data, so say if you want those counted too.";
+    const { say, commands, state } = await loadStore({ command: async (request) => result([request.command === "count Eva users" ? offer : "Done."]) });
+    await say("Bee, count Eva users");
+    await vi.advanceTimersByTimeAsync(90_000);
+    expect(state().conversationOpen).toBe(true);
+    await say("Yes, I do.");
+    expect(commands.map((request) => request.command)).toEqual(["count Eva users", "Yes, I do."]);
+    expect(state().session.lines).toEqual([]);
+  });
+
+  it("leaves a bare yes in the meeting when Bee neither asked nor offered", async () => {
+    const { say, commands, state } = await loadStore();
+    await say("Bee, open Teams");
+    await say("Yes.");
+    expect(commands).toHaveLength(1);
+    expect(state().session.lines.map((line) => line.text)).toEqual(["Yes."]);
+  });
+
+  it("reopens on a clear desktop request just after thanks, and not once the reopen window has passed", async () => {
+    const { say, commands, state } = await loadStore();
+    await say("Bee, open Outlook");
+    await say("Okay, thanks.");
+    expect(state().conversationOpen).toBe(false);
+    await say("I said open teams.");
+    expect(commands.map((request) => request.command)).toEqual(["open Outlook", "I said open teams."]);
+    await say("Thanks.");
+    await vi.advanceTimersByTimeAsync(REOPEN_WINDOW_MS);
+    await say("Open Slack.");
+    expect(commands).toHaveLength(2);
+    expect(state().session.lines.map((line) => line.text)).toEqual(["Open Slack."]);
+  });
+
+  it("never reopens on meeting talk after thanks, or after the meeting turned back to others", async () => {
+    const first = await loadStore();
+    await first.say("Bee, open Outlook");
+    await first.say("Thanks.");
+    await first.say("we should open the doc later");
+    await first.say("open question about the budget");
+    expect(first.commands).toHaveLength(1);
+
+    vi.resetModules();
+    const second = await loadStore();
+    await second.say("Bee, open Outlook");
+    await second.say("Thanks.");
+    await second.caption("Can someone open the deck?");
+    await second.say("Open the deck.");
+    expect(second.commands).toHaveLength(1);
   });
 });

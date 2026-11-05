@@ -2,23 +2,26 @@ import { isStepCount, streamText, type FinishReason, type LanguageModel, type La
 import { z } from "zod";
 import { TIP_SOURCE_MAX_CHARS, clampTip } from "../shared/ipc";
 import { withTimeout } from "./abort";
-import { cacheAtEnd } from "./bee-history";
+import { cacheAtEnd, compactingStep, historyAsText, type Summarise } from "./bee-history";
 import { debugLog, errorData, modelName, msSince, onceText, stepData } from "./debug-log";
 import { ANTHROPIC_CACHE, commandProviderOptions, guideProviderOptions } from "./gateway";
 import type { Snippet } from "./notes";
+import { knownNamesBlock } from "./known-names";
+import { stopOnNoProgress } from "./loop-guard";
 import { MAX_TIPS, tipCap, tipKey } from "./steering";
 import { lunaTools, sourcesFromGenerateResult, type BeeSource } from "./tools";
 import type { SearchLocation } from "./web-search";
 
 const TRANSCRIPT_WINDOW = 8;
 const LUNA_TIMEOUT_MS = 45_000;
-/** Model steps for a meeting tip turn. */
+/** A direct request has no step cap and thinks harder, so it gets longer than a tip turn. The user can still stop it. */
+export const COMMAND_TIMEOUT_MS = 120_000;
+/** Model steps for a meeting tip turn. A direct request has no step cap: it ends when the AI is done, on Stop, or on the loop guard (core/loop-guard.ts). */
 export const TIP_MAX_STEPS = 8;
-/** Model steps for a direct request: room to search, search again and chain tools before the answer. */
-export const COMMAND_MAX_STEPS = 12;
-// Output tokens per step. A direct request thinks first (gateway.ts ANTHROPIC_BRIEF_THINKING), which spends from this budget.
+// Output tokens per step. A direct request thinks first (gateway.ts ANTHROPIC_COMMAND_THINKING: adaptive, medium effort), which
+// spends from this budget, so it gets room for that and the reply.
 const TIP_MAX_OUTPUT_TOKENS = 800;
-export const COMMAND_MAX_OUTPUT_TOKENS = 3000;
+export const COMMAND_MAX_OUTPUT_TOKENS = 16_000;
 const SCHEMA_ERROR = /json schema|propertyNames|input_?schema|tools?\b.*\bschema|functionality.*not supported|not supported.*schema/i;
 // Too many tools for the provider, e.g. "Invalid 'tools': array too long. Expected an array with maximum length 128".
 const TOOL_COUNT_ERROR = /tools'?\W.*\b(array too long|too many|maximum length)|too many tools/i;
@@ -113,6 +116,7 @@ export const LUNA_SYSTEM = [
   "Otherwise, suggest what to say or do next, using the notes when they help and citing them.",
   "Never invent facts, figures or dates about the user's own work that are not in the transcript or notes.",
   "If nothing useful can be said, reply with exactly NONE.",
+  "Bee can open apps and use the computer, but only for a request that starts with its name. Never say Bee cannot open apps or control the computer. If the newest line asks Bee to do something on the computer, give one tip: Say \"Bee\" first, for example \"Bee, open Teams\".",
   "Output only the tips. Start every tip with a fact about the world or words to say. Never write as yourself (\"I\", \"me\", \"my\") or about your own work: the request, these rules, which tips you keep or drop, the search or its results, the sources, or how you phrase, rewrite or copy anything. Put words for the user to say in quotes, for example: Say \"I can confirm by Friday.\"",
   `Put any plan or note to yourself on its own line starting with "${NOTE_PREFIX}"; Bee never shows it. Never put a plan in a tip.`,
   "Good tip lines (they show the format only: never reuse their facts):",
@@ -142,7 +146,8 @@ export const LUNA_DIRECT_SYSTEM = [
   "If a tool's results miss the point or are thin, try again with different terms or another tool before you answer.",
   "A request may need several tool calls in a row, for example a search, then a read, then a count: make them all, then answer.",
   "Bee shows the user each desktop action's result itself. After an action, do not repeat that result word for word: reply with one short line that confirms what the user can see now, for example \"- The Vercel usage page is open.\"",
-  "Earlier turns, when given, are the user's earlier requests to Bee and what Bee did (\"Done:\" actions, \"Ended:\" where the screen was left, \"Error:\"). A follow-up such as \"the team one\", \"that page\" or \"why did you not…\" refers to them: act on it or answer it in that light.",
+  "Earlier turns, when given, are the user's earlier requests to Bee and what Bee did, with its real tool calls and results (\"Ended:\" says where the screen was left). A summary may stand for the oldest turns. A follow-up such as \"yes\", \"the team one\", \"that page\" or \"why did you not…\" refers to them: act on it or answer it in that light.",
+  "A tool result in an earlier turn, or in the summary, was confirmed when it ran. Never take it back, doubt it or say it was not run. Never run the same query or search again unless the user asks again or asks for fresh numbers: answer from the earlier result.",
   ...NOTES_AND_SEARCH_RULES,
   "Each line states a different fact: never repeat or restate a sentence or a fact.",
   "Use append_note only when the user clearly asks to add or save a note.",
@@ -159,9 +164,9 @@ export const LUNA_DIRECT_SYSTEM = [
   `${BAD_MARK}NONE`,
 ].join("\n");
 
-/** Added to LUNA_DIRECT_SYSTEM when Bee cannot use the computer here (no agent-desktop, Linux): the AI says so. */
+/** Added to LUNA_DIRECT_SYSTEM only when computer use is not available on this direct request (no agent-desktop, Linux): the AI says so. */
 export const LUNA_NO_COMPUTER =
-  "Bee cannot click, type, send messages, close apps or change settings in other apps. If asked, say so in one line, for example \"- Bee cannot send messages.\"";
+  "On this computer Bee cannot click, type, send messages, close apps or change settings in other apps. It can still open apps and pages when it has those tools. If asked for more, say so in one line, for example \"- Bee cannot send messages here.\"";
 
 /** Added to LUNA_DIRECT_SYSTEM when Bee can use the computer (core/computer-use.ts): the AI hands the task over. */
 export const LUNA_COMPUTER =
@@ -287,6 +292,8 @@ export function buildLunaPrompt(args: {
   command?: string;
   /** A direct request where Bee can use the computer: the AI may hand the task over (LUNA_COMPUTER). */
   computerUse?: boolean;
+  /** Names Bee should know (core/known-names.ts), for a direct request: in the context, so the AI spells them right. */
+  knownNames?: readonly string[];
 }): LunaPrompt {
   const meeting = meetingBlock(args.meetingBrief);
   const lines = args.transcript.slice(-TRANSCRIPT_WINDOW).map((line) => `- ${line.trim()}`);
@@ -304,9 +311,10 @@ export function buildLunaPrompt(args: {
   const mcp = lunaMcpSystem(args.connectedServers ?? [], args.unavailableServers ?? []);
   const command = args.command?.replace(/\s+/g, " ").trim();
   if (command) {
+    const names = knownNamesBlock(args.knownNames ?? []);
     return {
       system: [LUNA_DIRECT_SYSTEM, args.computerUse ? LUNA_COMPUTER : LUNA_NO_COMPUTER, ...(mcp ? [mcp] : []), ...(meeting ? [LUNA_MEETING_SYSTEM] : [])].join("\n"),
-      context,
+      context: names ? `${context}\n\n${names}` : context,
       transcript: [
         ...(lines.length > 0 ? ["Meeting lines so far (oldest first; background only, never the request):", ...lines, ""] : []),
         "The user's request to Bee:",
@@ -341,8 +349,8 @@ export function buildLunaPrompt(args: {
 /**
  * The model call's instructions (the system) and messages, with cache breakpoints after the system and after the context.
  * None after the transcript: it is a sliding window that changes every phrase, so a cache write there would rarely be read.
- * A direct request may bring earlier turns with Bee (core/bee-history.ts historyMessages): they go before the request, oldest
- * first, with one more breakpoint at their end. Three in all, within Anthropic's four.
+ * A direct request brings its earlier turns with Bee (core/bee-history.ts), tool calls and results included: they go before the
+ * request, oldest first, with one more breakpoint at their end. Three in all, within Anthropic's four.
  */
 export function lunaRequest(prompt: LunaPrompt, history: readonly ModelMessage[] = []): { instructions: SystemModelMessage; messages: ModelMessage[] } {
   return {
@@ -851,6 +859,10 @@ export type LunaResult = TipFields & {
   totalMs: number;
   /** The run finished with no answer text (error says so). After a desktop action that is a fine end for a direct request. */
   empty?: boolean;
+  /** A direct request's response messages (the AI's text, tool calls and results) for Bee's history. Absent when the call failed. */
+  messages?: ModelMessage[];
+  /** The loop guard stopped a direct request: the same tool call kept giving the same result (error says so). */
+  loop?: boolean;
 };
 
 /** Tools the error names; else tools whose schema has a key the error names (providers name the keyword, not the tool); else every extra tool. */
@@ -929,8 +941,12 @@ export async function guideWithLuna(args: {
   desktopTools?: ToolSet;
   /** desktopTools include use_computer (core/direct-command.ts): the prompt says when to call it. */
   computerUse?: boolean;
-  /** A direct request's earlier turns with Bee (core/bee-history.ts historyMessages), sent before the request. */
+  /** A direct request's earlier turns with Bee (core/bee-history.ts), sent whole before the request. */
   historyMessages?: readonly ModelMessage[];
+  /** For a direct request: folds the oldest messages into a summary when they near the window (core/bee-history.ts). */
+  summarise?: Summarise;
+  /** For a direct request: names Bee should know (core/known-names.ts). */
+  knownNames?: readonly string[];
 }): Promise<LunaResult> {
   const startedAt = performance.now();
   const maxTips = args.command ? MAX_DIRECT_LINES : tipCap(args.shown?.length ?? 0);
@@ -974,9 +990,10 @@ export async function guideWithLuna(args: {
     args.onActivity?.({ tool, phase });
   };
   let attempts = 0;
+  let looped = false;
   const run = async () => {
     const prompt = buildLunaPrompt({ ...args, web, ...mcpServers(args.connectedServers ?? [], args.unavailableServers ?? [], extra, dropped.length > 0) });
-    const abortSignal = withTimeout(args.signal, args.timeoutMs ?? LUNA_TIMEOUT_MS);
+    const abortSignal = withTimeout(args.signal, args.timeoutMs ?? (args.command ? COMMAND_TIMEOUT_MS : LUNA_TIMEOUT_MS));
     const tools = lunaTools({ notesDir: args.notesDir, extraRoots: args.extraRoots, extra, web, location: searchOptions ? args.searchLocation : undefined, desktop: args.desktopTools });
     attempts += 1;
     // The whole prompt, on this computer only. The system prompt barely changes, so its text is written once per session.
@@ -997,9 +1014,18 @@ export async function guideWithLuna(args: {
     });
     const result = streamText({
       model: args.model,
-      ...lunaRequest(prompt, args.command ? args.historyMessages : []),
+      // Anthropic refuses tool calls in the messages of a request with no tools: then the history goes as text.
+      ...lunaRequest(prompt, !args.command ? [] : Object.keys(tools).length > 0 ? args.historyMessages : historyAsText(args.historyMessages ?? [])),
       tools,
-      stopWhen: isStepCount(args.command ? COMMAND_MAX_STEPS : TIP_MAX_STEPS),
+      // A direct request has no step cap: it ends when the AI stops, on Stop or the timeout, or when the same tool call keeps
+      // giving the same result (core/loop-guard.ts). Near the window, its oldest messages fold into a summary (core/bee-history.ts).
+      stopWhen: args.command
+        ? stopOnNoProgress(() => {
+            looped = true;
+            debugLog.warn("ai", "luna-no-progress", { attempt: attempts });
+          })
+        : isStepCount(TIP_MAX_STEPS),
+      ...(args.command ? { prepareStep: compactingStep({ summarise: args.summarise, signal: args.signal, onCompact: (info) => debugLog.info("ai", "luna-compacted", info) }) } : {}),
       // Local tools report around their execution. Provider tools (web_search) report from the stream below.
       // A finished step reports any call that was missed, so every start gets an end.
       onToolExecutionStart: ({ toolCall }) => report(toolCall.toolCallId, toolCall.toolName, "start"),
@@ -1015,7 +1041,7 @@ export async function guideWithLuna(args: {
       abortSignal,
       // User-facing: not flex (see gateway.ts). Anthropic only while web_search is sent; Anthropic first on the no-web retry.
       // Tips keep thinking off (gateway.ts ANTHROPIC_NO_THINKING): it costs latency and can spend the whole output budget before
-      // any tip. A direct request thinks briefly (ANTHROPIC_BRIEF_THINKING), so it plans its tool calls.
+      // any tip. A direct request thinks adaptively at medium effort (ANTHROPIC_COMMAND_THINKING), so it plans its tool calls.
       providerOptions: args.command ? commandProviderOptions("default", { web }) : guideProviderOptions("default", { web }),
     });
     // Only the last step's text is the answer, so each step starts a fresh list. Within a step, text before a tool is
@@ -1072,6 +1098,7 @@ export async function guideWithLuna(args: {
       finishReason: await result.finishReason,
       usage: await result.totalUsage,
       providerMetadata: await result.providerMetadata,
+      messages: args.command ? ((await result.responseMessages) as ModelMessage[]) : undefined,
     };
   };
   // First try with every tool. A web-search rejection retries once without web_search; a search-option rejection first retries
@@ -1094,8 +1121,12 @@ export async function guideWithLuna(args: {
         cost: result.providerMetadata?.gateway ?? null,
       });
       // No answer text is a failure, not "no tips" (that is a literal NONE). Not retried: it would double latency and cost.
-      if (done.empty) return { tips: [], tipSources: [], sources: [], error: `AI guidance failed: ${emptyReason(done)}`, skipped: skipped(), empty: true, ...timings(done) };
-      return { ...tipFields(fresh(parseLunaTips(result.text, maxTips))), sources: sourcesFromGenerateResult(result), error: null, skipped: skipped(), ...timings(done) };
+      const messages = result.messages ? { messages: result.messages } : {};
+      if (done.empty) {
+        const error = looped ? "Stopped: the AI kept repeating the same step." : `AI guidance failed: ${emptyReason(done)}`;
+        return { tips: [], tipSources: [], sources: [], error, skipped: skipped(), empty: true, ...(looped ? { loop: true } : {}), ...messages, ...timings(done) };
+      }
+      return { ...tipFields(fresh(parseLunaTips(result.text, maxTips))), sources: sourcesFromGenerateResult(result), error: null, skipped: skipped(), ...messages, ...timings(done) };
     } catch (error) {
       // Match on the whole text so a tool named late in a long error is still found. Show the short one.
       const message = errorText(error, Number.POSITIVE_INFINITY);

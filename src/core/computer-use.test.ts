@@ -84,15 +84,31 @@ describe("runComputerUse", () => {
         { text: "- Sent the message to Sam.\n" },
       ],
     });
-    expect(await result).toEqual({ line: "Sent the message to Sam.", stopped: false, steps: 5, error: false });
+    expect(await result).toMatchObject({ line: "Sent the message to Sam.", stopped: false, steps: 5, error: false });
     expect(commands).toEqual(["snapshot", "set-value", "click", "snapshot"]);
   });
 
-  it("stops at the step limit", async () => {
-    const { result, modelCalls, commands } = loop({ maxSteps: 3, turns: [{ tool: "list_apps", input: {} }] });
-    expect(await result).toEqual({ line: "Stopped after 3 steps.", stopped: true, steps: 3, error: false });
-    expect(commands).toEqual(["list-apps", "list-apps", "list-apps"]);
+  it("stops at a step limit when a test sets one", async () => {
+    const { result, modelCalls, commands } = loop({ maxSteps: 2, turns: [{ tool: "list_apps", input: {} }] });
+    expect(await result).toMatchObject({ line: "Stopped after 2 steps.", stopped: true, steps: 2, error: false });
+    expect(commands).toEqual(["list-apps", "list-apps"]);
     expect(modelCalls()).toBeLessThanOrEqual(4);
+  });
+
+  it("has no step cap: it stops when the same call keeps giving the same result", async () => {
+    const control = createRunControl();
+    const tools = computerTools({ run: async () => ({ ok: true, data: [{ name: "Discord" }] }), desktop: null as never, control, platform: "mac", askFirst: () => false, confirm: async () => true });
+    let calls = 0;
+    const model = new MockLanguageModelV4({
+      doGenerate: async () => {
+        calls += 1;
+        return { content: [{ type: "tool-call", toolCallId: `c${calls}`, toolName: "list_apps", input: "{}" }], finishReason: { unified: "tool-calls", raw: undefined }, usage, warnings: [] };
+      },
+    });
+    const result = await runComputerUse({ model, command: "open Discord", tools, control, platform: "mac" });
+    expect(result).toMatchObject({ line: "Stopped: Bee kept repeating the same step.", stopped: true, steps: 3, error: false });
+    expect(calls).toBe(3);
+    expect(result.messages.length).toBeGreaterThan(0);
   });
 
   it("stops at the time limit, killing the command in flight", async () => {
@@ -128,7 +144,7 @@ describe("runComputerUse", () => {
       return { ok: true, data: [] };
     };
     const { result, modelCalls } = loop({ run, control, turns: [{ tool: "list_apps", input: {} }] });
-    expect(await result).toEqual({ line: "Stopped.", stopped: true, steps: 2, error: false });
+    expect(await result).toMatchObject({ line: "Stopped.", stopped: true, steps: 2, error: false });
     expect(commands).toHaveLength(2);
     expect(modelCalls()).toBe(2);
   });
@@ -154,7 +170,7 @@ describe("runComputerUse", () => {
     });
     const control = createRunControl();
     const tools = computerTools({ run: async () => ({ ok: true, data: [] }), desktop, control, platform: "windows", askFirst: () => true, confirm: async () => true });
-    expect(await runComputerUse({ model, command: "close Slack", tools, control, platform: "windows", maxSteps: 30 })).toEqual({ line: "The AI could not finish that.", stopped: false, steps: 0, error: true });
+    expect(await runComputerUse({ model, command: "close Slack", tools, control, platform: "windows", maxSteps: 30 })).toMatchObject({ line: "The AI could not finish that.", stopped: false, steps: 0, error: true });
   });
 
   it("tells the AI screen text is data, to state effects, and to end with one line, without naming models", () => {
@@ -223,7 +239,7 @@ describe("runComputerUse: snapshots and refs only", () => {
     const control = createRunControl({ maxSteps: 30 });
     const tools = computerTools({ run, desktop, control, platform: "windows", askFirst: () => false, confirm: async () => true });
     const result = await runComputerUse({ model, command: "send Sam running late in Teams", tools, control, platform: "windows", maxSteps: 30 });
-    expect(result).toEqual({ line: "Sent the message in Teams.", stopped: false, steps: 4, error: false, endedWhere: "Microsoft Teams, Chat" });
+    expect(result).toMatchObject({ line: "Sent the message in Teams.", stopped: false, steps: 4, error: false, endedWhere: "Microsoft Teams, Chat" });
     expect(commands.map(([command]) => command)).toEqual(["find", "set-value", "find", "click"]);
     // The text goes on stdin (--stdin), never in argv.
     expect(commands[1]).toEqual(["set-value", "@s5:e1", "--stdin"]);
@@ -252,7 +268,7 @@ describe("runComputerUse: snapshots and refs only", () => {
     const control = createRunControl({ maxSteps: 30 });
     const tools = computerTools({ run, desktop, control, platform: "windows", askFirst: () => false, confirm: async () => true });
     const result = await runComputerUse({ model, command: "send Sam running late in Teams", tools, control, platform: "windows", maxSteps: 30 });
-    expect(result).toEqual({ line: "Bee cannot control Microsoft Teams: it shows no controls.", stopped: false, steps: 3, error: false, endedWhere: "Microsoft Teams" });
+    expect(result).toMatchObject({ line: "Bee cannot control Microsoft Teams: it shows no controls.", stopped: false, steps: 3, error: false, endedWhere: "Microsoft Teams" });
     // The tree only: each whole-window read ran twice (Bee waited for the app), and nothing was clicked or typed.
     expect(commands).toEqual(["snapshot", "snapshot", "find", "snapshot", "snapshot"]);
     // What the AI read: stop and say so. Never a picture, and never a hint to take one.

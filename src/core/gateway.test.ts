@@ -1,10 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
-  ANTHROPIC_BRIEF_THINKING,
+  ANTHROPIC_COMMAND_THINKING,
   ANTHROPIC_CACHE,
   ANTHROPIC_NO_THINKING,
   COMMAND_MODEL,
-  COMMAND_THINKING_BUDGET,
   FLEX_PROVIDER_OPTIONS,
   GUIDE_MODEL,
   GUIDE_PROVIDER,
@@ -60,14 +59,14 @@ describe("commandProviderOptions", () => {
     expect(GUIDE_MODEL).toBe("anthropic/claude-haiku-5.5");
   });
 
-  it("routes like guideProviderOptions, with brief thinking on", () => {
-    expect(COMMAND_THINKING_BUDGET).toBe(1500);
-    expect(ANTHROPIC_BRIEF_THINKING).toEqual({ anthropic: { thinking: { type: "enabled", budgetTokens: 1500 } } });
+  it("routes like guideProviderOptions, with adaptive thinking at medium effort (no budgetTokens)", () => {
+    expect(ANTHROPIC_COMMAND_THINKING).toEqual({ anthropic: { thinking: { type: "adaptive" }, effort: "medium" } });
     for (const tier of ["flex", "default", "ultrafast"] as const) {
       for (const web of [true, false]) {
         const options = commandProviderOptions(tier, { web });
         expect(options.gateway).toEqual(guideProviderOptions(tier, { web }).gateway);
-        expect(options.anthropic).toEqual({ thinking: { type: "enabled", budgetTokens: 1500 } });
+        expect(options.anthropic).toEqual({ thinking: { type: "adaptive" }, effort: "medium" });
+        expect(JSON.stringify(options)).not.toContain("budgetTokens");
       }
     }
   });
