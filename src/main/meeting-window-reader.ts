@@ -1,11 +1,23 @@
-import { parseAccessibility, parseApps, parseFindCount, parseSnapshotTree, parseWindows, type AdApp, type AdWindow } from "../core/agent-desktop-envelope";
+import {
+  parseAccessibility,
+  parseApps,
+  parseFindCount,
+  parseSnapshotTree,
+  parseWindows,
+  type AdApp,
+  type AdNode,
+  type AdWindow,
+  type AgentDesktopFailure,
+} from "../core/agent-desktop-envelope";
 import {
   EMPTY_CAPTIONS,
   captionStep,
   detectMeetings,
+  drillTargets,
   extractCaptionLines,
   extractParticipants,
   isPossibleTeamsCall,
+  joinDrills,
   meetingReading,
   type CaptionLine,
   type CaptionMemory,
@@ -19,7 +31,8 @@ import type { AgentDesktopRun } from "./agent-desktop";
 // Experimental: "read meeting window" (Settings, off by default). With the setting on, Bee lists windows with agent-desktop to
 // find a Teams, Zoom or Google Meet call on macOS and Windows, reads the Teams or Zoom call window's people and live captions,
 // and hands new caption lines to the renderer. Read-only and headless: only list-apps, list-windows, find --count, snapshot
-// and permissions run. Everything stays in memory. Console lines carry codes and counts only. Any failure falls back to the built-in
+// and permissions run. A call window is read as a skeleton (a shallow map), then by drilling only the regions that can hold
+// people and captions (snapshot --root), never as one deep snapshot of the whole window. Everything stays in memory. Console lines carry codes and counts only. Any failure falls back to the built-in
 // detector (main/teams-detector.ts), which keeps running beside it.
 
 export const READER_TIMING = {
@@ -43,8 +56,10 @@ export const READER_TIMING = {
   confirmMs: 60_000,
 };
 
-// Snapshot bounds: deep enough for Chromium's nested groups, short enough to keep the poll light.
-const SNAPSHOT_ARGS = ["--compact", "--max-depth", "25", "--timeout-ms", "2500"];
+// The map: three levels, interactive nodes only, cut regions marked with children_count and a drill ref.
+const SKELETON_ARGS = ["--skeleton", "-i", "--compact", "--timeout-ms", "2500"];
+// A drill: all of one region's text (no -i, which drops caption and name text), deep enough for Chromium's nested groups.
+const DRILL_ARGS = ["--compact", "--max-depth", "25", "--timeout-ms", "2500"];
 const CAPTION_SPEAKER_MAX = 100;
 const CAPTION_TEXT_MAX = 2000;
 const CAPTION_BATCH_MAX = 50;
@@ -105,6 +120,8 @@ export function createMeetingWindowReader(deps: {
   let memory: CaptionMemory = EMPTY_CAPTIONS;
   let cancelTimer: (() => void) | null = null;
   let captionBusy = false;
+  // Drill refs from the last skeleton. Re-drilled while captions show; mapped again when none show or a drill fails.
+  let drills: string[] = [];
   let captionFailures = 0;
   let idleDelay = timing.captionMs;
 
@@ -125,6 +142,7 @@ export function createMeetingWindowReader(deps: {
     memory = EMPTY_CAPTIONS;
     captionFailures = 0;
     idleDelay = timing.captionMs;
+    drills = [];
   }
 
   function forget(): void {
@@ -247,6 +265,37 @@ export function createMeetingWindowReader(deps: {
     }, ms);
   }
 
+  /**
+   * The call window's people and captions regions as one tree: a skeleton to find the regions, then a drill into each. Kept
+   * refs are drilled again without a new skeleton; when one fails (the window changed), the window is mapped once more.
+   */
+  async function readTree(run: AgentDesktopRun, window: MeetingWindow): Promise<{ ok: true; tree: AdNode | null } | AgentDesktopFailure> {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const kept = drills.length > 0;
+      if (!kept) {
+        const skeleton = await run("snapshot", ["--app", window.appName, "--window-id", window.windowId, ...SKELETON_ARGS], { timeoutMs: 6000 });
+        if (!skeleton.ok) return skeleton;
+        drills = drillTargets(skeleton.data);
+        if (drills.length === 0) return { ok: true, tree: null };
+      }
+      const trees: AdNode[] = [];
+      let failed: AgentDesktopFailure | null = null;
+      for (const ref of drills) {
+        const result = await run("snapshot", ["--root", ref, ...DRILL_ARGS], { timeoutMs: 6000 });
+        if (!result.ok) {
+          failed = result;
+          break;
+        }
+        const tree = parseSnapshotTree(result.data);
+        if (tree) trees.push(tree);
+      }
+      if (!failed) return { ok: true, tree: joinDrills(trees) };
+      drills = [];
+      if (!kept || failed.code === "PERM_DENIED") return failed;
+    }
+    return { ok: false, code: "ERROR" };
+  }
+
   const clip = (line: CaptionLine): CaptionLine => ({ speaker: line.speaker?.slice(0, CAPTION_SPEAKER_MAX) ?? null, text: line.text.slice(0, CAPTION_TEXT_MAX) });
 
   async function readCallWindow(): Promise<void> {
@@ -259,7 +308,7 @@ export function createMeetingWindowReader(deps: {
     captionBusy = true;
     const started = clock();
     try {
-      const result = await run("snapshot", ["--app", window.appName, "--window-id", window.windowId, ...SNAPSHOT_ARGS], { timeoutMs: 6000 });
+      const result = await readTree(run, window);
       if (target !== window) return;
       let delay: number;
       if (!result.ok) {
@@ -268,10 +317,12 @@ export function createMeetingWindowReader(deps: {
         delay = Math.min(timing.captionMs * 2 ** captionFailures, timing.failMaxMs);
       } else {
         captionFailures = 0;
-        const tree = parseSnapshotTree(result.data);
+        const tree = result.tree;
         participants = extractParticipants(tree);
         const captions = extractCaptionLines(tree);
         captionsVisible = captions.visible;
+        // No captions in the drilled regions: map the window again next time, as a captions panel may have opened elsewhere.
+        if (!captions.visible) drills = [];
         const step = captionStep(memory, captions.lines, clock());
         memory = step.memory;
         if (step.fresh.length > 0) {

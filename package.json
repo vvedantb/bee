@@ -32,7 +32,7 @@
     "@clerk/electron": "^0.0.47",
     "@modelcontextprotocol/sdk": "^1.32.1",
     "@vvedantb/server": "^0.7.1",
-    "agent-desktop": "^1.1.0",
+    "agent-desktop": "^1.2.0",
     "ai": "^7.0.116",
     "electron-store": "^8.2.0",
     "zod": "^4.6.5"

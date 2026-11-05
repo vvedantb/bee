@@ -4,6 +4,7 @@ import {
   COMPUTER_USE_COMMANDS,
   DESKTOP_ACTION_COMMANDS,
   HEADED_FLAG,
+  STDIN_FLAG,
   READ_ONLY_COMMANDS,
   assertComputerUse,
   assertDesktopAction,
@@ -89,14 +90,17 @@ describe("assertComputerUse", () => {
     expect(() => assertComputerUse("get", [REF, "--property=title"])).not.toThrow();
     expect(() => assertComputerUse("is", [REF, "--property=checked"])).not.toThrow();
     for (const command of ["click", "clear", "check", "uncheck", "expand", "collapse", "scroll-to"]) expect(() => assertComputerUse(command, [REF]), command).not.toThrow();
-    expect(() => assertComputerUse("type", [REF, "--", "hi Sam"])).not.toThrow();
-    expect(() => assertComputerUse("set-value", [REF, "--", "-5 apples\nand pears"])).not.toThrow();
+    expect(() => assertComputerUse("type", [REF, STDIN_FLAG])).not.toThrow();
+    expect(() => assertComputerUse("set-value", [REF, STDIN_FLAG, "--timeout-ms=8000"])).not.toThrow();
     expect(() => assertComputerUse("select", [REF, "--", "Option B"])).not.toThrow();
     expect(() => assertComputerUse("scroll", [REF, "--direction=down", "--amount=3"])).not.toThrow();
     expect(() => assertComputerUse("press", ["cmd+w", "--app=Google Chrome"])).not.toThrow();
     expect(() => assertComputerUse("close-app", ["Discord"])).not.toThrow();
     expect(() => assertComputerUse("wait", ["1000"])).not.toThrow();
     expect(() => assertComputerUse("wait", ["--window=Save", "--app=TextEdit", "--timeout=8000"])).not.toThrow();
+    expect(() => assertComputerUse("wait", [`--element=${REF}`, "--predicate=value", "--value=7", "--timeout=5000"])).not.toThrow();
+    expect(() => assertComputerUse("wait", [`--element=${REF}`, "--predicate=actionable", "--action=type"])).not.toThrow();
+    expect(() => assertComputerUse("wait", [`--element=${REF}`])).not.toThrow();
     expect(() => assertComputerUse("list-apps", [])).not.toThrow();
     expect(() => assertComputerUse("permissions", [])).not.toThrow();
   });
@@ -105,7 +109,7 @@ describe("assertComputerUse", () => {
     for (const command of [
       "screenshot", "clipboard-get", "clipboard-set", "clipboard-clear", "batch", "launch", "mouse-click", "mouse-move", "mouse-wheel", "drag", "hover",
       "double-click", "right-click", "key-down", "notification-action", "dismiss-all-notifications", "list-notifications", "session", "trace",
-      "cursor-overlay", "open-system-surface", "skills", "move-window", "resize-window", "status", "focus-window", "toggle",
+      "cursor-overlay", "open-system-surface", "move-window", "resize-window", "status", "focus-window", "toggle",
     ]) {
       expect(() => assertComputerUse(command, []), command).toThrow(/not allowed/);
     }
@@ -133,11 +137,11 @@ describe("assertComputerUse", () => {
 
   it("allows physical input only on press, type and focus", () => {
     expect(() => assertComputerUse("press", ["return", "--app=Slack", HEADED_FLAG])).not.toThrow();
-    expect(() => assertComputerUse("type", [REF, HEADED_FLAG, "--", "hi"])).not.toThrow();
+    expect(() => assertComputerUse("type", [REF, HEADED_FLAG, STDIN_FLAG])).not.toThrow();
     expect(() => assertComputerUse("focus", [REF, HEADED_FLAG])).not.toThrow();
     for (const command of ["click", "set-value", "scroll", "snapshot", "close-app", "select"]) {
       const args = command === "snapshot" ? ["--app=Slack"] : command === "close-app" ? ["Slack"] : [REF];
-      expect(() => assertComputerUse(command, [...args, HEADED_FLAG, ...(command === "set-value" || command === "select" ? ["--", "x"] : [])]), command).toThrow(/not allowed/);
+      expect(() => assertComputerUse(command, [...args, HEADED_FLAG, ...(command === "set-value" ? [STDIN_FLAG] : command === "select" ? ["--", "x"] : [])]), command).toThrow(/not allowed/);
     }
     expect(() => assertComputerUse("press", ["return", "--app=Slack", "--headed=yes"])).toThrow(/not allowed|no value/);
   });
@@ -154,10 +158,54 @@ describe("assertComputerUse", () => {
     expect(() => assertComputerUse("wait", ["600000"])).toThrow(/argument not allowed/);
     expect(() => assertComputerUse("wait", ["--event=reboot"])).toThrow(/value not allowed/);
     // Free text only after "--", exactly once, and only where it belongs.
-    expect(() => assertComputerUse("type", [REF, "hi"])).toThrow();
-    expect(() => assertComputerUse("type", [REF, "--", "a", "b"])).toThrow(/text not allowed/);
+    expect(() => assertComputerUse("select", [REF, "hi"])).toThrow();
+    expect(() => assertComputerUse("select", [REF, "--", "a", "b"])).toThrow(/text not allowed/);
     expect(() => assertComputerUse("click", [REF, "--", "x"])).toThrow(/text not allowed/);
-    expect(() => assertComputerUse("type", [REF, "--", "bad\u0000text"])).toThrow(/text not allowed/);
+    expect(() => assertComputerUse("select", [REF, "--", "bad\u0000text"])).toThrow(/text not allowed/);
+  });
+
+  it("takes type and set-value text only on stdin: --stdin, never argv text", () => {
+    for (const command of ["type", "set-value"]) {
+      expect(() => assertComputerUse(command, [REF, STDIN_FLAG]), command).not.toThrow();
+      expect(() => assertComputerUse(command, [REF, "--", "hunter2"]), command).toThrow(/goes on stdin/);
+      expect(() => assertComputerUse(command, [REF, "hunter2"]), command).toThrow();
+      expect(() => assertComputerUse(command, [REF, STDIN_FLAG, "--", "hunter2"]), command).toThrow(/text not allowed/);
+      expect(() => assertComputerUse(command, [REF, `${STDIN_FLAG}=yes`]), command).toThrow(/no value|not allowed/);
+      expect(() => assertComputerUse(command, [REF, STDIN_FLAG, STDIN_FLAG]), command).toThrow(/repeated/);
+    }
+    for (const command of ["click", "select", "press", "wait", "snapshot"]) {
+      const args = command === "press" ? ["return"] : command === "wait" || command === "snapshot" ? [] : [REF];
+      expect(() => assertComputerUse(command, [...args, STDIN_FLAG, ...(command === "select" ? ["--", "x"] : [])]), command).toThrow(/not allowed/);
+    }
+  });
+
+  it("waits on one ref's predicate, with --value and --action only where they belong", () => {
+    for (const predicate of ["exists", "enabled", "visible", "actionable"]) expect(() => assertComputerUse("wait", [`--element=${REF}`, `--predicate=${predicate}`]), predicate).not.toThrow();
+    expect(() => assertComputerUse("wait", [`--element=${REF}`, "--predicate=value", "--value="])).not.toThrow();
+    expect(() => assertComputerUse("wait", [`--element=${REF}`, "--predicate=value"])).toThrow(/--value/);
+    expect(() => assertComputerUse("wait", [`--element=${REF}`, "--predicate=enabled", "--value=7"])).toThrow(/--value/);
+    expect(() => assertComputerUse("wait", [`--element=${REF}`, "--value=7"])).toThrow(/--value/);
+    expect(() => assertComputerUse("wait", [`--element=${REF}`, "--predicate=visible", "--action=click"])).toThrow(/--action/);
+    expect(() => assertComputerUse("wait", [`--element=${REF}`, "--predicate=actionable", "--action=drag"])).toThrow(/value not allowed/);
+    expect(() => assertComputerUse("wait", [`--element=${REF}`, "--predicate=focused"])).toThrow(/value not allowed/);
+    expect(() => assertComputerUse("wait", ["--element=@e1"])).toThrow(/value not allowed/);
+    expect(() => assertComputerUse("wait", ["--predicate=exists"])).toThrow(/need --element/);
+    expect(() => assertComputerUse("wait", ["--value=7"])).toThrow(/need --element/);
+    for (const other of ["--window=Save", "--text=Hi", "--app=Slack", "--menu", "1000"]) {
+      expect(() => assertComputerUse("wait", [`--element=${REF}`, other]), other).toThrow(/no other mode/);
+    }
+    // Post-action waits stay off.
+    for (const flag of ["--wait-for=button:OK", "--wait-for-gone=progressindicator"]) expect(() => assertComputerUse("click", [REF, flag]), flag).toThrow(/not allowed/);
+  });
+
+  it("reads only the desktop and platform skills: no list, path, --full, reference or other skill", () => {
+    expect(() => assertComputerUse("skills", ["get", "desktop"])).not.toThrow();
+    expect(() => assertComputerUse("skills", ["get", "platform"])).not.toThrow();
+    for (const args of [[], ["list"], ["path"], ["get"], ["get", "macos"], ["get", "windows"], ["get", "desktop", "--full"], ["get", "desktop", "workflows"], ["get", "platform", "troubleshooting"], ["--full"]]) {
+      expect(() => assertComputerUse("skills", args), args.join(" ")).toThrow(/not allowed/);
+    }
+    // The meeting window reader's runner never runs skills.
+    expect(() => assertReadOnly("skills", ["get", "desktop"])).toThrow(/not allowed/);
   });
 
   it("needs a real ref, keys and app name as positionals", () => {

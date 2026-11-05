@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { HEADED_FLAG, type AgentDesktopResult, type ComputerRun, type ComputerUseCommand } from "./agent-desktop-envelope";
+import { HEADED_FLAG, STDIN_FLAG, assertComputerUse, type AgentDesktopResult, type ComputerRun, type ComputerUseCommand } from "./agent-desktop-envelope";
 import { createRunControl, type ComputerPlatform, type RunControl } from "./computer-control";
 import { shellElement, type Element } from "./computer-gate";
 import {
@@ -30,12 +30,12 @@ const SNAPSHOT = {
   },
 };
 
-type Call = { command: ComputerUseCommand; args: string[]; signal?: AbortSignal };
+type Call = { command: ComputerUseCommand; args: string[]; signal?: AbortSignal; stdin?: string };
 
 function fakeRun(reply: (call: Call) => AgentDesktopResult | Promise<AgentDesktopResult> = () => ({ ok: true, data: { disposition: { delivery: "delivered_verified" } } })) {
   const calls: Call[] = [];
   const run: ComputerRun = async (command, args, options) => {
-    const call = { command, args, signal: options?.signal };
+    const call = { command, args, signal: options?.signal, ...(options?.stdin !== undefined ? { stdin: options.stdin } : {}) };
     calls.push(call);
     if (command === "snapshot") return { ok: true, data: SNAPSHOT };
     return reply(call);
@@ -174,16 +174,60 @@ describe("computerTools: what runs", () => {
     ]);
   });
 
-  it("types after --, and passes physical keys only when asked", async () => {
+  it("types and sets text on stdin with --stdin, never in argv or the log, and passes physical keys only when asked", async () => {
+    const events: DebugEvent[] = [];
+    setDebugSink({ write: (event) => events.push(event), wants: () => true });
+    const { call, calls } = setup({ askFirst: false });
+    try {
+      await call("snapshot", { app: "Discord" });
+      await call("type_text", { ref: "@s1abc:e1", text: "-5 is fine", effect: "none" });
+      await call("type_text", { ref: "@s1abc:e1", text: "ok", effect: "none", physical: true });
+      await call("set_value", { ref: "@s1abc:e1", value: "hunter2-secret", effect: "none" });
+    } finally {
+      setDebugSink(null);
+    }
+    expect(calls.slice(1).map(({ command, args, stdin }) => [command, args, stdin])).toEqual([
+      ["type", ["@s1abc:e1", STDIN_FLAG], "-5 is fine"],
+      ["type", ["@s1abc:e1", HEADED_FLAG, STDIN_FLAG], "ok"],
+      ["set-value", ["@s1abc:e1", STDIN_FLAG], "hunter2-secret"],
+    ]);
+    for (const { command, args } of calls.slice(1)) {
+      expect(args).not.toContain("--");
+      expect(() => assertComputerUse(command, args)).not.toThrow();
+    }
+    const exec = events.filter((event) => event.event === "exec");
+    expect(exec).toHaveLength(4);
+    expect(JSON.stringify(exec)).not.toMatch(/hunter2|-5 is fine/);
+  });
+
+  it("waits on a ref's predicate with fixed argv, and refuses a bad mix before anything runs", async () => {
     const { call, calls } = setup({ askFirst: false });
     await call("snapshot", { app: "Discord" });
-    await call("type_text", { ref: "@s1abc:e1", text: "-5 is fine", effect: "none" });
-    await call("type_text", { ref: "@s1abc:e1", text: "ok", effect: "none", physical: true });
-    await call("set_value", { ref: "@s1abc:e1", value: "draft", effect: "none" });
-    expect(calls.slice(1).map(({ command, args }) => [command, ...args])).toEqual([
-      ["type", "@s1abc:e1", "--", "-5 is fine"],
-      ["type", "@s1abc:e1", HEADED_FLAG, "--", "ok"],
-      ["set-value", "@s1abc:e1", "--", "draft"],
+    expect(await call("wait", { element: "@s1abc:e1", predicate: "value", value: "draft" })).toBe("Done.");
+    expect(await call("wait", { element: "@s1abc:e1", predicate: "actionable", action: "type", timeout_ms: 3000 })).toBe("Done.");
+    expect(await call("wait", { element: "@s1abc:e2" })).toBe("Done.");
+    expect(await call("wait", { element: "@s1abc:e1", predicate: "value" })).toMatch(/^Error: give value/);
+    expect(await call("wait", { element: "@s1abc:e1", predicate: "enabled", value: "x" })).toMatch(/^Error: value goes only/);
+    expect(await call("wait", { element: "@s1abc:e1", predicate: "visible", action: "click" })).toMatch(/^Error: action goes only/);
+    expect(await call("wait", { predicate: "value", value: "x" })).toMatch(/^Error: give element/);
+    expect(await call("wait", { element: "@s9zzz:e1", predicate: "exists" })).toMatch(/^Error: use a ref/);
+    const waits = calls.filter((item) => item.command === "wait").map(({ args }) => args);
+    expect(waits).toEqual([
+      ["--element=@s1abc:e1", "--predicate=value", "--value=draft", "--timeout=8000"],
+      ["--element=@s1abc:e1", "--predicate=actionable", "--action=type", "--timeout=3000"],
+      ["--element=@s1abc:e2", "--predicate=exists", "--timeout=8000"],
+    ]);
+    for (const args of waits) expect(() => assertComputerUse("wait", args)).not.toThrow();
+  });
+
+  it("reads a field's value and any other element's text by default", async () => {
+    const { call, calls } = setup({ askFirst: false });
+    await call("snapshot", { app: "Discord" });
+    await call("read", { ref: "@s1abc:e1" });
+    await call("read", { ref: "@s1abc:e2" });
+    expect(calls.slice(1).map(({ args }) => args)).toEqual([
+      ["@s1abc:e1", "--property=value"],
+      ["@s1abc:e2", "--property=text"],
     ]);
   });
 
@@ -283,7 +327,7 @@ describe("computerTools: what runs", () => {
     const { call } = setup({ run, askFirst: false });
     await call("snapshot", { app: "Discord" });
     await Promise.all([call("type_text", { ref: "@s1abc:e1", text: "hi", effect: "none" }), call("click", { ref: "@s1abc:e3", effect: "none" })]);
-    expect(order).toEqual(["start type", "end type hi", "start click", "end click @s1abc:e3"]);
+    expect(order).toEqual(["start type", `end type ${STDIN_FLAG}`, "start click", "end click @s1abc:e3"]);
   });
 });
 
@@ -764,7 +808,8 @@ describe("computerTools: agent-desktop 1.1 snapshots and refs", () => {
     await call("scroll", { ref: "@s1abc:e4", direction: "down" });
     await call("scroll", { ref: "@s1abc:e2" });
     expect(calls.slice(1).map(({ command, args }) => [command, ...args])).toEqual([
-      ["get", "@s1abc:e1", "--property=text"],
+      // A text field reads its value by default: since agent-desktop 0.10 its text is what a person reads, not its content.
+      ["get", "@s1abc:e1", "--property=value"],
       ["get", "@s1abc:e1", "--property=value"],
       ["is", "@s1abc:e2", "--property=enabled"],
       ["clear", "@s1abc:e1"],

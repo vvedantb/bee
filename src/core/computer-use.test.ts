@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentDesktopResult, ComputerRun } from "./agent-desktop-envelope";
 import { createRunControl, type RunControl } from "./computer-control";
 import { CANNOT_CONTROL, computerTools } from "./computer-tools";
-import { COMPUTER_SYSTEM, computerAccess, endedWhere, finalLine, runComputerUse, wantsComputerUse } from "./computer-use";
+import { COMPUTER_SYSTEM, computerAccess, computerSkills, endedWhere, finalLine, runComputerUse, trimSkill, wantsComputerUse } from "./computer-use";
 import type { DesktopActions } from "./desktop-actions";
 
 // The computer-use loop with a mock model and a fake agent-desktop: no network, no OS. Each model call is one turn.
@@ -174,6 +174,12 @@ describe("runComputerUse", () => {
     expect(COMPUTER_SYSTEM).toMatch(/identical twins, stop and say Bee cannot tell which one to use/);
     expect(COMPUTER_SYSTEM).not.toMatch(/screenshot|click_at|picture|image/i);
   });
+
+  it("tells the AI to verify with a wait on the ref, and to check a field's value, not its text", () => {
+    expect(COMPUTER_SYSTEM).toMatch(/wait with element and predicate value/);
+    expect(COMPUTER_SYSTEM).toMatch(/predicate actionable with action type/);
+    expect(COMPUTER_SYSTEM).toMatch(/read its value, not its text/);
+  });
 });
 
 describe("runComputerUse: snapshots and refs only", () => {
@@ -219,7 +225,9 @@ describe("runComputerUse: snapshots and refs only", () => {
     const result = await runComputerUse({ model, command: "send Sam running late in Teams", tools, control, platform: "windows", maxSteps: 30 });
     expect(result).toEqual({ line: "Sent the message in Teams.", stopped: false, steps: 4, error: false, endedWhere: "Microsoft Teams, Chat" });
     expect(commands.map(([command]) => command)).toEqual(["find", "set-value", "find", "click"]);
-    expect(commands[1]).toEqual(["set-value", "@s5:e1", "--", "Running late"]);
+    // The text goes on stdin (--stdin), never in argv.
+    expect(commands[1]).toEqual(["set-value", "@s5:e1", "--stdin"]);
+    expect(commands.flat().join(" ")).not.toContain("Running late");
     expect(prompts.map(pictures)).toEqual([0, 0, 0, 0, 0]);
     // The Windows line: write headless with set_value; type_text and focus always need physical.
     const system = JSON.stringify(prompts[0]?.[0]);
@@ -252,6 +260,98 @@ describe("runComputerUse: snapshots and refs only", () => {
     expect(seen).toContain(`If those show nothing usable either, ${CANNOT_CONTROL}.`);
     expect(seen).not.toMatch(/screenshot|click_at/i);
     expect(prompts.map(pictures)).toEqual([0, 0, 0, 0]);
+  });
+});
+
+describe("agent-desktop's skills", () => {
+  const GUIDE = [
+    "---",
+    "name: agent-desktop",
+    "description: >",
+    "  Operate desktop apps.",
+    "---",
+    "",
+    "# agent-desktop",
+    "",
+    "## Shell syntax",
+    "",
+    "Quote refs in PowerShell.",
+    "",
+    "## The loop",
+    "",
+    "Map, drill, act, verify with wait.",
+    "",
+    "## References",
+    "",
+    "| commands-system | waits |",
+  ].join("\n");
+  const skillsRun = (reply: (name: string) => AgentDesktopResult) => {
+    const calls: string[][] = [];
+    const run: ComputerRun = async (command, args) => {
+      calls.push([command, ...args]);
+      return reply(args[1] ?? "");
+    };
+    return { run, calls };
+  };
+
+  it("trims a guide: no front matter, setup or reference sections, and a cap at a paragraph", () => {
+    const trimmed = trimSkill(GUIDE);
+    expect(trimmed).toBe("# agent-desktop\n\n## The loop\n\nMap, drill, act, verify with wait.");
+    const long = trimSkill(`## Rules\n\n${"a".repeat(300)}\n\n${"b".repeat(300)}`, 400);
+    expect(long).toBe(`## Rules\n\n${"a".repeat(300)}\n…`);
+    expect(trimSkill("x".repeat(5000)).length).toBeLessThanOrEqual(4002);
+  });
+
+  it("loads skills get desktop and skills get platform once for the session", async () => {
+    const { run, calls } = skillsRun((name) => ({ ok: true, data: { content: `## ${name}\n\nUse ${name} rules.`, skill: name } }));
+    const skills = computerSkills(run);
+    const first = await skills();
+    expect(first).toBe("## desktop\n\nUse desktop rules.\n\n## platform\n\nUse platform rules.");
+    expect(await skills()).toBe(first);
+    expect(calls).toEqual([
+      ["skills", "get", "desktop"],
+      ["skills", "get", "platform"],
+    ]);
+  });
+
+  it("fails soft, and tries again next run, when a guide cannot be read", async () => {
+    let fail = true;
+    const { run, calls } = skillsRun((name) => (fail && name === "platform" ? { ok: false, code: "INTERNAL" } : { ok: true, data: { content: `## ${name}` } }));
+    const skills = computerSkills(run);
+    expect(await skills()).toBe("## desktop");
+    fail = false;
+    expect(await skills()).toBe("## desktop\n\n## platform");
+    expect(await skills()).toBe("## desktop\n\n## platform");
+    expect(calls).toHaveLength(4);
+    const throwing = computerSkills(async () => {
+      throw new Error("refused");
+    });
+    expect(await throwing()).toBe("");
+  });
+
+  it("puts the trimmed guides in the system prompt after Bee's own rules, and runs without them when they fail", async () => {
+    const prompts: unknown[] = [];
+    const model = new MockLanguageModelV4({
+      doGenerate: async (options) => {
+        prompts.push(options.prompt);
+        return { content: [{ type: "text", text: "Done." }], finishReason: { unified: "stop", raw: undefined }, usage, warnings: [] };
+      },
+    });
+    const { run } = skillsRun((name) => ({ ok: true, data: { content: name === "desktop" ? GUIDE : `## What differs on macOS\n\n${"m".repeat(9000)}` } }));
+    const tools = computerTools({ run, desktop, control: createRunControl(), platform: "mac", askFirst: () => false, confirm: async () => true });
+    await runComputerUse({ model, command: "send Sam hi", tools, control: createRunControl(), platform: "mac", maxSteps: 5, skills: computerSkills(run) });
+    const system = JSON.stringify((prompts[0] as ModelMessage[])[0]);
+    expect(system).toContain("agent-desktop's own guides follow");
+    expect(system).toContain("Map, drill, act, verify with wait.");
+    expect(system).not.toContain("Quote refs in PowerShell");
+    expect(system).toContain("What differs on macOS");
+    expect(system).not.toContain("m".repeat(4100));
+    expect(system.indexOf("This is a Mac.")).toBeLessThan(system.indexOf("agent-desktop's own guides"));
+
+    const failing = computerSkills(async () => ({ ok: false, code: "SPAWN_FAILED" }));
+    const result = await runComputerUse({ model, command: "send Sam hi", tools, control: createRunControl(), platform: "mac", maxSteps: 5, skills: failing });
+    expect(result.line).toBe("Done.");
+    expect(JSON.stringify((prompts[1] as ModelMessage[])[0])).not.toContain("agent-desktop's own guides");
   });
 });
 

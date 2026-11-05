@@ -5,7 +5,7 @@ import type { ComputerRun } from "./agent-desktop-envelope";
 import { commandFallbackReply, historyMessages, type BeeExchange } from "./bee-history";
 import { COMPUTER_MAX_STEPS, createRunControl, stopLine, type ComputerPlatform, type RunControl } from "./computer-control";
 import { computerTools, type ConfirmRequest } from "./computer-tools";
-import { computerAccess, runComputerUse, wantsComputerUse } from "./computer-use";
+import { computerAccess, runComputerUse, wantsComputerUse, type ComputerSkills } from "./computer-use";
 import { debugLog, errorData } from "./debug-log";
 import { COMMAND_MODEL, NO_GATEWAY_KEY, type BeeGateway } from "./gateway";
 import type { McpTools } from "./mcp";
@@ -58,6 +58,8 @@ export type ComputerHost = {
   platform: ComputerPlatform;
   /** agent-desktop's computer-use runner (main/agent-desktop.ts). Never the meeting window reader's. */
   run: ComputerRun;
+  /** agent-desktop's guides, loaded once for the session over run (core/computer-use.ts computerSkills). */
+  skills?: ComputerSkills;
   /** "Ask before sending or deleting", read per action. */
   askFirst: () => boolean;
   /** Shows the Confirm prompt in the island; true for Confirm. */
@@ -130,6 +132,7 @@ async function runComputerCommand(args: {
       control,
       platform: host.platform,
       maxSteps,
+      ...(host.skills ? { skills: host.skills } : {}),
     });
     const guide = performance.now() - started;
     debugLog.info("computer", "run-end", { ...outcome, reason: control.reason(), declined: control.declined(), ms: Math.round(guide) });

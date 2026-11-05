@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -18,8 +18,8 @@ import {
 
 const root = new URL("../../", import.meta.url);
 const repo = (path: string) => fileURLToPath(new URL(path, root));
-// agent-desktop 1.1.0's own reply to version (envelope 2.6), less its os and target.
-const ENVELOPE = '{"version":"2.6","ok":true,"command":"version","data":{"version":"1.1.0"}}';
+// agent-desktop 1.2.0's own reply to version (envelope 2.6), less its os and target.
+const ENVELOPE = '{"version":"2.6","ok":true,"command":"version","data":{"version":"1.2.0"}}';
 
 describe("platformBinaryNames", () => {
   it("names the bundled binary and macOS helper per platform", () => {
@@ -86,13 +86,13 @@ describe("package.json packaging", () => {
     for (const entry of agentDesktop(build.win.extraResources)) expect(existsSync(repo(expand(entry.from, "x64"))), entry.from).toBe(true);
   });
 
-  it("installs agent-desktop 1.1 or later (envelope 2.6, refs that prove their identity), as package.json asks", () => {
+  it("installs agent-desktop 1.2 or later (envelope 2.6, --stdin, element waits, bundled skills), as package.json asks", () => {
     const manifest = JSON.parse(readFileSync(repo("package.json"), "utf8"));
-    expect(manifest.dependencies["agent-desktop"]).toBe("^1.1.0");
+    expect(manifest.dependencies["agent-desktop"]).toBe("^1.2.0");
     const installed = JSON.parse(readFileSync(repo("node_modules/agent-desktop/package.json"), "utf8")).version as string;
     const [major, minor] = installed.split(".").map(Number);
     expect(major, installed).toBe(1);
-    expect(minor, installed).toBeGreaterThanOrEqual(1);
+    expect(minor, installed).toBeGreaterThanOrEqual(2);
   });
 
   it("keeps every OS's binaries out of app.asar", () => {
@@ -152,7 +152,7 @@ describe("createAgentDesktopRunner", () => {
   it("runs a read-only command headless in a private state folder, and parses the envelope", async () => {
     const fake = fakeExec(() => ({ stdout: ENVELOPE }));
     const runner = make(fake.exec);
-    expect(await runner.run("version", [], { timeoutMs: 1234 })).toEqual({ ok: true, data: { version: "1.1.0" } });
+    expect(await runner.run("version", [], { timeoutMs: 1234 })).toEqual({ ok: true, data: { version: "1.2.0" } });
     const call = fake.calls[0];
     expect(call?.file).toBe("/bin/agent-desktop");
     expect(call?.args).toEqual(["version"]);
@@ -188,7 +188,7 @@ describe("createAgentDesktopRunner", () => {
   it("refuses mutating commands and input flags before any process starts", () => {
     const fake = fakeExec(() => ({ stdout: ENVELOPE }));
     const runner = make(fake.exec);
-    for (const command of ["click", "type", "focus", "press", "focus-window"]) expect(() => runner.run(command as never, [])).toThrow(/not allowed/);
+    for (const command of ["click", "type", "focus", "press", "focus-window", "skills"]) expect(() => runner.run(command as never, [])).toThrow(/not allowed/);
     expect(() => runner.run("snapshot", ["--headed"])).toThrow(/not allowed/);
     expect(fake.calls).toEqual([]);
   });
@@ -351,9 +351,9 @@ describe("createAgentDesktopComputerRunner", () => {
   // A fake agent-desktop that answers after delayMs, and dies like execFile when its signal aborts.
   const make = (delayMs = 0) => {
     temp = mkdtempSync(join(tmpdir(), "bee-ad-computer-test-"));
-    const calls: Array<{ args: string[]; env: NodeJS.ProcessEnv; killed: boolean }> = [];
+    const calls: Array<{ args: string[]; env: NodeJS.ProcessEnv; killed: boolean; stdin?: string }> = [];
     const exec: ExecFile = (_file, args, options, callback) => {
-      const call = { args, env: options.env, killed: false };
+      const call = { args, env: options.env, killed: false, ...(options.stdin !== undefined ? { stdin: options.stdin } : {}) };
       calls.push(call);
       const timer = setTimeout(() => callback(null, ENVELOPE), delayMs);
       options.signal?.addEventListener("abort", () => {
@@ -369,15 +369,60 @@ describe("createAgentDesktopComputerRunner", () => {
   it("runs observe and act commands with fixed argv, in its own state folder, without secrets", async () => {
     const { runner, calls } = make();
     expect((await runner.run("snapshot", ["--interactive-only", "--app=Discord"])).ok).toBe(true);
-    expect((await runner.run("type", ["@s8f3k2p9:e2", "--", "hi Sam"])).ok).toBe(true);
+    expect((await runner.run("select", ["@s8f3k2p9:e2", "--", "Sam"])).ok).toBe(true);
     expect(calls.map((call) => call.args)).toEqual([
       ["snapshot", "--interactive-only", "--app=Discord"],
-      ["type", "@s8f3k2p9:e2", "--", "hi Sam"],
+      ["select", "@s8f3k2p9:e2", "--", "Sam"],
     ]);
     for (const call of calls) {
       expect(call.env.BEE_AI_GATEWAY_API_KEY).toBeUndefined();
       expect(call.env.AGENT_DESKTOP_HOME?.startsWith(temp)).toBe(true);
     }
+    runner.cleanup();
+  });
+
+  it("sends type and set-value text on stdin with --stdin, never in argv, and refuses stdin without the flag", async () => {
+    const { runner, calls } = make();
+    expect((await runner.run("type", ["@s8f3k2p9:e2", "--stdin"], { stdin: "hunter2 é" })).ok).toBe(true);
+    expect((await runner.run("set-value", ["@s8f3k2p9:e2", "--stdin"], { stdin: "-5" })).ok).toBe(true);
+    expect(calls.map((call) => [call.args, call.stdin])).toEqual([
+      [["type", "@s8f3k2p9:e2", "--stdin"], "hunter2 é"],
+      [["set-value", "@s8f3k2p9:e2", "--stdin"], "-5"],
+    ]);
+    // --stdin with text after "--", stdin without --stdin, --stdin with nothing to send, or --stdin on another command.
+    expect(() => runner.run("type", ["@s8f3k2p9:e2", "--stdin", "--", "hi"], { stdin: "hi" })).toThrow(/text not allowed/);
+    expect(() => runner.run("type", ["@s8f3k2p9:e2", "--", "hi"], { stdin: "hi" })).toThrow(/goes on stdin/);
+    expect(() => runner.run("set-value", ["@s8f3k2p9:e2", "--", "hunter2"])).toThrow(/goes on stdin/);
+    expect(() => runner.run("set-value", ["@s8f3k2p9:e2", "--stdin"])).toThrow(/needs stdin/);
+    expect(() => runner.run("click", ["@s8f3k2p9:e2", "--stdin"], { stdin: "x" })).toThrow(/not allowed/);
+    expect(calls).toHaveLength(2);
+    runner.cleanup();
+  });
+
+  it("reads only agent-desktop's desktop and platform guides with skills", async () => {
+    const { runner, calls } = make();
+    expect((await runner.run("skills", ["get", "desktop"])).ok).toBe(true);
+    expect((await runner.run("skills", ["get", "platform"])).ok).toBe(true);
+    for (const args of [[], ["list"], ["path"], ["get", "macos"], ["get", "desktop", "--full"], ["get", "desktop", "workflows"], ["get", "--full", "desktop"]]) {
+      expect(() => runner.run("skills", args), args.join(" ")).toThrow(/not allowed/);
+    }
+    expect(calls.map((call) => call.args)).toEqual([
+      ["skills", "get", "desktop"],
+      ["skills", "get", "platform"],
+    ]);
+    runner.cleanup();
+  });
+
+  // POSIX only: a shell script stands in for agent-desktop, and saves what came on its stdin.
+  it.skipIf(process.platform === "win32")("writes stdin to the real child as UTF-8 and closes it", async () => {
+    temp = mkdtempSync(join(tmpdir(), "bee-ad-stdin-test-"));
+    const script = join(temp, "fake-agent-desktop");
+    const saved = join(temp, "stdin.txt");
+    writeFileSync(script, `#!/bin/sh\ncat > '${saved}'\necho '{"version":"2.6","ok":true,"command":"type","data":{}}'\n`);
+    chmodSync(script, 0o755);
+    const runner = createAgentDesktopComputerRunner({ path: script, macHelper: null }, { env: { PATH: process.env.PATH ?? "/bin:/usr/bin" }, tempDir: () => temp, lockAcl: () => true });
+    expect(await runner.run("type", ["@s8f3k2p9:e2", "--stdin"], { stdin: "héllo\nwörld", timeoutMs: 5000 })).toEqual({ ok: true, data: {} });
+    expect(readFileSync(saved, "utf8")).toBe("héllo\nwörld");
     runner.cleanup();
   });
 
@@ -481,7 +526,8 @@ describe("source scan: agent-desktop stays read-only", () => {
     const allowed = new Set<string | undefined>([...READ_ONLY_COMMANDS, ...DESKTOP_ACTION_COMMANDS]);
     // main/teams-detector.ts runs reg and tasklist through its own runner, not agent-desktop.
     for (const { path, text } of sources().filter(({ path }) => !["main/teams-detector.ts", "core/computer-tools.ts"].includes(fromSrc(path)))) {
-      for (const command of commandsIn(text)) expect(allowed.has(command), `${fromSrc(path)}: ${command}`).toBe(true);
+      // computer-use.ts loads agent-desktop's guides (skills get) on the computer-use runner; nothing else runs skills.
+      for (const command of commandsIn(text)) expect(allowed.has(command) || (command === "skills" && fromSrc(path) === "core/computer-use.ts"), `${fromSrc(path)}: ${command}`).toBe(true);
     }
   });
 });

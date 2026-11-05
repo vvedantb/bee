@@ -1,7 +1,7 @@
 import { tool } from "ai";
 import { z } from "zod";
 import {
-  HEADED_FLAG, REF_PATTERN, identityUnproven, parseApps, parseWindows, type AgentDesktopFailure, type AgentDesktopResult, type ComputerRun, type ComputerUseCommand,
+  HEADED_FLAG, REF_PATTERN, STDIN_FLAG, identityUnproven, parseApps, parseWindows, type AgentDesktopFailure, type AgentDesktopResult, type ComputerRun, type ComputerUseCommand,
 } from "./agent-desktop-envelope";
 import { awaitAnswer, CONFIRM_TIMEOUT_MS, type ComputerPlatform, type IrreversibleKind, type RunControl } from "./computer-control";
 import {
@@ -145,8 +145,8 @@ const LOOK_HINTS: Record<string, string> = {
   APP_UNRESPONSIVE: `the app did not answer. Wait, then look again. ${KEEPS_FAILING}`,
   INVALID_ARGS: "check the ref and the arguments: refs come only from the latest snapshot or find, and a surface must be one this computer has.",
 };
-// agent-desktop 1.1's details.kind, where it says more than the code. Refs prove their identity: on Windows (and on macOS for
-// an element with no address) a ref acts only when it was the only element in its window with its role, name and
+// agent-desktop's details.kind (since 1.1), where it says more than the code. Refs prove their identity: on Windows (and on
+// macOS for an element with no address) a ref acts only when it was the only element in its window with its role, name and
 // description.
 const KIND_HINTS: Record<string, string> = {
   identity_not_unique:
@@ -494,6 +494,9 @@ const physicalSchema = z
 // read: get's properties, then is's true-or-false checks.
 const GET_PROPERTIES = ["text", "value", "title", "role", "states"] as const;
 const IS_PROPERTIES = ["visible", "enabled", "checked", "focused", "expanded", "selected"] as const;
+// wait on one ref (agent-desktop 1.2): what to wait for, and for actionable, which action.
+const PREDICATES = ["exists", "enabled", "visible", "actionable", "value"] as const;
+const WAIT_ACTIONS = ["click", "type", "set-value", "clear"] as const;
 // set_state: the agent-desktop command for each state, and the island's step line.
 const STATE_ACTIONS = {
   checked: { command: "check", verb: "Ticking", line: "Ticking a box…" },
@@ -536,11 +539,12 @@ export function computerTools(deps: ComputerToolDeps) {
    * One agent-desktop command for this run. A permission refusal ends the run. A failure is logged
    * with agent-desktop's message (redacted); a command the allowlist refuses never starts and comes back as REFUSED.
    */
-  const exec = async (command: ComputerUseCommand, args: string[], timeoutMs: number): Promise<AgentDesktopResult> => {
+  const exec = async (command: ComputerUseCommand, args: string[], timeoutMs: number, stdin?: string): Promise<AgentDesktopResult> => {
     const started = performance.now();
     let result: AgentDesktopResult;
     try {
-      result = await deps.run(command, args, { timeoutMs, signal: control.signal });
+      // stdin (type and set-value text) is never logged: args carry only --stdin.
+      result = await deps.run(command, args, { timeoutMs, signal: control.signal, ...(stdin !== undefined ? { stdin } : {}) });
     } catch (error) {
       debugLog.warn("computer", "exec-refused", { command, args, ms: msSince(started), error: errorData(error).message });
       return { ok: false, code: "REFUSED" };
@@ -658,14 +662,15 @@ export function computerTools(deps: ComputerToolDeps) {
 
   /**
    * A ref action: check the ref, run it, and keep where focus is for Return. Never in a terminal or console. Once more when
-   * agent-desktop could not check the element in time and says nothing was sent (resolution_identity_unknown).
+   * agent-desktop could not check the element in time and says nothing was sent (resolution_identity_unknown). stdin: text for
+   * type and set-value, sent on the child's stdin with --stdin so it is never in argv or the logs.
    */
-  const onRef = (command: ComputerUseCommand, ref: string, args: string[] = [], timeoutMs = ACT_MS) => async () => {
+  const onRef = (command: ComputerUseCommand, ref: string, args: string[] = [], timeoutMs = ACT_MS, stdin?: string) => async () => {
     if (["click", "type", "set-value", "clear", "focus"].includes(command) && shellElement(refs.get(ref))) return SHELL_MESSAGE;
-    let result = await exec(command, [ref, ...args], timeoutMs);
+    let result = await exec(command, [ref, ...args], timeoutMs, stdin);
     if (!result.ok && result.kind === "resolution_identity_unknown" && result.retry === "safe" && !control.reason()) {
       debugLog.info("computer", "act-again", { command, kind: result.kind });
-      result = await exec(command, [ref, ...args], timeoutMs);
+      result = await exec(command, [ref, ...args], timeoutMs, stdin);
     }
     if (result.ok && ["type", "set-value", "clear", "focus"].includes(command)) lastField = refs.get(ref) ?? lastField;
     if (result.ok && command === "click") lastField = focusAfterClick(lastField, refs.get(ref));
@@ -771,13 +776,14 @@ export function computerTools(deps: ComputerToolDeps) {
 
     read: tool({
       description:
-        "Read one thing about a ref: text (what a person reads), value, title, role or states; or check one state, true or false: visible, enabled, checked, focused, expanded or selected.",
+        "Read one thing about a ref: text (what a person reads), value (what a field holds: use it to check what was typed or set), title, role or states; or check one state, true or false: visible, enabled, checked, focused, expanded or selected. Default: value for a text field, else text.",
       inputSchema: z.object({ ref: refSchema, property: z.enum([...GET_PROPERTIES, ...IS_PROPERTIES]).optional() }),
       execute: ({ ref, property }) =>
         step("read", "Reading the screen…", async () => {
           const invalid = badRef(ref);
           if (invalid) return invalid;
-          const args = [ref, `--property=${property ?? "text"}`];
+          // Since agent-desktop 0.10 text is what a person reads, not a field's content: a field defaults to value.
+          const args = [ref, `--property=${property ?? (isTextEntry(refs.get(ref)) ? "value" : "text")}`];
           const result = (IS_PROPERTIES as readonly string[]).includes(property ?? "") ? await readOnce("is", args) : await readOnce("get", args);
           return result.ok ? formatRead(result.data) : errorLine(result, true);
         }),
@@ -829,7 +835,7 @@ export function computerTools(deps: ComputerToolDeps) {
         step(
           "type_text",
           label(ref, "Typing in", "Typing…"),
-          async () => badRef(ref) ?? onRef("type", ref, [...(physical ? [HEADED_FLAG] : []), "--", cleanText(text)], ACT_MS + Math.min(40_000, text.length * 40))(),
+          async () => badRef(ref) ?? onRef("type", ref, [...(physical ? [HEADED_FLAG] : []), STDIN_FLAG], ACT_MS + Math.min(40_000, text.length * 40), cleanText(text))(),
           gateFor("type", ref, { effect, text }),
         ),
     }),
@@ -843,7 +849,7 @@ export function computerTools(deps: ComputerToolDeps) {
           : step(
               "set_value",
               label(ref, "Typing in", "Typing…"),
-              async () => badRef(ref) ?? onRef("set-value", ref, ["--", cleanText(value)])(),
+              async () => badRef(ref) ?? onRef("set-value", ref, [STDIN_FLAG], ACT_MS, cleanText(value))(),
               gateFor("set-value", ref, { effect, text: value }),
             ),
     }),
@@ -954,8 +960,13 @@ export function computerTools(deps: ComputerToolDeps) {
     }),
 
     wait: tool({
-      description: "Wait: a number of milliseconds, or until a window title or some text appears in an app. Use after an action that loads something.",
+      description:
+        "Wait until something is true, instead of a fixed sleep. To check an action worked, wait on its ref: element with predicate value and value (the field or display now holds this), or actionable with action before acting on a control that is still loading, or exists, enabled or visible. Or wait until a window title or some text appears in an app. ms alone is a last resort.",
       inputSchema: z.object({
+        element: refSchema.optional().describe("A ref to wait on, with predicate."),
+        predicate: z.enum(PREDICATES).optional().describe("With element: exists (default), enabled, visible, actionable, or value (needs value)."),
+        value: z.string().max(4000).optional().describe("With predicate value: the exact value to wait for."),
+        action: z.enum(WAIT_ACTIONS).optional().describe("With predicate actionable: the action to check for (click, type, set-value, clear). Default click."),
         ms: z.number().int().min(100).max(WAIT_MAX_MS).optional(),
         for_window: z.string().max(200).optional().describe("Wait until a window whose title contains this appears."),
         for_text: z.string().max(200).optional().describe("Wait until this text appears in the app."),
@@ -964,9 +975,27 @@ export function computerTools(deps: ComputerToolDeps) {
       }),
       execute: (input) =>
         step("wait", "Waiting…", async () => {
+          const timeout = input.timeout_ms ?? 8000;
+          if (input.element) {
+            const invalid = badRef(input.element);
+            if (invalid) return invalid;
+            const predicate = input.predicate ?? "exists";
+            if (predicate === "value" && input.value === undefined) return "Error: give value with predicate value.";
+            if (predicate !== "value" && input.value !== undefined) return "Error: value goes only with predicate value.";
+            if (predicate !== "actionable" && input.action) return "Error: action goes only with predicate actionable.";
+            const args = [
+              `--element=${input.element}`,
+              `--predicate=${predicate}`,
+              ...(input.value !== undefined ? [`--value=${cleanText(input.value)}`] : []),
+              ...(input.action ? [`--action=${input.action}`] : []),
+              `--timeout=${timeout}`,
+            ];
+            const result = await exec("wait", args, timeout + 5000);
+            return result.ok ? "Done." : errorLine(result);
+          }
+          if (input.predicate || input.value !== undefined || input.action) return "Error: give element with predicate, value or action.";
           const invalid = badApp(input.app);
           if (invalid) return invalid;
-          const timeout = input.timeout_ms ?? 8000;
           const what = input.for_window ? [`--window=${cleanText(input.for_window)}`] : input.for_text ? [`--text=${cleanText(input.for_text)}`] : null;
           if (input.for_text && !input.app) return "Error: give app with for_text.";
           const args = what ? [...what, ...scope(input), `--timeout=${timeout}`] : [String(input.ms ?? 1000)];

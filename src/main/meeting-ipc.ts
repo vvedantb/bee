@@ -3,7 +3,7 @@ import { z } from "zod";
 import { meetingTerms, meetingWindowBrief, type MeetingWindowContext } from "../core/agent-desktop-meeting";
 import type { ComputerRun } from "../core/agent-desktop-envelope";
 import type { ComputerPlatform, RunControl } from "../core/computer-control";
-import { computerAccess } from "../core/computer-use";
+import { computerAccess, computerSkills } from "../core/computer-use";
 import { debugLog, errorData, msSince } from "../core/debug-log";
 import type { DesktopActions } from "../core/desktop-actions";
 import { runDirectCommand, type ComputerHost } from "../core/direct-command";
@@ -77,6 +77,8 @@ export function registerMeetingIpc(args: { notesDir: string; fsRoots: () => stri
   const confirms = new Map<number, { runId: string; resolve: (confirmed: boolean) => void }>();
   let confirmSeq = 0;
   let computerRuns = 0;
+  // agent-desktop's guides, read once over the computer-use runner and kept for the app's session.
+  const skills = args.computer ? computerSkills(args.computer.run) : undefined;
 
   /** Main's side of one request's computer use: step lines and Confirm prompts go to the window that asked. */
   const computerHost = (computer: NonNullable<typeof args.computer>, sender: { isDestroyed: () => boolean; send: (channel: string, payload: unknown) => void }, runId: string | number | undefined): ComputerHost => {
@@ -87,6 +89,7 @@ export function registerMeetingIpc(args: { notesDir: string; fsRoots: () => stri
     return {
       platform: computer.platform,
       run: computer.run,
+      ...(skills ? { skills } : {}),
       askFirst: computer.askFirst,
       onStep: (label) => {
         debugLog.info("computer", "step-line", { runId, label });
