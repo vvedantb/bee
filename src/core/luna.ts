@@ -153,6 +153,10 @@ export const LUNA_DIRECT_SYSTEM = [
   "Each line states a different fact: never repeat or restate a sentence or a fact.",
   "Use append_note only when the user clearly asks to add or save a note.",
   "Never invent facts, figures or dates about the user's own work that are not in the request, the meeting lines or the notes.",
+  "Never state a count, a list of people or users, rows, records, messages or calendar entries unless a tool result in this turn or an earlier turn shows them. Call the tool first and answer from its result; never answer before it returns.",
+  "When a tool fails (an app does not open, a calendar, file or connector cannot be read), say that it failed. Never draw a conclusion from the failure, for example never say there are no meetings because the calendar could not be read.",
+  "Never say a message was sent, something was deleted or bought, or a form was submitted, unless a tool result in this turn shows it. Otherwise say what Bee did and that it could not confirm the rest.",
+  "When a name in the request could be more than one person the user knows (names that sound alike, such as Chris and Krzysztof), ask which one; never pick one yourself.",
   "Always reply with at least one line. If the request is unclear, or Bee cannot tell which one the user means, ask one short question, for example \"- Which team?\"",
   "Output only the reply lines. Never write as yourself (\"I\", \"me\", \"my\") or about your own work: the request, these rules, the tools, the search or its results. Write \"Bee\" where you would write \"I\".",
   `Put any plan or note to yourself on its own line starting with "${NOTE_PREFIX}"; Bee never shows it. Never put a plan in a reply line.`,
@@ -317,7 +321,7 @@ export function buildLunaPrompt(args: {
   const mcp = lunaMcpSystem(args.connectedServers ?? [], args.unavailableServers ?? []);
   const command = args.command?.replace(/\s+/g, " ").trim();
   if (command) {
-    const names = knownNamesBlock(args.knownNames ?? []);
+    const names = knownNamesBlock(args.knownNames ?? [], command);
     const remembered = args.memory?.trim() ?? "";
     return {
       system: [
@@ -405,7 +409,8 @@ export function lunaRequest(prompt: LunaPrompt, history: readonly ModelMessage[]
  */
 
 // a) Non-tip lines.
-const NOTE_LINE = /^~(?:\s|$)/;
+// "~ note" and "~note"; not "~15°C", which is a tip about the weather.
+const NOTE_LINE = /^~(?:\s|$|(?=\p{L}))/u;
 const BAD_LINE = /^✗/;
 // Only at the end, so "Summary: rain on Saturday." stays.
 const TRAILING_HEADER = /(?:^|(?<=[.!?])\s+)[^.!?]*:\s*$/;

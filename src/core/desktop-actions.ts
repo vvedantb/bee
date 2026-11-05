@@ -1,8 +1,8 @@
 import { safeExternalUrl } from "./url-safety";
 
 // Desktop actions for a direct request ("Bee, open Teams"): which app a name means, what is refused, and which requests need
-// no AI at all. Pure: main/desktop-actions.ts runs them. Bee only opens or brings forward apps and opens web pages. It never
-// clicks, types, sends, closes or changes anything in another app.
+// no AI at all. Pure: main/desktop-actions.ts runs them on macOS, Windows and Linux. Bee only opens or brings forward apps and
+// opens web pages. It never clicks, types, sends, closes or changes anything in another app.
 
 /** What a desktop action did, as the short line the island shows, with no end stop ("Opened Teams", "Could not find Figma"). */
 export type DesktopActionResult = { ok: boolean; message: string };
@@ -17,15 +17,24 @@ export type DesktopActions = {
 export const APP_NAME_MAX = 60;
 export const WINDOW_TITLE_MAX = 120;
 
-/** How each OS finds an app: macOS by display name (open -a); Windows by a fixed URI, a Start menu shortcut or a system exe. */
+/**
+ * How each OS finds an app: macOS by display name (open -a); Windows by a fixed URI, a Start menu shortcut or a system exe; Linux
+ * by desktop-entry names through agent-desktop launch (core/app-discovery.ts linuxLaunchNames), tried in order.
+ */
 export type AppTarget = {
   label: string;
   mac: string | null;
   win: { uri?: string; startMenu: string[]; exe?: string } | null;
+  linux: string[];
   known: boolean;
 };
 
-type KnownApp = Omit<AppTarget, "known" | "win"> & { aliases: string[]; win: { uri?: string; startMenu?: string[]; exe?: string } | null };
+type KnownApp = Omit<AppTarget, "known" | "win" | "linux"> & {
+  aliases: string[];
+  win: { uri?: string; startMenu?: string[]; exe?: string } | null;
+  /** Desktop-entry names on Linux, most common first. Absent: only the name as said is tried. */
+  linux?: string[];
+};
 
 // Apps people ask for by a short name. A name not listed here is still tried as given (Start menu or open -a). Windows URIs
 // and exes are fixed here, never taken from the model.
@@ -36,23 +45,28 @@ const KNOWN_APPS: readonly KnownApp[] = [
   { label: "Excel", aliases: ["excel", "microsoft excel"], mac: "Microsoft Excel", win: { startMenu: ["Excel"] } },
   { label: "PowerPoint", aliases: ["powerpoint", "power point", "microsoft powerpoint"], mac: "Microsoft PowerPoint", win: { startMenu: ["PowerPoint"] } },
   { label: "OneNote", aliases: ["onenote", "one note", "microsoft onenote"], mac: "Microsoft OneNote", win: { startMenu: ["OneNote"] } },
-  { label: "Slack", aliases: ["slack"], mac: "Slack", win: { startMenu: ["Slack"] } },
-  { label: "Zoom", aliases: ["zoom", "zoom workplace"], mac: "zoom.us", win: { startMenu: ["Zoom Workplace", "Zoom"] } },
-  { label: "Chrome", aliases: ["chrome", "google chrome"], mac: "Google Chrome", win: { startMenu: ["Google Chrome"] } },
-  { label: "Edge", aliases: ["edge", "microsoft edge"], mac: "Microsoft Edge", win: { startMenu: ["Microsoft Edge"] } },
-  { label: "Firefox", aliases: ["firefox", "mozilla firefox"], mac: "Firefox", win: { startMenu: ["Firefox", "Mozilla Firefox"] } },
+  { label: "Slack", aliases: ["slack"], mac: "Slack", win: { startMenu: ["Slack"] }, linux: ["slack"] },
+  { label: "Zoom", aliases: ["zoom", "zoom workplace"], mac: "zoom.us", win: { startMenu: ["Zoom Workplace", "Zoom"] }, linux: ["zoom"] },
+  { label: "Chrome", aliases: ["chrome", "google chrome"], mac: "Google Chrome", win: { startMenu: ["Google Chrome"] }, linux: ["google-chrome", "google-chrome-stable", "chromium", "chromium-browser"] },
+  { label: "Edge", aliases: ["edge", "microsoft edge"], mac: "Microsoft Edge", win: { startMenu: ["Microsoft Edge"] }, linux: ["microsoft-edge", "microsoft-edge-stable"] },
+  { label: "Firefox", aliases: ["firefox", "mozilla firefox"], mac: "Firefox", win: { startMenu: ["Firefox", "Mozilla Firefox"] }, linux: ["firefox", "firefox-esr"] },
   { label: "Safari", aliases: ["safari"], mac: "Safari", win: null },
-  { label: "Spotify", aliases: ["spotify"], mac: "Spotify", win: { uri: "spotify:", startMenu: ["Spotify"] } },
+  { label: "Spotify", aliases: ["spotify"], mac: "Spotify", win: { uri: "spotify:", startMenu: ["Spotify"] }, linux: ["spotify"] },
   { label: "Notion", aliases: ["notion"], mac: "Notion", win: { startMenu: ["Notion"] } },
-  { label: "VS Code", aliases: ["vs code", "vscode", "visual studio code"], mac: "Visual Studio Code", win: { startMenu: ["Visual Studio Code"] } },
+  { label: "VS Code", aliases: ["vs code", "vscode", "visual studio code"], mac: "Visual Studio Code", win: { startMenu: ["Visual Studio Code"] }, linux: ["code"] },
   { label: "Finder", aliases: ["finder"], mac: "Finder", win: null },
   { label: "File Explorer", aliases: ["file explorer", "explorer", "windows explorer"], mac: null, win: { startMenu: ["File Explorer"], exe: "explorer.exe" } },
   // Not plain "notes": that may mean the user's own notes, so the AI decides.
   { label: "Notes", aliases: ["apple notes"], mac: "Notes", win: null },
   { label: "Notepad", aliases: ["notepad"], mac: null, win: { exe: "notepad.exe" } },
-  { label: "Calculator", aliases: ["calculator", "calc"], mac: "Calculator", win: { uri: "calculator:" } },
-  { label: "Calendar", aliases: ["calendar", "apple calendar"], mac: "Calendar", win: null },
-  { label: "Mail", aliases: ["mail", "apple mail"], mac: "Mail", win: null },
+  { label: "Calculator", aliases: ["calculator", "calc"], mac: "Calculator", win: { uri: "calculator:" }, linux: ["gnome-calculator", "org.gnome.Calculator", "galculator", "kcalc"] },
+  { label: "Calendar", aliases: ["calendar", "apple calendar"], mac: "Calendar", win: null, linux: ["gnome-calendar", "org.gnome.Calendar"] },
+  { label: "Mail", aliases: ["mail", "apple mail"], mac: "Mail", win: null, linux: ["thunderbird", "evolution"] },
+  { label: "LibreOffice", aliases: ["libreoffice", "libre office"], mac: "LibreOffice", win: { startMenu: ["LibreOffice"] }, linux: ["libreoffice", "libreoffice-startcenter"] },
+  { label: "LibreOffice Writer", aliases: ["libreoffice writer", "libre office writer"], mac: "LibreOffice", win: { startMenu: ["LibreOffice Writer"] }, linux: ["libreoffice-writer"] },
+  { label: "LibreOffice Calc", aliases: ["libreoffice calc", "libre office calc"], mac: "LibreOffice", win: { startMenu: ["LibreOffice Calc"] }, linux: ["libreoffice-calc"] },
+  // Linux file managers. Not plain "files": that may mean the user's own files, so the AI decides.
+  { label: "File manager", aliases: ["file manager", "thunar", "nautilus"], mac: null, win: null, linux: ["thunar", "nautilus", "org.gnome.Nautilus", "nemo", "dolphin", "pcmanfm"] },
 ];
 
 // Shells, script hosts and system tools Bee never opens, whatever the request: one more step and they run anything.
@@ -120,14 +134,14 @@ export function resolveApp(raw: string): { ok: true; app: AppTarget } | { ok: fa
   if (!name) return { ok: false, message: "That is not an app name Bee can open" };
   if (BLOCKED_APPS.has(appKey(name))) return { ok: false, message: BLOCKED_APP_MESSAGE };
   const known = knownApp(name);
-  if (known) return { ok: true, app: { label: known.label, mac: known.mac, win: known.win && { ...known.win, startMenu: known.win.startMenu ?? [] }, known: true } };
-  return { ok: true, app: { label: name, mac: name, win: { startMenu: [name] }, known: false } };
+  if (known) return { ok: true, app: { label: known.label, mac: known.mac, win: known.win && { ...known.win, startMenu: known.win.startMenu ?? [] }, linux: known.linux ?? [], known: true } };
+  return { ok: true, app: { label: name, mac: name, win: { startMenu: [name] }, linux: [], known: false } };
 }
 
 /** The names a running app may be listed under (agent-desktop list-apps), as appKey values. */
 export function appNames(app: AppTarget): string[] {
   const known = KNOWN_APPS.find((item) => item.label === app.label && app.known);
-  const names = [app.label, app.mac ?? "", ...(app.win?.startMenu ?? []), ...(app.win?.exe ? [app.win.exe] : []), ...(known?.aliases ?? [])];
+  const names = [app.label, app.mac ?? "", ...(app.win?.startMenu ?? []), ...(app.win?.exe ? [app.win.exe] : []), ...(app.linux ?? []), ...(known?.aliases ?? [])];
   return [...new Set(names.map(appKey).filter((name) => name.length > 0))];
 }
 

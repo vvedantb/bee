@@ -450,7 +450,7 @@ describe("runDirectCommand: the command model, adaptive thinking and caching", (
 
   it("runs computer use on COMMAND_MODEL with adaptive thinking and the cache markers kept", async () => {
     const model = new MockLanguageModelV4({
-      doGenerate: async () => ({ content: [{ type: "text", text: "Sent the message." }], finishReason: { unified: "stop", raw: undefined }, usage, warnings: [] }),
+      doGenerate: async () => ({ content: [{ type: "text", text: "Opened the chat with Sam." }], finishReason: { unified: "stop", raw: undefined }, usage, warnings: [] }),
     });
     const { gateway, ids } = idGateway(model);
     const computer: ComputerHost = {
@@ -460,7 +460,7 @@ describe("runDirectCommand: the command model, adaptive thinking and caching", (
       confirm: async () => true,
     };
     const result = await runDirectCommand({ command: "send Sam a message in Discord", snippets, gateway, actions: fakeActions().actions, computer });
-    expect(result.tips).toEqual(["Sent the message."]);
+    expect(result.tips).toEqual(["Opened the chat with Sam."]);
     expect(ids).toEqual([COMMAND_MODEL]);
     const call = model.doGenerateCalls[0];
     expect(call?.providerOptions).toMatchObject({ gateway: { order: ["anthropic"] }, ...THINKING });
@@ -557,11 +557,11 @@ describe("runDirectCommand: Jev routing, the fast pass and Bee's memory", () => 
 
   it("falls back to the word rules when Jev is slow, fails or names an open it cannot resolve", async () => {
     for (const jev of [() => new Promise(() => undefined), () => Promise.reject(new Error("down")), async () => choice("open_app")]) {
-      const { gateway } = gatewayWith({ jev, command: [{ text: "Sent the message." }] });
+      const { gateway } = gatewayWith({ jev, command: [{ text: "Opened the chat with Sam." }] });
       const { computer, commands } = host();
       const started = performance.now();
       const result = await runDirectCommand({ command: "send Sam a message in Discord", snippets, gateway, actions: fakeActions().actions, computer });
-      expect(result.tips).toEqual(["Sent the message."]);
+      expect(result.tips).toEqual(["Opened the chat with Sam."]);
       expect(performance.now() - started).toBeLessThan(2000);
     }
   });

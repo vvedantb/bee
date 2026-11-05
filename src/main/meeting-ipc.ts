@@ -67,7 +67,7 @@ export function registerMeetingIpc(args: { notesDir: string; fsRoots: () => stri
   wakeWordEnabled?: () => boolean;
   /**
    * Computer use for a direct request (core/computer-use.ts): its own agent-desktop runner, never the meeting window reader's,
-   * and the "Ask before sending or deleting" setting. Absent: Bee cannot operate apps here (Linux, or no agent-desktop).
+   * and the "Ask before sending or deleting" setting. Absent: Bee cannot operate apps here (no agent-desktop for this OS).
    */
   computer?: { platform: ComputerPlatform; run: ComputerRun; askFirst: () => boolean; cleanup: () => void };
   /** Finished sessions to vmem (main/vmem-transcript-queue.ts). It checks the setting and the connector itself. */
@@ -357,7 +357,8 @@ export function registerMeetingIpc(args: { notesDir: string; fsRoots: () => stri
     if (open) pending.resolve(answer.confirmed);
   });
 
-  // Settings: may computer use run here, and has macOS allowed Bee Accessibility and Screen Recording. Fails open as unknown.
+  // Settings: may computer use run here, and has macOS allowed Bee Accessibility and Screen Recording (on Linux: does the AT-SPI
+  // bus answer). Fails open as unknown.
   ipcMain.handle(IPC.computerAccess, async (): Promise<ComputerAccessView> => {
     if (!args.computer) return { supported: false, platform: "other", accessibility: "unknown", screenRecording: "unknown" };
     const platform = args.computer.platform;

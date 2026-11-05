@@ -750,3 +750,22 @@ describe("settings savedGatewayApiKey", () => {
     expect(store.savedGatewayApiKey()).toBeUndefined();
   });
 });
+
+describe("settings: a name correction persists (temp profile)", () => {
+  it("keeps a corrected spelling across a restart, beside the person it sounds like, with no rule that one means the other", async () => {
+    const { correctedName, knownNamesBlock, nameAmbiguities } = await import("../core/known-names");
+    const first = create();
+    first.save({ knownNames: ["Chris Lee"] });
+    // "Bee, send Chris hi" → Bee wrote to Chris Lee → "No, I meant Krzysztof Nowak.": direct-command passes the correction to learnNames.
+    const corrected = correctedName("No, I meant Krzysztof Nowak.");
+    expect(corrected).toBe("Krzysztof Nowak");
+    first.learnNames([corrected as string]);
+    // A new store over the same folder is Bee after a restart.
+    const again = create();
+    expect(again.knownNames()).toEqual(["Chris Lee", "Krzysztof Nowak"]);
+    expect(JSON.parse(readFileSync(join(dir, "settings.json"), "utf8")).knownNames).toEqual(["Chris Lee", "Krzysztof Nowak"]);
+    // Both stay known, so the next "Chris" is asked about, not silently sent to either.
+    expect(nameAmbiguities("send Chris hi", again.knownNames())).toEqual([{ heard: "Chris", matches: ["Chris Lee", "Krzysztof Nowak"] }]);
+    expect(knownNamesBlock(again.knownNames())).toContain("Krzysztof Nowak, Chris Lee.");
+  });
+});

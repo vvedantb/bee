@@ -3,6 +3,7 @@ import { z } from "zod";
 import {
   HEADED_FLAG, REF_PATTERN, STDIN_FLAG, identityUnproven, parseApps, parseWindows, type AgentDesktopFailure, type AgentDesktopResult, type ComputerRun, type ComputerUseCommand,
 } from "./agent-desktop-envelope";
+import { isColdStart, runningAppsLine, waitForListed } from "./app-discovery";
 import { awaitAnswer, CONFIRM_TIMEOUT_MS, type ComputerPlatform, type IrreversibleKind, type RunControl } from "./computer-control";
 import {
   EFFECTS, LABEL_MAX, WINDOW_ROLES, confirmDetail, confirmQuestion, focusAfterClick, insideOf, irreversibleKind, isNavField, isTextEntry, keepsFocus, keysLabel, needsConfirm, shellElement,
@@ -41,6 +42,15 @@ export type ComputerToolDeps = {
   onStep?: (label: string) => void;
   onActivity?: (activity: LunaToolActivity) => void;
   confirmTimeoutMs?: number;
+  /**
+   * An action finished that the confirm gate (core/computer-gate.ts, which reads the tree, not just the AI's effect) counts as a
+   * send, delete, purchase or form submit: the proof the run's last line may claim it by (core/claim-guard.ts).
+   */
+  onEffect?: (kind: IrreversibleKind) => void;
+  /** The clock, for how long ago this run opened an app (core/app-discovery.ts). Tests pass a fake. */
+  now?: () => number;
+  /** The pause between looks for a starting app. Tests pass one that returns at once. */
+  sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
 };
 
 /** The step line while a Confirm waits for the user. */
@@ -67,8 +77,11 @@ const SHELL_MESSAGE = "Error: Bee does not type into terminals or consoles.";
 
 // Overlays snapshot and find may read instead of the window, as each OS has them (agent-desktop status supported_surfaces).
 // Since agent-desktop 1.1 a kind the OS does not have is INVALID_ARGS, so the AI is never offered one. Windows reads an open
-// menu as menu and a Chromium modal (Teams, Edge) as sheet, and has no menubar.
-const SURFACES = { mac: ["menu", "menubar", "sheet", "popover", "alert"], windows: ["menu", "sheet"] } as const satisfies Record<ComputerPlatform, readonly string[]>;
+// menu as menu and a Chromium modal (Teams, Edge) as sheet, and has no menubar. Linux (AT-SPI) reads menu, sheet and alert.
+const SURFACES = { mac: ["menu", "menubar", "sheet", "popover", "alert"], windows: ["menu", "sheet"], linux: ["menu", "sheet", "alert"] } as const satisfies Record<
+  ComputerPlatform,
+  readonly string[]
+>;
 // Text in a snapshot line, and the whole snapshot, so a dense app cannot flood the context.
 const NODE_TEXT = 80;
 // What the confirm gate keeps about where each ref sits: containers above it, neighbours each side, a description or value.
@@ -626,6 +639,9 @@ export function computerTools(deps: ComputerToolDeps) {
   // Running apps as list-apps last named them, and the names the AI gave that matched one (Teams: ms-teams.exe).
   let running: string[] | null = null;
   const matched = new Map<string, string>();
+  // When this run opened each app (by appKey), so a read that misses it moments later waits for it rather than fail.
+  const opened = new Map<string, number>();
+  const now = deps.now ?? Date.now;
   // Roles this run's reads showed, for find; and where each snapshot id read (app, window), to read it again for a refused ref.
   const roles = new Set<string>();
   const scopes = new Map<string, Scope>();
@@ -696,8 +712,8 @@ export function computerTools(deps: ComputerToolDeps) {
   };
 
   // On a Mac each ref carries its element's own address, so a snapshot that could not prove its refs still acts. On Windows
-  // its refs are refused (identity_not_unique) until a read with more time proves them.
-  const unproven = (data: unknown) => deps.platform === "windows" && identityUnproven(data);
+  // and Linux (no element address there either) its refs are refused (identity_not_unique) until a read with more time proves them.
+  const unproven = (data: unknown) => deps.platform !== "mac" && identityUnproven(data);
 
   /** Why a whole-window snapshot should be read once more: few refs, cut off by depth (not a skeleton), or refs not proven. */
   const settleWindow = (skeleton: boolean) => (data: unknown): string | null =>
@@ -718,6 +734,8 @@ export function computerTools(deps: ComputerToolDeps) {
     debugLog.info("computer", "step", { n: control.steps(), tool: name, label, app: currentApp });
     deps.onStep?.(clip(label, 60));
     deps.onActivity?.({ tool: name, phase: "start" });
+    // What the gate counts this action as, read before it runs (a key press can move focus): proof for the last line once it is done.
+    const committed = gate ? irreversibleKind(gate()) : null;
     try {
       if (gate && deps.askFirst()) {
         const action = gate();
@@ -739,6 +757,7 @@ export function computerTools(deps: ComputerToolDeps) {
       if (control.reason()) return STOPPED;
       const output = await work();
       debugLog.debug("computer", "step-done", { n: control.steps(), tool: name, ms: msSince(started), output });
+      if (committed && actionDone(output)) deps.onEffect?.(committed);
       return output;
     } catch (error) {
       debugLog.warn("computer", "step-failed", { n: control.steps(), tool: name, ms: msSince(started), reason: control.reason(), error: error instanceof Error ? error.message : String(error) });
@@ -795,11 +814,20 @@ export function computerTools(deps: ComputerToolDeps) {
     let app = known && !offLimitsApp(known) ? known : name;
     let result = await work(app);
     if (!result.ok && result.code === "APP_NOT_FOUND" && !control.reason()) {
-      const listed = await exec("list-apps", [], READ_MS);
-      if (listed.ok) running = parseApps(listed.data).map((item) => item.name);
-      const found = running ? matchApp(name, running) : null;
-      if (found && found !== app && !offLimitsApp(found) && !control.reason()) {
-        debugLog.info("computer", "app-matched", { asked: name, app: found });
+      const listedMatch = async () => {
+        const listed = await exec("list-apps", [], READ_MS);
+        if (listed.ok) running = parseApps(listed.data).map((item) => item.name);
+        return running ? matchApp(name, running) : null;
+      };
+      // Warm: one look. Cold (this run opened it moments ago): a few looks with a pause, under a cap, before it counts as missing.
+      // The name read may differ from the one opened ("Chrome" opened, "google-chrome" read): match it like list-apps names.
+      const openedAs = opened.has(appKey(name)) ? appKey(name) : matchApp(appKey(name), [...opened.keys()]);
+      const cold = isColdStart(openedAs === null ? undefined : opened.get(openedAs), now());
+      if (cold) deps.onStep?.(`Waiting for ${shortName(name, 30)} to start…`);
+      const { found, tries } = cold ? await waitForListed({ list: listedMatch, signal: control.signal, ...(deps.sleep ? { sleep: deps.sleep } : {}) }) : { found: await listedMatch(), tries: 1 };
+      if (cold) debugLog.info("computer", "cold-app-wait", { asked: name, found, tries });
+      if (found && (found !== app || cold) && !offLimitsApp(found) && !control.reason()) {
+        if (found !== app) debugLog.info("computer", "app-matched", { asked: name, app: found });
         app = found;
         result = await work(app);
       }
@@ -1249,8 +1277,26 @@ export function computerTools(deps: ComputerToolDeps) {
         step("open_app", `Opening ${shortName(name, 30)}…`, async () => {
           if (offLimitsApp(name)) return OFF_LIMITS_MESSAGE;
           const result = await deps.desktop.openApp(name);
-          if (result.ok) [currentApp, lastField] = [name, null];
-          return desktopLine(result);
+          if (result.ok) {
+            [currentApp, lastField] = [name, null];
+            opened.set(appKey(name), now());
+            return desktopLine(result);
+          }
+          // Not opened by that name. It may run under another one (google-chrome, ms-teams.exe): list once and use the exact
+          // listed name, rather than leave the AI to guess, retry and time out.
+          if (control.reason()) return desktopLine(result);
+          const listed = await exec("list-apps", [], READ_MS);
+          if (!listed.ok) return `${desktopLine(result)} ${errorLine(listed, true)}`;
+          running = parseApps(listed.data).map((item) => item.name);
+          const found = matchApp(cleanApp(name) ?? name, running);
+          if (found && !offLimitsApp(found)) {
+            debugLog.info("computer", "open-matched-running", { asked: name, app: found });
+            matched.set(cleanApp(name) ?? name, found);
+            [currentApp, lastField] = [found, null];
+            opened.set(appKey(name), now());
+            return `Done: ${found} is already running. Use the app name ${found}; bring it forward with focus_window if needed.`;
+          }
+          return `${desktopLine(result)} ${runningAppsLine(running.filter((app) => !offLimitsApp(app)))} If one of these is the app, use that exact name. Never say the app was opened.`;
         }),
     }),
 

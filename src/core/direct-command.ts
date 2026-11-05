@@ -4,6 +4,7 @@ import type { PipelineResult } from "../shared/ipc";
 import type { ComputerRun } from "./agent-desktop-envelope";
 import { assistantMessage, cleanForHistory, commandFallbackReply, historySummariser, userMessage, type Summarise } from "./bee-history";
 import { memorySummary, memoryTools, type BeeMemory } from "./bee-memory";
+import { answerEvidence, guardLine, replaceLastText, runEvidence, type ClaimKind } from "./claim-guard";
 import { routeWithJev, type JevRoute } from "./command-route-jev";
 import { createRunControl, stopLine, type ComputerPlatform, type RunControl } from "./computer-control";
 import { computerTools, type ConfirmRequest } from "./computer-tools";
@@ -13,7 +14,7 @@ import { COMMAND_MODEL, GUIDE_MODEL, JEV_MODEL, NO_GATEWAY_KEY, type BeeGateway 
 import type { McpTools } from "./mcp";
 import { routeCommand, type DesktopActionResult, type DesktopActions } from "./desktop-actions";
 import { desktopTools } from "./desktop-tools";
-import { screenNames, spelledName } from "./known-names";
+import { correctedName, nameAmbiguities, screenNames, spelledName, whichNameQuestion } from "./known-names";
 import { guideWithLuna, noteCitation, type LunaToolActivity, type TipFields } from "./luna";
 import type { Snippet } from "./notes";
 import { loadMcp } from "./pipeline";
@@ -43,6 +44,8 @@ const MCP_ERROR_CHARS = 300;
 const PARTIAL_MAX = 5;
 
 const FAST_TOOL = { "open-app": "open_app", "focus-app": "focus_window", "open-url": "open_url" } as const;
+// A request that does something to or for a person: sending, messaging, inviting, deleting. A name in it must be the right person.
+const REACHES_PERSON = /\b(?:send|message|dm|text|e-?mail|mail|reply|respond|post|tell|ping|call|invite|share|forward|delete|remove|add)\b/i;
 
 /** Action lines then reply lines, without repeats (the reply may say "Opened Teams." again). */
 function joinLines(actions: readonly string[], reply: TipFields): TipFields {
@@ -92,7 +95,10 @@ const lineResult = (line: string, patch: Partial<PipelineResult["timingsMs"]> = 
   timingsMs: timings(patch),
 });
 
-/** The computer-use loop for one request, ending with one line for the island. On a Mac without Accessibility, no loop runs. */
+/**
+ * The computer-use loop for one request, ending with one line for the island. On a Mac without Accessibility, or Linux without
+ * the AT-SPI bus (agent-desktop reports accessibility denied there), no loop runs: the line says why.
+ */
 async function runComputerCommand(args: {
   command: string;
   transcript?: string[];
@@ -120,7 +126,7 @@ async function runComputerCommand(args: {
   host.onStep?.("Starting…");
   try {
     debugLog.info("computer", "run-start", { platform: host.platform, maxSteps: maxSteps ?? null, maxMs: host.maxMs ?? null, askFirst: host.askFirst(), command: args.command });
-    if (host.platform === "mac") {
+    if (host.platform === "mac" || host.platform === "linux") {
       const access = await computerAccess(host.run, control.signal);
       debugLog.info("computer", "access", access);
       if (control.reason()) {
@@ -135,6 +141,8 @@ async function runComputerCommand(args: {
         return lineResult(line);
       }
     }
+    // Sends, deletes, purchases and submits the confirm gate counted as done: proof for the last line (core/claim-guard.ts).
+    const committed = new Set<ClaimKind>();
     const tools = {
       ...computerTools({
         run: host.run,
@@ -145,6 +153,7 @@ async function runComputerCommand(args: {
         confirm: host.confirm,
         onStep: host.onStep,
         onActivity: args.onActivity,
+        onEffect: (kind) => committed.add(kind),
       }),
       // Memory changes nothing on screen, so its calls take no step of the run's budget.
       ...(args.memory ? memoryTools(args.memory) : {}),
@@ -174,6 +183,16 @@ async function runComputerCommand(args: {
       outcome = quick ? { ...planned, messages: [...quick.messages, ...planned.messages] } : planned;
     }
     const guide = performance.now() - started;
+    // A line that claims a send, delete, purchase or submit this run never proved, or an empty calendar no read showed, becomes a
+    // cautious one. A stop or an error already has its own line.
+    if (!outcome.stopped && !outcome.error) {
+      const checked = guardLine(outcome.line, runEvidence(outcome.messages, committed));
+      if (checked.rewritten) {
+        debugLog.warn("computer", "claim-rewritten", { line: outcome.line, shown: checked.line, reason: checked.reason, proven: [...committed] });
+        // The history keeps the line the user saw in place of the claim, so no later turn reads the claim as Bee's own.
+        outcome = { ...outcome, line: checked.line, claimRewritten: true, messages: replaceLastText(outcome.messages, checked.line) };
+      }
+    }
     debugLog.info("computer", "run-end", { ...outcome, reason: control.reason(), declined: control.declined(), ms: Math.round(guide) });
     // What the AI did, tool calls and results included, then the line the island shows when it differs (a stop).
     const said = outcome.messages.length > 0 && !outcome.stopped && !outcome.error ? outcome.messages : [...outcome.messages, assistantMessage(outcome.line)];
@@ -246,8 +265,10 @@ export async function runDirectCommand(args: {
     recorded = true;
     const turn = cleanForHistory([userMessage(command), ...messages]);
     args.onTurn?.(turn);
-    // Names to keep: a spelling the user just gave, and chat names in the tool results and the AI's reply.
-    const learned = [...(spelledName(command) ? [spelledName(command) as string] : []), ...screenNames(JSON.stringify(turn.slice(1)).replace(/\\"/g, '"'))];
+    // Names to keep: a spelling or a correction the user just gave ("I meant Krzysztof"), and chat names in the tool results and
+    // the AI's reply. A correction teaches the spelling only: Bee never stores that one name means another.
+    const said = [spelledName(command), correctedName(command)].filter((name): name is string => name !== null);
+    const learned = [...said, ...screenNames(JSON.stringify(turn.slice(1)).replace(/\\"/g, '"'))];
     if (learned.length > 0) {
       debugLog.info("ai", "names-learned", { names: learned });
       args.onLearnNames?.(learned);
@@ -281,6 +302,16 @@ export async function runDirectCommand(args: {
     ]);
     console.debug(`perf command fast ${route.kind} ok=${result.ok ? 1 : 0}`);
     return { notes: [], rankSource: "fallback", rankError: null, tips: [result.message], tipSources: [null], sources: [], guideError: null, actions: [result.message], timingsMs: timings() };
+  }
+
+  // A message, a send or a delete for a name that could be more than one person the user has taught Bee ("Chris": Chris Lee or
+  // Krzysztof Nowak) asks which one first, before any AI call or action: never a silent pick. The answer is a follow-up.
+  const unclear = REACHES_PERSON.test(command) ? nameAmbiguities(command, args.knownNames ?? [])[0] : undefined;
+  if (unclear) {
+    const question = whichNameQuestion(unclear);
+    debugLog.info("ai", "name-ambiguous", { command, heard: unclear.heard, matches: unclear.matches });
+    record([assistantMessage(question)]);
+    return lineResult(question);
   }
 
   // A task on screen goes straight to the loop: it needs no notes, connectors or web search.
@@ -381,12 +412,22 @@ export async function runDirectCommand(args: {
   // No reply and no action (NONE, or no text at all) never leaves the island blank: a short line or a question back instead.
   const silent = actionLines.length === 0 && guide.tips.length === 0 && !guide.loop && (guide.error === null || guide.empty === true);
   if (silent) debugLog.info("ai", "command-fallback", { command, empty: guide.empty ?? false });
-  const shown = silent ? { tips: [commandFallbackReply(command)], tipSources: [null] } : joinLines(actionLines, guide);
+  // An answer has no computer tools: a line that says something was sent or deleted needs a tool result that succeeded this turn
+  // (a connector may have done it), or an earlier turn that proved or showed it ("did you send it?"); "no meetings" needs a read
+  // that succeeded when tools were tried (core/claim-guard.ts).
+  const evidence = answerEvidence(guide.messages ?? [], history);
+  const checkedTips = guide.tips.map((tip) => guardLine(tip, evidence, { requireProof: false }));
+  const rewritten = checkedTips.filter((checked) => checked.rewritten);
+  if (rewritten.length > 0) debugLog.warn("ai", "claim-rewritten", { tips: guide.tips, shown: checkedTips.map((checked) => checked.line), reasons: rewritten.map((checked) => checked.reason) });
+  // A replaced line keeps no source label: the label belonged to the claim.
+  const reply: TipFields = { tips: checkedTips.map((checked) => checked.line), tipSources: guide.tipSources.map((source, index) => (checkedTips[index]?.rewritten ? null : source)) };
+  const shown = silent ? { tips: [commandFallbackReply(command)], tipSources: [null] } : joinLines(actionLines, reply);
   // The AI's own messages, then what the island showed when the AI wrote nothing (a fallback, a stop or an error).
   const shownText = shown.tips.join("\n");
   const lastText = guide.messages?.at(-1)?.role === "assistant" && guide.tips.length > 0;
   const closing = lastText ? [] : [assistantMessage(guide.error && !silent ? `${shownText ? `${shownText}\n` : ""}Error: ${guide.error}` : shownText || "(no reply)")];
-  record([...(guide.messages ?? []), ...closing]);
+  // A replaced claim leaves the history too: it keeps the lines the user saw.
+  record(rewritten.length > 0 ? replaceLastText(guide.messages ?? [], shownText) : [...(guide.messages ?? []), ...closing]);
   return {
     notes,
     rankSource: "fallback",

@@ -21,6 +21,8 @@ import {
   estimateTokens,
   historyAsText,
   historySummariser,
+  keyHistoryLine,
+  SUMMARY_SYSTEM,
   parseHistory,
   repairHistory,
   summaryText,
@@ -277,5 +279,98 @@ describe("commandFallbackReply", () => {
   it("asks which one for a pointer, else says Bee is not sure", () => {
     expect(commandFallbackReply("open the team one")).toBe("Which one?");
     expect(commandFallbackReply("do the thing with the numbers")).toBe("Bee isn't sure what to do next.");
+  });
+});
+
+// Growth alone is no proof that compaction works (bee-history.json went 0 → 54 → 232 messages across restarts in the 0.3.36–0.3.38
+// logs): these check what survives it. Synthetic turns only: a name correction early on, then runs of snapshot noise.
+describe("compaction keeps what later turns need", () => {
+  let id = 0;
+  const step = (toolName: string, input: Record<string, unknown>, value: string): ModelMessage[] => {
+    const toolCallId = `k_${++id}`;
+    return [
+      { role: "assistant", content: [{ type: "tool-call", toolCallId, toolName, input }] },
+      { role: "tool", content: [{ type: "tool-result", toolCallId, toolName, output: { type: "text", value } }] },
+    ];
+  };
+  const noise = (count: number): ModelMessage[] =>
+    Array.from({ length: count }, (_, index) => [
+      userMessage(`look at the fixture page again ${index}`),
+      ...step("snapshot", { app: "google-chrome" }, `window "Fixture" ${"@s9:e1 button ".repeat(30)}`),
+      assistantMessage(`Looked at the page ${index}.`),
+    ]).flat();
+  const correction: ModelMessage[] = [
+    userMessage("send Susannah hi"),
+    assistantMessage("Which chat? Bee found no Susannah."),
+    userMessage("Bro, you spelt it wrong. It's Z U Z A N N A."),
+    ...step("set_value", { ref: "@s1:e2", value: "hi", effect: "none" }, "Done."),
+    ...step("press_key", { keys: "return", app: "google-chrome", ref: "@s1:e2", effect: "send" }, "Done."),
+    assistantMessage("Sent hi to Zuzanna.\nEnded: file:///fixture/chrome-form.html, chat with Zuzanna"),
+    userMessage("No, I meant Krzysztof Nowak, not Chris"),
+    assistantMessage("Cancelled. Nothing was sent."),
+  ];
+
+  it("picks out corrections, Ended: lines, committed actions and stops as key lines, not noise", () => {
+    expect(keyHistoryLine("User: Bro, you spelt it wrong. It's Z U Z A N N A.")).toBe(true);
+    expect(keyHistoryLine("User: No, I meant Krzysztof Nowak, not Chris")).toBe(true);
+    expect(keyHistoryLine('Bee called press_key {"keys":"return","app":"google-chrome","ref":"@s1:e2","effect":"send"}')).toBe(true);
+    expect(keyHistoryLine("Bee: Sent hi to Zuzanna. Ended: file:///fixture/chrome-form.html")).toBe(true);
+    expect(keyHistoryLine("Bee: Cancelled. Nothing was sent.")).toBe(true);
+    expect(keyHistoryLine("User: look at the fixture page again 3")).toBe(false);
+    expect(keyHistoryLine('snapshot returned "window"')).toBe(false);
+    expect(keyHistoryLine("Bee: Looked at the page 3.")).toBe(false);
+  });
+
+  it("keeps the corrections and where the screen was left in the plain summary, though newer noise fills the room", () => {
+    const messages = [...correction, ...noise(40)];
+    const plainOld = summaryText(messages, 3000);
+    expect(plainOld).toContain("(Older lines left out.)");
+    expect(plainOld).toContain("Kept from older turns:");
+    expect(plainOld).toContain("It's Z U Z A N N A.");
+    expect(plainOld).toContain("I meant Krzysztof Nowak");
+    expect(plainOld).toContain("Ended: file:///fixture/chrome-form.html");
+    expect(plainOld).toContain('"effect":"send"');
+    expect(plainOld).toContain("Cancelled. Nothing was sent.");
+    expect(plainOld).toContain("look at the fixture page again 39");
+    expect(plainOld.length).toBeLessThanOrEqual(3000);
+    // Noise is never pinned.
+    expect(plainOld.split("Newest lines:")[0]).not.toContain("look at the fixture page again 0");
+  });
+
+  it("keeps the corrections through compaction with no summary call (offline), and again after more growth", async () => {
+    const first = await compactMessages([...correction, ...noise(40)], { maxTokens: 2000, keepTokens: 800 });
+    const head = JSON.stringify(first[0]);
+    expect(head).toContain(SUMMARY_HEADER);
+    expect(head).toContain("Z U Z A N N A");
+    expect(head).toContain("I meant Krzysztof Nowak");
+    // More turns, compacted again: the summary of the summary still holds them.
+    const second = await compactMessages([...first, ...noise(40)], { maxTokens: 2000, keepTokens: 800 });
+    expect(estimateTokens(second)).toBeLessThan(estimateTokens([...first, ...noise(40)]));
+    expect(JSON.stringify(second[0])).toContain("Z U Z A N N A");
+  });
+
+  it("keeps a correction an AI summary wrote when the next compaction has to run offline", async () => {
+    const earlier = userMessage(`${SUMMARY_HEADER}\n- The user asked Bee to message Susannah.\n- The user corrected the spelling: Zuzanna, not Susannah.\n- Bee looked at the fixture page.`);
+    const out = await compactMessages([earlier, ...noise(40)], { maxTokens: 2000, keepTokens: 800 });
+    expect(JSON.stringify(out[0])).toContain("The user corrected the spelling: Zuzanna, not Susannah.");
+    expect(JSON.stringify(out[0])).not.toContain("Bee looked at the fixture page.");
+  });
+
+  it("asks the summary call to keep corrections, outcomes, Confirms and Ended: lines, and to drop the noise", async () => {
+    expect(SUMMARY_SYSTEM).toContain("every name or spelling correction the user gave");
+    expect(SUMMARY_SYSTEM).toContain("where the screen was left");
+    expect(SUMMARY_SYSTEM).toContain("Never turn a failure, a cancel or an unconfirmed send into a success");
+    expect(SUMMARY_SYSTEM).toContain("a calendar that did not open is not an empty calendar");
+    expect(SUMMARY_SYSTEM).toContain("Drop the noise");
+    const systems: string[] = [];
+    const model = new MockLanguageModelV4({
+      doGenerate: async (options) => {
+        systems.push(JSON.stringify(options.prompt));
+        return { content: [{ type: "text", text: "summary" }], finishReason: { unified: "stop", raw: undefined }, usage: { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined }, outputTokens: { total: 1, text: 1, reasoning: undefined } }, warnings: [] };
+      },
+    });
+    await historySummariser(model)(correction);
+    expect(systems[0]).toContain("every name or spelling correction");
+    expect(systems[0]).toContain("Z U Z A N N A");
   });
 });

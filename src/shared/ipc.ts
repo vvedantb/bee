@@ -269,11 +269,12 @@ export type ComputerUpdate = z.infer<typeof computerUpdateSchema>;
 export const computerAnswerSchema = z.object({ runId: runIdSchema, id: z.number().int().positive(), confirmed: z.boolean() });
 export type ComputerAnswer = z.infer<typeof computerAnswerSchema>;
 
-// What computer use may do here, for Settings. supported: Windows or Mac with agent-desktop. States are agent-desktop's.
+// What computer use may do here, for Settings. supported: Windows, Mac or Linux with agent-desktop. States are agent-desktop's:
+// on Linux, accessibility denied means no AT-SPI bus in this session (no D-Bus session, or not a desktop session).
 const accessStateSchema = z.enum(["granted", "denied", "not_required", "unknown"]);
 export const computerAccessSchema = z.object({
   supported: z.boolean(),
-  platform: z.enum(["mac", "windows", "other"]),
+  platform: z.enum(["mac", "windows", "linux", "other"]),
   accessibility: accessStateSchema,
   screenRecording: accessStateSchema,
 });

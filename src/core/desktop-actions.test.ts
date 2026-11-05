@@ -38,7 +38,7 @@ describe("cleanAppName", () => {
 
 describe("resolveApp", () => {
   it("knows common apps by short names, with each OS's own target", () => {
-    expect(resolveApp("teams")).toEqual({ ok: true, app: { label: "Teams", mac: "Microsoft Teams", win: { uri: "msteams:", startMenu: ["Microsoft Teams", "Teams"] }, known: true } });
+    expect(resolveApp("teams")).toEqual({ ok: true, app: { label: "Teams", mac: "Microsoft Teams", win: { uri: "msteams:", startMenu: ["Microsoft Teams", "Teams"] }, linux: [], known: true } });
     expect(resolveApp("Microsoft Teams").ok && resolveApp("the Teams app")).toMatchObject({ ok: true, app: { label: "Teams" } });
     expect(resolveApp("google chrome")).toMatchObject({ ok: true, app: { label: "Chrome", mac: "Google Chrome", win: { startMenu: ["Google Chrome"] } } });
     expect(resolveApp("Zoom")).toMatchObject({ ok: true, app: { mac: "zoom.us", win: { startMenu: ["Zoom Workplace", "Zoom"] } } });
@@ -47,7 +47,18 @@ describe("resolveApp", () => {
   });
 
   it("uses any other plain name as given", () => {
-    expect(resolveApp("Figma")).toEqual({ ok: true, app: { label: "Figma", mac: "Figma", win: { startMenu: ["Figma"] }, known: false } });
+    expect(resolveApp("Figma")).toEqual({ ok: true, app: { label: "Figma", mac: "Figma", win: { startMenu: ["Figma"] }, linux: [], known: false } });
+  });
+
+  it("knows Linux desktop-entry names for common apps, and none made up for Teams", () => {
+    expect(resolveApp("chrome")).toMatchObject({ ok: true, app: { label: "Chrome", linux: ["google-chrome", "google-chrome-stable", "chromium", "chromium-browser"] } });
+    expect(resolveApp("Firefox")).toMatchObject({ ok: true, app: { linux: ["firefox", "firefox-esr"] } });
+    expect(resolveApp("libreoffice writer")).toMatchObject({ ok: true, app: { label: "LibreOffice Writer", linux: ["libreoffice-writer"] } });
+    expect(resolveApp("Thunar")).toMatchObject({ ok: true, app: { label: "File manager", mac: null, win: null } });
+    expect(resolveApp("teams")).toMatchObject({ ok: true, app: { linux: [] } });
+    // "files" alone may mean the user's own files: the AI decides, as before.
+    expect(routeCommand("open files")).toEqual({ kind: "ai" });
+    expect(routeCommand("open LibreOffice")).toEqual({ kind: "open-app", name: "LibreOffice" });
   });
 
   it("refuses shells, script tools and system tools, however they are named", () => {

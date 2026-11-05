@@ -10,6 +10,7 @@ import {
   createAgentDesktopComputerRunner,
   createAgentDesktopRunner,
   lockPrivateStateDirAcl,
+  computerPlatformOf,
   platformBinaryNames,
   resolveAgentDesktop,
   type ExecFile,
@@ -20,6 +21,15 @@ const root = new URL("../../", import.meta.url);
 const repo = (path: string) => fileURLToPath(new URL(path, root));
 // agent-desktop 1.2.0's own reply to version (envelope 2.6), less its os and target.
 const ENVELOPE = '{"version":"2.6","ok":true,"command":"version","data":{"version":"1.2.0"}}';
+
+describe("computerPlatformOf", () => {
+  it("gives Linux computer use beside macOS and Windows, and nothing elsewhere", () => {
+    expect(computerPlatformOf("darwin")).toBe("mac");
+    expect(computerPlatformOf("win32")).toBe("windows");
+    expect(computerPlatformOf("linux")).toBe("linux");
+    expect(computerPlatformOf("freebsd")).toBeNull();
+  });
+});
 
 describe("platformBinaryNames", () => {
   it("names the bundled binary and macOS helper per platform", () => {
@@ -84,6 +94,16 @@ describe("package.json packaging", () => {
     expect(agentDesktop(build.win.extraResources).map((entry) => entry.to)).toEqual(["agent-desktop/agent-desktop.exe", "agent-desktop/LICENSE"]);
     for (const arch of ["arm64", "x64"]) for (const entry of agentDesktop(build.mac.extraResources)) expect(existsSync(repo(expand(entry.from, arch))), expand(entry.from, arch)).toBe(true);
     for (const entry of agentDesktop(build.win.extraResources)) expect(existsSync(repo(expand(entry.from, "x64"))), entry.from).toBe(true);
+  });
+
+  it("ships the Linux binary too, beside an unpacked dir build for artifact transfer (linux-unpacked)", () => {
+    expect(agentDesktop(build.linux.extraResources).map((entry) => entry.to)).toEqual(["agent-desktop/agent-desktop", "agent-desktop/LICENSE"]);
+    for (const arch of ["arm64", "x64"]) for (const entry of agentDesktop(build.linux.extraResources)) expect(existsSync(repo(expand(entry.from, arch))), expand(entry.from, arch)).toBe(true);
+    expect(build.linux.target).toEqual(expect.arrayContaining(["AppImage", "dir"]));
+    // The packaged path resolveAgentDesktop looks for on Linux is the one extraResources writes.
+    const resources = "/opt/Bee/resources";
+    const found = resolveAgentDesktop({ packaged: true, resourcesPath: resources, appPath: "/x", platform: "linux", arch: "x64", exists: (path) => path === join(resources, "agent-desktop", "agent-desktop") });
+    expect(found).toEqual({ path: join(resources, "agent-desktop", "agent-desktop"), macHelper: null });
   });
 
   it("installs agent-desktop 1.2 or later (envelope 2.6, --stdin, element waits, bundled skills), as package.json asks", () => {
@@ -489,9 +509,10 @@ describe("source scan: agent-desktop stays read-only", () => {
     const index = readFileSync(repo("src/main/index.ts"), "utf8");
     expect(index).toMatch(/createMeetingWindowReader\(\{[^}]*run: agentDesktop\?\.run/s);
     expect(index).toMatch(/createDesktopActions\(\{[^}]*run: desktopRunner\?\.run/s);
-    // Computer use gets its own runner, created only for macOS and Windows, and handed only to the direct request handler.
-    expect(index).toMatch(/const computerRunner = [^;]*createAgentDesktopComputerRunner\(agentDesktopBinary\)/);
-    expect(index).toMatch(/computer: computerRunner\s*\?\s*\{[^}]*run: computerRunner\.run/s);
+    // Computer use gets its own runner, created only for macOS, Windows and Linux (computerPlatformOf), and handed only to the
+    // direct request handler.
+    expect(index).toMatch(/const computerRunner = agentDesktopBinary && computerPlatform \? createAgentDesktopComputerRunner\(agentDesktopBinary\)/);
+    expect(index).toMatch(/computer:\s*computerRunner && computerPlatform\s*\?\s*\{[^}]*platform: computerPlatform, run: computerRunner\.run/s);
     expect(index.match(/computerRunner\.run/g)).toHaveLength(1);
   });
 

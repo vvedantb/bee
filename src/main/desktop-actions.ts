@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { readdirSync, type Dirent } from "node:fs";
 import { basename, extname, join } from "node:path";
 import { parseApps, type AdApp } from "../core/agent-desktop-envelope";
+import { afterLaunchFailure, linuxLaunchNames, waitForListed } from "../core/app-discovery";
 import {
   cleanWindowTitle,
   matchRunningApp,
@@ -18,7 +19,9 @@ import { withoutSecrets, type AgentDesktopActionRun } from "./agent-desktop";
 // ("Bee, open Teams"). No Electron imports: index.ts passes shell.openExternal and shell.openPath. Nothing here runs a shell.
 // Processes start with execFile and fixed arguments: macOS /usr/bin/open -a <a checked app name>, and agent-desktop through its
 // own action runner (launch, focus-window, list-apps only). Windows apps open by a fixed URI, a Start menu shortcut or a fixed
-// system exe. Console lines carry codes only, never names.
+// system exe. Linux apps open through agent-desktop launch by desktop-entry name (google-chrome, then chromium, …), which needs
+// the desktop session's accessibility bus; a launch that times out is looked for in list-apps before Bee calls it missing
+// (core/app-discovery.ts). Console lines carry codes only, never names.
 
 export type DesktopActionDeps = {
   platform: NodeJS.Platform;
@@ -101,12 +104,16 @@ export function createDesktopActions(deps: DesktopActionDeps): DesktopActions {
   const runFixed = deps.execFile ?? execFixed;
   const run = deps.run;
 
+  // Linux: agent-desktop said there is no accessibility bus (no D-Bus session). Every launch fails the same way until restart.
+  let noBus = false;
+
   /** The running app that matches, from agent-desktop list-apps. Null when none does or agent-desktop cannot tell. */
   async function runningApp(app: AppTarget): Promise<AdApp | null> {
     if (!run) return null;
     const listed = await run("list-apps", [], { timeoutMs: LIST_TIMEOUT_MS });
     if (!listed.ok) {
       console.debug(`desktop-action list-apps ${listed.code}`);
+      if (deps.platform === "linux" && afterLaunchFailure(listed.code) === "stop") noBus = true;
       return null;
     }
     return matchRunningApp(app, parseApps(listed.data));
@@ -159,6 +166,27 @@ export function createDesktopActions(deps: DesktopActionDeps): DesktopActions {
     return false;
   }
 
+  /**
+   * Linux: agent-desktop launch by each desktop-entry name in turn (--activate waits for a window, so a warm app comes forward).
+   * A launch that timed out may be a cold app still starting: Bee looks for it in list-apps a few times rather than start
+   * another name. No accessibility bus: stops at once.
+   */
+  async function openLinux(app: AppTarget): Promise<boolean> {
+    if (!run) return false;
+    for (const name of linuxLaunchNames(app)) {
+      const launched = await run("launch", [name, "--activate", "--timeout", String(LAUNCH_TIMEOUT_MS)], { timeoutMs: LAUNCH_TIMEOUT_MS + 2000 });
+      if (launched.ok) return true;
+      console.debug(`desktop-action launch ${launched.code}`);
+      const next = afterLaunchFailure(launched.code);
+      if (next === "stop") {
+        noBus = true;
+        return false;
+      }
+      if (next === "look") return (await waitForListed({ list: () => runningApp(app) })).found !== null;
+    }
+    return false;
+  }
+
   async function open(app: AppTarget): Promise<boolean> {
     if (deps.platform === "darwin") return openMac(app);
     if (deps.platform === "win32") {
@@ -166,33 +194,43 @@ export function createDesktopActions(deps: DesktopActionDeps): DesktopActions {
       if (await focusRunning(app, null)) return true;
       return openWindows(app);
     }
+    if (deps.platform === "linux") {
+      // Already running and focusable (X11): bring it forward. On Wayland focus-window refuses, and launch --activate does it.
+      if (await focusRunning(app, null)) return true;
+      if (noBus) return false;
+      return openLinux(app);
+    }
     return false;
   }
 
-  const unsupported = () => deps.platform !== "darwin" && deps.platform !== "win32";
+  const unsupported = () => deps.platform !== "darwin" && deps.platform !== "win32" && deps.platform !== "linux";
+  /** Why an app did not open: on Linux with no accessibility bus, that; otherwise not found. */
+  const notOpened = (app: AppTarget, what = "") =>
+    fail(noBus ? `Could not open ${app.label}: Bee cannot reach the desktop session's accessibility bus` : `Could not find ${what}${app.label}`);
 
   return {
     async openApp(name) {
       const resolved = resolveApp(name);
       if (!resolved.ok) return fail(resolved.message);
-      if (unsupported()) return fail("Bee opens apps on Windows and Mac only");
+      if (unsupported()) return fail("Bee opens apps on Windows, Mac and Linux only");
       const { app } = resolved;
-      return (await open(app)) ? ok(`Opened ${app.label}`) : fail(`Could not find ${app.label}`);
+      return (await open(app)) ? ok(`Opened ${app.label}`) : notOpened(app);
     },
 
     async focusWindow({ app: name, title: rawTitle }) {
       const resolved = resolveApp(name);
       if (!resolved.ok) return fail(resolved.message);
-      if (unsupported()) return fail("Bee switches windows on Windows and Mac only");
+      if (unsupported()) return fail("Bee switches windows on Windows, Mac and Linux only");
       const { app } = resolved;
       const title = rawTitle === undefined ? null : cleanWindowTitle(rawTitle);
       if (rawTitle !== undefined && rawTitle.trim() !== "" && !title) return fail("That is not a window title Bee can use");
       // macOS without a title: open -a brings the app's windows forward. Otherwise agent-desktop focuses one window.
       if (deps.platform === "darwin" && !title) return (await openMac(app)) ? ok(`Focused ${app.label}`) : fail(`Could not find ${app.label}`);
       if (await focusRunning(app, title)) return ok(`Focused ${app.label}`);
-      // Not running, or agent-desktop could not focus it: opening it brings it forward.
-      if (await (deps.platform === "darwin" ? openMac(app) : openWindows(app))) return ok(`Opened ${app.label}`);
-      return fail(`Could not find a window for ${app.label}`);
+      // Not running, or agent-desktop could not focus it (on Linux, a Wayland session): opening it brings it forward.
+      const opened = deps.platform === "darwin" ? await openMac(app) : deps.platform === "linux" ? !noBus && (await openLinux(app)) : await openWindows(app);
+      if (opened) return ok(`Opened ${app.label}`);
+      return notOpened(app, "a window for ");
     },
 
     async openUrl(raw) {

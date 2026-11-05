@@ -107,14 +107,14 @@ describe("main: computer use for a direct request", () => {
     return () => ({ languageModel: () => model }) as unknown as BeeGateway;
   };
 
-  function setupComputer(options: { turns: Turn[]; askFirst?: boolean; computer?: boolean }) {
+  function setupComputer(options: { turns: Turn[]; askFirst?: boolean; computer?: boolean; platform?: "mac" | "windows" | "linux"; accessibility?: "granted" | "denied" }) {
     electron.handlers.clear();
     const commands: string[] = [];
     const sent: Array<{ channel: string; payload: unknown }> = [];
     let cleaned = 0;
     const run: ComputerRun = async (command) => {
       commands.push(command);
-      if (command === "permissions") return { ok: true, data: { accessibility: { state: "granted" }, screen_recording: { state: "denied" } } };
+      if (command === "permissions") return { ok: true, data: { accessibility: { state: options.accessibility ?? "granted" }, screen_recording: { state: "denied" } } };
       if (command === "skills") return { ok: true, data: { content: "# Guide\n\nAct on refs." } };
       return command === "snapshot" ? { ok: true, data: SNAPSHOT } : { ok: true, data: {} };
     };
@@ -133,7 +133,7 @@ describe("main: computer use for a direct request", () => {
         options.computer === false
           ? undefined
           : {
-              platform: "mac",
+              platform: options.platform ?? "mac",
               run,
               askFirst: () => options.askFirst ?? true,
               cleanup: () => {
@@ -153,6 +153,7 @@ describe("main: computer use for a direct request", () => {
       // Async like ipcMain.handle: a handler that throws rejects the renderer's call.
       answer: async (payload: unknown) => handler(IPC.computerAnswer)(event, payload),
       stop: async (payload: unknown) => handler(IPC.stopCommand)(event, payload),
+      cancel: async (payload: unknown) => handler(IPC.cancelPipeline)(event, payload),
       access: () => handler(IPC.computerAccess)(event) as Promise<unknown>,
       updates,
       commands,
@@ -206,6 +207,24 @@ describe("main: computer use for a direct request", () => {
     expect((await running).tips).toEqual(["Stopped."]);
     expect(ipc.commands).not.toContain("click");
     await expect(ipc.stop({ runId: { nope: 1 } })).rejects.toThrow();
+  });
+
+  it("lets a newer request cancel the one in flight (the renderer cancels the older run id): nothing is sent", async () => {
+    const ipc = setupComputer({ turns: SEND_TURNS });
+    const older = ipc.start("send Sam a message in Discord", 7);
+    await vi.waitFor(() => expect(ipc.updates().some((update) => update.type === "confirm")).toBe(true));
+    // store.ts runCommand: a new request cancels the previous run id before it starts its own.
+    await ipc.cancel({ runId: 7 });
+    expect((await older).tips).toEqual(["Stopped."]);
+    expect(ipc.commands).not.toContain("click");
+  });
+
+  it("on Linux without the accessibility bus, says so in Settings and runs no loop", async () => {
+    const { LINUX_A11Y_LINE } = await import("../core/computer-control");
+    const linux = setupComputer({ turns: SEND_TURNS, platform: "linux", accessibility: "denied" });
+    expect(await linux.access()).toEqual({ supported: true, platform: "linux", accessibility: "denied", screenRecording: "denied" });
+    expect((await linux.start("send Sam a message in Discord")).tips).toEqual([LINUX_A11Y_LINE]);
+    expect(linux.commands.filter((command) => command !== "permissions")).toEqual([]);
   });
 
   it("reports what computer use may do here, for Settings", async () => {

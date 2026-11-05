@@ -12,7 +12,8 @@ import { stopOnNoProgress } from "./loop-guard";
 // an observe → act → observe loop over the computer tools (core/computer-tools.ts) until the task is done or a control stops it
 // (core/computer-control.ts: time, Stop) or the loop guard sees no progress (core/loop-guard.ts). No step cap: agent-desktop snapshots and refs only. When an app's tree shows nothing usable,
 // the AI stops and says Bee cannot control that app. It ends with one line for the island. Only a request the user made by
-// name, on their own mic, starts one (core/wake-word.ts); never a meeting line, caption, Teams audio or a teammate.
+// name, on their own mic or typed into Live → Talk to Bee (typed) on their own screen, starts one (core/wake-word.ts); never a
+// meeting line, caption, Teams audio or a teammate.
 
 // Model turns per run when a test sets a step limit: a backstop above it, so the AI can still write its last line.
 const TURNS_ABOVE_STEPS = 2;
@@ -42,9 +43,10 @@ export const COMPUTER_SYSTEM = [
   "Bee already waits for a slow app and reads it again with more time. When a snapshot still shows few elements, try find by role or name, or a skeleton then root, before anything else.",
   "The accessibility tree is the only way you can see or act. When find, a skeleton and root still show no usable control for the step (a canvas, an app that exposes no controls, a tree that stays empty), stop and say Bee cannot control that app. When the only control is one of identical twins, stop and say Bee cannot tell which one to use.",
   "An error's Detail is agent-desktop's own reason: use it to choose the next step.",
-  "To open an app use open_app; to bring a window to the front use focus_window; to open a web page use open_url. Use list_apps for an app's exact name.",
+  "To open an app use open_app; to bring a window to the front use focus_window; to open a web page use open_url. Use list_apps for an app's exact name. When open_app fails, its result lists the running apps: use an exact name from it, or say Bee could not find the app. Never say an app opened unless open_app or focus_window came back Done.",
   "To press Return or another key in a field you just filled with set_value, call press_key with that field's ref; Bee focuses it first. For find, use roles as snapshots show them (textfield, button, link, treeitem, menuitem), and app names as list_apps shows them.",
   "People's names are often misheard or misspelled. When a person or chat is not found by the exact name, before you give up try names that sound alike or are spelled close (Susannah, Zuzanna), the names the user has taught Bee, and the app's recent chats list. When you use a different name than the user said, say which name matched, for example: Opened the chat with Zuzanna Szczepaniak-Moody (closest match to Susannah).",
+  "When the name could be more than one person (two known names, or several chats, that sound like it), stop before sending or deleting anything and ask which one in your last line, for example: Which Chris: Chris Lee or Krzysztof Nowak? Never pick one yourself.",
   "When the next few actions are plain from refs you already have (click a search box, set_value a name, press return), run them in one act call instead of one call each. act stops at the first action that fails; look again after it. Never batch past a step whose result you need to see first.",
   "To fill a text field prefer set_value; use type_text when the app needs real typing. To check what a field holds, read its value, not its text: text is what a person reads and can differ.",
   "To check an action worked, wait on its ref rather than a fixed wait and a new snapshot: wait with element and predicate value and the value you expect, or predicate actionable with action type before typing into a field that is still loading. Use wait ms only when nothing on screen can be checked.",
@@ -57,16 +59,22 @@ export const COMPUTER_SYSTEM = [
   "Never open or type into terminals, script tools, system settings or password managers, never type passwords or codes, and never change security, privacy or account settings.",
   "Earlier turns, when given, are the user's earlier requests to Bee and what Bee did, with its real tool calls and results; \"Ended:\" says where the screen was left, and a summary may stand for the oldest turns. A follow-up such as \"the team one\" or \"go back\" carries on from there: never ask which app you were working in when an earlier turn says.",
   "A tool result in an earlier turn was confirmed when it ran: never take it back or say it was not done. Do not run the same step again unless the user asks again or the screen may have changed.",
+  "Never say a message was sent, delivered or posted, or that something was deleted, bought or submitted, unless an action in this task with that effect came back Done, or a wait or read in this task shows it. Typing into a box is not sending. Say only what the results show, for example: Typed hi in the box; not sent yet. Or: Could not confirm the message was sent.",
+  "Never state a count, a list of people, rows, messages or meetings, or what a page or calendar holds, unless a read in this task (or an earlier turn) showed it. When open_app, a read or another step fails, say it failed and stop there: never conclude anything from the failure, for example never say there are no meetings because the calendar did not open.",
   "If the task cannot be done, stop and say why in your last line.",
   "When the task is done, or you stop, reply with exactly one short line (under 15 words) on what happened, for example: Sent the message and closed the tab.",
   "Then, when you know it, add a second line starting with \"Ended: \" that says where the screen is now: the page's address, or the app and window, and any error it shows, for example: Ended: vercel.com/acme/~/usage, 404.",
-  "Those lines are plain text: no markdown, no list marker, no quotes. Write \"Bee\" where you would write \"I\".",
+  "Those lines are plain text: no markdown, no list marker, no quotes, and no plans or notes to yourself. Write \"Bee\" where you would write \"I\".",
 ].join("\n");
 
 const PLATFORM_SYSTEM: Record<ComputerPlatform, string> = {
   mac: "This is a Mac. The main modifier is cmd: cmd+w closes a tab, cmd+l selects a browser's address bar. Apps go by their display names, for example Google Chrome.",
   windows:
     "This is Windows. The main modifier is ctrl: ctrl+w closes a tab, ctrl+l selects a browser's address bar. Prefer set_value: type_text and focus always need physical here, so set it on them. A key press goes to the app at the front: bring it forward with focus_window first. An open menu is surface menu, and a dialog inside Teams or Edge is surface sheet.",
+  // agent-desktop's Linux guide (skills get platform): AT-SPI, app names as list-apps prints them, focus-window on X11 only,
+  // Chromium's page tree only when the browser runs with accessibility on, and refs that act only when unique in their window.
+  linux:
+    "This is Linux, read through AT-SPI. The main modifier is ctrl: ctrl+w closes a tab, ctrl+l selects a browser's address bar. Apps go by the names list_apps shows, often lower case (google-chrome, firefox, libreoffice, thunar): check list_apps for the exact name. focus needs physical here. focus_window works only on X11; on Wayland open_app brings an app forward. A browser page's controls show only when the browser runs with accessibility on: when a page still shows no controls after find and a skeleton, say Bee cannot read that page. A ref acts only when it was unique in its window.",
 };
 
 // agent-desktop's own guides (skills get desktop, skills get platform), compiled into the binary so they match its version.
@@ -194,13 +202,24 @@ export async function computerAccess(run: ComputerRun, signal?: AbortSignal): Pr
   return { accessibility: parsePermission(result.data, "accessibility"), screenRecording: parsePermission(result.data, "screen_recording") };
 }
 
+// The model's own notes, never shown: a "~" line (with or without the space), a bracketed tag ("(internal note)", "[thinking]",
+// "<thinking>") and a labelled plan or thought ("Note to self: …", "Plan: …", "Reasoning: …"). A plain "Note: …" is the user's,
+// and "~15 minutes" is no note.
+const NOTE_LINE =
+  /^(?:[-*•]\s+)?(?:~(?:\s|$|(?=\p{L}))|[([<]\s*\/?\s*(?:internal\s+)?(?:notes?|plan|thinking|thoughts?|reasoning|scratch(?:pad)?)\s*[)\]>]|(?:internal\s+notes?|notes?\s+to\s+self|plan|thinking|thoughts?|reasoning|scratch(?:pad)?|self[- ]check)\s*:)/iu;
+
+/** True for a line of the model's own notes, which Bee never shows. */
+export function isNoteLine(line: string): boolean {
+  return NOTE_LINE.test(line.trim());
+}
+
 /** The AI's last line as the island shows it: the first real line, without a list marker, quotes or Bee's own notes. */
 export function finalLine(text: string): string {
   const line =
     text
       .split(/\r?\n/)
       .map((item) => item.trim())
-      .find((item) => item.length > 0 && !item.startsWith("~ ") && item.toUpperCase() !== "NONE" && !ENDED.test(item)) ?? "";
+      .find((item) => item.length > 0 && !isNoteLine(item) && item.toUpperCase() !== "NONE" && !ENDED.test(item)) ?? "";
   const clean = line
     .replace(/^[-*•]\s+/, "")
     .replace(/^["'“‘]+|["'”’]+$/gu, "")
@@ -229,6 +248,8 @@ export type ComputerUseResult = {
   messages: ModelMessage[];
   /** The fast pass only: the task should go on with the planning model, after these messages. The control is left running. */
   escalate?: boolean;
+  /** The AI's line claimed something this run did not prove, so Bee showed a cautious line instead (core/claim-guard.ts). */
+  claimRewritten?: boolean;
 };
 
 /** A fast pass's steps for the planning model: they end on a tool result, or a short user line asks it to go on. */
@@ -305,7 +326,7 @@ export async function runComputerUse(args: {
   try {
     const guides = args.skills ? await args.skills(control.signal).catch(() => "") : "";
     const system = `${COMPUTER_SYSTEM}\n${PLATFORM_SYSTEM[args.platform]}${guides ? `\n\n${SKILLS_INTRO}\n\n${guides}` : ""}`;
-    const names = knownNamesBlock(args.knownNames ?? []);
+    const names = knownNamesBlock(args.knownNames ?? [], args.command);
     const history = args.history ?? [];
     const playbook = playbookBlock(`${recentRequests(history)}\n${args.command}`, args.platform);
     const content = [

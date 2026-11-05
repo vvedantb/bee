@@ -197,10 +197,10 @@ describe("desktop actions everywhere", () => {
     expect(external).toEqual(["https://www.bbc.co.uk/news"]);
   });
 
-  it("says apps and windows open on Windows and Mac only elsewhere", async () => {
-    const { actions, execs, runs } = make("linux");
-    expect(await actions.openApp("Teams")).toEqual({ ok: false, message: "Bee opens apps on Windows and Mac only" });
-    expect(await actions.focusWindow({ app: "Teams" })).toEqual({ ok: false, message: "Bee switches windows on Windows and Mac only" });
+  it("says apps and windows open on Windows, Mac and Linux only elsewhere", async () => {
+    const { actions, execs, runs } = make("freebsd");
+    expect(await actions.openApp("Teams")).toEqual({ ok: false, message: "Bee opens apps on Windows, Mac and Linux only" });
+    expect(await actions.focusWindow({ app: "Teams" })).toEqual({ ok: false, message: "Bee switches windows on Windows, Mac and Linux only" });
     expect(execs).toEqual([]);
     expect(runs).toEqual([]);
   });
@@ -211,5 +211,87 @@ describe("desktop actions everywhere", () => {
     const logged = debug.mock.calls.flat().join(" ");
     expect(logged).toContain("focus-window ACTION_FAILED");
     expect(logged).not.toMatch(/Teams|Secret/);
+  });
+});
+
+// Linux: agent-desktop launch by desktop-entry name, list-apps and focus-window, all faked. A launch result per name, a list-apps
+// result per call (the last repeats), and focus-window refusing as it does on Wayland.
+function makeLinux(options: { launch?: Record<string, AgentDesktopResult>; lists?: AgentDesktopResult[]; focus?: AgentDesktopResult } = {}) {
+  const runs: RunCall[] = [];
+  const execs: string[] = [];
+  let listCall = 0;
+  const run = async (command: DesktopActionCommand, args: string[]): Promise<AgentDesktopResult> => {
+    runs.push({ command, args });
+    if (command === "list-apps") {
+      const lists = options.lists ?? [{ ok: true, data: { apps: [] } }];
+      return lists[Math.min(listCall++, lists.length - 1)] as AgentDesktopResult;
+    }
+    if (command === "focus-window") return options.focus ?? { ok: false, code: "ACTION_NOT_SUPPORTED" };
+    return options.launch?.[args[0] ?? ""] ?? { ok: false, code: "APP_NOT_FOUND" };
+  };
+  const actions = createDesktopActions({
+    platform: "linux",
+    run,
+    execFile: async (file) => {
+      execs.push(file);
+    },
+    openExternal: async () => undefined,
+    openPath: async () => "",
+  });
+  return { actions, runs, execs, launched: () => runs.filter((call) => call.command === "launch").map((call) => call.args[0]) };
+}
+const apps = (...names: string[]): AgentDesktopResult => ({ ok: true, data: { apps: names.map((name, index) => ({ name, pid: index + 1 })) } });
+
+describe("desktop actions on Linux", () => {
+  beforeEach(() => vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] }));
+  afterEach(() => vi.useRealTimers());
+
+  it("opens a cold app by its desktop-entry names in turn, waiting for its window, never through a shell", async () => {
+    const { actions, launched, runs, execs } = makeLinux({ launch: { chromium: { ok: true, data: {} } } });
+    expect(await actions.openApp("Chrome")).toEqual({ ok: true, message: "Opened Chrome" });
+    expect(launched()).toEqual(["google-chrome", "google-chrome-stable", "chromium"]);
+    expect(runs.find((call) => call.command === "launch")?.args).toEqual(["google-chrome", "--activate", "--timeout", "8000"]);
+    expect(execs).toEqual([]);
+  });
+
+  it("brings a warm app forward with focus-window, with no launch (X11)", async () => {
+    const { actions, launched } = makeLinux({ lists: [apps("google-chrome")], focus: { ok: true, data: {} } });
+    expect(await actions.openApp("Chrome")).toEqual({ ok: true, message: "Opened Chrome" });
+    expect(launched()).toEqual([]);
+  });
+
+  it("falls back to launch --activate when focus-window is refused (Wayland)", async () => {
+    const { actions, launched } = makeLinux({ lists: [apps("google-chrome")], launch: { "google-chrome": { ok: true, data: {} } } });
+    expect(await actions.focusWindow({ app: "Chrome" })).toEqual({ ok: true, message: "Opened Chrome" });
+    expect(launched()).toEqual(["google-chrome"]);
+  });
+
+  it("looks for a cold app that timed out, a few times, rather than start another browser", async () => {
+    const { actions, launched, runs } = makeLinux({
+      launch: { "google-chrome": { ok: false, code: "TIMEOUT" } },
+      lists: [apps(), apps(), apps("google-chrome")],
+    });
+    const result = actions.openApp("Chrome");
+    await vi.runAllTimersAsync();
+    expect(await result).toEqual({ ok: true, message: "Opened Chrome" });
+    expect(launched()).toEqual(["google-chrome"]);
+    // One warm check before launching, then two misses and a hit while it starts.
+    expect(runs.filter((call) => call.command === "list-apps")).toHaveLength(3);
+  });
+
+  it("says no accessibility bus plainly, and stops trying names", async () => {
+    const { actions, launched } = makeLinux({ lists: [{ ok: false, code: "PLATFORM_NOT_SUPPORTED" }] });
+    expect(await actions.openApp("Chrome")).toEqual({ ok: false, message: "Could not open Chrome: Bee cannot reach the desktop session's accessibility bus" });
+    expect(launched()).toEqual([]);
+    const denied = makeLinux({ launch: { "google-chrome": { ok: false, code: "PERM_DENIED" } } });
+    expect(await denied.actions.openApp("Chrome")).toMatchObject({ ok: false, message: expect.stringContaining("accessibility bus") });
+    expect(denied.launched()).toEqual(["google-chrome"]);
+  });
+
+  it("says not found when no name launches, and still opens pages", async () => {
+    const { actions, launched } = makeLinux();
+    expect(await actions.openApp("Figma")).toEqual({ ok: false, message: "Could not find Figma" });
+    expect(launched()).toEqual(["Figma", "figma"]);
+    expect(await actions.openUrl("https://example.com/")).toEqual({ ok: true, message: "Opened https://example.com/" });
   });
 });
