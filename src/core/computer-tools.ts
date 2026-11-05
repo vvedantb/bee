@@ -18,9 +18,11 @@ import type { LunaToolActivity } from "./luna";
 // (click, set_value, type_text, select_option, set_state, scroll, focus), keys, apps and waits. main runs each command on its
 // own runner with fixed argv and no shell; main/agent-desktop.ts assertComputerUse checks every one. Apps open, windows come
 // forward and pages open through the desktop actions (core/desktop-actions.ts). Each call is one step of the run's budget
-// (core/computer-control.ts); sending, deleting, buying and submitting wait for the user's Confirm first when the setting is on
-// (core/computer-gate.ts, which reads where each ref sits in the tree, not just what the AI says). Terminals, script tools,
-// system settings and Bee itself are never read or typed into. The tree is the only way in: no screenshots and no clicks at a
+// (core/computer-control.ts), act included: it runs a short list of actions on known refs (click, type, Return) in one step,
+// to save the AI a round trip per action, and stops at the first that fails. Sending, deleting, buying and submitting wait
+// for the user's Confirm first when the setting is on, inside a batch too (core/computer-gate.ts, which reads where each ref
+// sits in the tree, not just what the AI says). Terminals, script tools, system settings and Bee itself are never read or
+// typed into. The tree is the only way in: no screenshots and no clicks at a
 // point. When an app's tree stays empty or unusable once Bee has waited for it and the AI has tried find, a skeleton and root
 // (a canvas, an app that never exposes its controls), the tools tell the AI to stop and say Bee cannot control that app.
 
@@ -491,6 +493,34 @@ const physicalSchema = z
   .optional()
   .describe("Real key presses or focus. Only when POLICY_DENIED said this step needs it, or the system says this computer always needs it. Never to retry other errors.");
 
+// act: the most actions one batch may hold, and what each one is. Only actions on refs the AI already has, keys and short pauses:
+// no looking (a batch never acts on a ref it has not seen), and no apps or pages (they change what the refs mean).
+export const ACT_MAX = 8;
+const ACT_PAUSE_MAX_MS = 3000;
+const actSchema = z.discriminatedUnion("do", [
+  z.object({ do: z.literal("click"), ref: refSchema, effect: effectSchema }),
+  z.object({ do: z.literal("set_value"), ref: refSchema, value: z.string().max(4000), effect: effectSchema }),
+  z.object({ do: z.literal("type_text"), ref: refSchema, text: z.string().min(1).max(4000), effect: effectSchema, physical: physicalSchema }),
+  z.object({ do: z.literal("focus"), ref: refSchema, physical: physicalSchema }),
+  z.object({ do: z.literal("select_option"), ref: refSchema, option: z.string().min(1).max(200), effect: effectSchema }),
+  z.object({
+    do: z.literal("press_key"),
+    keys: z.string().min(1).max(40),
+    app: appSchema,
+    window_id: windowSchema.optional(),
+    ref: refSchema.optional(),
+    effect: effectSchema,
+    physical: physicalSchema,
+  }),
+  z.object({ do: z.literal("wait"), ms: z.number().int().min(100).max(ACT_PAUSE_MAX_MS) }),
+]);
+type ActInput = z.infer<typeof actSchema>;
+
+/** An action's output that says it was done: "Done…", after any note on which app name Bee used. */
+export function actionDone(output: string): boolean {
+  return /^(?:Using [^\n]{1,120}? for [^\n]{1,120}?\. )?Done\b/.test(output);
+}
+
 // read: get's properties, then is's true-or-false checks.
 const GET_PROPERTIES = ["text", "value", "title", "role", "states"] as const;
 const IS_PROPERTIES = ["visible", "enabled", "checked", "focused", "expanded", "selected"] as const;
@@ -680,48 +710,61 @@ export function computerTools(deps: ComputerToolDeps) {
   };
 
   /**
+   * One action inside a step: shows its line, asks first when the gate says so, then does the work. Never throws. A decline
+   * stops the run.
+   */
+  const runAction = async (name: string, label: string, work: () => Promise<string>, gate?: () => GateAction): Promise<string> => {
+    const started = performance.now();
+    debugLog.info("computer", "step", { n: control.steps(), tool: name, label, app: currentApp });
+    deps.onStep?.(clip(label, 60));
+    deps.onActivity?.({ tool: name, phase: "start" });
+    try {
+      if (gate && deps.askFirst()) {
+        const action = gate();
+        const kind = needsConfirm(action, deps.askFirst());
+        if (kind) {
+          deps.onStep?.(CONFIRM_LABEL);
+          const request: ConfirmRequest = { kind, question: confirmQuestion(kind), detail: confirmDetail(action, currentApp) };
+          debugLog.info("computer", "confirm-needed", { tool: name, kind, request, action });
+          const confirmed = await control.paused(() => awaitAnswer((signal) => deps.confirm(request, signal), control.signal, deps.confirmTimeoutMs ?? CONFIRM_TIMEOUT_MS));
+          debugLog.info("computer", "confirm-result", { tool: name, kind, confirmed, reason: control.reason() });
+          if (!confirmed) {
+            control.stop("declined", kind);
+            return STOPPED;
+          }
+          console.debug(`computer confirmed ${kind}`);
+          deps.onStep?.(clip(label, 60));
+        }
+      }
+      if (control.reason()) return STOPPED;
+      const output = await work();
+      debugLog.debug("computer", "step-done", { n: control.steps(), tool: name, ms: msSince(started), output });
+      return output;
+    } catch (error) {
+      debugLog.warn("computer", "step-failed", { n: control.steps(), tool: name, ms: msSince(started), reason: control.reason(), error: error instanceof Error ? error.message : String(error) });
+      return control.reason() ? STOPPED : "Error: that step failed. Look again before trying something else.";
+    } finally {
+      deps.onActivity?.({ tool: name, phase: "end" });
+    }
+  };
+
+  /** Counts one step of the run's budget, or says the run has stopped. */
+  const countStep = (name: string): boolean => {
+    if (control.step()) return true;
+    debugLog.info("computer", "step-refused", { tool: name, reason: control.reason(), steps: control.steps() });
+    return false;
+  };
+
+  /**
    * Runs one tool step: counts it, shows its line, asks first when the gate says so, then does the work. A step after the run
    * stopped does nothing.
    */
   const step = (name: string, label: string, work: () => Promise<string>, gate?: () => GateAction): Promise<string> =>
-    serial(async () => {
-      if (!control.step()) {
-        debugLog.info("computer", "step-refused", { tool: name, reason: control.reason(), steps: control.steps() });
-        return STOPPED;
-      }
-      const started = performance.now();
-      debugLog.info("computer", "step", { n: control.steps(), tool: name, label, app: currentApp });
-      deps.onStep?.(clip(label, 60));
-      deps.onActivity?.({ tool: name, phase: "start" });
-      try {
-        if (gate && deps.askFirst()) {
-          const action = gate();
-          const kind = needsConfirm(action, deps.askFirst());
-          if (kind) {
-            deps.onStep?.(CONFIRM_LABEL);
-            const request: ConfirmRequest = { kind, question: confirmQuestion(kind), detail: confirmDetail(action, currentApp) };
-            debugLog.info("computer", "confirm-needed", { tool: name, kind, request, action });
-            const confirmed = await control.paused(() => awaitAnswer((signal) => deps.confirm(request, signal), control.signal, deps.confirmTimeoutMs ?? CONFIRM_TIMEOUT_MS));
-            debugLog.info("computer", "confirm-result", { tool: name, kind, confirmed, reason: control.reason() });
-            if (!confirmed) {
-              control.stop("declined", kind);
-              return STOPPED;
-            }
-            console.debug(`computer confirmed ${kind}`);
-            deps.onStep?.(clip(label, 60));
-          }
-        }
-        if (control.reason()) return STOPPED;
-        const output = await work();
-        debugLog.debug("computer", "step-done", { n: control.steps(), tool: name, ms: msSince(started), output });
-        return output;
-      } catch (error) {
-        debugLog.warn("computer", "step-failed", { n: control.steps(), tool: name, ms: msSince(started), reason: control.reason(), error: error instanceof Error ? error.message : String(error) });
-        return control.reason() ? STOPPED : "Error: that step failed. Look again before trying something else.";
-      } finally {
-        deps.onActivity?.({ tool: name, phase: "end" });
-      }
-    });
+    serial(async () => (countStep(name) ? runAction(name, label, work, gate) : STOPPED));
+
+  /** One action as a tool or a batch runs it: its name, step line, work and confirm gate. */
+  type Action = { name: string; label: string; work: () => Promise<string>; gate?: () => GateAction };
+  const run = (action: Action) => step(action.name, action.label, action.work, action.gate);
 
   /** A ref the AI gave: one this run's snapshots or finds showed it, else the error to send back. */
   const badRef = (ref: string): string | null => (REF_PATTERN.test(ref) && refs.has(ref) ? null : "Error: use a ref from this task's latest snapshot or find, for example @s8f3k2p9:e12.");
@@ -844,6 +887,139 @@ export function computerTools(deps: ComputerToolDeps) {
   };
 
   const gateFor = (command: string, ref: string, extra: Partial<GateAction> & { effect?: Effect }) => (): GateAction => ({ command, target: refs.get(ref) ?? null, lastField, ...extra });
+
+  // The acting tools as actions, so a tool call and a batch (act) run the same checks, gates and work.
+  const clickAction = ({ ref, effect }: { ref: string; effect: Effect }): Action => ({
+    name: "click",
+    label: label(ref, "Clicking", "Clicking…"),
+    work: async () => badRef(ref) ?? onRef("click", ref, [], ACT_MS, undefined, (to) => gateFor("click", to, { effect })())(),
+    gate: gateFor("click", ref, { effect }),
+  });
+  const typeAction = ({ ref, text, effect, physical }: { ref: string; text: string; effect: Effect; physical?: boolean | undefined }): Action => ({
+    name: "type_text",
+    label: label(ref, "Typing in", "Typing…"),
+    work: async () =>
+      badRef(ref) ??
+      onRef("type", ref, [...(physical ? [HEADED_FLAG] : []), STDIN_FLAG], ACT_MS + Math.min(40_000, text.length * 40), cleanText(text), (to) => gateFor("type", to, { effect, text })())(),
+    gate: gateFor("type", ref, { effect, text }),
+  });
+  const setValueAction = ({ ref, value, effect }: { ref: string; value: string; effect: Effect }): Action =>
+    value === ""
+      ? {
+          name: "set_value",
+          label: label(ref, "Clearing", "Clearing a field…"),
+          work: async () => badRef(ref) ?? onRef("clear", ref, [], ACT_MS, undefined, (to) => gateFor("clear", to, { effect })())(),
+          gate: gateFor("clear", ref, { effect }),
+        }
+      : {
+          name: "set_value",
+          label: label(ref, "Typing in", "Typing…"),
+          work: async () => badRef(ref) ?? onRef("set-value", ref, [STDIN_FLAG], ACT_MS, cleanText(value), (to) => gateFor("set-value", to, { effect, text: value })())(),
+          gate: gateFor("set-value", ref, { effect, text: value }),
+        };
+  const focusAction = ({ ref, physical }: { ref: string; physical?: boolean | undefined }): Action => ({
+    name: "focus",
+    label: label(ref, "Selecting", "Selecting a field…"),
+    work: async () => badRef(ref) ?? onRef("focus", ref, physical ? [HEADED_FLAG] : [])(),
+  });
+  const selectAction = ({ ref, option, effect }: { ref: string; option: string; effect: Effect }): Action => ({
+    name: "select_option",
+    label: `Choosing ${shortName(option, 30)}…`,
+    work: async () => badRef(ref) ?? onRef("select", ref, ["--", cleanText(option)], ACT_MS, undefined, (to) => gateFor("select", to, { effect, text: option })())(),
+    gate: gateFor("select", ref, { effect, text: option }),
+  });
+  type PressInput = { keys: string; app: string; window_id?: string | undefined; ref?: string | undefined; effect: Effect; physical?: boolean | undefined };
+  const pressAction = (input: PressInput): Action => ({
+    name: "press_key",
+    label: `Pressing ${keysLabel(input.keys)}…`,
+    work: async () => {
+      const keys = input.keys.trim().toLowerCase().replace(/\s*\+\s*/g, "+");
+      if (!/^[a-z0-9]{1,12}(?:\+[a-z0-9]{1,12}){0,4}$/.test(keys)) return "Error: keys look like return or cmd+w.";
+      const invalid = badApp(input.app) ?? badWindow(input.window_id) ?? (input.ref ? badRef(input.ref) : null);
+      if (invalid) return invalid;
+      if (shellElement(input.ref ? refs.get(input.ref) : lastField)) return SHELL_MESSAGE;
+      const headed = input.physical ? [HEADED_FLAG] : [];
+      if (input.ref) {
+        const focused = await exec("focus", [input.ref, ...headed], ACT_MS);
+        if (!focused.ok) return `Bee could not focus that field, so pressed nothing. ${errorLine(focused)}`;
+        lastField = refs.get(input.ref) ?? lastField;
+      }
+      const press = (app: string | undefined) => exec("press", [keys, ...scope({ app, window_id: input.window_id }), ...headed], ACT_MS);
+      let { result, app, note } = await withApp(input.app, press);
+      currentApp = app ?? currentApp;
+      // agent-desktop sends keys only where the app's keyboard focus is proven, and refuses before sending anything when it
+      // is not (a field written with set_value need not hold focus). Focus the field written last, then press once more.
+      const field = input.ref ? null : refOf(lastField);
+      if (!result.ok && result.code === "ACTION_FAILED" && (NO_FOCUS.test(result.message ?? "") || /focus/.test(result.kind ?? "")) && field && !control.reason()) {
+        const focused = await exec("focus", [field, ...headed], ACT_MS);
+        debugLog.info("computer", "press-after-focus", { focused: focused.ok });
+        if (!focused.ok) note = `${note}Bee tried to focus the field first: ${errorLine(focused)} `;
+        else if (!control.reason()) result = await press(app);
+      }
+      if (!keepsFocus(keys)) lastField = null;
+      return `${note}${result.ok ? `${formatDone(result.data)} Check the result with a snapshot.` : errorLine(result)}`;
+    },
+    gate: () => ({
+      command: "press",
+      keys: input.keys.trim().toLowerCase().replace(/\s*\+\s*/g, "+"),
+      lastField: (input.ref ? refs.get(input.ref) : undefined) ?? lastField,
+      effect: input.effect,
+    }),
+  });
+  const pauseAction = ({ ms }: { ms: number }): Action => ({
+    name: "wait",
+    label: "Waiting…",
+    work: async () => {
+      const result = await exec("wait", [String(ms)], ms + 5000);
+      return result.ok ? "Done." : errorLine(result);
+    },
+  });
+
+  /**
+   * act: several actions in one step, in order, each with its own checks and confirm gate. It stops at the first that does not
+   * come back done (an error, a decline, a stop), and says which ran. One call is one step of the run's budget, however many
+   * actions it holds (at most ACT_MAX).
+   */
+  const batch = (actions: readonly Action[]): Promise<string> =>
+    serial(async () => {
+      if (!countStep("act")) return STOPPED;
+      debugLog.info("computer", "act", { n: control.steps(), actions: actions.map((action) => action.name) });
+      const lines: string[] = [];
+      for (const [index, action] of actions.entries()) {
+        if (control.reason()) {
+          lines.push(STOPPED);
+          break;
+        }
+        const output = await runAction(action.name, action.label, action.work, action.gate);
+        lines.push(`${index + 1}. ${action.name}: ${output}`);
+        if (output === STOPPED) break;
+        if (!actionDone(output)) {
+          if (index < actions.length - 1) lines.push(`Bee stopped there: actions ${index + 2} to ${actions.length} did not run. Look again before going on.`);
+          break;
+        }
+      }
+      return lines.join("\n");
+    });
+
+  /** One act item as its action. */
+  const actionOf = (item: ActInput): Action => {
+    switch (item.do) {
+      case "click":
+        return clickAction(item);
+      case "set_value":
+        return setValueAction(item);
+      case "type_text":
+        return typeAction(item);
+      case "focus":
+        return focusAction(item);
+      case "select_option":
+        return selectAction(item);
+      case "press_key":
+        return pressAction(item);
+      case "wait":
+        return pauseAction(item);
+    }
+  };
 
   return {
     snapshot: tool({
@@ -998,58 +1174,31 @@ export function computerTools(deps: ComputerToolDeps) {
     click: tool({
       description: "Click (press) the element with this ref.",
       inputSchema: z.object({ ref: refSchema, effect: effectSchema }),
-      execute: ({ ref, effect }) => step("click", label(ref, "Clicking", "Clicking…"), async () => badRef(ref) ?? onRef("click", ref, [], ACT_MS, undefined, (to) => gateFor("click", to, { effect })())(), gateFor("click", ref, { effect })),
+      execute: (input) => run(clickAction(input)),
     }),
 
     type_text: tool({
       description: "Type text into the text field with this ref, as keystrokes. A line break presses Return, which sends in most chat apps.",
       inputSchema: z.object({ ref: refSchema, text: z.string().min(1).max(4000), effect: effectSchema, physical: physicalSchema }),
-      execute: ({ ref, text, effect, physical }) =>
-        step(
-          "type_text",
-          label(ref, "Typing in", "Typing…"),
-          async () =>
-            badRef(ref) ??
-            onRef("type", ref, [...(physical ? [HEADED_FLAG] : []), STDIN_FLAG], ACT_MS + Math.min(40_000, text.length * 40), cleanText(text), (to) => gateFor("type", to, { effect, text })())(),
-          gateFor("type", ref, { effect, text }),
-        ),
+      execute: (input) => run(typeAction(input)),
     }),
 
     set_value: tool({
       description: "Fill a text field: set its whole value at once; an empty value clears it. Faster than type_text and headless; use it for drafts, searches and form fields.",
       inputSchema: z.object({ ref: refSchema, value: z.string().max(4000), effect: effectSchema }),
-      execute: ({ ref, value, effect }) =>
-        value === ""
-          ? step(
-              "set_value",
-              label(ref, "Clearing", "Clearing a field…"),
-              async () => badRef(ref) ?? onRef("clear", ref, [], ACT_MS, undefined, (to) => gateFor("clear", to, { effect })())(),
-              gateFor("clear", ref, { effect }),
-            )
-          : step(
-              "set_value",
-              label(ref, "Typing in", "Typing…"),
-              async () => badRef(ref) ?? onRef("set-value", ref, [STDIN_FLAG], ACT_MS, cleanText(value), (to) => gateFor("set-value", to, { effect, text: value })())(),
-              gateFor("set-value", ref, { effect, text: value }),
-            ),
+      execute: (input) => run(setValueAction(input)),
     }),
 
     focus: tool({
       description: "Put keyboard focus on an element without clicking it.",
       inputSchema: z.object({ ref: refSchema, physical: physicalSchema }),
-      execute: ({ ref, physical }) => step("focus", label(ref, "Selecting", "Selecting a field…"), async () => badRef(ref) ?? onRef("focus", ref, physical ? [HEADED_FLAG] : [])()),
+      execute: (input) => run(focusAction(input)),
     }),
 
     select_option: tool({
       description: "Choose an option by its text in a list, dropdown or menu button.",
       inputSchema: z.object({ ref: refSchema, option: z.string().min(1).max(200), effect: effectSchema }),
-      execute: ({ ref, option, effect }) =>
-        step(
-          "select_option",
-          `Choosing ${shortName(option, 30)}…`,
-          async () => badRef(ref) ?? onRef("select", ref, ["--", cleanText(option)], ACT_MS, undefined, (to) => gateFor("select", to, { effect, text: option })())(),
-          gateFor("select", ref, { effect, text: option }),
-        ),
+      execute: (input) => run(selectAction(input)),
     }),
 
     set_state: tool({
@@ -1083,44 +1232,14 @@ export function computerTools(deps: ComputerToolDeps) {
         effect: effectSchema,
         physical: physicalSchema,
       }),
-      execute: (input) =>
-        step(
-          "press_key",
-          `Pressing ${keysLabel(input.keys)}…`,
-          async () => {
-            const keys = input.keys.trim().toLowerCase().replace(/\s*\+\s*/g, "+");
-            if (!/^[a-z0-9]{1,12}(?:\+[a-z0-9]{1,12}){0,4}$/.test(keys)) return "Error: keys look like return or cmd+w.";
-            const invalid = badApp(input.app) ?? badWindow(input.window_id) ?? (input.ref ? badRef(input.ref) : null);
-            if (invalid) return invalid;
-            if (shellElement(input.ref ? refs.get(input.ref) : lastField)) return SHELL_MESSAGE;
-            const headed = input.physical ? [HEADED_FLAG] : [];
-            if (input.ref) {
-              const focused = await exec("focus", [input.ref, ...headed], ACT_MS);
-              if (!focused.ok) return `Bee could not focus that field, so pressed nothing. ${errorLine(focused)}`;
-              lastField = refs.get(input.ref) ?? lastField;
-            }
-            const press = (app: string | undefined) => exec("press", [keys, ...scope({ app, window_id: input.window_id }), ...headed], ACT_MS);
-            let { result, app, note } = await withApp(input.app, press);
-            currentApp = app ?? currentApp;
-            // agent-desktop sends keys only where the app's keyboard focus is proven, and refuses before sending anything when it
-            // is not (a field written with set_value need not hold focus). Focus the field written last, then press once more.
-            const field = input.ref ? null : refOf(lastField);
-            if (!result.ok && result.code === "ACTION_FAILED" && (NO_FOCUS.test(result.message ?? "") || /focus/.test(result.kind ?? "")) && field && !control.reason()) {
-              const focused = await exec("focus", [field, ...headed], ACT_MS);
-              debugLog.info("computer", "press-after-focus", { focused: focused.ok });
-              if (!focused.ok) note = `${note}Bee tried to focus the field first: ${errorLine(focused)} `;
-              else if (!control.reason()) result = await press(app);
-            }
-            if (!keepsFocus(keys)) lastField = null;
-            return `${note}${result.ok ? `${formatDone(result.data)} Check the result with a snapshot.` : errorLine(result)}`;
-          },
-          () => ({
-            command: "press",
-            keys: input.keys.trim().toLowerCase().replace(/\s*\+\s*/g, "+"),
-            lastField: (input.ref ? refs.get(input.ref) : undefined) ?? lastField,
-            effect: input.effect,
-          }),
-        ),
+      execute: (input) => run(pressAction(input)),
+    }),
+
+    act: tool({
+      description:
+        "Run a short sequence of actions in one go, in order, on refs you already have: for example click a search box, set_value a name, press return. Bee stops at the first action that fails and says which ran. Use it for obvious short sequences; look again after it to check.",
+      inputSchema: z.object({ actions: z.array(actSchema).min(1).max(ACT_MAX) }),
+      execute: ({ actions }) => batch(actions.map(actionOf)),
     }),
 
     open_app: tool({
@@ -1222,5 +1341,5 @@ export function computerTools(deps: ComputerToolDeps) {
 /** The tools' names, for the prompt and the activity labels (renderer/src/island.ts). */
 export const COMPUTER_TOOL_NAMES = [
   "snapshot", "find", "read", "list_apps", "list_windows", "click", "type_text", "set_value", "focus", "select_option", "set_state", "scroll", "press_key",
-  "open_app", "focus_window", "open_url", "close_app", "wait",
+  "act", "open_app", "focus_window", "open_url", "close_app", "wait",
 ] as const;

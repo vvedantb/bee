@@ -3,11 +3,13 @@ import { z } from "zod";
 import type { PipelineResult } from "../shared/ipc";
 import type { ComputerRun } from "./agent-desktop-envelope";
 import { assistantMessage, cleanForHistory, commandFallbackReply, historySummariser, userMessage, type Summarise } from "./bee-history";
+import { memorySummary, memoryTools, type BeeMemory } from "./bee-memory";
+import { routeWithJev, type JevRoute } from "./command-route-jev";
 import { createRunControl, stopLine, type ComputerPlatform, type RunControl } from "./computer-control";
 import { computerTools, type ConfirmRequest } from "./computer-tools";
-import { computerAccess, runComputerUse, wantsComputerUse, type ComputerSkills } from "./computer-use";
+import { computerAccess, runComputerUse, simpleComputerTask, wantsComputerUse, type ComputerSkills, type ComputerUseResult } from "./computer-use";
 import { debugLog, errorData } from "./debug-log";
-import { COMMAND_MODEL, GUIDE_MODEL, NO_GATEWAY_KEY, type BeeGateway } from "./gateway";
+import { COMMAND_MODEL, GUIDE_MODEL, JEV_MODEL, NO_GATEWAY_KEY, type BeeGateway } from "./gateway";
 import type { McpTools } from "./mcp";
 import { routeCommand, type DesktopActionResult, type DesktopActions } from "./desktop-actions";
 import { desktopTools } from "./desktop-tools";
@@ -24,8 +26,13 @@ import { needsWebSearch, type SearchLocation } from "./web-search";
 // ("send Sam a message in Discord", core/computer-use.ts wantsComputerUse) runs the computer-use loop. Anything else goes to
 // Luna with the desktop tools, and use_computer to hand a task on screen over to the loop. The result has the pipeline's
 // shape, so the island shows it like tips: action lines first ("Opened Teams"), then the reply, or the loop's one last line.
-// No Jev: there is no meeting turn to rank notes for. Bee's whole history (core/bee-history.ts: every earlier request with the AI's
-// text, tool calls and results) goes to the AI before the request, so a follow-up ("the team one", "yes") carries on from there.
+// When the word rules leave the path open (no quick open, and computer use is there), Jev picks it in one choice question within
+// about 300 ms (core/command-route-jev.ts); on a time out or an unsure answer, the word rules decide as before. A simple task on
+// screen ("click Inbox") runs first on the fast model with thinking off, and goes to the planning model when it asks to or runs
+// out of turns. Bee's memory (core/bee-memory.ts) goes with every request as a short summary, with memory_read and memory_write
+// to change it. Jev never ranks notes here: there is no meeting turn to rank them for. Bee's whole history (core/bee-history.ts:
+// every earlier request with the AI's text, tool calls and results) goes to the AI before the request, so a follow-up ("the team
+// one", "yes") carries on from there.
 // Each request's own messages go back to main through onTurn, to be added to that history.
 
 const RETRIEVE_LIMIT = 5;
@@ -99,6 +106,10 @@ async function runComputerCommand(args: {
   knownNames?: readonly string[];
   /** The run's messages for Bee's history (core/bee-history.ts), without the request. */
   onMessages?: (messages: ModelMessage[]) => void;
+  /** Bee's memory: its summary goes with the request, and the AI may read and change it. */
+  memory?: BeeMemory | null;
+  /** A simple task (simpleComputerTask): the fast model tries it first, and hands it to the planning model when it cannot. */
+  fast?: boolean;
 }): Promise<PipelineResult> {
   const { host } = args;
   const maxSteps = host.maxSteps;
@@ -124,29 +135,44 @@ async function runComputerCommand(args: {
         return lineResult(line);
       }
     }
-    const tools = computerTools({
-      run: host.run,
-      desktop: args.actions,
-      control,
-      platform: host.platform,
-      askFirst: host.askFirst,
-      confirm: host.confirm,
-      onStep: host.onStep,
-      onActivity: args.onActivity,
-    });
-    const outcome = await runComputerUse({
-      model: args.gateway.languageModel(COMMAND_MODEL),
+    const tools = {
+      ...computerTools({
+        run: host.run,
+        desktop: args.actions,
+        control,
+        platform: host.platform,
+        askFirst: host.askFirst,
+        confirm: host.confirm,
+        onStep: host.onStep,
+        onActivity: args.onActivity,
+      }),
+      // Memory changes nothing on screen, so its calls take no step of the run's budget.
+      ...(args.memory ? memoryTools(args.memory) : {}),
+    };
+    const remembered = args.memory ? memorySummary(args.memory.facts()) : "";
+    const base = {
       command: args.command,
       transcript: args.transcript,
       history: args.history,
       summarise: args.summarise,
       ...(args.knownNames?.length ? { knownNames: args.knownNames } : {}),
+      ...(remembered ? { memory: remembered } : {}),
       tools,
       control,
       platform: host.platform,
       ...(maxSteps !== undefined ? { maxSteps } : {}),
       ...(host.skills ? { skills: host.skills } : {}),
-    });
+    };
+    // The fast model tries a simple task first. When it hands over, the planning model carries on from its steps, with the same
+    // control (the same refs, budget, clock and Stop).
+    let outcome: ComputerUseResult;
+    const quick = args.fast ? await runComputerUse({ ...base, model: args.gateway.languageModel(GUIDE_MODEL), fast: true }) : null;
+    if (quick && !quick.escalate) outcome = quick;
+    else {
+      if (quick) console.debug(`perf computer fast escalate steps=${quick.steps}`);
+      const planned = await runComputerUse({ ...base, model: args.gateway.languageModel(COMMAND_MODEL), ...(quick?.messages.length ? { steps: quick.messages } : {}) });
+      outcome = quick ? { ...planned, messages: [...quick.messages, ...planned.messages] } : planned;
+    }
     const guide = performance.now() - started;
     debugLog.info("computer", "run-end", { ...outcome, reason: control.reason(), declined: control.declined(), ms: Math.round(guide) });
     // What the AI did, tool calls and results included, then the line the island shows when it differs (a stop).
@@ -158,6 +184,26 @@ async function runComputerCommand(args: {
   } finally {
     control.dispose();
   }
+}
+
+/**
+ * Whether a request (after no quick open matched) goes to the computer-use loop. Jev decides when it answers in time and is sure
+ * (computer_use or direct_answer); otherwise, and for any other route it gives, the word rules do (wantsComputerUse). A request
+ * Jev calls an open, focus or page was not one routeCommand could name, so the word rules take that too.
+ */
+async function wantsLoop(command: string, gateway: BeeGateway, signal?: AbortSignal): Promise<boolean> {
+  const words = wantsComputerUse(command);
+  // Test and replay gateways may have no evaluation model: the word rules alone, then.
+  if (typeof gateway.evaluationModel !== "function") return words;
+  let route: JevRoute | null = null;
+  try {
+    route = await routeWithJev({ model: gateway.evaluationModel(JEV_MODEL), command, ...(signal ? { signal } : {}) });
+  } catch (error) {
+    debugLog.info("ai", "jev-route-failed", { error: errorData(error) });
+  }
+  const loop = route === "computer_use" ? true : route === "direct_answer" ? false : words;
+  debugLog.info("ai", "command-path", { jev: route, words, loop });
+  return loop;
 }
 
 export async function runDirectCommand(args: {
@@ -188,6 +234,8 @@ export async function runDirectCommand(args: {
   onActivity?: (activity: LunaToolActivity) => void;
   onPartial?: (partial: TipFields) => void;
   signal?: AbortSignal;
+  /** Bee's memory (main/bee-memory-store.ts). Absent: the AI has no memory tools and no summary. */
+  memory?: BeeMemory | null;
 }): Promise<PipelineResult> {
   const command = args.command.replace(/\s+/g, " ").trim();
   const route = routeCommand(command);
@@ -237,13 +285,14 @@ export async function runDirectCommand(args: {
 
   // A task on screen goes straight to the loop: it needs no notes, connectors or web search.
   const computer = args.computer && args.actions && args.gateway ? { host: args.computer, actions: args.actions, gateway: args.gateway } : null;
-  const loop = () =>
+  const memory = args.memory ?? null;
+  const loop = (fast = false) =>
     computer
-      ? runComputerCommand({ ...computer, command, transcript: args.transcript, history, signal: args.signal, onActivity: args.onActivity, summarise, knownNames: args.knownNames, onMessages: record })
+      ? runComputerCommand({ ...computer, command, transcript: args.transcript, history, signal: args.signal, onActivity: args.onActivity, summarise, knownNames: args.knownNames, onMessages: record, memory, fast })
       : Promise.reject(new Error("no computer use"));
-  if (computer && wantsComputerUse(command)) {
+  if (computer && (await wantsLoop(command, computer.gateway, args.signal))) {
     console.debug("perf command computer");
-    return loop();
+    return loop(simpleComputerTask(command));
   }
 
   const t0 = performance.now();
@@ -269,7 +318,7 @@ export async function runDirectCommand(args: {
   };
   // use_computer hands a task on screen over to the loop: this answer stops at once, and the loop runs instead.
   const handOver = new AbortController();
-  const tools = args.actions
+  const desktop = args.actions
     ? {
         ...desktopTools(args.actions, (line) => {
           debugLog.info("desktop", "action-line", { line });
@@ -291,6 +340,7 @@ export async function runDirectCommand(args: {
           : {}),
       }
     : undefined;
+  const tools = desktop || memory ? { ...desktop, ...(memory ? memoryTools(memory) : {}) } : undefined;
   const started = performance.now();
   const guide = await guideWithLuna({
     model: args.gateway.languageModel(COMMAND_MODEL),
@@ -310,6 +360,7 @@ export async function runDirectCommand(args: {
     historyMessages: history,
     summarise,
     knownNames: args.knownNames,
+    ...(memory ? { memory: memorySummary(memory.facts()) } : {}),
     onActivity: args.onActivity,
     onPartial: (partial) => {
       if (handOver.signal.aborted) return;

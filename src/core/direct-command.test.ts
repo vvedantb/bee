@@ -3,6 +3,7 @@ import { MockLanguageModelV4 } from "ai/test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { pipelineResultSchema } from "../shared/ipc";
 import { assistantMessage, userMessage } from "./bee-history";
+import { MEMORY_RULES, inMemoryBeeMemory } from "./bee-memory";
 import { ACCESSIBILITY_LINE, type RunControl } from "./computer-control";
 import type { DesktopActions } from "./desktop-actions";
 import { runDirectCommand, type ComputerHost } from "./direct-command";
@@ -473,5 +474,170 @@ describe("runDirectCommand: the command model, adaptive thinking and caching", (
     const call = model.doStreamCalls[0];
     expect(call?.providerOptions).toMatchObject({ anthropic: { thinking: { type: "disabled" } } });
     expect(call?.maxOutputTokens).toBe(800);
+  });
+});
+
+describe("runDirectCommand: Jev routing, the fast pass and Bee's memory", () => {
+  type Turn = { tool: string; input: unknown } | { text: string };
+  const SNAP = { app: "Discord", window: { id: "w-1", title: "Discord" }, tree: { role: "window", children: ["Send", "Inbox", "Help", "Channels"].map((name, index) => ({ role: "button", name, ref_id: `@s1:e${index + 2}` })) } };
+  const ROUTES = ["computer_use", "direct_answer", "open_app", "focus_app", "open_url", "ai"];
+  const choice = (route: string) => ({ type: "choice", choice: route, probabilities: Object.fromEntries(ROUTES.map((key) => [key, key === route ? 0.95 : 0.01])) });
+
+  /** One model per id: each plays its own turns (generate) or streams its own steps, and records its calls. */
+  function gatewayWith(args: { jev?: () => Promise<unknown>; command?: Turn[]; guide?: Turn[]; stream?: Chunk[][] }) {
+    const ids: string[] = [];
+    const jevCalls: unknown[] = [];
+    const play = (turns: Turn[] = []) => {
+      let n = 0;
+      return new MockLanguageModelV4({
+        doGenerate: async () => {
+          const turn = turns[n] ?? { text: "Done." };
+          n += 1;
+          return "tool" in turn
+            ? { content: [{ type: "tool-call", toolCallId: `g${n}`, toolName: turn.tool, input: JSON.stringify(turn.input) }], finishReason: { unified: "tool-calls", raw: undefined }, usage, warnings: [] }
+            : { content: [{ type: "text", text: turn.text }], finishReason: { unified: "stop", raw: undefined }, usage, warnings: [] };
+        },
+        doStream: async () => ({ stream: simulateReadableStream({ chunks: args.stream?.shift() ?? text("NONE") }) as never }),
+      });
+    };
+    const models: Record<string, MockLanguageModelV4> = { [COMMAND_MODEL]: play(args.command), [GUIDE_MODEL]: play(args.guide) };
+    const gateway = {
+      languageModel: (id: string) => {
+        ids.push(id);
+        return models[id];
+      },
+      ...(args.jev
+        ? {
+            evaluationModel: () => ({
+              specificationVersion: "v4",
+              provider: "fake",
+              modelId: "fake-jev",
+              supportedQuestionTypes: ["choice"],
+              doEvaluate: async (options: unknown) => {
+                jevCalls.push(options);
+                return { answers: { route: await args.jev?.() }, warnings: [] };
+              },
+            }),
+          }
+        : {}),
+    } as unknown as BeeGateway;
+    return { gateway, ids, models, jevCalls };
+  }
+
+  function host() {
+    const commands: string[] = [];
+    const computer: ComputerHost = {
+      platform: "windows",
+      run: async (command) => {
+        commands.push(command);
+        return command === "snapshot" ? { ok: true, data: SNAP } : { ok: true, data: {} };
+      },
+      askFirst: () => false,
+      confirm: async () => true,
+    };
+    return { computer, commands };
+  }
+
+  it("lets Jev send a request the word rules would answer to the loop", async () => {
+    const { gateway, ids, jevCalls } = gatewayWith({ jev: async () => choice("computer_use"), command: [{ text: "Muted the call." }] });
+    const result = await runDirectCommand({ command: "I need the Teams call muted", snippets, gateway, actions: fakeActions().actions, computer: host().computer });
+    expect(result.tips).toEqual(["Muted the call."]);
+    expect(jevCalls).toHaveLength(1);
+    expect(ids).toContain(COMMAND_MODEL);
+  });
+
+  it("lets Jev keep a request off the screen, and the answer path still runs", async () => {
+    const { gateway, models } = gatewayWith({ jev: async () => choice("direct_answer"), stream: [text("- Bee would say hi.\n")] });
+    const { computer, commands } = host();
+    const result = await runDirectCommand({ command: "tell Sam hello means what in French", snippets, gateway, actions: fakeActions().actions, computer });
+    expect(result.tips).toEqual(["Bee would say hi."]);
+    expect(commands).toEqual([]);
+    expect(models[COMMAND_MODEL]?.doStreamCalls).toHaveLength(1);
+  });
+
+  it("falls back to the word rules when Jev is slow, fails or names an open it cannot resolve", async () => {
+    for (const jev of [() => new Promise(() => undefined), () => Promise.reject(new Error("down")), async () => choice("open_app")]) {
+      const { gateway } = gatewayWith({ jev, command: [{ text: "Sent the message." }] });
+      const { computer, commands } = host();
+      const started = performance.now();
+      const result = await runDirectCommand({ command: "send Sam a message in Discord", snippets, gateway, actions: fakeActions().actions, computer });
+      expect(result.tips).toEqual(["Sent the message."]);
+      expect(performance.now() - started).toBeLessThan(2000);
+    }
+  });
+
+  it("never asks Jev for a quick open", async () => {
+    const { gateway, jevCalls } = gatewayWith({ jev: async () => choice("computer_use") });
+    expect((await runDirectCommand({ command: "open Teams", snippets, gateway, actions: fakeActions().actions, computer: host().computer })).tips).toEqual(["Opened Teams"]);
+    expect(jevCalls).toEqual([]);
+  });
+
+  it("runs a simple click on the fast model with thinking off, and never the planning model when it finishes", async () => {
+    const { gateway, ids, models } = gatewayWith({ guide: [{ tool: "snapshot", input: { app: "Discord" } }, { tool: "click", input: { ref: "@s1:e3", effect: "none" } }, { text: "Opened the inbox." }] });
+    const { computer, commands } = host();
+    const result = await runDirectCommand({ command: "click Inbox in Discord", snippets, gateway, actions: fakeActions().actions, computer });
+    expect(result.tips).toEqual(["Opened the inbox."]);
+    expect(ids).toContain(GUIDE_MODEL);
+    expect(ids).not.toContain(COMMAND_MODEL);
+    expect(commands).toEqual(["snapshot", "click"]);
+    const call = models[GUIDE_MODEL]?.doGenerateCalls[0];
+    expect(call?.providerOptions).toMatchObject({ anthropic: { thinking: { type: "disabled" } } });
+    expect(JSON.stringify(call?.prompt)).toContain("ESCALATE");
+    // The playbook for the app the request names goes with it.
+    expect(JSON.stringify(call?.prompt)).toContain("ctrl+k opens the quick switcher");
+  });
+
+  it("hands a simple task the fast model cannot do to the planning model, which carries on from its steps", async () => {
+    const { gateway, models } = gatewayWith({
+      guide: [{ tool: "snapshot", input: { app: "Discord" } }, { text: "ESCALATE" }],
+      command: [{ tool: "click", input: { ref: "@s1:e3", effect: "none" } }, { text: "Opened the inbox." }],
+    });
+    const turns: ModelMessage[][] = [];
+    const { computer, commands } = host();
+    const result = await runDirectCommand({ command: "click the inbox button", snippets, gateway, actions: fakeActions().actions, computer, onTurn: (turn) => turns.push(turn) });
+    expect(result.tips).toEqual(["Opened the inbox."]);
+    expect(commands).toEqual(["snapshot", "click"]);
+    const planned = models[COMMAND_MODEL]?.doGenerateCalls[0];
+    expect(planned?.providerOptions).toMatchObject({ anthropic: { thinking: { type: "adaptive" }, effort: "medium" } });
+    // The planning model sees the fast pass's snapshot and its refs, but never the ESCALATE line.
+    const prompt = JSON.stringify(planned?.prompt);
+    expect(prompt).toContain("@s1:e3");
+    expect(prompt).not.toContain('"ESCALATE"');
+    // Bee's history keeps both passes' tool calls.
+    expect(JSON.stringify(turns[0])).toContain("snapshot");
+    expect(JSON.stringify(turns[0])).toContain("click");
+  });
+
+  it("never runs a send or a two-step task on the fast model", async () => {
+    for (const command of ["send Sam a message in Discord", "click Inbox, then click Send"]) {
+      const { gateway, ids } = gatewayWith({ command: [{ text: "Done it." }] });
+      await runDirectCommand({ command, snippets, gateway, actions: fakeActions().actions, computer: host().computer });
+      expect(ids, command).not.toContain(GUIDE_MODEL);
+    }
+  });
+
+  it("gives the answer path the memory tools and summary, and saves a fact it writes", async () => {
+    const memory = inMemoryBeeMemory([{ text: "Sam in Teams is Samuel Jones", kind: "person", updated: "2026-11-01" }]);
+    const { gateway, models } = gatewayWith({ stream: [toolCall("memory_write", { fact: "Prefers British English", kind: "preference" }), text("- Bee will remember that.\n")] });
+    const result = await runDirectCommand({ command: "remember I prefer British English", snippets, gateway, actions: fakeActions().actions, memory });
+    expect(result.tips).toEqual(["Bee will remember that."]);
+    expect(memory.facts().map((fact) => fact.text)).toEqual(["Sam in Teams is Samuel Jones", "Prefers British English"]);
+    const call = models[COMMAND_MODEL]?.doStreamCalls[0];
+    expect((call?.tools ?? []).map((item) => item.name)).toEqual(expect.arrayContaining(["memory_read", "memory_write", "open_app"]));
+    expect(JSON.stringify(call?.prompt)).toContain("Sam in Teams is Samuel Jones");
+    expect(JSON.stringify(call?.prompt)).toContain(MEMORY_RULES.slice(0, 40));
+  });
+
+  it("gives computer use the memory summary and tools, and no memory at all without a store", async () => {
+    const memory = inMemoryBeeMemory([{ text: "Sam in Discord is sammyj", kind: "person", updated: "2026-11-01" }]);
+    const { gateway, models } = gatewayWith({ command: [{ text: "Sent the message." }] });
+    await runDirectCommand({ command: "send Sam a message in Discord", snippets, gateway, actions: fakeActions().actions, computer: host().computer, memory });
+    const call = models[COMMAND_MODEL]?.doGenerateCalls[0];
+    expect(JSON.stringify(call?.prompt)).toContain("Sam in Discord is sammyj");
+    expect((call?.tools ?? []).map((item) => item.name)).toEqual(expect.arrayContaining(["memory_read", "memory_write", "act"]));
+    const bare = gatewayWith({ stream: [text("- Hi.\n")] });
+    await runDirectCommand({ command: "what's 2 plus 2?", snippets, gateway: bare.gateway, actions: null });
+    expect(bare.models[COMMAND_MODEL]?.doStreamCalls[0]?.tools ?? []).toEqual([]);
+    expect(JSON.stringify(bare.models[COMMAND_MODEL]?.doStreamCalls[0]?.prompt)).not.toContain("memory_write");
   });
 });

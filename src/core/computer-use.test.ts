@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentDesktopResult, ComputerRun } from "./agent-desktop-envelope";
 import { createRunControl, type RunControl } from "./computer-control";
 import { CANNOT_CONTROL, computerTools } from "./computer-tools";
-import { COMPUTER_SYSTEM, computerAccess, computerSkills, endedWhere, finalLine, runComputerUse, trimSkill, wantsComputerUse } from "./computer-use";
+import { COMPUTER_SYSTEM, FAST_MAX_TURNS, computerAccess, computerSkills, endedWhere, finalLine, runComputerUse, simpleComputerTask, trimSkill, wantsComputerUse } from "./computer-use";
 import type { DesktopActions } from "./desktop-actions";
 
 // The computer-use loop with a mock model and a fake agent-desktop: no network, no OS. Each model call is one turn.
@@ -458,5 +458,81 @@ describe("computer use: where it ended, and earlier turns", () => {
     await runComputerUse({ model, command: "the team one", history, tools: {}, control: createRunControl({ maxSteps: 5 }), platform: "mac", maxSteps: 5 });
     expect(prompts[0]?.map((message) => message.role)).toEqual(["system", "user", "assistant", "user"]);
     expect(JSON.stringify(prompts[0]?.[3])).toContain("the team one");
+  });
+});
+
+describe("simpleComputerTask", () => {
+  it("takes one quick action on one target", () => {
+    for (const command of ["click Inbox", "please click the Help button", "press escape", "tick Remember me", "mute the call", "type hello in the search box"]) {
+      expect(simpleComputerTask(command), command).toBe(true);
+    }
+  });
+
+  it("leaves sends, deletes, buys, two steps, long requests and questions to the planning model", () => {
+    for (const command of [
+      "click Send",
+      "send Sam a message",
+      "click Inbox, then click Help",
+      "type hello and press return",
+      "click delete on the draft",
+      "click the button that says continue to the next page of the long form",
+      "what does the Help button do?",
+      "open Teams",
+    ]) {
+      expect(simpleComputerTask(command), command).toBe(false);
+    }
+  });
+});
+
+describe("runComputerUse: batching, playbooks, memory and the fast pass", () => {
+  it("tells the AI to batch short sequences with act", () => {
+    expect(COMPUTER_SYSTEM).toContain("act call");
+  });
+
+  it("sends the playbook for an app the request names, and the memory summary, but not in the cached system", async () => {
+    const control = createRunControl();
+    const prompts: string[] = [];
+    const model = new MockLanguageModelV4({
+      doGenerate: async (options) => {
+        prompts.push(JSON.stringify(options.prompt));
+        return { content: [{ type: "text", text: "Done." }], finishReason: { unified: "stop", raw: undefined }, usage, warnings: [] };
+      },
+    });
+    const tools = computerTools({ run: async () => ({ ok: true, data: {} }), desktop, control, platform: "windows", askFirst: () => false, confirm: async () => true });
+    await runComputerUse({ model, command: "message Priya in Teams", tools, control, platform: "windows", memory: "What Bee remembers:\n- Priya in Teams is Priya Shah" });
+    expect(prompts[0]).toContain("Microsoft Teams: ctrl+e goes to the search box");
+    expect(prompts[0]).toContain("Priya in Teams is Priya Shah");
+    const system = JSON.parse(prompts[0] ?? "[]")[0] as { content: string };
+    expect(system.content).not.toContain("ctrl+e goes to the search box");
+    expect(system.content).not.toContain("Priya");
+  });
+
+  it("hands over with the control still running when the fast pass runs out of turns", async () => {
+    const control = createRunControl();
+    const reads = ["@s1:e1", "@s1:e2", "@s1:e3", "@s1:e4"].map((ref) => ({ tool: "read", input: { ref } }));
+    const { model, calls } = turnsModel([{ tool: "snapshot", input: { app: "Discord" } }, ...reads, ...reads]);
+    const run: ComputerRun = async (command) => (command === "snapshot" ? { ok: true, data: SNAPSHOT } : { ok: true, data: {} });
+    const tools = computerTools({ run, desktop, control, platform: "mac", askFirst: () => false, confirm: async () => true });
+    const result = await runComputerUse({ model, command: "click Inbox", tools, control, platform: "mac", fast: true });
+    expect(result).toMatchObject({ escalate: true, stopped: false, error: false });
+    expect(calls()).toBe(FAST_MAX_TURNS);
+    expect(result.messages.length).toBeGreaterThan(0);
+    expect(control.reason()).toBeNull();
+    expect(control.signal.aborted).toBe(false);
+    control.dispose();
+  });
+
+  it("hands over when the fast model fails, but not when the user stopped the run", async () => {
+    const failing = new MockLanguageModelV4({
+      doGenerate: async () => {
+        throw new Error("overloaded");
+      },
+    });
+    const control = createRunControl();
+    const tools = computerTools({ run: async () => ({ ok: true, data: {} }), desktop, control, platform: "mac", askFirst: () => false, confirm: async () => true });
+    expect(await runComputerUse({ model: failing, command: "click Inbox", tools, control, platform: "mac", fast: true })).toMatchObject({ escalate: true, messages: [] });
+    control.stop("user");
+    expect(await runComputerUse({ model: failing, command: "click Inbox", tools, control, platform: "mac", fast: true })).toMatchObject({ stopped: true, line: "Stopped." });
+    expect((await runComputerUse({ model: failing, command: "click Inbox", tools, control, platform: "mac", fast: true })).escalate).toBeUndefined();
   });
 });

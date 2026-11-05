@@ -18,6 +18,9 @@ const ACTIVITY_LABELS = new Map([
   ["open_app", "Opening the app…"],
   ["focus_window", "Switching windows…"],
   ["open_url", "Opening the link…"],
+  // Bee's memory (core/bee-memory.ts), for a direct request.
+  ["memory_read", "Checking what Bee remembers…"],
+  ["memory_write", "Remembering…"],
   // Computer use (core/computer-tools.ts). The step line from main ("Clicking Send…") wins over these while it runs.
   ["use_computer", "Using your computer…"],
   ["snapshot", "Looking at the screen…"],
@@ -33,6 +36,7 @@ const ACTIVITY_LABELS = new Map([
   ["set_state", "Selecting…"],
   ["scroll", "Scrolling…"],
   ["press_key", "Pressing keys…"],
+  ["act", "Working on screen…"],
   ["close_app", "Closing the app…"],
   ["wait", "Waiting…"],
 ]);
