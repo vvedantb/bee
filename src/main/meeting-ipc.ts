@@ -13,6 +13,7 @@ import type { MeetingContext } from "../core/meeting-context";
 import { GUIDE_MODEL, NO_GATEWAY_KEY, STT_MODEL, createBeeGateway, type BeeGateway } from "../core/gateway";
 import { runPipeline } from "../core/pipeline";
 import { searchLocation } from "../core/web-search";
+import { conversationTranscript, meetingTranscript } from "../core/session-transcript";
 import { buildLocalSummary, generateMeetingSummary } from "../core/summary";
 import { transcribeSpeech } from "../core/transcribe";
 import {
@@ -21,6 +22,7 @@ import {
   commandRequestSchema,
   commandStopSchema,
   computerAnswerSchema,
+  conversationEndedSchema,
   followUpRequestSchema,
   meetingContextRequestSchema,
   meetingSummaryRequestSchema,
@@ -37,6 +39,7 @@ import {
 } from "../shared/ipc";
 import { assertSignedIn } from "./auth";
 import { isNotePath, loadSnippets, writeMeetingSummaryFile } from "./notes";
+import type { VmemTranscripts } from "./vmem-transcript-queue";
 
 /**
  * Mic phrases → Grok STT, lines → retrieve → Jev → Luna, and the end-of-meeting summary into the notes folder.
@@ -63,7 +66,9 @@ export function registerMeetingIpc(args: { notesDir: string; fsRoots: () => stri
    * Computer use for a direct request (core/computer-use.ts): its own agent-desktop runner, never the meeting window reader's,
    * and the "Ask before sending or deleting" setting. Absent: Bee cannot operate apps here (Linux, or no agent-desktop).
    */
-  computer?: { platform: ComputerPlatform; run: ComputerRun; askFirst: () => boolean; cleanup: () => void } }): void {
+  computer?: { platform: ComputerPlatform; run: ComputerRun; askFirst: () => boolean; cleanup: () => void };
+  /** Finished sessions to vmem (main/vmem-transcript-queue.ts). It checks the setting and the connector itself. */
+  transcripts?: VmemTranscripts }): void {
   const createGateway = args.gateway ?? createBeeGateway;
   // One controller per run in flight. The renderer cancels a run when a newer line supersedes it.
   const runs = new Map<string, AbortController>();
@@ -374,7 +379,26 @@ export function registerMeetingIpc(args: { notesDir: string; fsRoots: () => stri
     } catch {
       console.debug("perf meeting-memory saved=0");
     }
+    // Finished session 1 of 2: the meeting, once its summary file is safely written. Queued in the background, so the reply
+    // never waits on vmem; a failure here is logged and never touches the summary.
+    try {
+      args.transcripts?.submit(meetingTranscript({ transcript: input.transcript, tips: input.tips, notesCited: input.notesCited, subject: args.meeting.subject?.(input.meetingId), when }));
+    } catch (error) {
+      debugLog.error("vmem", "transcript-render-failed", { kind: "meeting", error: errorData(error) });
+    }
     return { path, usedLlm: summary.usedLlm, error: summary.error };
+  });
+
+  // Finished session 2 of 2: a conversation of direct requests, when the renderer's history clears after HISTORY_IDLE_MS idle
+  // (store.ts clearHistory("idle")). A history cleared by a meeting ending is not sent; the meeting above covers it.
+  ipcMain.handle(IPC.conversationEnded, (_event, payload) => {
+    const { sessionToken, exchanges } = conversationEndedSchema.parse(payload);
+    assertSignedIn(sessionToken);
+    try {
+      args.transcripts?.submit(conversationTranscript({ exchanges, when: new Date() }));
+    } catch (error) {
+      debugLog.error("vmem", "transcript-render-failed", { kind: "conversation", error: errorData(error) });
+    }
   });
 
   ipcMain.handle(IPC.openMeetingSummary, (_event, payload) => {

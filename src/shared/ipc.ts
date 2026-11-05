@@ -55,6 +55,7 @@ export const IPC = {
   computerAnswer: "bee:computer:answer",
   computerAccess: "bee:computer:access",
   classifyFollowUp: "bee:command:classify-follow-up",
+  conversationEnded: "bee:command:conversation-ended",
 };
 
 // Collapsed notch, notch plus the sync popup, notch plus the island response, or the full panel.
@@ -74,6 +75,9 @@ export const settingsViewSchema = z.object({
   // Personalised link suggestions: the effective toggle, and whether an enabled vmem connector (Connectors tab) exists.
   personalisedLinks: z.boolean(),
   vmemConnected: z.boolean(),
+  // Send finished meetings and conversations to vmem's transcript_submit (main/vmem-transcript-queue.ts). Effective value: on
+  // while an enabled vmem connector exists, until the user sets it.
+  sendSessionsToVmem: z.boolean(),
   meetingMode: z.boolean(),
   // Zoom factor for the whole overlay, always an allowed value.
   interfaceScale: interfaceScaleSchema,
@@ -113,6 +117,7 @@ export const settingsUpdateSchema = z.object({
   interfaceScale: interfaceScaleSchema.optional(),
   motionPreference: motionPreferenceSchema.optional(),
   personalisedLinks: z.boolean().optional(),
+  sendSessionsToVmem: z.boolean().optional(),
   // Extra absolute folders Luna may read; replaces the saved list.
   fsRoots: z.array(z.string().max(1000)).max(20).optional(),
   meetingContextEnabled: z.boolean().optional(),
@@ -202,6 +207,15 @@ export const commandRequestSchema = z.object({
   sessionToken: z.string().max(8000),
 });
 export type CommandRequest = z.infer<typeof commandRequestSchema>;
+
+// Renderer → main, fire and forget: Bee's history of direct requests cleared after HISTORY_IDLE_MS idle, so that conversation is
+// finished. Main sends it to vmem when "Send finished sessions to vmem" is on (main/vmem-transcript-queue.ts). The history holds
+// at most HISTORY_MAX exchanges, so that is what a conversation sends. Never sent when a meeting ends (the meeting is sent instead).
+export const conversationEndedSchema = z.object({
+  exchanges: z.array(beeExchangeSchema).min(1).max(HISTORY_ITEMS_MAX),
+  sessionToken: z.string().max(8000),
+});
+export type ConversationEnded = z.infer<typeof conversationEndedSchema>;
 
 // While the conversation window is open, an own mic phrase that is neither clearly for Bee nor clearly for the meeting: one small
 // AI call decides (core/follow-up.ts). Lines are labelled "me:" or "them:".

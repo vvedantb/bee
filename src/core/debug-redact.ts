@@ -59,7 +59,16 @@ export function isSecretKey(key: string): boolean {
 export function redactString(text: string): string {
   if (text.startsWith("data:")) return `[data-url ${text.length} chars]`;
   if (text.length >= BASE64_MIN_CHARS && BASE64.test(text.slice(0, 4000))) return `[base64 ${text.length} chars]`;
-  let out = text.length > MAX_STRING_CHARS ? `${text.slice(0, MAX_STRING_CHARS)}… [${text.length - MAX_STRING_CHARS} more chars]` : text;
+  const out = text.length > MAX_STRING_CHARS ? `${text.slice(0, MAX_STRING_CHARS)}… [${text.length - MAX_STRING_CHARS} more chars]` : text;
+  return redactSecretValues(out);
+}
+
+/**
+ * Only the value patterns (keys, JWTs, Bearer tokens, URL secrets), with no length cap and no data-URL or base64 rule, so a long
+ * transcript keeps every line (core/session-transcript.ts).
+ */
+export function redactSecretValues(text: string): string {
+  let out = text;
   for (const [pattern, replacement] of VALUE_PATTERNS) out = out.replace(pattern, replacement);
   return out;
 }

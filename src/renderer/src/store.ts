@@ -858,8 +858,22 @@ function clearHistory(reason: string): void {
   clearTimeout(historyTimer);
   historyTimer = undefined;
   if (history.length > 0) debugLog.info("wake", "history-cleared", { reason, exchanges: history.length });
+  // An idle clear ends a conversation: main may send it to vmem (it checks the setting and holds the connector's secrets).
+  // Not on meeting-end: the meeting's own send covers that session.
+  if (reason === "idle" && history.length > 0 && (state.settings?.sendSessionsToVmem ?? false)) sendConversation(history);
   history = [];
   lastBee = null;
+}
+
+/** Fire and forget: a failure is logged and never reaches the user. */
+function sendConversation(exchanges: readonly BeeExchange[]): void {
+  void (async () => {
+    try {
+      await window.bee.conversationEnded({ exchanges: [...exchanges], sessionToken: await sessionToken() });
+    } catch (error) {
+      debugLog.warn("vmem", "conversation-send-failed", { error: errorData(error) });
+    }
+  })();
 }
 
 /** Bee's history as it stands now, oldest first (tests). */

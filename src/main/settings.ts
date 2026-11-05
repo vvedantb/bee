@@ -7,6 +7,8 @@ import { clampInterfaceScale, type SavedPosition } from "../core/interface-scale
 import { clampMotionPreference } from "../core/motion-preference";
 import { normalizeFsRoots } from "../core/fs-sandbox";
 import { createMcpOAuthProvider, hasMcpOAuthTokens, mcpOAuthStateSchema, type McpOAuthStorage } from "../core/mcp-oauth";
+import { canSubmitTranscripts } from "../core/vmem-transcript";
+import type { TranscriptSettings } from "./vmem-transcript-queue";
 import { isVmemConnector, mcpSlug, mcpUrlError, parseMcpArgs, parseMcpEnv, type McpServerConfig, type McpServerInfo } from "../core/mcp";
 import { safeIconSrc } from "../shared/mcp-icons";
 import {
@@ -34,6 +36,9 @@ const fileSchema = z.object({
   overlayPosition: z.object({ x: z.number().finite(), y: z.number().finite(), displayId: z.number() }).optional().catch(undefined),
   // Personalised link suggestions. The toggle is stored only once the user sets it; until then it follows whether an enabled vmem connector exists.
   personalisedLinks: z.boolean().optional(),
+  // Send finished sessions to vmem (main/vmem-transcript-queue.ts). Like personalisedLinks: stored only once the user sets it;
+  // until then on only while an enabled vmem connector exists. A bad value reads as unset.
+  sendSessionsToVmem: z.boolean().optional().catch(undefined),
   fsRoots: z.array(z.string()).default([]),
   // Meeting context: all on until the user switches them off.
   meetingContextEnabled: z.boolean().default(true).catch(true),
@@ -414,6 +419,24 @@ export function createSettingsStore(args: {
     return { enabled: personalisedLinks(file), hasVmem: hasVmemConnector(file) };
   }
 
+  function sendSessionsToVmem(file: SettingsFile): boolean {
+    return file.sendSessionsToVmem ?? hasVmemConnector(file);
+  }
+
+  /**
+   * What the vmem transcript sender needs, read before each queue and send so Settings and Connectors changes apply at once:
+   * the effective toggle, the enabled vmem connector, and whether its saved tool list has transcript_submit. Main only.
+   */
+  function transcriptSettings(): TranscriptSettings {
+    const file = read();
+    const server = file.mcpServers.find((item) => item.enabled && isVmemConnector(item));
+    return {
+      enabled: sendSessionsToVmem(file),
+      config: server ? toConfig(server, readMcpSecrets(file)) : undefined,
+      listed: server ? canSubmitTranscripts(server) : false,
+    };
+  }
+
   /** The enabled vmem connector with decrypted secrets, or undefined. Main only. */
   function vmemConfig(): McpServerConfig | undefined {
     const file = read();
@@ -427,6 +450,7 @@ export function createSettingsStore(args: {
     return {
       personalisedLinks: personalisedLinks(file),
       vmemConnected: hasVmemConnector(file),
+      sendSessionsToVmem: sendSessionsToVmem(file),
       gatewayKeySource: saved ? "saved" : args.envGatewayKey?.trim() ? "env" : "none",
       meetingMode: file.meetingMode,
       interfaceScale: file.interfaceScale,
@@ -485,6 +509,7 @@ export function createSettingsStore(args: {
     if (update.interfaceScale !== undefined) file = { ...file, interfaceScale: clampInterfaceScale(update.interfaceScale) };
     if (update.motionPreference !== undefined) file = { ...file, motionPreference: clampMotionPreference(update.motionPreference) };
     if (update.personalisedLinks !== undefined) file = { ...file, personalisedLinks: update.personalisedLinks };
+    if (update.sendSessionsToVmem !== undefined) file = { ...file, sendSessionsToVmem: update.sendSessionsToVmem };
     if (update.meetingContextEnabled !== undefined) file = { ...file, meetingContextEnabled: update.meetingContextEnabled };
     if (update.meetingCalendarEnabled !== undefined) file = { ...file, meetingCalendarEnabled: update.meetingCalendarEnabled };
     if (update.meetingMemoryEnabled !== undefined) file = { ...file, meetingMemoryEnabled: update.meetingMemoryEnabled };
@@ -516,5 +541,5 @@ export function createSettingsStore(args: {
     write({ ...read(), overlayPosition: position });
   }
 
-  return { view, save, meetingContext, readMeetingWindow, teamsAudioFallback, wakeWord, askBeforeSending, verboseLogging, overlayPosition, saveOverlayPosition, gatewayApiKey, savedGatewayApiKey, linkSettings, vmemConfig, fsRoots, mcpList, mcpSave, mcpRemove, mcpSetEnabled, mcpRecordTools, mcpConfigs, mcpSignedOut, mcpConfig, mcpOAuthStorage };
+  return { view, save, meetingContext, readMeetingWindow, teamsAudioFallback, wakeWord, askBeforeSending, verboseLogging, overlayPosition, saveOverlayPosition, gatewayApiKey, savedGatewayApiKey, linkSettings, vmemConfig, transcriptSettings, fsRoots, mcpList, mcpSave, mcpRemove, mcpSetEnabled, mcpRecordTools, mcpConfigs, mcpSignedOut, mcpConfig, mcpOAuthStorage };
 }

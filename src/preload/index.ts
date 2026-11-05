@@ -33,6 +33,7 @@ import {
   updateActionSchema,
   updateCheckSchema,
   type CommandRequest,
+  type ConversationEnded,
   type FollowUpRequest,
   type CommandStop,
   type ComputerAnswer,
@@ -118,6 +119,10 @@ const api = {
   runCommand: async (request: CommandRequest) => pipelineResultSchema.parse(await ipcRenderer.invoke(IPC.runCommand, request)),
   // In the conversation window: is an unclear own mic phrase for Bee or the meeting? Null when main cannot tell (no key, failure).
   classifyFollowUp: async (request: FollowUpRequest) => followUpResultSchema.parse(await ipcRenderer.invoke(IPC.classifyFollowUp, request)),
+  // Bee's history cleared after idle: main may send that finished conversation to vmem. Fire and forget; main checks the setting.
+  conversationEnded: async (request: ConversationEnded) => {
+    z.void().parse(await ipcRenderer.invoke(IPC.conversationEnded, request));
+  },
   // Cancels a run a newer line has superseded. Fire and forget: the run's own result is dropped anyway.
   cancelPipeline: async (request: PipelineCancel) => {
     z.void().parse(await ipcRenderer.invoke(IPC.cancelPipeline, request));

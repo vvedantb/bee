@@ -1,6 +1,6 @@
 import { createClerkBridge } from "@clerk/electron";
 import { storage } from "@clerk/electron/storage";
-import { BrowserWindow, Menu, Tray, app, globalShortcut, ipcMain, nativeImage, screen, session, shell, systemPreferences } from "electron";
+import { BrowserWindow, Menu, Tray, app, globalShortcut, ipcMain, nativeImage, powerMonitor, screen, session, shell, systemPreferences } from "electron";
 import { randomUUID } from "node:crypto";
 import { release } from "node:os";
 import { join, resolve } from "node:path";
@@ -29,6 +29,7 @@ import { createCalendarReader, createWindowTitleReader } from "./local-readers";
 import { registerMcpIpc } from "./mcp-ipc";
 import { registerOpenUrlIpc } from "./open-url";
 import { registerMeetingIpc } from "./meeting-ipc";
+import { createVmemTranscripts } from "./vmem-transcript-queue";
 import { ensureNotesDir } from "./notes";
 import { handleRendererProtocol } from "./renderer-protocol";
 import { createSettingsStore, type SettingsStore } from "./settings";
@@ -421,7 +422,14 @@ if (clerk.isPrimaryInstance) {
       // macOS has no in-call detector, so it reads Teams window names on its own schedule.
       pollTitlesWhenIdle: isMac,
     });
+    // Finished meetings and conversations to vmem's transcript_submit, when the setting is on. A small queue in the user data
+    // folder (not the logs folder) keeps a send that failed offline; it is tried again now, on wake and on its own backoff timer.
+    const transcripts = createVmemTranscripts({ path: join(userDataDir, "vmem-transcripts.json"), settings: settings.transcriptSettings, pool: mcpPool });
+    setTimeout(() => transcripts.kick(), 10_000).unref?.();
+    powerMonitor.on("resume", () => transcripts.kick());
+    app.on("will-quit", () => transcripts.stop());
     registerMeetingIpc({
+      transcripts,
       notesDir,
       fsRoots: settings.fsRoots,
       mcpConfigs: settings.mcpConfigs,

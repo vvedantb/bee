@@ -34,6 +34,7 @@ const SETTINGS: SettingsView = {
   gatewayKeySource: "saved",
   personalisedLinks: false,
   vmemConnected: false,
+  sendSessionsToVmem: false,
   meetingMode: false,
   interfaceScale: 1,
   motionPreference: "on",
