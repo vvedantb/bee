@@ -1,14 +1,18 @@
 import type { ModelMessage } from "ai";
+import { MockLanguageModelV4 } from "ai/test";
 import { describe, expect, it } from "vitest";
 import {
   CACHE_BREAKPOINTS_MAX,
   COMPACT_AT_TOKENS,
+  KEEP_RECENT_TOKENS,
+  SUMMARY_INPUT_MAX_CHARS,
   CONVERSATION_IDLE_MS,
   SUMMARY_HEADER,
   addExchange,
   assistantMessage,
   cacheAtEnd,
   cacheBreakpoints,
+  chunkLines,
   cleanForHistory,
   commandFallbackReply,
   compactMessages,
@@ -16,12 +20,14 @@ import {
   compactingStep,
   estimateTokens,
   historyAsText,
+  historySummariser,
   parseHistory,
   repairHistory,
   summaryText,
   userMessage,
   type BeeExchange,
 } from "./bee-history";
+import { COMMAND_CONTEXT_TOKENS, GUIDE_CONTEXT_TOKENS } from "./gateway";
 
 const exchange = (index: number, patch: Partial<BeeExchange> = {}): BeeExchange => ({ request: `request ${index}`, reply: `reply ${index}`, at: index * 1000, ...patch });
 const CACHE = { anthropic: { cacheControl: { type: "ephemeral" } } };
@@ -178,11 +184,69 @@ describe("compaction near the window", () => {
     expect(repairHistory(out)).toEqual(out);
   });
 
+  it("compacts at 400k of COMMAND_MODEL's 1M window, well before the limit, and keeps 150k word for word", () => {
+    expect(COMMAND_CONTEXT_TOKENS).toBe(1_000_000);
+    expect(COMPACT_AT_TOKENS).toBe(400_000);
+    expect(KEEP_RECENT_TOKENS).toBe(150_000);
+    expect(KEEP_RECENT_TOKENS).toBeLessThan(COMPACT_AT_TOKENS);
+    expect(COMPACT_AT_TOKENS).toBeLessThan(COMMAND_CONTEXT_TOKENS);
+    // One summary call fits GUIDE_MODEL's window (4 characters a token) with room for the system and the reply.
+    expect(SUMMARY_INPUT_MAX_CHARS / 4).toBeLessThan(GUIDE_CONTEXT_TOKENS);
+    expect(SUMMARY_INPUT_MAX_CHARS / 4).toBeGreaterThan(COMPACT_AT_TOKENS - KEEP_RECENT_TOKENS);
+  });
+
   it("compacts in prepareStep only when needed", async () => {
     const step = compactingStep({ maxTokens: 3000, keepTokens: 1500, summarise: async () => "summary" });
     expect(await step({ messages: toolTurn(1) })).toBeUndefined();
     const result = await step({ messages: Array.from({ length: 6 }, (_, index) => big(index + 1)).flat() });
     expect(JSON.stringify(result?.messages[0])).toContain("summary");
+  });
+});
+
+describe("the summary call", () => {
+  const model = (prompts: string[]) =>
+    new MockLanguageModelV4({
+      doGenerate: async (options) => {
+        prompts.push(JSON.stringify(options.prompt));
+        return {
+          content: [{ type: "text", text: `summary ${prompts.length}` }],
+          finishReason: { unified: "stop", raw: undefined },
+          usage: { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined }, outputTokens: { total: 1, text: 1, reasoning: undefined } },
+          warnings: [],
+        };
+      },
+    });
+  const turns = Array.from({ length: 6 }, (_, index) => toolTurn(index + 1, `${index + 1} users ${"x".repeat(1500)}`)).flat();
+
+  it("reads input that fits in one call", async () => {
+    const prompts: string[] = [];
+    expect(await historySummariser(model(prompts))(turns)).toBe("summary 1");
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0]).toContain("count users 1");
+    expect(prompts[0]).not.toContain("Older lines left out");
+  });
+
+  it("summarises longer input in chunks, folding each into the summary so far, and drops nothing", async () => {
+    const prompts: string[] = [];
+    expect(await historySummariser(model(prompts), { maxInputChars: 2500, maxChunks: 50 })(turns)).toBe(`summary ${prompts.length}`);
+    expect(prompts.length).toBeGreaterThan(1);
+    expect(prompts[0]).toContain("count users 1");
+    expect(prompts.at(-1)).toContain("Eva has 6 users");
+    expect(prompts[1]).toContain("summary 1");
+    expect(prompts.join("")).not.toContain("Older lines left out");
+  });
+
+  it("leaves out only the oldest chunks past the chunk limit, and says so", async () => {
+    const prompts: string[] = [];
+    await historySummariser(model(prompts), { maxInputChars: 2500, maxChunks: 2 })(turns);
+    expect(prompts).toHaveLength(2);
+    expect(prompts[0]).toContain("Older lines left out");
+    expect(prompts.at(-1)).toContain("Eva has 6 users");
+  });
+
+  it("chunks lines within the limit, oldest first", () => {
+    expect(chunkLines(["aaa", "bbb", "ccc"], 8)).toEqual(["aaa\nbbb", "ccc"]);
+    expect(chunkLines(["x".repeat(20)], 8)[0]?.length).toBe(8);
   });
 });
 

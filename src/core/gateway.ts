@@ -4,6 +4,12 @@ import { createGateway, type GatewayProvider } from "@ai-sdk/gateway";
 export const GUIDE_MODEL = "anthropic/claude-haiku-5.5";
 // The model behind direct requests to Bee ("Bee, …") and computer use: it chains tool calls and thinks first.
 export const COMMAND_MODEL = "anthropic/claude-sonnet-5.5";
+// Context windows in tokens, from the Gateway catalog (ai-gateway.vercel.sh/v1/models) and Anthropic's docs. The 1M window is native
+// and the default for Sonnet 5.5 and Haiku 5.5: no beta header or provider option unlocks it, and the legacy context-1m-* beta header
+// must not be sent (Anthropic's Sonnet 5.5 migration guide says to remove it). Sonnet 5.5 has flat pricing across the window;
+// Haiku 5.5 bills input over 100k tokens at a higher tier (Gateway input_tiers), but its window is still 1M.
+export const COMMAND_CONTEXT_TOKENS = 1_000_000;
+export const GUIDE_CONTEXT_TOKENS = 1_000_000;
 export const JEV_MODEL = "typesafe-ai/jev";
 // Gateway also lists this model as spacexai/grok-stt; both ids resolve.
 export const STT_MODEL = "xai/grok-stt";
@@ -30,6 +36,9 @@ export const GUIDE_PROVIDER = "anthropic";
 /**
  * Turns off extended thinking for a GUIDE_MODEL call. Haiku thinks by default: a live Luna call spent its whole
  * output budget on reasoning and returned no text. The Gateway forwards `anthropic` options to Anthropic.
+ * Haiku 5.5 accepts `disabled`: the installed @ai-sdk/anthropic `getModelCapabilities` has no claude-haiku-5 entry that forces
+ * adaptive thinking (only Opus 5.x, Fable 5.x and Sonnet 5 strip `disabled`), so this stays the fast path for tips, the
+ * follow-up check, meeting summaries and the history summariser. Do not switch them to adaptive thinking with effort.
  * Never send this to a non-Anthropic model (Jev, STT).
  */
 export const ANTHROPIC_NO_THINKING = { anthropic: { thinking: { type: "disabled" } } } as const;

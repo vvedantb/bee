@@ -40,11 +40,11 @@ describe("Bee's history on disk", () => {
 
   it("compacts the oldest turns once the history nears the window, and keeps the newest", async () => {
     const store = createBeeHistoryStore({ path });
-    // Each turn is about 40k characters (~10k tokens): past COMPACT_AT_TOKENS after a dozen.
-    for (let index = 1; index <= 14; index++) await store.append(turn(index, 40_000), async () => "Eva has 16 users; counted many times.");
+    // Each turn is about 160k characters (~40k tokens): past COMPACT_AT_TOKENS (400k) after ten or so.
+    for (let index = 1; index <= 14; index++) await store.append(turn(index, 160_000), async () => "Eva has 16 users; counted many times.");
     const messages = createBeeHistoryStore({ path }).messages();
     expect(JSON.stringify(messages[0])).toContain(SUMMARY_HEADER);
-    expect(messages.slice(-4)).toEqual(turn(14, 40_000));
+    expect(messages.slice(-4)).toEqual(turn(14, 160_000));
     expect(messages.length).toBeLessThan(14 * 4);
   });
 
