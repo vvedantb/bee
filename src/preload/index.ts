@@ -9,6 +9,8 @@ import {
   lunaActivitySchema,
   lunaPartialSchema,
   clearMeetingMemoryResultSchema,
+  memoryClearResultSchema,
+  memoryListResultSchema,
   computerAccessSchema,
   computerUpdateSchema,
   copyGatewayKeyResultSchema,
@@ -217,6 +219,11 @@ const api = {
   meeting: {
     context: async (sessionToken: string) => meetingContextViewSchema.parse(await ipcRenderer.invoke(IPC.meetingContext, { sessionToken })),
     clearMemory: async (sessionToken: string) => clearMeetingMemoryResultSchema.parse(await ipcRenderer.invoke(IPC.clearMeetingMemory, { sessionToken })),
+  },
+  // Settings → Saved memory: Bee's memory facts for direct requests, oldest first, and the clear. Never history or saved meetings.
+  memory: {
+    list: async (sessionToken: string) => memoryListResultSchema.parse(await ipcRenderer.invoke(IPC.memoryList, { sessionToken })),
+    clear: async (sessionToken: string) => memoryClearResultSchema.parse(await ipcRenderer.invoke(IPC.memoryClear, { sessionToken })),
   },
   // Experimental meeting window reader: new live caption lines from the call window, and the macOS Accessibility pane.
   meetingWindow: {

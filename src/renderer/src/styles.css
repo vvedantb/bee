@@ -797,6 +797,21 @@ ol {
   margin-top: 8px;
 }
 
+/* Settings → Saved memory: one fact per row, its kind and date under it. */
+.memory-facts {
+  gap: 6px;
+  margin-top: 8px;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.memory-facts li {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow-wrap: anywhere;
+}
+
 .spin {
   animation: spin 800ms linear infinite;
 }

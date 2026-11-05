@@ -21,6 +21,7 @@ import { Favicon } from "./Favicon";
 import { Connectors } from "./Connectors";
 import { logSignIn } from "./debug-log";
 import { MeetingContextSection } from "./MeetingContextSection";
+import { MemorySection } from "./MemorySection";
 import { NotchStatus } from "./NotchStatus";
 import { MicHint } from "./MicHint";
 import { SecretField } from "./SecretField";
@@ -635,6 +636,8 @@ function SettingsTab({ state, settings }: { state: BeeState; settings: SettingsV
         teamsAudio={{ ...state.teamsAudio, plan: teamsAudioNow(state) }}
         onOpenScreenRecording={() => void actions.openScreenRecordingSettings()}
       />
+
+      <MemorySection onLoad={() => actions.listMemory()} onClear={() => actions.clearMemory()} />
 
       <TeamSection state={state} />
 
