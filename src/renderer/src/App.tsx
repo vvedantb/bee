@@ -583,7 +583,7 @@ function SettingsTab({ state, settings }: { state: BeeState; settings: SettingsV
       <SettingRow
         id="ask-before-sending"
         label="Ask before sending or deleting"
-        description="Before the AI sends a message or email, deletes something, buys something, or submits a form, Bee asks you to confirm in the island."
+        description="Before the AI sends a message or email, deletes something, buys something, or submits a form, Bee asks you to confirm in the island. Ordinary clicks, such as opening apps, tabs and menus, do not ask."
         checked={settings.askBeforeSendingEnabled}
         onCheckedChange={(askBeforeSendingEnabled) => void actions.saveSettings({ askBeforeSendingEnabled })}
       />

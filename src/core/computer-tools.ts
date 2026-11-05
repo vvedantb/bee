@@ -313,7 +313,8 @@ export function formatSnapshot(
   // is not the ref itself).
   const tree = isRecord(data.tree) ? data.tree : null;
   const above = within?.element.context?.ancestors ?? [];
-  const top = within && tree && str(tree.ref_id) === within.ref ? above : within ? [asAncestor(within.element), ...above] : [];
+  const isRef = !!within && !!tree && str(tree.ref_id) === within.ref;
+  const top = isRef ? above : within ? [asAncestor(within.element), ...above] : [];
   const walk = (raw: unknown, depth: number, place: Place) => {
     if (cut || !isRecord(raw)) return;
     if (depth > MAX_DEPTH) {
@@ -337,7 +338,9 @@ export function formatSnapshot(
       }
       line = elementLine(raw, depth);
       children = childrenOf(raw);
-      ancestors = children.length > 0 ? [asAncestor(elementOf(raw)), ...place.ancestors].slice(0, MAX_ANCESTORS) : [];
+      // The region's top is the ref itself: name it as Bee saw it first, since a region often comes back unnamed.
+      const self = isRef && raw === tree && within ? within.element : elementOf(raw);
+      ancestors = children.length > 0 ? [asAncestor(self), ...place.ancestors].slice(0, MAX_ANCESTORS) : [];
     } catch {
       skipped += 1;
       return;
@@ -480,7 +483,9 @@ const appSchema = z.string().min(1).max(APP_NAME_MAX).describe("The app's name a
 const windowSchema = z.string().max(60).describe("A window id from list_windows (w-…), when the app has several windows.");
 const effectSchema = z
   .enum(EFFECTS)
-  .describe("What this action does: send (sends a message, email or post, including Return in a chat box), delete, buy (pays or orders), submit (submits a form), or none.");
+  .describe(
+    "What this action commits: send (it sends a message, email or post, including Return in a chat box), delete (it deletes something), buy (it pays or places an order), submit (it submits a form that commits something). Otherwise none: navigating, tabs, menus, opening apps, and Continue, Next or OK that commit nothing.",
+  );
 const physicalSchema = z
   .boolean()
   .optional()

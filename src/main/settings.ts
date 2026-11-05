@@ -54,7 +54,7 @@ const fileSchema = z.object({
   // "Bee" wake word (core/wake-word.ts): own mic phrases that start with "Bee…" go to the AI as a direct request. On until switched off.
   wakeWordEnabled: z.boolean().default(true).catch(true),
   // "Ask before sending or deleting" (core/computer-gate.ts): computer use waits for a Confirm tap before it sends, deletes, buys
-  // or submits. On until switched off; a bad stored value reads as on, the safe side.
+  // or submits; ordinary clicks do not ask. On until switched off; a bad stored value reads as on, the safe side.
   askBeforeSendingEnabled: z.boolean().default(true).catch(true),
   // Verbose debug logs (main/debug-log.ts), on this computer only. On until switched off, for now; off keeps warnings and errors.
   verboseLogging: z.boolean().default(true).catch(true),

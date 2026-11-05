@@ -102,7 +102,7 @@ export const settingsViewSchema = z.object({
   // conversation. On by default.
   wakeWordEnabled: z.boolean(),
   // "Ask before sending or deleting" (core/computer-gate.ts): computer use waits for a Confirm tap in the island before it
-  // sends, deletes, buys or submits a form. On by default.
+  // sends, deletes, buys or submits a form. Ordinary clicks do not ask. On by default.
   askBeforeSendingEnabled: z.boolean(),
   // Verbose debug logs (main/debug-log.ts): every event of a session, prompts and replies included, on this computer only. Off
   // keeps warnings and errors. On by default for now.
