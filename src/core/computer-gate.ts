@@ -1,10 +1,12 @@
 import type { IrreversibleKind } from "./computer-control";
 
 // "Ask before sending or deleting" (Settings, on by default): which computer-use actions pause for the user's Confirm in the
-// island. Sending a message or email, deleting, buying and submitting a form do. Looking, navigating, typing a draft, clicking
-// a clearly named control that commits nothing, and opening or closing apps and tabs do not. The answer comes from the
-// accessibility tree Bee read (core/computer-tools.ts formatSnapshot keeps where each ref sits), never from the AI alone: the
-// AI's stated effect can add a Confirm, never remove one. When unsure, it asks. Pure: core/computer-tools.ts asks first.
+// island. Only an action that commits something asks: sending a message, email or post, deleting, buying or paying, and
+// submitting a form. Ordinary clicks do not: looking, navigating, switching tabs or views, opening menus and apps, typing a
+// draft, and buttons such as Continue, Next or OK that commit nothing. A control asks when its own name, the labels around it,
+// a message box beside it, or a checkout or a dialog that names a commit says it commits; being somewhere in Slack, Gmail or
+// Amazon is not enough. The answer comes from the accessibility tree Bee read (core/computer-tools.ts formatSnapshot keeps
+// where each ref sits); the AI's stated effect can add a Confirm, never remove one. Pure: core/computer-tools.ts asks first.
 
 /** What the AI says an action does. Anything but none needs a confirm, whatever the element is called. */
 export const EFFECTS = ["none", "send", "delete", "buy", "submit"] as const;
@@ -28,7 +30,7 @@ export type Element = {
   name: string;
   description?: string;
   value?: string;
-  /** Absent: Bee never saw where it sits (a find match), so an unlabelled one asks. */
+  /** Absent: Bee never saw where it sits (a find match), so only its own name can make it ask. */
   context?: TreeContext;
 };
 
@@ -80,10 +82,9 @@ const SAFE_NAME = new RegExp(
 // A name that says nothing about what the control does: "button", "OK", "Go". An empty or symbol-only name counts too.
 const GENERIC_NAME = /^(?:button|btn|icon|icon button|image|img|graphic|svg|unlabell?ed|untitled|action|click|tap|ok|okay|yes|done|continue|go|apply|proceed)$/i;
 
-// Apps and places where an unlabelled control may send (messaging and email) or buy (shopping). Read from the app and window
-// title, and from the names of the containers around the element.
-const MESSAGING = /\b(?:discord|slack|teams|whatsapp|telegram|signal|imessage|messages?|messenger|skype|google chat|chat|wechat|viber|mattermost|webex|zoom|linkedin|twitter|facebook|instagram|reddit|threads|mastodon|bluesky|mail|gmail|outlook|thunderbird|spark|superhuman|proton ?mail|airmail|mimestream|fastmail|inbox|e-?mail|conversation|thread|reply|compose|composer|dm|direct messages?)\b/i;
+// Shops, and the checkout words that make an unlabelled control there a purchase. Being in a shop alone is not enough.
 const SHOPPING = /\b(?:amazon|ebay|etsy|shop|shopping|store|cart|basket|checkout|check out|order|payment|paypal|deliveroo|uber ?eats|just ?eat|doordash|instacart|tesco|ocado|sainsbury'?s|asda|argos|ikea|aliexpress|temu|shein|airbnb|booking\.com|ticketmaster)\b/i;
+const CHECKOUT = /\b(?:check ?out|cart|basket|bag|pay|payment|order|buy|purchase)\b/i;
 
 // A message composer by its name: the box itself ("Message @sam", "Type a message") or the area around it.
 const COMPOSER_FIELD = /^(?:message|reply|write|type a|send a message|chat with|comment|add a comment)\b|\b(?:compose|composer|message body|message text|draft)\b/i;
@@ -168,18 +169,25 @@ function inComposer(context: TreeContext): boolean {
   return context.ancestors.some((ancestor) => !WINDOW_ROLES.test(ancestor.role) && (isTextEntry(ancestor) || COMPOSER_AREA.test(plain(ancestor.name))));
 }
 
-/** What an unlabelled control may do where it sits: send in a messaging or email app, buy in a shop, submit in a dialog. */
+/**
+ * What an unlabelled control may do where it sits: buy in a shop's cart or checkout, or what a dialog's label names ("Delete
+ * this file?"). An icon in a plain dialog or on a product page does not ask; one beside a message box is a send (inComposer).
+ */
 function placeKind(context: TreeContext): IrreversibleKind | null {
   const places = [context.app, ...context.ancestors.map(ancestorText)];
-  if (places.some((place) => MESSAGING.test(place))) return "send";
-  if (places.some((place) => SHOPPING.test(place))) return "buy";
-  return context.ancestors.some((ancestor) => DIALOG_ROLES.test(ancestor.role)) ? "submit" : null;
+  if (places.some((place) => SHOPPING.test(place)) && [...places, ...context.nearby].some((place) => CHECKOUT.test(place))) return "buy";
+  for (const dialog of context.ancestors.filter((ancestor) => DIALOG_ROLES.test(ancestor.role))) {
+    const kind = namedKind(ancestorText(dialog));
+    if (kind) return kind;
+  }
+  return null;
 }
 
 /**
  * What clicking (or choosing in) an element commits, from the tree alone: its own name, description and value; then, unless
  * its own name clearly commits nothing (Compose, Close, Emoji), a commit word next to or around it, a message box or text
- * field beside it, and for a control with no useful name, the app or dialog it sits in. Clicking into a text field never asks.
+ * field beside it, and for a control with no useful name, a checkout or a dialog that names a commit. Clicking into a text
+ * field never asks, and nor does an unlabelled control Bee never saw in place (a find match).
  */
 export function elementKind(target: Element | null | undefined): IrreversibleKind | null {
   if (!target || isTextEntry(target)) return null;
@@ -187,13 +195,14 @@ export function elementKind(target: Element | null | undefined): IrreversibleKin
   if (own) return own;
   if (SAFE_NAME.test(plain(target.name))) return null;
   const { context } = target;
-  if (!context) return unlabelled(target) ? "send" : null;
+  if (!context) return null;
   return contextKind(context) ?? (inComposer(context) ? "send" : null) ?? (unlabelled(target) ? placeKind(context) : null);
 }
 
 /**
- * What a key press commits. Return (with any modifier) sends in a message box and presses whatever else has focus; only a
- * search or address box makes it a navigation. Space presses a focused control. Delete keys delete outside a text field.
+ * What a key press commits. Return (with any modifier) sends in a message box or text field, and presses a focused control,
+ * which asks only when that control would (a search or address box navigates). Space presses a focused control. With focus
+ * unknown, Return and Space do not ask. Delete keys delete outside a text field.
  */
 function keysKind(keys: string, focus: Element | null | undefined): IrreversibleKind | null {
   const parts = keys.toLowerCase().split("+");
@@ -202,12 +211,11 @@ function keysKind(keys: string, focus: Element | null | undefined): Irreversible
   if (SEND_KEYS.has(parts.join("+"))) return "send";
   const field = isTextEntry(focus);
   if (ENTER.has(base)) {
-    if (!focus) return "submit";
-    if (isNavField(focus)) return null;
+    if (!focus || isNavField(focus)) return null;
     if (field || COMPOSER_FIELD.test(plain(focus.name))) return "send";
-    return elementKind(focus) ?? "submit";
+    return elementKind(focus);
   }
-  if (base === "space" && !modified) return field ? null : focus ? elementKind(focus) : "submit";
+  if (base === "space" && !modified) return field || !focus ? null : elementKind(focus);
   if (DELETE_KEYS.has(base)) return modified || !field ? "delete" : null;
   return null;
 }

@@ -35,12 +35,22 @@ export function registerMcpIpc(settings: SettingsStore, vmem: VmemSearch, pool: 
     const save = mcpSaveSchema.parse(payload);
     return changed(settings.mcpSave(save), save.id);
   });
-  // Disconnect: ask the authorization server to revoke the tokens first (best effort, bounded), then clear them locally.
-  ipcMain.handle(IPC.mcpRemove, async (_event, payload) => {
-    const id = mcpIdSchema.parse(payload).id;
+  // Remove and sign-out ask the authorization server to revoke the tokens first (best effort, bounded), then clear them locally.
+  const revoke = async (id: string): Promise<void> => {
     const url = settings.mcpConfig(id)?.url;
     if (url) await revokeMcpOAuth({ url, state: settings.mcpOAuthStorage(id).load() });
+  };
+  // Remove connector: deletes the server and its secrets.
+  ipcMain.handle(IPC.mcpRemove, async (_event, payload) => {
+    const id = mcpIdSchema.parse(payload).id;
+    await revoke(id);
     return changed(settings.mcpRemove(id), id);
+  });
+  // Disconnect of a sign-in server: drops its tokens and switches it off, keeping the saved server.
+  ipcMain.handle(IPC.mcpSignOut, async (_event, payload) => {
+    const id = mcpIdSchema.parse(payload).id;
+    await revoke(id);
+    return changed(settings.mcpSignOut(id), id);
   });
   ipcMain.handle(IPC.mcpSetEnabled, (_event, payload) => {
     const update = mcpSetEnabledSchema.parse(payload);

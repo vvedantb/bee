@@ -489,20 +489,20 @@ describe("computerTools: the confirm gate reads the tree, not the AI", () => {
     expect(asked.map((request) => request.kind)).toEqual(["delete", "send"]);
   });
 
-  it("asks before Return once focus may have left a search box", async () => {
+  it("does not ask before Return once focus has left a search box for somewhere unknown", async () => {
     const { run } = discordRun();
     const { call, asked } = setup({ run });
     await call("snapshot", { app: "Discord" });
     await call("type_text", { ref: "@s3:e2", text: "sam", effect: "none" });
     await call("press_key", { keys: "return", app: "Discord", effect: "none" });
     expect(asked).toEqual([]);
-    // The search jumped somewhere: focus is unknown, so a second Return asks.
+    // The search jumped somewhere: focus is unknown, and nothing says Return there commits.
     await call("press_key", { keys: "return", app: "Discord", effect: "none" });
-    expect(asked.map((request) => [request.kind, request.detail])).toEqual([["submit", "Press Return in Discord"]]);
+    expect(asked).toEqual([]);
     // Clicking into the message box puts focus there; Return sends.
     await call("click", { ref: "@s3:e7", effect: "none" });
     await call("press_key", { keys: "ctrl+enter", app: "Discord", effect: "none" });
-    expect(asked.map((request) => [request.kind, request.detail]).at(-1)).toEqual(["send", "Press Ctrl+Enter in “Message @sam”"]);
+    expect(asked.map((request) => [request.kind, request.detail])).toEqual([["send", "Press Ctrl+Enter in “Message @sam”"]]);
   });
 
   it("asks before Return when a snapshot shows the message box focused, with nothing typed this run", async () => {
@@ -513,7 +513,7 @@ describe("computerTools: the confirm gate reads the tree, not the AI", () => {
     expect(asked.map((request) => [request.kind, request.detail])).toEqual([["send", "Press Return in “Message #job-search”"]]);
   });
 
-  it("keeps the containers above a root snapshot's region, and asks before an unlabelled match from find", async () => {
+  it("keeps the containers above a root snapshot's region, and does not ask before an unlabelled match from find", async () => {
     // The region alone says nothing (no app, no names): only what Bee kept about @s3:e5 shows it is Discord's message box.
     const region = { tree: { role: "group", name: "", ref_id: "@s3:e5", children: [{ role: "button", name: "", ref_id: "@s5:e1" }] } };
     const { run } = discordRun(({ command, args }) => {
@@ -530,7 +530,7 @@ describe("computerTools: the confirm gate reads the tree, not the AI", () => {
     await call("click", { ref: "@s6:e2", effect: "none" });
     expect(asked).toHaveLength(1);
     await call("click", { ref: "@s6:e1", effect: "none" });
-    expect(asked.map((request) => request.kind)).toEqual(["send", "send"]);
+    expect(asked).toHaveLength(1);
   });
 
   it("still runs on its own with the setting off", async () => {
