@@ -16,7 +16,7 @@ import { stopOnNoProgress } from "./loop-guard";
 // Model turns per run when a test sets a step limit: a backstop above it, so the AI can still write its last line.
 const TURNS_ABOVE_STEPS = 2;
 const LINE_MAX = 160;
-// Output tokens per step: adaptive thinking at high effort (gateway.ts ANTHROPIC_COMMAND_THINKING) spends from this budget before
+// Output tokens per step: adaptive thinking at medium effort (gateway.ts ANTHROPIC_COMMAND_THINKING) spends from this budget before
 // the tool call, so it leaves room for that and the reply.
 export const COMPUTER_MAX_OUTPUT_TOKENS = 16_000;
 const TRANSCRIPT_LINES = 8;
@@ -264,7 +264,7 @@ export async function runComputerUse(args: {
       abortSignal: control.signal,
       maxOutputTokens: COMPUTER_MAX_OUTPUT_TOKENS,
       maxRetries: 1,
-      // User-facing: not flex. No web search here, so routing keeps fail-over; adaptive thinking at high effort (gateway.ts).
+      // User-facing: not flex. No web search here, so routing keeps fail-over; adaptive thinking at medium effort (gateway.ts).
       providerOptions: commandProviderOptions("default", { web: false }),
     });
     args.onFinish?.({ usage: result.totalUsage, providerMetadata: result.providerMetadata });

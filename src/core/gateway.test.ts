@@ -59,13 +59,13 @@ describe("commandProviderOptions", () => {
     expect(GUIDE_MODEL).toBe("anthropic/claude-haiku-5.5");
   });
 
-  it("routes like guideProviderOptions, with adaptive thinking at high effort (no budgetTokens)", () => {
-    expect(ANTHROPIC_COMMAND_THINKING).toEqual({ anthropic: { thinking: { type: "adaptive" }, effort: "high" } });
+  it("routes like guideProviderOptions, with adaptive thinking at medium effort (no budgetTokens)", () => {
+    expect(ANTHROPIC_COMMAND_THINKING).toEqual({ anthropic: { thinking: { type: "adaptive" }, effort: "medium" } });
     for (const tier of ["flex", "default", "ultrafast"] as const) {
       for (const web of [true, false]) {
         const options = commandProviderOptions(tier, { web });
         expect(options.gateway).toEqual(guideProviderOptions(tier, { web }).gateway);
-        expect(options.anthropic).toEqual({ thinking: { type: "adaptive" }, effort: "high" });
+        expect(options.anthropic).toEqual({ thinking: { type: "adaptive" }, effort: "medium" });
         expect(JSON.stringify(options)).not.toContain("budgetTokens");
       }
     }

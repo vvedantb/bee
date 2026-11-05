@@ -18,7 +18,7 @@ const LUNA_TIMEOUT_MS = 45_000;
 export const COMMAND_TIMEOUT_MS = 120_000;
 /** Model steps for a meeting tip turn. A direct request has no step cap: it ends when the AI is done, on Stop, or on the loop guard (core/loop-guard.ts). */
 export const TIP_MAX_STEPS = 8;
-// Output tokens per step. A direct request thinks first (gateway.ts ANTHROPIC_COMMAND_THINKING: adaptive, high effort), which
+// Output tokens per step. A direct request thinks first (gateway.ts ANTHROPIC_COMMAND_THINKING: adaptive, medium effort), which
 // spends from this budget, so it gets room for that and the reply.
 const TIP_MAX_OUTPUT_TOKENS = 800;
 export const COMMAND_MAX_OUTPUT_TOKENS = 16_000;
@@ -1041,7 +1041,7 @@ export async function guideWithLuna(args: {
       abortSignal,
       // User-facing: not flex (see gateway.ts). Anthropic only while web_search is sent; Anthropic first on the no-web retry.
       // Tips keep thinking off (gateway.ts ANTHROPIC_NO_THINKING): it costs latency and can spend the whole output budget before
-      // any tip. A direct request thinks adaptively at high effort (ANTHROPIC_COMMAND_THINKING), so it plans its tool calls.
+      // any tip. A direct request thinks adaptively at medium effort (ANTHROPIC_COMMAND_THINKING), so it plans its tool calls.
       providerOptions: args.command ? commandProviderOptions("default", { web }) : guideProviderOptions("default", { web }),
     });
     // Only the last step's text is the answer, so each step starts a fresh list. Within a step, text before a tool is

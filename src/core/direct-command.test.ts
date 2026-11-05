@@ -419,7 +419,7 @@ describe("runDirectCommand: Bee's history and no blank replies", () => {
 
 describe("runDirectCommand: the command model, adaptive thinking and caching", () => {
   // claude-sonnet-5* always thinks adaptively (installed @ai-sdk/anthropic): effort, never budgetTokens.
-  const THINKING = { anthropic: { thinking: { type: "adaptive" }, effort: "high" } };
+  const THINKING = { anthropic: { thinking: { type: "adaptive" }, effort: "medium" } };
   /** A gateway that records which model ids were asked for. */
   function idGateway(model: MockLanguageModelV4) {
     const ids: string[] = [];
@@ -432,7 +432,7 @@ describe("runDirectCommand: the command model, adaptive thinking and caching", (
     return { gateway, ids };
   }
 
-  it("answers with COMMAND_MODEL, thinking at high effort, with room to think and the cache markers kept", async () => {
+  it("answers with COMMAND_MODEL, thinking at medium effort, with room to think and the cache markers kept", async () => {
     const { model } = stepsModel([text("- 15% of 18,000 is 2,700.\n")]);
     const { gateway, ids } = idGateway(model);
     await runDirectCommand({ command: "what's 15% of 18000?", snippets, gateway, actions: null });
