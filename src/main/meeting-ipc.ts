@@ -7,6 +7,7 @@ import { computerAccess, computerSkills } from "../core/computer-use";
 import { debugLog, errorData, msSince } from "../core/debug-log";
 import type { DesktopActions } from "../core/desktop-actions";
 import { historySummariser } from "../core/bee-history";
+import type { BeeMemory } from "../core/bee-memory";
 import { runDirectCommand, type ComputerHost } from "../core/direct-command";
 import { classifyFollowUp } from "../core/follow-up";
 import { loadMcpTools, type McpPool, type McpServerConfig } from "../core/mcp";
@@ -73,6 +74,8 @@ export function registerMeetingIpc(args: { notesDir: string; fsRoots: () => stri
   transcripts?: VmemTranscripts;
   /** Bee's history of direct requests on disk (main/bee-history-store.ts). Absent: each request starts with none. */
   history?: BeeHistoryStore;
+  /** Bee's memory (main/bee-memory-store.ts): the memory folder in the user data folder. Absent: no memory tools. */
+  memory?: BeeMemory;
   /** Names Bee should know (Settings, core/known-names.ts), read per request, and the names a request taught it. */
   knownNames?: () => string[];
   learnNames?: (names: string[]) => void }): void {
@@ -291,6 +294,7 @@ export function registerMeetingIpc(args: { notesDir: string; fsRoots: () => stri
         },
         knownNames: args.knownNames?.(),
         onLearnNames: args.learnNames,
+        memory: args.memory ?? null,
         meetingBrief,
         meetingTerms: meetingTerms(windowContext) || undefined,
         searchLocation: searchLocation({ timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone, locale: app.getSystemLocale() }),

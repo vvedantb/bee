@@ -3,7 +3,7 @@ import { HEADED_FLAG, STDIN_FLAG, assertComputerUse, type AgentDesktopResult, ty
 import { createRunControl, type ComputerPlatform, type RunControl } from "./computer-control";
 import { shellElement, type Element } from "./computer-gate";
 import {
-  CANNOT_CONTROL, COMPUTER_TOOL_NAMES, CONFIRM_LABEL, STOPPED, computerTools, errorLine, findRole, formatDone, formatMatches, formatSnapshot, matchApp, offLimitsApp, shallowTree,
+  ACT_MAX, CANNOT_CONTROL, COMPUTER_TOOL_NAMES, actionDone, CONFIRM_LABEL, STOPPED, computerTools, errorLine, findRole, formatDone, formatMatches, formatSnapshot, matchApp, offLimitsApp, shallowTree,
   thinTree,
   type ConfirmRequest,
 } from "./computer-tools";
@@ -797,7 +797,7 @@ describe("computerTools: agent-desktop 1.1 snapshots and refs", () => {
   it("keeps the tool surface small: read checks states, an empty set_value clears, set_state ticks and expands, scroll without a direction brings a ref into view", async () => {
     const { call, calls, tools, steps } = setup({ askFirst: false });
     expect(Object.keys(tools).sort()).toEqual([...COMPUTER_TOOL_NAMES].sort());
-    expect(COMPUTER_TOOL_NAMES).toHaveLength(18);
+    expect(COMPUTER_TOOL_NAMES).toHaveLength(19);
     await call("snapshot", { app: "Discord" });
     await call("read", { ref: "@s1abc:e1" });
     await call("read", { ref: "@s1abc:e1", property: "value" });
@@ -1195,5 +1195,81 @@ describe("computerTools: Teams on Windows (app names, focus for keys, ambiguous 
     expect(await call("find", { app: "ms-teams.exe", role: "listitem", name: "Zuzanna" })).toBe("Role treeitem for listitem. No matches. Roles here: button, combobox, listbox.");
     expect(await call("find", { app: "ms-teams.exe", role: "textbox" })).toMatch(/^Role textfield for textbox\./);
     expect(lines(calls).slice(1)).toEqual(["find --app=ms-teams.exe --role=treeitem --name=Zuzanna --limit=15", "find --app=ms-teams.exe --role=textfield --limit=15"]);
+  });
+});
+
+describe("computerTools: act runs a short batch in one step", () => {
+  const send = { do: "click", ref: "@s1abc:e2", effect: "send" } as const;
+  const fill = { do: "set_value", ref: "@s1abc:e1", value: "hi Sam", effect: "none" } as const;
+  const enter = { do: "press_key", keys: "return", app: "Discord", ref: "@s1abc:e1", effect: "send" } as const;
+
+  it("runs each action in order, as one step of the budget, and says how each went", async () => {
+    const { call, calls, control, steps } = setup({ askFirst: false });
+    await call("snapshot", { app: "Discord" });
+    const output = String(await call("act", { actions: [{ do: "click", ref: "@s1abc:e1", effect: "none" }, fill, enter] }));
+    expect(calls.slice(1).map(({ command, args }) => [command, ...args])).toEqual([
+      ["click", "@s1abc:e1"],
+      ["set-value", "@s1abc:e1", STDIN_FLAG],
+      ["focus", "@s1abc:e1"],
+      ["press", "return", "--app=Discord"],
+    ]);
+    expect(calls[2]?.stdin).toBe("hi Sam");
+    expect(control.steps()).toBe(2);
+    expect(output.split("\n")).toEqual([
+      "1. click: Done (delivered_verified).",
+      "2. set_value: Done (delivered_verified).",
+      "3. press_key: Done (delivered_verified). Check the result with a snapshot.",
+    ]);
+    expect(steps.slice(1)).toEqual(["Clicking Message @sam…", "Typing in Message @sam…", "Pressing Return…"]);
+  });
+
+  it("stops at the first action that fails, and runs nothing after it", async () => {
+    const fake = fakeRun((call) => (call.command === "set-value" ? { ok: false, code: "ACTION_FAILED", retry: "unsafe" } : { ok: true, data: {} }));
+    const { call } = setup({ askFirst: false, run: fake.run });
+    await call("snapshot", { app: "Discord" });
+    const output = String(await call("act", { actions: [fill, enter, send] }));
+    expect(fake.calls.map((item) => item.command)).toEqual(["snapshot", "set-value"]);
+    expect(output).toContain("1. set_value: Error ACTION_FAILED");
+    expect(output).toContain("actions 2 to 3 did not run");
+  });
+
+  it("stops on a ref it has not seen, an app Bee never uses, or a terminal, before running anything there", async () => {
+    const { call, calls } = setup({ askFirst: false });
+    await call("snapshot", { app: "Discord" });
+    expect(String(await call("act", { actions: [{ do: "click", ref: "@s9:e9", effect: "none" }, fill] }))).toContain("1. click: Error: use a ref from this task's latest snapshot");
+    expect(String(await call("act", { actions: [{ ...enter, app: "Keychain" }, fill] }))).toContain("Bee does not use terminals");
+    expect(calls.map((item) => item.command)).toEqual(["snapshot"]);
+  });
+
+  it("asks before a send inside a batch, and a decline stops the run with nothing more done", async () => {
+    const { call, calls, asked, control } = setup({ confirm: async () => false });
+    await call("snapshot", { app: "Discord" });
+    const output = String(await call("act", { actions: [fill, send, { do: "click", ref: "@s1abc:e3", effect: "none" }] }));
+    expect(asked.map((request) => request.kind)).toEqual(["send"]);
+    expect(calls.slice(1).map((item) => item.command)).toEqual(["set-value"]);
+    expect(output).toContain(STOPPED);
+    expect(control.reason()).toBe("declined");
+    expect(await call("act", { actions: [fill] })).toBe(STOPPED);
+  });
+
+  it("does nothing once the budget is spent, and holds at most ACT_MAX actions", async () => {
+    const control = createRunControl({ maxSteps: 1 });
+    const { call, calls, tools } = setup({ askFirst: false, control });
+    await call("snapshot", { app: "Discord" });
+    expect(await call("act", { actions: [fill] })).toBe(STOPPED);
+    expect(calls.map((item) => item.command)).toEqual(["snapshot"]);
+    type Schema = { safeParse: (value: unknown) => { success: boolean } };
+    const schema = tools.act.inputSchema as unknown as Schema;
+    expect(schema.safeParse({ actions: Array(ACT_MAX).fill(fill) }).success).toBe(true);
+    expect(schema.safeParse({ actions: Array(ACT_MAX + 1).fill(fill) }).success).toBe(false);
+    expect(schema.safeParse({ actions: [{ do: "open_app", name: "Terminal" }] }).success).toBe(false);
+    control.dispose();
+  });
+
+  it("reads an output as done only when it says Done, after any app-name note", () => {
+    expect(actionDone("Done (delivered_verified).")).toBe(true);
+    expect(actionDone("Using ms-teams.exe for Teams. Done.")).toBe(true);
+    expect(actionDone("Error ACTION_FAILED: it may still have happened.")).toBe(false);
+    expect(actionDone("Bee could not focus that field, so pressed nothing.")).toBe(false);
   });
 });

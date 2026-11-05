@@ -6,6 +6,7 @@ import { cacheAtEnd, compactingStep, historyAsText, type Summarise } from "./bee
 import { debugLog, errorData, modelName, msSince, onceText, stepData } from "./debug-log";
 import { ANTHROPIC_CACHE, commandProviderOptions, guideProviderOptions } from "./gateway";
 import type { Snippet } from "./notes";
+import { MEMORY_RULES } from "./bee-memory";
 import { knownNamesBlock } from "./known-names";
 import { stopOnNoProgress } from "./loop-guard";
 import { MAX_TIPS, tipCap, tipKey } from "./steering";
@@ -294,6 +295,11 @@ export function buildLunaPrompt(args: {
   computerUse?: boolean;
   /** Names Bee should know (core/known-names.ts), for a direct request: in the context, so the AI spells them right. */
   knownNames?: readonly string[];
+  /**
+   * For a direct request with the memory tools (core/bee-memory.ts): what Bee remembers, as a short summary for the context. Any
+   * string, even empty, adds the memory rules to the system prompt.
+   */
+  memory?: string;
 }): LunaPrompt {
   const meeting = meetingBlock(args.meetingBrief);
   const lines = args.transcript.slice(-TRANSCRIPT_WINDOW).map((line) => `- ${line.trim()}`);
@@ -312,9 +318,16 @@ export function buildLunaPrompt(args: {
   const command = args.command?.replace(/\s+/g, " ").trim();
   if (command) {
     const names = knownNamesBlock(args.knownNames ?? []);
+    const remembered = args.memory?.trim() ?? "";
     return {
-      system: [LUNA_DIRECT_SYSTEM, args.computerUse ? LUNA_COMPUTER : LUNA_NO_COMPUTER, ...(mcp ? [mcp] : []), ...(meeting ? [LUNA_MEETING_SYSTEM] : [])].join("\n"),
-      context: names ? `${context}\n\n${names}` : context,
+      system: [
+        LUNA_DIRECT_SYSTEM,
+        args.computerUse ? LUNA_COMPUTER : LUNA_NO_COMPUTER,
+        ...(args.memory !== undefined ? [MEMORY_RULES] : []),
+        ...(mcp ? [mcp] : []),
+        ...(meeting ? [LUNA_MEETING_SYSTEM] : []),
+      ].join("\n"),
+      context: [context, names, remembered].filter((part) => part).join("\n\n"),
       transcript: [
         ...(lines.length > 0 ? ["Meeting lines so far (oldest first; background only, never the request):", ...lines, ""] : []),
         "The user's request to Bee:",
@@ -947,6 +960,8 @@ export async function guideWithLuna(args: {
   summarise?: Summarise;
   /** For a direct request: names Bee should know (core/known-names.ts). */
   knownNames?: readonly string[];
+  /** For a direct request with the memory tools in desktopTools: what Bee remembers (buildLunaPrompt memory). */
+  memory?: string;
 }): Promise<LunaResult> {
   const startedAt = performance.now();
   const maxTips = args.command ? MAX_DIRECT_LINES : tipCap(args.shown?.length ?? 0);
