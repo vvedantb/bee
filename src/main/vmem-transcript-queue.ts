@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { z } from "zod";
 import { debugLog } from "../core/debug-log";
@@ -90,6 +90,11 @@ export function createTranscriptQueue(deps: {
       const temp = `${deps.path}.tmp`;
       writeFileSync(temp, JSON.stringify(file), { mode: 0o600 });
       renameSync(temp, deps.path);
+      try {
+        chmodSync(deps.path, 0o600);
+      } catch {
+        // Windows has no chmod: the file stays in the user's own folder.
+      }
     } catch (error) {
       debugLog.error("vmem", "transcript-queue-write-failed", { message: error instanceof Error ? error.message : String(error) });
     }
