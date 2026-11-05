@@ -1498,8 +1498,14 @@ export const actions = {
     return mcpChange(() => window.bee.mcp.save(server), server.id);
   },
 
-  async removeMcpServer(id: string): Promise<void> {
-    await mcpChange(() => window.bee.mcp.remove(id), id);
+  /** Resolves true when removed: the server, its tokens and secrets are gone. */
+  async removeMcpServer(id: string): Promise<boolean> {
+    return mcpChange(() => window.bee.mcp.remove(id), id);
+  },
+
+  /** Disconnect for a sign-in server: revokes and clears its tokens and switches it off, keeping the saved server. */
+  async signOutMcpServer(id: string): Promise<void> {
+    await mcpChange(() => window.bee.mcp.signOut(id), id);
   },
 
   async setMcpEnabled(update: McpSetEnabled): Promise<void> {

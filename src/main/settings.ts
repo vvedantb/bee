@@ -304,6 +304,15 @@ export function createSettingsStore(args: {
     return mcpList();
   }
 
+  /** Disconnect for a sign-in server: drops its tokens and switches it off, but keeps the saved server. */
+  function mcpSignOut(id: string): McpServerView[] {
+    const file = read();
+    const secrets = readMcpSecrets(file);
+    const mcpServers = file.mcpServers.map((server) => (server.id === id ? { ...server, enabled: false } : server));
+    write(writeMcpSecrets({ ...file, mcpServers }, { ...secrets, [id]: { ...secrets[id], auth: undefined, oauth: undefined } }));
+    return mcpList();
+  }
+
   /** Switches a server, or one of its listed tools. */
   function mcpSetEnabled(update: McpSetEnabled): McpServerView[] {
     const file = read();
@@ -343,7 +352,7 @@ export function createSettingsStore(args: {
       load: () => readMcpSecrets(read())[id]?.oauth,
       save: (oauth) => {
         const file = read();
-        // A server removed while signing in (Disconnect) must not come back through a late save.
+        // A server removed while signing in must not come back through a late save.
         if (!file.mcpServers.some((server) => server.id === id)) return;
         const secrets = readMcpSecrets(file);
         write(writeMcpSecrets(file, { ...secrets, [id]: { ...secrets[id], oauth } }));
@@ -541,5 +550,5 @@ export function createSettingsStore(args: {
     write({ ...read(), overlayPosition: position });
   }
 
-  return { view, save, meetingContext, readMeetingWindow, teamsAudioFallback, wakeWord, askBeforeSending, verboseLogging, overlayPosition, saveOverlayPosition, gatewayApiKey, savedGatewayApiKey, linkSettings, vmemConfig, transcriptSettings, fsRoots, mcpList, mcpSave, mcpRemove, mcpSetEnabled, mcpRecordTools, mcpConfigs, mcpSignedOut, mcpConfig, mcpOAuthStorage };
+  return { view, save, meetingContext, readMeetingWindow, teamsAudioFallback, wakeWord, askBeforeSending, verboseLogging, overlayPosition, saveOverlayPosition, gatewayApiKey, savedGatewayApiKey, linkSettings, vmemConfig, transcriptSettings, fsRoots, mcpList, mcpSave, mcpRemove, mcpSignOut, mcpSetEnabled, mcpRecordTools, mcpConfigs, mcpSignedOut, mcpConfig, mcpOAuthStorage };
 }

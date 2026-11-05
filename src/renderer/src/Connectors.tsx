@@ -165,14 +165,33 @@ function McpToolList({ server }: { server: McpServerView }) {
   );
 }
 
-// The details of one custom connector: test the connection, switch tools. Only reached by clicking the row.
-function McpDetails({ server, test }: { server: McpServerView; test: McpTestState | undefined }) {
+// The details of one custom connector: test the connection, switch tools, remove it. Only reached by clicking the row.
+function McpDetails({ server, test, onRemoved }: { server: McpServerView; test: McpTestState | undefined; onRemoved: () => void }) {
   const status = test ? testLabel(test) : null;
+  // Remove works in any state (connected or not). The first click asks, the second removes.
+  const [confirming, setConfirming] = useState(false);
+  const [removing, setRemoving] = useState(false);
+
+  async function remove(): Promise<void> {
+    if (!confirming) {
+      setConfirming(true);
+      return;
+    }
+    setRemoving(true);
+    const removed = await actions.removeMcpServer(server.id);
+    setRemoving(false);
+    setConfirming(false);
+    if (removed) onRemoved();
+  }
+
   return (
     <div className="mcp-details">
       <div className="row">
         <Button type="button" variant="secondary" size="sm" disabled={test?.busy} onClick={() => void actions.testMcpServer(server.id)}>
           Test connection
+        </Button>
+        <Button type="button" variant="destructive" size="sm" disabled={removing} onClick={() => void remove()} onBlur={() => setConfirming(false)}>
+          {confirming ? "Click again to remove" : "Remove connector"}
         </Button>
       </div>
       {status ? <p className={status.failed ? "error" : "muted"}>{status.text}</p> : null}
@@ -282,7 +301,7 @@ export function Connectors(props: { servers: McpServerView[]; tests: Record<stri
         <h2>{editingServer ? editingServer.name : "Add custom connector"}</h2>
         {/* Remount per target so each form starts from its own saved values. */}
         <McpForm key={editing} server={editingServer} error={props.error} onDone={() => setEditing(null)} />
-        {editingServer ? <McpDetails server={editingServer} test={props.tests[editingServer.id]} /> : null}
+        {editingServer ? <McpDetails server={editingServer} test={props.tests[editingServer.id]} onRemoved={() => setEditing(null)} /> : null}
       </section>
     );
   }
@@ -293,20 +312,22 @@ export function Connectors(props: { servers: McpServerView[]; tests: Record<stri
       <ul className="connector-list">
         {props.servers.map((server) => {
           // An HTTP server with auth "none" signs in with MCP OAuth and counts as connected once tokens are stored; other rows just switch on and off.
-          // Disconnect removes the server and its tokens.
+          // Disconnect keeps the saved server: sign-in servers revoke and drop their tokens and switch off, others just switch off.
+          // Removing the server is in its details view.
           const oauth = server.transport === "http" && server.auth.type === "none";
           const connected = oauth ? server.enabled && server.hasAuth : server.enabled;
           const connect = () =>
             oauth
               ? actions.connectMcpServer({ name: server.name, enabled: true, transport: "http", url: server.url, auth: { type: "none" } }, server.id)
               : actions.setMcpEnabled({ id: server.id, enabled: true });
+          const disconnect = () => (oauth ? actions.signOutMcpServer(server.id) : actions.setMcpEnabled({ id: server.id, enabled: false }));
           return (
             <ConnectorRow
               key={server.id}
               server={server}
               connected={connected}
               busy={busy === server.id}
-              onToggle={() => void run(server.id, () => (connected ? actions.removeMcpServer(server.id) : connect()))}
+              onToggle={() => void run(server.id, () => (connected ? disconnect() : connect()))}
               onOpen={() => setEditing(server.id)}
             />
           );
