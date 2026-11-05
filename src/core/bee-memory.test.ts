@@ -117,8 +117,23 @@ describe("memoryTools", () => {
       write: () => {
         throw new Error("disk");
       },
+      clear: () => {
+        throw new Error("disk");
+      },
     });
     expect(await exec(tools.memory_read, {})).toMatch(/^Error/);
     expect(await exec(tools.memory_write, { fact: "Prefers tea" })).toMatch(/^Error/);
+  });
+});
+
+describe("inMemoryBeeMemory clear", () => {
+  it("forgets every fact, says how many there were, and leaves nothing for the prompt", () => {
+    const memory = inMemoryBeeMemory([], () => NOW);
+    memory.write({ fact: "Prefers British English", kind: "preference" });
+    memory.write({ fact: "Uses the new Outlook", kind: "app" });
+    expect(memory.clear()).toBe(2);
+    expect(memory.facts()).toEqual([]);
+    expect(memorySummary(memory.facts())).toBe("");
+    expect(memory.clear()).toBe(0);
   });
 });

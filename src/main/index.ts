@@ -18,6 +18,7 @@ import { createMeetingMemoryStore } from "../core/meeting-memory";
 import { searchMcpNotes } from "../core/meeting-search";
 import { createVmemSearch } from "../core/vmem-history";
 import { createBeeHistoryStore } from "./bee-history-store";
+import { registerBeeMemoryIpc } from "./bee-memory-ipc";
 import { createBeeMemoryStore } from "./bee-memory-store";
 import { createDebugLog, settingsChange, type DebugLogWriter } from "./debug-log";
 import { registerDebugLogIpc } from "./debug-log-ipc";
@@ -434,6 +435,8 @@ if (clerk.isPrimaryInstance) {
     const beeHistory = createBeeHistoryStore({ path: join(userDataDir, "bee-history.json") });
     // Bee's memory for direct requests (core/bee-memory.ts): the memory folder beside it, small and capped. Missing: empty.
     const beeMemory = createBeeMemoryStore({ userDataDir });
+    // Settings → Saved memory lists and clears this same store, so a clear reaches the next direct request at once.
+    registerBeeMemoryIpc(beeMemory);
     registerMeetingIpc({
       transcripts,
       history: beeHistory,

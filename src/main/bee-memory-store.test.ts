@@ -47,6 +47,30 @@ describe("Bee's memory on disk", () => {
     expect(readdirSync(join(userDataDir, MEMORY_DIR)).some((name) => name.startsWith(`${FACTS_FILE}.bad-`))).toBe(true);
   });
 
+  it("clears to an empty file that a restart reads as empty, touching nothing else in the user data folder", () => {
+    writeFileSync(join(userDataDir, "bee-history.json"), "history");
+    const store = createBeeMemoryStore({ userDataDir, now: NOW });
+    store.write({ fact: "Prefers British English", kind: "preference" });
+    store.write({ fact: "Uses the new Outlook", kind: "app" });
+    expect(store.clear()).toBe(2);
+    expect(store.facts()).toEqual([]);
+    expect(JSON.parse(readFileSync(store.path, "utf8"))).toEqual({ version: 1, facts: [] });
+    expect(createBeeMemoryStore({ userDataDir }).facts()).toEqual([]);
+    expect(readFileSync(join(userDataDir, "bee-history.json"), "utf8")).toBe("history");
+    expect(readdirSync(userDataDir).sort()).toEqual(["bee-history.json", MEMORY_DIR]);
+    expect(store.clear()).toBe(0);
+  });
+
+  it("keeps every fact when the clear cannot be written", () => {
+    const store = createBeeMemoryStore({ userDataDir, now: NOW });
+    store.write({ fact: "Prefers tea" });
+    // A folder where the temp file goes makes the write fail.
+    mkdirSync(`${store.path}.tmp`);
+    expect(() => store.clear()).toThrow(/could not clear/);
+    expect(store.facts().map((fact) => fact.text)).toEqual(["Prefers tea"]);
+    expect(createBeeMemoryStore({ userDataDir }).facts().map((fact) => fact.text)).toEqual(["Prefers tea"]);
+  });
+
   it.skipIf(process.platform === "win32")("keeps the file private to the user", () => {
     const store = createBeeMemoryStore({ userDataDir, now: NOW });
     store.write({ fact: "Prefers tea" });

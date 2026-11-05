@@ -5,7 +5,7 @@ import { debugLog, errorData } from "../core/debug-log";
 
 // Bee's memory on disk (core/bee-memory.ts): facts.json in the memory folder inside the user data folder, next to bee-history.json.
 // Read once at start and kept in main; each change is written at once, through a temp file and a rename. A missing folder or file
-// is an empty memory; a corrupt file is kept beside the new one (facts.json.bad-<time>) and Bee starts empty.
+// is an empty memory; clearing writes an empty list (only this file: never history, logs or settings); a corrupt file is kept beside the new one (facts.json.bad-<time>) and Bee starts empty.
 
 export const MEMORY_DIR = "memory";
 export const FACTS_FILE = "facts.json";
@@ -66,6 +66,13 @@ export function createBeeMemoryStore(deps: { userDataDir: string; now?: () => Da
       facts = result.facts;
       debugLog.info("memory", "written", { message: result.message, facts: facts.length });
       return result;
+    },
+    clear: () => {
+      const cleared = facts.length;
+      if (!write([])) throw new Error("Bee could not clear its memory on this computer.");
+      facts = [];
+      debugLog.info("memory", "cleared", { cleared });
+      return cleared;
     },
   };
 }

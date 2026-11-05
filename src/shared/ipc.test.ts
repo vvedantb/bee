@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
+import { FACT_CHARS, MEMORY_FACTS_MAX, MEMORY_KINDS } from "../core/bee-memory";
 import {
   COMMAND_MAX_CHARS,
   COMPUTER_LINE_MAX,
   DEBUG_BATCH_MAX,
   IPC,
+  MEMORY_FACT_KINDS,
   TIP_MAX_CHARS,
   clampTip,
   commandRequestSchema,
@@ -16,6 +18,10 @@ import {
   lunaActivitySchema,
   lunaPartialSchema,
   meetingSummaryRequestSchema,
+  memoryClearResultSchema,
+  memoryFactViewSchema,
+  memoryListResultSchema,
+  memoryRequestSchema,
   pipelineRequestSchema,
   pipelineResultSchema,
 } from "./ipc";
@@ -133,5 +139,30 @@ describe("debug log IPC", () => {
     expect(debugLogBatchSchema.safeParse({ events: Array(DEBUG_BATCH_MAX).fill(one) }).success).toBe(true);
     expect(debugLogBatchSchema.safeParse({ events: Array(DEBUG_BATCH_MAX + 1).fill(one) }).success).toBe(false);
     expect(debugLogBatchSchema.safeParse({ events: [] }).success).toBe(false);
+  });
+});
+
+describe("Saved memory schemas", () => {
+  const fact = { text: "Sam in Teams is Samuel Jones", kind: "person", updated: "2026-11-05" };
+
+  it("has its own channels, apart from saved meetings", () => {
+    expect(IPC.memoryList).toBe("bee:memory:list");
+    expect(IPC.memoryClear).toBe("bee:memory:clear");
+    expect(IPC.memoryClear).not.toBe(IPC.clearMeetingMemory);
+  });
+
+  it("keeps the fact shape in step with Bee's memory", () => {
+    expect([...MEMORY_FACT_KINDS]).toEqual([...MEMORY_KINDS]);
+    expect(memoryFactViewSchema.safeParse({ ...fact, text: "a".repeat(FACT_CHARS) }).success).toBe(true);
+    expect(memoryFactViewSchema.safeParse({ ...fact, text: "a".repeat(FACT_CHARS + 1) }).success).toBe(false);
+    expect(memoryListResultSchema.safeParse({ facts: Array.from({ length: MEMORY_FACTS_MAX }, () => fact) }).success).toBe(true);
+  });
+
+  it("needs a session token, and rejects an unknown kind or a negative count", () => {
+    expect(memoryRequestSchema.safeParse({}).success).toBe(false);
+    expect(memoryRequestSchema.parse({ sessionToken: "t" })).toEqual({ sessionToken: "t" });
+    expect(memoryListResultSchema.safeParse({ facts: [{ ...fact, kind: "health" }] }).success).toBe(false);
+    expect(memoryClearResultSchema.safeParse({ cleared: -1 }).success).toBe(false);
+    expect(memoryClearResultSchema.parse({ cleared: 3 })).toEqual({ cleared: 3 });
   });
 });

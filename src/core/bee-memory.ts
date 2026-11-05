@@ -151,6 +151,8 @@ export type BeeMemory = {
   /** Oldest first. */
   facts: () => MemoryFact[];
   write: (change: MemoryChange) => MemoryWriteResult;
+  /** Forgets every fact (Settings → Saved memory) and resolves how many there were. Throws when it cannot, keeping them all. */
+  clear: () => number;
 };
 
 /** Added to a direct request's system prompt when the memory tools are there. */
@@ -203,6 +205,11 @@ export function inMemoryBeeMemory(start: readonly MemoryFact[] = [], now: () => 
       const result = applyMemoryChange(facts, change, now());
       facts = result.facts;
       return result;
+    },
+    clear: () => {
+      const cleared = facts.length;
+      facts = [];
+      return cleared;
     },
   };
 }

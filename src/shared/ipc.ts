@@ -43,6 +43,9 @@ export const IPC = {
   getHttpsIcon: "bee:icon:get",
   meetingContext: "bee:meeting:context",
   clearMeetingMemory: "bee:meeting:clear-memory",
+  /** Settings → Saved memory: Bee's memory facts for direct requests (main/bee-memory-store.ts), listed and cleared. */
+  memoryList: "bee:memory:list",
+  memoryClear: "bee:memory:clear",
   meetingWindowCaptions: "bee:meeting-window:captions",
   openAccessibilitySettings: "bee:meeting-window:open-accessibility-settings",
   teamsAudioStatus: "bee:teams-audio:status",
@@ -381,6 +384,16 @@ export const teamsAudioEndedSchema = z.object({ id: z.number().int().positive(),
 export type TeamsAudioEnded = z.infer<typeof teamsAudioEndedSchema>;
 
 export const clearMeetingMemoryResultSchema = z.object({ cleared: z.number().int().nonnegative() });
+
+// Settings → Saved memory: Bee's own memory facts (core/bee-memory.ts), not saved meetings. Both channels need a session.
+// The fact shape is repeated here so the preload never loads core/bee-memory.ts (and the AI SDK with it); ipc.test.ts keeps the
+// two in step. Oldest first, as main keeps them.
+export const MEMORY_FACT_KINDS = ["person", "preference", "app", "other"] as const;
+export const memoryRequestSchema = z.object({ sessionToken: z.string().max(8000) });
+export const memoryFactViewSchema = z.object({ text: z.string().min(1).max(200), kind: z.enum(MEMORY_FACT_KINDS), updated: z.string().max(10) });
+export type MemoryFactView = z.infer<typeof memoryFactViewSchema>;
+export const memoryListResultSchema = z.object({ facts: z.array(memoryFactViewSchema).max(200) });
+export const memoryClearResultSchema = z.object({ cleared: z.number().int().nonnegative() });
 
 // 15 s of 16 kHz 16-bit mono WAV is about 480 KB; the cap leaves room without letting a runaway buffer through.
 export const TRANSCRIBE_MAX_BYTES = 2_000_000;

@@ -23,6 +23,7 @@ import {
   type MeetingContextView,
   type MeetingWindowCaptions,
   type MeetingSummaryResult,
+  type MemoryFactView,
   type PipelineResult,
   type SettingsUpdate,
   type SettingsView,
@@ -1807,6 +1808,16 @@ export const actions = {
     // The card recalls a saved meeting: it goes with them.
     if (state.meetingCard) set({ meetingCard: null });
     return cleared;
+  },
+
+  /** Bee's saved memory facts (Settings → Saved memory), oldest first. Not saved meetings. */
+  async listMemory(): Promise<MemoryFactView[]> {
+    return (await window.bee.memory.list(await sessionToken())).facts;
+  },
+
+  /** Forgets every saved memory fact; history, saved meetings and settings stay. Resolves how many there were. */
+  async clearMemory(): Promise<number> {
+    return (await window.bee.memory.clear(await sessionToken())).cleared;
   },
 
   async openSummary(): Promise<void> {
