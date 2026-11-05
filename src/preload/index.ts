@@ -206,6 +206,8 @@ const api = {
     list: async () => mcpListSchema.parse(await ipcRenderer.invoke(IPC.mcpList)),
     save: async (server: McpSave) => mcpListSchema.parse(await ipcRenderer.invoke(IPC.mcpSave, server)),
     remove: async (id: string) => mcpListSchema.parse(await ipcRenderer.invoke(IPC.mcpRemove, { id })),
+    // Revokes and clears the sign-in tokens and switches the server off; the server stays saved.
+    signOut: async (id: string) => mcpListSchema.parse(await ipcRenderer.invoke(IPC.mcpSignOut, { id })),
     setEnabled: async (update: McpSetEnabled) => mcpListSchema.parse(await ipcRenderer.invoke(IPC.mcpSetEnabled, update)),
     test: async (id: string) => mcpTestResultSchema.parse(await ipcRenderer.invoke(IPC.mcpTest, { id })),
     // Opens the system browser for MCP sign-in and resolves once tokens are stored in main.

@@ -32,6 +32,7 @@ export const IPC = {
   mcpList: "bee:mcp:list",
   mcpSave: "bee:mcp:save",
   mcpRemove: "bee:mcp:remove",
+  mcpSignOut: "bee:mcp:sign-out",
   mcpSetEnabled: "bee:mcp:set-enabled",
   mcpTest: "bee:mcp:test",
   mcpAuthorize: "bee:mcp:authorize",

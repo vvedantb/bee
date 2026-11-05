@@ -167,9 +167,25 @@ describe("settings MCP servers", () => {
     store.mcpOAuthStorage(id).save({ tokens: { access_token: "a", token_type: "Bearer" } });
     store.mcpRemove(id);
     expect(JSON.parse(onDisk()).mcpSecrets).toBeUndefined();
-    // A late save after Disconnect does not bring the record back.
+    // A late save after removal does not bring the record back.
     store.mcpOAuthStorage(id).save({ tokens: { access_token: "a", token_type: "Bearer" } });
     expect(JSON.parse(onDisk()).mcpSecrets).toBeUndefined();
+  });
+
+  it("signs out without removing: drops the tokens, switches off and keeps the server", () => {
+    crypto.on = true;
+    const store = create();
+    const id = store.mcpSave({ ...httpServer, auth: { type: "none" }, secret: undefined })[0]?.id as string;
+    store.mcpOAuthStorage(id).save({ tokens: { access_token: "oauth-PLAINTEXT-789", token_type: "Bearer" }, clientInformation: { client_id: "client-1" } });
+    expect(store.mcpList()[0]).toMatchObject({ enabled: true, hasAuth: true });
+    expect(store.mcpSignOut(id)).toEqual([expect.objectContaining({ id, name: "vmem", enabled: false, hasAuth: false })]);
+    expect(store.mcpOAuthStorage(id).load()).toBeUndefined();
+    expect(JSON.parse(onDisk()).mcpSecrets).toBeUndefined();
+    expect(store.mcpConfigs()).toEqual([]);
+    // Other servers keep their secrets.
+    const other = store.mcpSave({ ...httpServer, name: "other" }).find((server) => server.name === "other")?.id as string;
+    store.mcpSignOut(id);
+    expect(store.mcpConfig(other)?.secret).toBe("tok-PLAINTEXT-123");
   });
 
   it("leaves signed-out sign-in servers out of mcpConfigs and names them in mcpSignedOut", () => {
@@ -345,6 +361,20 @@ describe("settings personalised links", () => {
     expect(store.transcriptSettings()).toEqual({ enabled: false, config: undefined, listed: false });
     store.save({ sendSessionsToVmem: true });
     expect(store.view().sendSessionsToVmem).toBe(true);
+  });
+
+  it("stops sending finished sessions when the vmem connector signs out or is removed", () => {
+    const store = create();
+    const id = store.mcpSave(vmemPreset)[0]?.id as string;
+    store.mcpRecordTools(id, [{ name: "transcript_submit", description: "" }], { name: "vmem" });
+    expect(store.transcriptSettings()).toMatchObject({ enabled: true, config: { id }, listed: true });
+    store.mcpSignOut(id);
+    expect(store.transcriptSettings()).toEqual({ enabled: false, config: undefined, listed: false });
+    expect(store.mcpList()).toHaveLength(1);
+    store.mcpSetEnabled({ id, enabled: true });
+    expect(store.transcriptSettings()).toMatchObject({ enabled: true, config: { id } });
+    store.mcpRemove(id);
+    expect(store.transcriptSettings()).toEqual({ enabled: false, config: undefined, listed: false });
   });
 
   it("leaves no vmem key or base URL behind", () => {
