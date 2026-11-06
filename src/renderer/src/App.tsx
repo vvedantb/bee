@@ -21,6 +21,7 @@ import { Favicon } from "./Favicon";
 import { Connectors } from "./Connectors";
 import { logSignIn } from "./debug-log";
 import { MeetingContextSection } from "./MeetingContextSection";
+import { ClaudeCodeSection } from "./ClaudeCodeSection";
 import { MemorySection } from "./MemorySection";
 import { NotchStatus } from "./NotchStatus";
 import { MicHint } from "./MicHint";
@@ -459,28 +460,12 @@ function UpdateSection({ update }: { update: UpdateState }) {
   );
 }
 
-// Settings → "Bee, …" requests: they run on the user's own Claude Code and its login (main/claude-code.ts). Says what to do when it
-// is missing, too old or signed out.
-function ClaudeCodeSection({ claudeCode }: { claudeCode: BeeState["claudeCode"] }) {
+// Settings → "Bee, …" requests: checks the user's Claude Code when Settings opens (ClaudeCodeSection shows it).
+function ClaudeCodeStatus({ state }: { state: BeeState }) {
   useEffect(() => {
     void actions.refreshClaudeCode();
   }, []);
-  if (!claudeCode) return null;
-  const ready = claudeCode.state === "ready";
-  return (
-    <div className="flex flex-col gap-1">
-      <p className={ready ? "muted" : "error"} role="status">
-        {ready ? `Claude Code ${claudeCode.version ?? ""} is signed in. “Bee, …” requests use your Claude account.` : claudeCode.message}
-      </p>
-      {ready ? null : (
-        <div className="row actions">
-          <Button type="button" variant="secondary" size="sm" onClick={() => void actions.refreshClaudeCode(true)}>
-            Check again
-          </Button>
-        </div>
-      )}
-    </div>
-  );
+  return <ClaudeCodeSection claudeCode={state.claudeCode} update={state.claudeCodeUpdate} onUpdate={() => void actions.updateClaudeCode()} onCheck={() => void actions.refreshClaudeCode(true)} />;
 }
 
 // Settings → computer use: on a Mac, Accessibility for Bee. Computer use never needs Screen Recording.
@@ -610,7 +595,7 @@ function SettingsTab({ state, settings }: { state: BeeState; settings: SettingsV
         checked={settings.wakeWordEnabled}
         onCheckedChange={(wakeWordEnabled) => void actions.saveSettings({ wakeWordEnabled })}
       />
-      <ClaudeCodeSection claudeCode={state.claudeCode} />
+      <ClaudeCodeStatus state={state} />
       <SettingRow
         id="ask-before-sending"
         label="Ask before sending or deleting"

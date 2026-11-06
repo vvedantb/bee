@@ -10,6 +10,9 @@ import { historySummariser } from "../core/bee-history";
 import type { BeeMemory } from "../core/bee-memory";
 import { CLAUDE_CODE_MISSING, claudeCodeMessage } from "../core/claude-code";
 import type { ClaudeCode } from "./claude-code";
+import type { ClaudeCodeStatus } from "../core/claude-code";
+
+const claudeCodeView = (status: ClaudeCodeStatus): ClaudeCodeView => ({ state: status.state, version: "version" in status ? status.version : null, message: claudeCodeMessage(status) });
 import type { CommandAgent } from "../core/claude-agent";
 import { runDirectCommand, type ComputerHost } from "../core/direct-command";
 import { classifyFollowUp } from "../core/follow-up";
@@ -34,6 +37,7 @@ import {
   pipelineCancelSchema,
   pipelineRequestSchema,
   transcribeRequestSchema,
+  type ClaudeCodeUpdateResult,
   type ClaudeCodeView,
   type ComputerAccessView,
   type ComputerUpdate,
@@ -372,8 +376,14 @@ export function registerMeetingIpc(args: { notesDir: string; fsRoots: () => stri
   // Settings: the user's Claude Code, and what to do when "Bee, …" requests cannot run on it yet.
   ipcMain.handle(IPC.claudeCode, async (_event, payload): Promise<ClaudeCodeView> => {
     if (!args.claudeCode) return { state: "missing", version: null, message: CLAUDE_CODE_MISSING };
-    const status = await args.claudeCode.status(z.boolean().catch(false).parse(payload));
-    return { state: status.state, version: "version" in status ? status.version : null, message: claudeCodeMessage(status) };
+    return claudeCodeView(await args.claudeCode.status(z.boolean().catch(false).parse(payload)));
+  });
+
+  // Settings → Update Claude Code: `claude update`, then the state now.
+  ipcMain.handle(IPC.claudeCodeUpdate, async (): Promise<ClaudeCodeUpdateResult> => {
+    if (!args.claudeCode) return { view: { state: "missing", version: null, message: CLAUDE_CODE_MISSING }, error: null };
+    const { status, error } = await args.claudeCode.update();
+    return { view: claudeCodeView(status), error };
   });
 
   // Settings: may computer use run here, and has macOS allowed Bee Accessibility and Screen Recording. Fails open as unknown.

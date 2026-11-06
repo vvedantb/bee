@@ -12,10 +12,12 @@ import { debugLog } from "../core/debug-log";
 
 const READY_FOR_MS = 5 * 60_000;
 const CHECK_MS = 10_000;
+// `claude update` downloads the new version: give it time.
+const UPDATE_MS = 5 * 60_000;
 
-function run(path: string, args: string[]): Promise<{ ok: boolean; out: string }> {
+function run(path: string, args: string[], timeout = CHECK_MS): Promise<{ ok: boolean; out: string }> {
   return new Promise((resolve) => {
-    execFile(path, args, { timeout: CHECK_MS, windowsHide: true }, (error, stdout) => resolve({ ok: !error, out: String(stdout) }));
+    execFile(path, args, { timeout, windowsHide: true }, (error, stdout, stderr) => resolve({ ok: !error, out: `${String(stdout)}${error ? `\n${String(stderr)}` : ""}` }));
   });
 }
 
@@ -34,6 +36,8 @@ export type ClaudeCode = {
   status: (fresh?: boolean) => Promise<ClaudeCodeStatus>;
   /** The agent on the user's Claude Code, or what the user must do first. */
   agent: () => Promise<{ agent: CommandAgent } | { error: string }>;
+  /** Runs `claude update` on the install found (native or package manager, as Claude Code decides), then checks again. */
+  update: () => Promise<{ status: ClaudeCodeStatus; error: string | null }>;
 };
 
 export function createClaudeCode(): ClaudeCode {
@@ -54,8 +58,18 @@ export function createClaudeCode(): ClaudeCode {
     debugLog.info("ai", "claude-code", found);
     return found;
   }
+  async function update(): Promise<{ status: ClaudeCodeStatus; error: string | null }> {
+    const before = await status(true);
+    if (before.state === "missing") return { status: before, error: null };
+    const result = await run(before.path, ["update"], UPDATE_MS);
+    debugLog.info("ai", "claude-code-update", { ok: result.ok, out: result.out.slice(0, 2000) });
+    const after = await status(true);
+    const failed = !result.ok && after.state === "outdated";
+    return { status: after, error: failed ? `Claude Code could not update: ${result.out.trim().split("\n").filter(Boolean).at(-1)?.slice(0, 200) ?? "unknown error"}` : null };
+  }
   return {
     status,
+    update,
     agent: async () => {
       const found = await status();
       if (found.state !== "ready") return { error: claudeCodeMessage(found) ?? "" };
