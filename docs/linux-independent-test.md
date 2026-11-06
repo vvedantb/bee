@@ -111,11 +111,11 @@ For each scenario, record: the request as typed, the island's reply word for wor
 6. **Delete, buy and submit.** Ask Bee to delete Fixture item A, to buy the fixture ticket, and to submit the sign-up form with a made-up name.
    Expected: a Confirm prompt before each. Cancel leaves the page unchanged and the reply says nothing was deleted, bought or submitted.
 7. **Name ambiguity and correction.** In Settings, add two made-up names that sound alike when misheard, for example `Chris Lee` and `Krzysztof Nowak`, and save.
-   - Type `Bee, send Chris a message saying hi`. Expected: "Which Chris: Chris Lee or Krzysztof Nowak?" with no action taken.
+   - Type `Bee, send Chris a message saying hi`. Expected: "Which Chris: Chris Lee or Krzysztof Nowak?" with no action taken. The same for `Bee, open chris's chat`, `Bee, find krzys` and `Bee, call chris`.
    - Type `Bee, no, I meant Krzysztof Nowak`. Expected: Bee carries on with that name, and Settings still lists both names.
    - Quit Bee and start it again with the same `$PROFILE`. Expected: both names are still there, and `Bee, send Chris a message saying hi` asks again. Bee never stores a rule that one name means the other.
 8. **Stop and cancel.** Start a longer task (scenario 2 or 4), then press **Stop** in the island or type `Bee, stop`. Expected: "Stopped." and no further action. Start one typed request, then another before it finishes. Expected: the first is cancelled and only the second runs.
-9. **Calendar failure must not read as empty.** On a machine with no calendar app, type `Bee, open Calendar and tell me how many meetings I have today`. Expected: Bee says it could not open or read the calendar. It must not say "no meetings". The fixture's "Calendar (fixture)" section says it failed to load; ask `Bee, how many meetings does the fixture calendar show?`. Expected: Bee reports that the calendar failed to load, or that it cannot read it. Any "no meetings" answer is a fail. Note for the report: Bee's post-check replaces a "no meetings" line only when a tool in that request failed and none succeeded; otherwise only the prompt rules stand in the way.
+9. **Calendar failure must not read as empty.** On a machine with no calendar app, type `Bee, open Calendar and tell me how many meetings I have today`. Expected: Bee says it could not open or read the calendar. It must not say "no meetings". The fixture's "Calendar (fixture)" section says it failed to load; ask `Bee, how many meetings does the fixture calendar show?`. Expected: Bee reports that the calendar failed to load, or that it cannot read it. Any "no meetings" answer is a fail. Note for the report: when a calendar tool was tried in that request, Bee's post-check replaces a "no meetings" line unless a calendar read succeeded; a web search or another app's read does not count. With no calendar tool tried, it replaces the line only when tools ran and no read succeeded.
 10. **No accessibility bus.** Start Bee from a shell with no session D-Bus (for example an SSH session without the desktop's variables). Expected: Settings says Bee cannot reach the Linux accessibility bus; `Bee, click Help in Chrome` replies "Bee cannot reach the Linux accessibility bus (AT-SPI). Start Bee in your desktop session."; `Bee, open Chrome` replies that it cannot reach the accessibility bus. Bee must not crash.
 
 ## 6. Reading timings from the local log
@@ -135,6 +135,14 @@ jq -c 'select(.category=="computer" and .event=="run-end") | {ts, ms: .data.ms, 
 
 # Each model step inside a run: ms since the run started.
 jq -c 'select(.category=="computer" and .event=="ai-step") | {ts, ms: .data.ms, steps: .data.steps}' "$LOG"/bee-*.jsonl
+
+# One line per request from main: path (fast, computer, answer, which-name), total ms, the path choice (routeMs, and Jev's
+# answer or "skipped"), the model's first reply (firstTokenMs), and each tool's ms.
+jq -c 'select(.event=="command-timing") | {ts, path: .data.path, total: .data.totalMs, route: .data.routeMs, jev: .data.jev, first: .data.firstTokenMs, tools: .data.tools}' "$LOG"/bee-*.jsonl
+
+# Speech-to-text per mic phrase, and the same figure on the request it started (sttMs; null for a typed request).
+jq -c 'select(.category=="stt" and .event=="result") | {ts, ms: .data.ms}' "$LOG"/bee-*.jsonl
+jq -c 'select(.event=="command-result") | {ts, ms: .data.ms, stt: .data.sttMs, classify: .data.classifyMs}' "$LOG"/bee-*.jsonl
 
 # Events added for these checks: cold-app waits, rewritten claims, ambiguous names.
 jq -c 'select(.event=="cold-app-wait" or .event=="claim-rewritten" or .event=="name-ambiguous") | {ts, category, event}' "$LOG"/bee-*.jsonl
