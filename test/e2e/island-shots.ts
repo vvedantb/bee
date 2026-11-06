@@ -172,6 +172,8 @@ const states: Record<string, string> = {
   "hint-no-input": hintShot("no-input"),
   "hint-clipping": hintShot("clipping"),
   "hint-noisy": hintShot("noisy"),
+  // A tip with one long unbroken address: it wraps, and the island never scrolls sideways.
+  "long-url": `<div class="island open">${pill("Tips", false)}${islandBody(tipList(["The address is eva.carepulse.co.uk/vvedantb/eva/web/sessions/415/preview?tab=documents&panel=log in the vvedantb/eva repo.", "Bee read the window title and controls only, not the page content."]))}</div>`,
   // The show/hide shortcut brought Bee forward: the typing box, empty and ready.
   ask: `<div class="island open">${pill("Bee is ready", false)}${islandBody(renderToStaticMarkup(createElement(AskBox, { onSubmit: () => undefined, onClose: () => undefined })))}</div>`,
 };
@@ -210,7 +212,9 @@ window.addEventListener("DOMContentLoaded", () => {
   const notch = logo ? { logo: box(logo), buttons: buttons.map(box) } : undefined;
   // Let the open animation and the scroll settle before the harness captures.
   setTimeout(() => {
-    const scroll = scroller ? { scrollTop: scroller.scrollTop, scrollHeight: scroller.scrollHeight, clientHeight: scroller.clientHeight } : undefined;
+    const scroll = scroller
+      ? { scrollTop: scroller.scrollTop, scrollHeight: scroller.scrollHeight, clientHeight: scroller.clientHeight, scrollWidth: scroller.scrollWidth, clientWidth: scroller.clientWidth }
+      : undefined;
     const open = document.querySelector(".island-body") !== null;
     // The hint line, and whether anything on the island is styled as an error.
     const hint = document.querySelector(".island-hint")?.textContent ?? null;

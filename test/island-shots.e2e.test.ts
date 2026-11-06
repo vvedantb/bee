@@ -27,6 +27,7 @@ const SHOTS = [
   "hint-clipping",
   "hint-noisy",
   "ask",
+  "long-url",
 ];
 const HINTS: HintId[] = ["quiet", "no-input", "clipping", "noisy"];
 
@@ -34,7 +35,7 @@ const box = z.object({ width: z.number(), height: z.number(), centerY: z.number(
 const page = z.object({
   shot: z.string(),
   notch: z.object({ logo: box, buttons: z.array(box) }),
-  scroll: z.object({ scrollTop: z.number(), scrollHeight: z.number(), clientHeight: z.number() }).optional(),
+  scroll: z.object({ scrollTop: z.number(), scrollHeight: z.number(), clientHeight: z.number(), scrollWidth: z.number(), clientWidth: z.number() }).optional(),
   clicked: z.string().nullable(),
   open: z.boolean(),
   tips: z.number(),
@@ -71,6 +72,10 @@ describe("island screenshots (Electron E2E)", () => {
     // Each mic hint opens the body alone, as one calm line: no tips, nothing styled as an error. Other shots show no hint.
     for (const id of HINTS) expect(pageFor(`hint-${id}`)).toMatchObject({ open: true, tips: 0, hint: HINT_TEXT[id], error: false });
     for (const shot of SHOTS.filter((name) => !name.startsWith("hint-"))) expect(pageFor(shot)?.hint).toBeNull();
+
+    // A long unbroken address wraps: no island is ever wider than its scroll area.
+    for (const { shot, scroll: area } of report.pages) if (area) expect(area.scrollWidth, shot).toBeLessThanOrEqual(area.clientWidth);
+    expect(pageFor("long-url")).toMatchObject({ open: true, tips: 2 });
 
     // The update button sits before the mic and collapse buttons.
     expect(pageFor("update-available")?.notch.buttons).toHaveLength(3);
