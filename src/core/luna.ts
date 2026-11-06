@@ -1200,6 +1200,8 @@ export async function answerCommand(args: {
   knownNames?: readonly string[];
   /** What Bee remembers (buildLunaPrompt memory), with the memory tools in desktopTools. */
   memory?: string;
+  /** The window at the front (direct-command.ts frontWindowLine). */
+  screen?: string;
   now?: Date;
 }): Promise<LunaResult> {
   const startedAt = performance.now();
@@ -1222,7 +1224,7 @@ export async function answerCommand(args: {
       tier: "plan",
       system: prompt.system,
       history,
-      content: [prompt.context, prompt.transcript, prompt.tail],
+      content: [prompt.context, ...(args.screen ? [args.screen] : []), prompt.transcript, prompt.tail],
       tools,
       signal,
       onEvent: (event) => {

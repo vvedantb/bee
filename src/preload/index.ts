@@ -7,6 +7,7 @@ import {
   faviconResultSchema,
   httpsIconResultSchema,
   lunaActivitySchema,
+  backgroundJobSchema,
   lunaPartialSchema,
   clearMeetingMemoryResultSchema,
   memoryClearResultSchema,
@@ -36,6 +37,7 @@ import {
   transcribeResultSchema,
   updateActionSchema,
   updateCheckSchema,
+  type BackgroundJobView,
   type CommandRequest,
   type ConversationEnded,
   type FollowUpRequest,
@@ -188,6 +190,20 @@ const api = {
   downloadUpdate: async () => updateActionSchema.parse(await ipcRenderer.invoke(IPC.downloadUpdate)),
   installUpdate: async () => updateActionSchema.parse(await ipcRenderer.invoke(IPC.installUpdate)),
   // Tool calls starting and ending while a run is in flight. Returns the unsubscribe function.
+  /** Background tasks: each start, step and end (core/background.ts). */
+  onBackgroundUpdate: (listener: (job: BackgroundJobView) => void): (() => void) => {
+    const handler = (_event: unknown, payload: unknown) => {
+      const parsed = backgroundJobSchema.safeParse(payload);
+      if (parsed.success) listener(parsed.data);
+    };
+    ipcRenderer.on(IPC.backgroundUpdate, handler);
+    return () => {
+      ipcRenderer.removeListener(IPC.backgroundUpdate, handler);
+    };
+  },
+  stopBackground: async (id: string) => {
+    z.void().parse(await ipcRenderer.invoke(IPC.stopBackground, id));
+  },
   onLunaActivity: (listener: (activity: LunaActivity) => void): (() => void) => {
     const handler = (_event: unknown, payload: unknown) => {
       const parsed = lunaActivitySchema.safeParse(payload);

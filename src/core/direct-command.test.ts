@@ -6,7 +6,7 @@ import { assistantMessage, userMessage } from "./bee-history";
 import { MEMORY_RULES, inMemoryBeeMemory } from "./bee-memory";
 import { ACCESSIBILITY_LINE, type RunControl } from "./computer-control";
 import type { DesktopActions } from "./desktop-actions";
-import { runDirectCommand, type ComputerHost } from "./direct-command";
+import { frontWindowLine, runDirectCommand, type ComputerHost } from "./direct-command";
 import { GUIDE_MODEL, type BeeGateway } from "./gateway";
 
 // The test gateway's id for the agent's planning tier (test/helpers/model-agent.ts); the fast pass uses GUIDE_MODEL.
@@ -267,7 +267,7 @@ describe("runDirectCommand: computer use", () => {
     expect(pipelineResultSchema.parse(result)).toMatchObject({ tips: ["Sent the message."], guideError: null });
     expect(streamCalls).toEqual([]);
     expect(generateCalls()).toBe(3);
-    expect(commands).toEqual(["permissions", "snapshot", "click"]);
+    expect(commands).toEqual(["list-windows", "permissions", "snapshot", "click"]);
     expect(steps).toEqual(["Starting…", "Looking at Discord…", "Clicking Send…"]);
   });
 
@@ -303,13 +303,34 @@ describe("runDirectCommand: computer use", () => {
     expect(result.tips).toEqual(["You are in Discord, on the Inbox and Help channels."]);
     // The answer path, not the loop: it read the window list and the window, and acted on nothing.
     expect(generateCalls()).toBe(0);
-    expect(commands).toEqual(["list-windows", "snapshot"]);
+    // The front-window read, then the AI's own list_windows and snapshot.
+    expect(commands).toEqual(["list-windows", "list-windows", "snapshot"]);
     const tools = streamCalls[0]?.tools ?? [];
     expect(tools).toEqual(expect.arrayContaining(["list_windows", "snapshot", "find", "read", "use_computer"]));
     for (const act of ["click", "type_text", "set_value", "press_key", "act"]) expect(tools).not.toContain(act);
     expect(streamCalls[0]?.prompt).toContain("window marked (focused)");
     // Bee never shows itself to the AI.
     expect(streamCalls[1]?.prompt).not.toContain("w-0");
+  });
+
+  it("tells the AI which window is at the front, never Bee's own, and goes on without it when the read fails", async () => {
+    const windows = { windows: [{ id: "w-0", app_name: "Bee", title: "Bee", is_focused: true }, { id: "w-1", app_name: "Cursor", title: "invoice-export.ts — billing", is_focused: true }] };
+    const line = await frontWindowLine(async (command) => (command === "list-windows" ? { ok: true, data: windows } : { ok: true, data: {} }));
+    expect(line).toContain("Cursor — invoice-export.ts — billing");
+    expect(line).not.toContain("Bee —");
+    expect(await frontWindowLine(async () => ({ ok: false, code: "PERM_DENIED" }))).toBeNull();
+    expect(await frontWindowLine(async () => { throw new Error("spawn failed"); })).toBeNull();
+    const { gateway, streamCalls } = bothModel({ stream: [text("- It is the invoice export.\n")] });
+    const computer: ComputerHost = { platform: "mac", run: async (command) => (command === "list-windows" ? { ok: true, data: windows } : { ok: true, data: {} }), askFirst: () => true, confirm: async () => true };
+    await run({ command: "what is this file for?", snippets, gateway, actions: fakeActions().actions, computer });
+    expect(streamCalls[0]?.prompt).toContain("The window at the front of the user's screen: Cursor");
+  });
+
+  it("notes a fact the AI saved, under the reply", async () => {
+    const memory = inMemoryBeeMemory([]);
+    const { gateway } = bothModel({ stream: [toolCall("memory_write", { fact: "Priya owns the SLA summary", kind: "person" }), text("- Noted.\n")] });
+    const result = await run({ command: "Priya owns the SLA summary from now on", snippets, gateway, actions: fakeActions().actions, memory });
+    expect(result.guideNote).toBe("Remembered: Priya owns the SLA summary");
   });
 
   it("gives no window tools without computer use", async () => {
@@ -340,7 +361,7 @@ describe("runDirectCommand: computer use", () => {
     const result = await run({ command: "send Sam a message in Discord", snippets, gateway, actions: fakeActions().actions, computer });
     expect(result.tips).toEqual([ACCESSIBILITY_LINE]);
     expect(generateCalls()).toBe(0);
-    expect(commands).toEqual(["permissions"]);
+    expect(commands).toEqual(["list-windows", "permissions"]);
   });
 
   it("ends with Stopped when main stops the run", async () => {
@@ -348,7 +369,7 @@ describe("runDirectCommand: computer use", () => {
     const { computer, commands } = host({ onRun: (command, control) => command === "snapshot" && control?.stop("user") });
     const result = await run({ command: "send Sam a message in Discord", snippets, gateway, actions: fakeActions().actions, computer });
     expect(result.tips).toEqual(["Stopped."]);
-    expect(commands).toEqual(["permissions", "snapshot"]);
+    expect(commands).toEqual(["list-windows", "permissions", "snapshot"]);
   });
 
   it("offers no use_computer, and keeps the old line, without computer use", async () => {
@@ -573,7 +594,8 @@ describe("runDirectCommand: Jev routing, the fast pass and Bee's memory", () => 
     const { computer, commands } = host();
     const result = await run({ command: "tell Sam hello means what in French", snippets, gateway, actions: fakeActions().actions, computer });
     expect(result.tips).toEqual(["Bee would say hi."]);
-    expect(commands).toEqual([]);
+    // Only the front-window read: no step on screen.
+    expect(commands).toEqual(["list-windows"]);
     expect(models[COMMAND_MODEL]?.doStreamCalls).toHaveLength(1);
   });
 
@@ -601,7 +623,7 @@ describe("runDirectCommand: Jev routing, the fast pass and Bee's memory", () => 
     expect(result.tips).toEqual(["Opened the inbox."]);
     expect(ids).toContain(GUIDE_MODEL);
     expect(ids).not.toContain(COMMAND_MODEL);
-    expect(commands).toEqual(["snapshot", "click"]);
+    expect(commands).toEqual(["list-windows", "snapshot", "click"]);
     const call = models[GUIDE_MODEL]?.doGenerateCalls[0];
     expect(JSON.stringify(call?.prompt)).toContain("ESCALATE");
     // The playbook for the app the request names goes with it.
@@ -617,7 +639,7 @@ describe("runDirectCommand: Jev routing, the fast pass and Bee's memory", () => 
     const { computer, commands } = host();
     const result = await run({ command: "click the inbox button", snippets, gateway, actions: fakeActions().actions, computer, onTurn: (turn) => turns.push(turn) });
     expect(result.tips).toEqual(["Opened the inbox."]);
-    expect(commands).toEqual(["snapshot", "click"]);
+    expect(commands).toEqual(["list-windows", "snapshot", "click"]);
     const planned = models[COMMAND_MODEL]?.doGenerateCalls[0];
     // The planning model sees the fast pass's snapshot and its refs, as text after the request, but never the ESCALATE line.
     const prompt = JSON.stringify(planned?.prompt);
@@ -659,5 +681,20 @@ describe("runDirectCommand: Jev routing, the fast pass and Bee's memory", () => 
     await run({ command: "what's 2 plus 2?", snippets, gateway: bare.gateway, actions: null });
     expect(bare.models[COMMAND_MODEL]?.doStreamCalls[0]?.tools ?? []).toEqual([]);
     expect(JSON.stringify(bare.models[COMMAND_MODEL]?.doStreamCalls[0]?.prompt)).not.toContain("memory_write");
+  });
+});
+
+describe("runDirectCommand: background tasks", () => {
+  it("offers run_in_background only with a session that can fork, and hands the job over", async () => {
+    const { model, calls } = stepsModel([toolCall("run_in_background", { title: "Drafting release notes", task: "Draft them from the merged PRs." }), text("- Started: drafting the release notes.\n")]);
+    const agent = Object.assign(modelAgent(model), { background: async () => ({ text: "", messages: [], finish: "stop" as const, looped: false, sources: [], costUsd: null }) });
+    const started: string[] = [];
+    const result = await runDirectCommand({ command: "draft the release notes for the last release", snippets, agent, gateway: null, actions: null, background: (title) => (started.push(title), { ok: true, id: "bg-1" }) });
+    expect(started).toEqual(["Drafting release notes"]);
+    expect(result.tips).toEqual(["Started: drafting the release notes."]);
+    expect(calls[0]?.tools).toContain("run_in_background");
+    const plain = stepsModel([text("- Hi.\n")]);
+    await runDirectCommand({ command: "say hi", snippets, agent: modelAgent(plain.model), gateway: null, actions: null, background: () => ({ ok: true, id: "x" }) });
+    expect(plain.calls[0]?.tools ?? []).not.toContain("run_in_background");
   });
 });

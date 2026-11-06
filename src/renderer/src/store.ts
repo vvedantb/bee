@@ -16,6 +16,7 @@ import {
   SESSION_TRANSCRIPT_MAX,
   clampTip,
   type ClaudeCodeView,
+  type BackgroundJobView,
   type ComputerAccessView,
   type ComputerUpdate,
   type McpSave,
@@ -139,6 +140,8 @@ export type BeeState = {
   // Computer use in progress (null when none), and what macOS allows it, for Settings (null until asked).
   computer: ComputerView | null;
   computerAccess: ComputerAccessView | null;
+  // Background tasks (core/background.ts): running ones, and the newest finished ones, oldest first.
+  background: BackgroundJobView[];
   // The user's Claude Code, which "Bee, …" requests run on, for Settings (null until asked).
   claudeCode: ClaudeCodeView | null;
   // Settings → Update Claude Code: running, or why the last update failed.
@@ -215,6 +218,7 @@ let state: BeeState = {
   teamsAudio: { status: null, listening: false, failed: false, failure: null },
   computer: null,
   computerAccess: null,
+  background: [],
   claudeCode: null,
   claudeCodeUpdate: "idle",
   conversationOpen: false,
@@ -645,6 +649,30 @@ function withoutOne(list: string[], item: string): string[] {
 }
 
 /** Shows the logo's done state once, then lets it rest. */
+// Background tasks kept in the store for the Live tab, and how often a finished one checks whether an answer is still coming.
+const BACKGROUND_SHOWN = 8;
+const BACKGROUND_WAIT_MS = 500;
+
+/** A finished background task's result in the island, like an answer. While another answer is on its way, it waits for that one. */
+function showBackgroundResult(result: PipelineResult): void {
+  if (state.busy) {
+    setTimeout(() => showBackgroundResult(result), BACKGROUND_WAIT_MS);
+    return;
+  }
+  const tipSources = withSources(state.tipSources, result);
+  set({
+    result: { ...result, tipSources: sourcesOf(tipSources, result.tips) },
+    partialTips: null,
+    tipSources,
+    chips: mergeChips([], result.tips.flatMap((tip) => detectLinks(tip))),
+    dismissed: false,
+    islandClosing: false,
+  });
+  if (result.tips.length > 0) celebrate();
+  touchIsland();
+  void applyWindowSize();
+}
+
 function celebrate(): void {
   clearTimeout(doneTimer);
   set({ done: true });
@@ -1736,6 +1764,16 @@ export const actions = {
   },
 
   /** Settings: may computer use run here, and what macOS allows it. Unknown on failure. */
+  /** A background task started, moved on a step, or ended. An ended task's result opens the island once no answer is on its way. */
+  backgroundUpdate(job: BackgroundJobView): void {
+    set({ background: [...state.background.filter((item) => item.id !== job.id), job].slice(-BACKGROUND_SHOWN) });
+    if (job.status !== "running" && job.result) showBackgroundResult(job.result);
+  },
+
+  stopBackground(id: string): void {
+    void window.bee.stopBackground(id).catch(() => undefined);
+  },
+
   async refreshComputerAccess(): Promise<void> {
     try {
       set({ computerAccess: await window.bee.computer.access() });

@@ -7,7 +7,8 @@ import { computerAccess, computerSkills } from "../core/computer-use";
 import { debugLog, errorData, msSince } from "../core/debug-log";
 import type { DesktopActions } from "../core/desktop-actions";
 import { historySummariser } from "../core/bee-history";
-import type { BeeMemory } from "../core/bee-memory";
+import { memoryTools, type BeeMemory } from "../core/bee-memory";
+import { createBackgroundJobs } from "../core/background";
 import { CLAUDE_CODE_MISSING, claudeCodeMessage } from "../core/claude-code";
 import type { ClaudeCode } from "./claude-code";
 import type { ClaudeCodeStatus } from "../core/claude-code";
@@ -38,6 +39,7 @@ import {
   pipelineRequestSchema,
   transcribeRequestSchema,
   type ClaudeCodeUpdateResult,
+  type BackgroundJobView,
   type ClaudeCodeView,
   type ComputerAccessView,
   type ComputerUpdate,
@@ -105,6 +107,26 @@ export function registerMeetingIpc(args: { notesDir: string;
     const found = await args.claudeCode.agent();
     return "agent" in found ? { agent: found.agent } : { agent: null, noAgent: found.error };
   };
+
+  // Background tasks (core/background.ts): updates go to the window that last sent a request.
+  let lastSender: { isDestroyed: () => boolean; send: (channel: string, payload: unknown) => void } | null = null;
+  const background = createBackgroundJobs({
+    agent: async () => {
+      const got = await commandAgent();
+      return got.agent ? { agent: got.agent } : { error: got.noAgent ?? CLAUDE_CODE_MISSING };
+    },
+    tools: () => (args.memory ? memoryTools(args.memory) : {}),
+    history: () => args.history?.messages() ?? [],
+    onUpdate: (job) => {
+      debugLog.info("ai", "background-update", { id: job.id, status: job.status, tool: job.tool });
+      if (lastSender && !lastSender.isDestroyed()) lastSender.send(IPC.backgroundUpdate, job satisfies BackgroundJobView);
+    },
+    onTurn: (turn) => void args.history?.append(turn),
+  });
+
+  ipcMain.handle(IPC.stopBackground, (_event, payload) => {
+    background.stop(z.string().max(100).parse(payload));
+  });
 
   /** Main's side of one request's computer use: step lines and Confirm prompts go to the window that asked. */
   const computerHost = (computer: NonNullable<typeof args.computer>, sender: { isDestroyed: () => boolean; send: (channel: string, payload: unknown) => void }, runId: string | number | undefined): ComputerHost => {
@@ -272,6 +294,7 @@ export function registerMeetingIpc(args: { notesDir: string;
   // (the local debug log keeps it).
   ipcMain.handle(IPC.runCommand, async (event, payload) => {
     const request = commandRequestSchema.parse(payload);
+    lastSender = event.sender;
     assertSignedIn(request.sessionToken);
     if (args.wakeWordEnabled && !args.wakeWordEnabled()) {
       debugLog.warn("ai", "command-refused", { runId: request.runId, command: request.command, reason: "wake word off" });
@@ -310,6 +333,7 @@ export function registerMeetingIpc(args: { notesDir: string;
         knownNames: args.knownNames?.(),
         onLearnNames: args.learnNames,
         memory: args.memory ?? null,
+        background: background.start,
         meetingBrief,
         meetingTerms: meetingTerms(windowContext) || undefined,
         snippets: loadSnippets(args.notesDir),

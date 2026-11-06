@@ -69,7 +69,11 @@ export type AgentResult = {
  * Runs one request. Throws on a failed or aborted run. Tests pass their own (test/helpers/model-agent.ts). `note` tells a session
  * agent about a turn it did not run (a quick open with no AI call), so the next request knows it happened.
  */
-export type CommandAgent = ((request: AgentRequest) => Promise<AgentResult>) & { note?: (messages: readonly ModelMessage[]) => void };
+export type CommandAgent = ((request: AgentRequest) => Promise<AgentResult>) & {
+  note?: (messages: readonly ModelMessage[]) => void;
+  /** Runs a request beside the conversation (a background task): a fork of the session that never blocks the next request. */
+  background?: (request: AgentRequest) => Promise<AgentResult>;
+};
 
 const SERVER = "bee";
 const PREFIX = `mcp__${SERVER}__`;
@@ -244,7 +248,27 @@ type Turn = {
   costUsd: number | null;
   failure: string | null;
   done: (error?: Error) => void;
+  /** Stops the turn's model run (Stop, the loop guard, a turn limit). */
+  interrupt: () => void;
 };
+
+/** A new turn for a request, and the promise its result (or failure) settles. */
+function newTurn(request: AgentRequest, interrupt: () => void): { t: Turn; finished: Promise<void> } {
+  const t: Turn = { request, messages: [], toolNames: new Map(), steps: [], sources: [], lastId: "", turnText: "", looped: false, overTurns: false, modelTurns: 0, finish: "stop", costUsd: null, failure: null, done: () => undefined, interrupt };
+  const finished = new Promise<void>((resolve, reject) => {
+    t.done = (error) => (error ? reject(error) : resolve());
+  });
+  return { t, finished };
+}
+
+/** A finished turn as the request's result, or the error it ended on. */
+function turnResult(t: Turn, started: number, kind: string): AgentResult {
+  const request = t.request;
+  debugLog.info("ai", "agent-done", { kind, tier: request.tier, ms: msSince(started), finish: t.finish, looped: t.looped, costUsd: t.costUsd, tools: t.steps.length });
+  if (request.signal.aborted) throw request.signal.reason instanceof Error ? request.signal.reason : new Error("aborted");
+  if (t.failure !== null) throw new Error(SIGNED_OUT.test(t.failure) ? CLAUDE_CODE_SIGNED_OUT : t.failure);
+  return { text: t.turnText.trim() ? t.turnText : lastText(t.messages), messages: t.messages, finish: t.finish, looped: t.looped, sources: t.sources, costUsd: t.costUsd };
+}
 
 /**
  * The production agent: one Claude Code session on the user's install at `executable` (main/claude-code.ts), started on the first
@@ -261,6 +285,30 @@ export function claudeSession(options: { executable: string; cwd: string; store:
   // Rules ids already in the session's context. Cleared when Claude Code compacts, so the next request sends its rules again.
   const sentRules = new Set<string>();
 
+  /** The options every Claude Code process here shares: Bee's system prompt, auto mode, the user's settings, Bee's tools. */
+  function baseOptions(server: McpServer): Options {
+    return {
+      model: AGENT_MODEL.plan,
+      systemPrompt: SESSION_SYSTEM,
+      allowedTools: [`mcp__${SERVER}`],
+      permissionMode: "auto",
+      canUseTool: async (tool) => {
+        debugLog.warn("ai", "permission-undecided", { tool });
+        return { behavior: "deny", message: "Auto mode could not approve this, and Bee cannot ask the user mid-request. Say what you would have done instead." };
+      },
+      mcpServers: { [SERVER]: { type: "sdk", name: SERVER, instance: server } },
+      thinking: { type: "adaptive" },
+      effort: "medium",
+      includePartialMessages: true,
+      // The user's own Claude Code settings: their MCP servers, permissions and CLAUDE.md. Never a project's: cwd is Bee's folder.
+      settingSources: ["user"],
+      cwd: options.cwd,
+      env: agentEnv(),
+      pathToClaudeCodeExecutable: options.executable,
+      stderr: (data) => debugLog.debug("ai", "agent-stderr", { data: data.slice(0, 2000) }),
+    };
+  }
+
   function start(): NonNullable<typeof live> {
     const resume = options.store.load();
     const queue: SDKUserMessage[] = [];
@@ -273,28 +321,7 @@ export function claudeSession(options: { executable: string; cwd: string; store:
         else await new Promise<void>((resolve) => (wake = resolve));
       }
     }
-    const sdkOptions: Options = {
-      model: AGENT_MODEL.plan,
-      systemPrompt: SESSION_SYSTEM,
-      allowedTools: [`mcp__${SERVER}`],
-      permissionMode: "auto",
-      canUseTool: async (tool) => {
-        debugLog.warn("ai", "permission-undecided", { tool });
-        return { behavior: "deny", message: "Auto mode could not approve this, and Bee cannot ask the user mid-request. Say what you would have done instead." };
-      },
-      mcpServers: { [SERVER]: { type: "sdk", name: SERVER, instance: router.server } },
-      thinking: { type: "adaptive" },
-      effort: "medium",
-      includePartialMessages: true,
-      // The user's own Claude Code settings: their MCP servers, permissions and CLAUDE.md. Never a project's: cwd is Bee's folder.
-      settingSources: ["user"],
-      cwd: options.cwd,
-      ...(resume ? { resume } : {}),
-      env: agentEnv(),
-      pathToClaudeCodeExecutable: options.executable,
-      stderr: (data) => debugLog.debug("ai", "agent-stderr", { data: data.slice(0, 2000) }),
-    };
-    const q = query({ prompt: input(), options: sdkOptions });
+    const q = query({ prompt: input(), options: { ...baseOptions(router.server), ...(resume ? { resume } : {}) } });
     const session = {
       query: q,
       push: (message: SDKUserMessage) => {
@@ -372,7 +399,7 @@ export function claudeSession(options: { executable: string; cwd: string; store:
       // A turn limit (the fast pass, tests): past it with tools still being called, stop the request.
       if (request.maxTurns !== undefined && calls.length > 0 && t.modelTurns >= request.maxTurns && !t.overTurns) {
         t.overTurns = true;
-        void live?.query.interrupt();
+        t.interrupt();
       }
     } else if (message.type === "user") {
       if (message.parent_tool_use_id || typeof message.message.content === "string") return;
@@ -392,7 +419,7 @@ export function claudeSession(options: { executable: string; cwd: string; store:
       if (!t.looped && noProgress(t.steps)) {
         t.looped = true;
         debugLog.warn("ai", "agent-no-progress", { steps: t.steps.length });
-        void live?.query.interrupt();
+        t.interrupt();
       }
     } else if (message.type === "result") {
       t.costUsd = message.total_cost_usd;
@@ -423,11 +450,8 @@ export function claudeSession(options: { executable: string; cwd: string; store:
     const parts = sessionParts({ system: request.system, sentRules: sentRules.has(id), notes, history, content: request.content });
     const pendingNotes = notes;
     notes = [];
-    const t: Turn = { request, messages: [], toolNames: new Map(), steps: [], sources: [], lastId: "", turnText: "", looped: false, overTurns: false, modelTurns: 0, finish: "stop", costUsd: null, failure: null, done: () => undefined };
-    const finished = new Promise<void>((resolve, reject) => {
-      t.done = (error) => (error ? reject(error) : resolve());
-    });
-    const stop = () => void session.query.interrupt();
+    const { t, finished } = newTurn(request, () => void session.query.interrupt());
+    const stop = () => t.interrupt();
     request.signal.addEventListener("abort", stop, { once: true });
     turn = t;
     session.push({ type: "user", message: { role: "user", content: parts.map((text) => ({ type: "text", text })) }, parent_tool_use_id: null });
@@ -443,10 +467,40 @@ export function claudeSession(options: { executable: string; cwd: string; store:
       request.signal.removeEventListener("abort", stop);
       if (turn === t) turn = null;
     }
-    debugLog.info("ai", "agent-done", { tier: request.tier, ms: msSince(started), finish: t.finish, looped: t.looped, costUsd: t.costUsd, tools: t.steps.length });
+    return turnResult(t, started, "session");
+  }
+
+  /**
+   * A background task: a fork of the session (its whole conversation so far, then this request) in its own Claude Code process,
+   * with its own tools. It never blocks the session; its result goes back to the session as a note (main/meeting-ipc.ts). Without a
+   * session to fork yet, it starts fresh with Bee's history as text.
+   */
+  async function background(request: AgentRequest): Promise<AgentResult> {
+    const started = performance.now();
     if (request.signal.aborted) throw request.signal.reason instanceof Error ? request.signal.reason : new Error("aborted");
-    if (t.failure !== null) throw new Error(SIGNED_OUT.test(t.failure) ? CLAUDE_CODE_SIGNED_OUT : t.failure);
-    return { text: t.turnText.trim() ? t.turnText : lastText(t.messages), messages: t.messages, finish: t.finish, looped: t.looped, sources: t.sources, costUsd: t.costUsd };
+    const own = toolRouter();
+    await own.use(request.tools, request.signal);
+    const resume = options.store.load();
+    const parts = sessionParts({ system: request.system, sentRules: false, notes: [], history: resume ? [] : request.history, content: request.content });
+    const q = query({ prompt: single(parts), options: { ...baseOptions(own.server), persistSession: false, ...(resume ? { resume, forkSession: true } : {}) } });
+    const { t, finished } = newTurn(request, () => void q.interrupt());
+    const stop = () => t.interrupt();
+    request.signal.addEventListener("abort", stop, { once: true });
+    void (async () => {
+      try {
+        for await (const message of q) handle(t, message);
+        t.done(new Error("Claude Code stopped."));
+      } catch (error) {
+        t.done(error instanceof Error ? error : new Error(String(error)));
+      }
+    })();
+    try {
+      await finished;
+    } finally {
+      request.signal.removeEventListener("abort", stop);
+      q.close();
+    }
+    return turnResult(t, started, "background");
   }
 
   // One request at a time, in order: a newer one waits for the one in flight (which its caller stops when superseded).
@@ -456,6 +510,7 @@ export function claudeSession(options: { executable: string; cwd: string; store:
     return next;
   };
   return Object.assign(agent, {
+    background,
     note: (messages: readonly ModelMessage[]) => {
       notes.push(...messages);
     },
