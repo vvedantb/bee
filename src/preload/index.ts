@@ -190,6 +190,14 @@ const api = {
   downloadUpdate: async () => updateActionSchema.parse(await ipcRenderer.invoke(IPC.downloadUpdate)),
   installUpdate: async () => updateActionSchema.parse(await ipcRenderer.invoke(IPC.installUpdate)),
   // Tool calls starting and ending while a run is in flight. Returns the unsubscribe function.
+  /** The show/hide shortcut brought Bee forward: open the typing box. */
+  onAskOpen: (listener: () => void): (() => void) => {
+    const handler = () => listener();
+    ipcRenderer.on(IPC.askOpen, handler);
+    return () => {
+      ipcRenderer.removeListener(IPC.askOpen, handler);
+    };
+  },
   /** Background tasks: each start, step and end (core/background.ts). */
   onBackgroundUpdate: (listener: (job: BackgroundJobView) => void): (() => void) => {
     const handler = (_event: unknown, payload: unknown) => {

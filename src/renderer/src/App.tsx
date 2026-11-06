@@ -16,6 +16,7 @@ import {
 } from "@tabler/icons-react";
 import { Badge, Button, Input, PillTabs, Textarea } from "@vvedantb/ui";
 import { useEffect, useState, type FormEvent } from "react";
+import { AskBox } from "./AskBox";
 import { BackgroundChip, BackgroundSection } from "./Background";
 import { BeeLogo } from "./BeeLogo";
 import { Favicon } from "./Favicon";
@@ -100,7 +101,9 @@ function IslandBody({
   hint,
   hintClosing,
   confirm,
+  asking,
 }: {
+  asking: boolean;
   result: PipelineResult | null;
   chips: LinkChip[];
   closing: boolean;
@@ -122,6 +125,7 @@ function IslandBody({
         {/* Answers open at the top and never scroll by themselves, so the user reads from the start. Scrolling keeps the body open. */}
         <div className="island-scroll scrollbar-thin" onScroll={() => actions.islandScrolled()}>
           <div className="island-content">
+            {asking ? <AskBox onSubmit={(text) => actions.submitAsk(text)} onClose={() => actions.closeAsk()} /> : null}
             {confirm ? <ConfirmPrompt confirm={confirm} /> : null}
             {card.length > 0 ? (
               <div className="island-card">
@@ -269,6 +273,7 @@ function Island({ state }: { state: BeeState }) {
           hint={state.hint}
           hintClosing={state.hintClosing}
           confirm={showResponse ? (state.computer?.confirm ?? null) : null}
+          asking={state.asking}
         />
       ) : null}
     </div>
@@ -726,9 +731,15 @@ function useBackgroundUpdates(): void {
   useEffect(() => window.bee.onBackgroundUpdate((job) => actions.backgroundUpdate(job)), []);
 }
 
+/** The show/hide shortcut's "open the typing box" from main, for as long as the app runs. */
+function useAskOpen(): void {
+  useEffect(() => window.bee.onAskOpen(() => actions.openAsk()), []);
+}
+
 export function App() {
   const state = useBee();
   useBackgroundUpdates();
+  useAskOpen();
   useMotionAttribute(state.settings?.motionPreference ?? DEFAULT_MOTION_PREFERENCE);
   useSignInLog();
   return (

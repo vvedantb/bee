@@ -5,7 +5,7 @@ import { parseWindows, type ComputerRun } from "./agent-desktop-envelope";
 import { assistantMessage, cleanForHistory, commandFallbackReply, historySummariser, userMessage, type Summarise } from "./bee-history";
 import { memorySummary, memoryTools, type BeeMemory, type MemoryWriteResult } from "./bee-memory";
 import { routeWithJev, type JevRoute } from "./command-route-jev";
-import { createRunControl, stopLine, type ComputerPlatform, type RunControl } from "./computer-control";
+import { createRunControl, stopLine, type ComputerPlatform, type IrreversibleKind, type RunControl } from "./computer-control";
 import { computerTools, offLimitsApp, type ConfirmRequest } from "./computer-tools";
 import { computerAccess, runComputerUse, simpleComputerTask, wantsComputerUse, type ComputerSkills, type ComputerUseResult } from "./computer-use";
 import { debugLog, errorData } from "./debug-log";
@@ -23,6 +23,7 @@ import { retrieve } from "./retrieve";
 import { tipKey } from "./steering";
 import { needsWebSearch } from "./web-search";
 import type { BackgroundJobs } from "./background";
+import { answerEvidence, guardLine, replaceLastText, runEvidence, upgradeLine, withoutToolNames } from "./claim-guard";
 
 // A direct request to Bee: a mic phrase that started with the wake word ("Bee, open Teams", core/wake-word.ts). Bee answers
 // the user, not the meeting. Every AI step here runs on the user's own Claude Code and its login (core/claude-agent.ts); without
@@ -150,6 +151,8 @@ async function runComputerCommand(args: {
         return lineResult(line);
       }
     }
+    // Sends, deletes, purchases and submits the confirm gate counted as done: proof for the last line (core/claim-guard.ts).
+    const committed = new Set<IrreversibleKind>();
     const tools = {
       ...computerTools({
         run: host.run,
@@ -158,6 +161,7 @@ async function runComputerCommand(args: {
         platform: host.platform,
         askFirst: host.askFirst,
         confirm: host.confirm,
+        onEffect: (kind) => committed.add(kind),
         onStep: host.onStep,
         onActivity: args.onActivity,
       }),
@@ -191,6 +195,16 @@ async function runComputerCommand(args: {
     }
     const guide = performance.now() - started;
     debugLog.info("computer", "run-end", { ...outcome, reason: control.reason(), declined: control.declined(), ms: Math.round(guide) });
+    // A last line that claims a send, delete, purchase or submit (or typing) this run did not prove becomes a cautious one; a line
+    // that doubts one it did prove says it plainly (core/claim-guard.ts). The history keeps the line the user saw.
+    if (!outcome.stopped && !outcome.error) {
+      const evidence = runEvidence(outcome.messages, committed);
+      const checked = guardLine(outcome.line, evidence);
+      const upgraded = checked.rewritten ? null : upgradeLine(outcome.line, evidence.proven, evidence.typed);
+      const line = withoutToolNames(checked.rewritten ? checked.line : upgraded?.upgraded ? upgraded.line : outcome.line);
+      if (checked.rewritten) debugLog.warn("computer", "claim-rewritten", { line: outcome.line, shown: line, reason: checked.reason });
+      if (line !== outcome.line) outcome = { ...outcome, line, messages: replaceLastText(outcome.messages, line) };
+    }
     // What the AI did, tool calls and results included, then the line the island shows when it differs (a stop).
     const said = outcome.messages.length > 0 && !outcome.stopped && !outcome.error ? outcome.messages : [...outcome.messages, assistantMessage(outcome.line)];
     args.onMessages?.(said);
@@ -419,7 +433,7 @@ export async function runDirectCommand(args: {
     ? {
         run_in_background: tool({
           description:
-            "Hand a long job to Bee's background: research, drafting, writing or changing files, code, or several steps in other services that need no screen, and that would take more than about a minute. Bee does it while the user carries on, and shows the result when done. Give a short title (\"Drafting release notes\") and the full task with everything needed from this conversation. Then reply in one line that it has started. Never for a task on screen, or a quick answer.",
+            "Hand a long job to Bee's background: research, drafting, writing or changing files, code, or several steps in other services that need no screen, and that would take more than about a minute, or whenever the user asks for it to run in the background or while they carry on. Bee does it while the user carries on, and shows the result when done. Give a short title (\"Drafting release notes\") and the full task with everything needed from this conversation. Then reply in one line that it has started. Never for a task on screen, or a quick answer.",
           inputSchema: z.object({ title: z.string().min(1).max(80), task: z.string().min(1).max(4000) }),
           execute: async ({ title, task }) => {
             const started = startBackground(title, task);
@@ -469,12 +483,19 @@ export async function runDirectCommand(args: {
   // No reply and no action (NONE, or no text at all) never leaves the island blank: a short line or a question back instead.
   const silent = actionLines.length === 0 && guide.tips.length === 0 && !guide.loop && (guide.error === null || guide.empty === true);
   if (silent) debugLog.info("ai", "command-fallback", { command, empty: guide.empty ?? false });
-  const shown = silent ? { tips: [commandFallbackReply(command)], tipSources: [null] } : joinLines(actionLines, guide);
+  // Each line that claims a send, delete, purchase, submit, typing or an empty calendar that nothing proves becomes a cautious one
+  // (core/claim-guard.ts). What earlier turns proved or showed counts, for an answer about them. A replaced line keeps no source.
+  const evidence = answerEvidence(guide.messages ?? [], history);
+  const checked = guide.tips.map((tip) => guardLine(tip, evidence));
+  const rewritten = checked.some((item) => item.rewritten);
+  if (rewritten) debugLog.warn("ai", "claim-rewritten", { tips: guide.tips, shown: checked.map((item) => item.line), reasons: checked.map((item) => item.reason) });
+  const guarded: TipFields = { tips: checked.map((item) => withoutToolNames(item.line)), tipSources: guide.tipSources.map((source, index) => (checked[index]?.rewritten ? null : source)) };
+  const shown = silent ? { tips: [commandFallbackReply(command)], tipSources: [null] } : joinLines(actionLines, guarded);
   // The AI's own messages, then what the island showed when the AI wrote nothing (a fallback, a stop or an error).
   const shownText = shown.tips.join("\n");
   const lastText = guide.messages?.at(-1)?.role === "assistant" && guide.tips.length > 0;
   const closing = lastText ? [] : [assistantMessage(guide.error && !silent ? `${shownText ? `${shownText}\n` : ""}Error: ${guide.error}` : shownText || "(no reply)")];
-  record([...(guide.messages ?? []), ...closing]);
+  record(rewritten ? replaceLastText(guide.messages ?? [], shownText) : [...(guide.messages ?? []), ...closing]);
   return {
     notes,
     rankSource: "fallback",

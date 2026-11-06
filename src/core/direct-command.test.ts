@@ -347,6 +347,13 @@ describe("runDirectCommand: computer use", () => {
     expect(generateCalls()).toBe(0);
   });
 
+  it("rewrites a send no tool proved, on screen and in an answer (a proven send stays: see the test above)", async () => {
+    const unproven = bothModel({ turns: [{ text: "Sent the message." }] });
+    const result = await run({ command: "send Sam a message in Discord", snippets, gateway: unproven.gateway, actions: fakeActions().actions, computer: { platform: "mac", run: async () => ({ ok: true, data: {} }), askFirst: () => false, confirm: async () => true } });
+    expect(result.tips).toEqual(["Bee could not confirm anything was sent."]);
+    const answer = stepsModel([text("- Sent Priya the notes.\n")]);
+    expect((await run({ command: "what did you do with the notes?", snippets, gateway: answer.gateway, actions: null })).tips).toEqual(["Bee could not confirm anything was sent."]);
+  });
   it("keeps the quick path for a plain open", async () => {
     const { gateway, generateCalls } = bothModel({});
     const { computer, commands } = host();
@@ -497,7 +504,7 @@ describe("runDirectCommand: the agent tier", () => {
 
   it("runs computer use on the planning tier, with no Gateway key at all", async () => {
     const model = new MockLanguageModelV4({
-      doGenerate: async () => ({ content: [{ type: "text", text: "Sent the message." }], finishReason: { unified: "stop", raw: undefined }, usage, warnings: [] }),
+      doGenerate: async () => ({ content: [{ type: "text", text: "Opened the chat with Sam." }], finishReason: { unified: "stop", raw: undefined }, usage, warnings: [] }),
     });
     const agent = modelAgent(model);
     const computer: ComputerHost = {
@@ -507,7 +514,7 @@ describe("runDirectCommand: the agent tier", () => {
       confirm: async () => true,
     };
     const result = await runDirectCommand({ command: "send Sam a message in Discord", snippets, agent, gateway: null, actions: fakeActions().actions, computer });
-    expect(result.tips).toEqual(["Sent the message."]);
+    expect(result.tips).toEqual(["Opened the chat with Sam."]);
     expect(agent.requests.map((request) => request.tier)).toEqual(["plan"]);
   });
 
@@ -601,11 +608,11 @@ describe("runDirectCommand: Jev routing, the fast pass and Bee's memory", () => 
 
   it("falls back to the word rules when Jev is slow, fails or names an open it cannot resolve", async () => {
     for (const jev of [() => new Promise(() => undefined), () => Promise.reject(new Error("down")), async () => choice("open_app")]) {
-      const { gateway } = gatewayWith({ jev, command: [{ text: "Sent the message." }] });
+      const { gateway } = gatewayWith({ jev, command: [{ text: "Opened the chat with Sam." }] });
       const { computer, commands } = host();
       const started = performance.now();
       const result = await run({ command: "send Sam a message in Discord", snippets, gateway, actions: fakeActions().actions, computer });
-      expect(result.tips).toEqual(["Sent the message."]);
+      expect(result.tips).toEqual(["Opened the chat with Sam."]);
       expect(performance.now() - started).toBeLessThan(2000);
     }
   });

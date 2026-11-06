@@ -140,6 +140,8 @@ export type BeeState = {
   // Computer use in progress (null when none), and what macOS allows it, for Settings (null until asked).
   computer: ComputerView | null;
   computerAccess: ComputerAccessView | null;
+  // The typing box in the island (the show/hide shortcut opens it): a "Bee, …" request typed instead of said.
+  asking: boolean;
   // Background tasks (core/background.ts): running ones, and the newest finished ones, oldest first.
   background: BackgroundJobView[];
   // The user's Claude Code, which "Bee, …" requests run on, for Settings (null until asked).
@@ -219,6 +221,7 @@ let state: BeeState = {
   computer: null,
   computerAccess: null,
   background: [],
+  asking: false,
   claudeCode: null,
   claudeCodeUpdate: "idle",
   conversationOpen: false,
@@ -428,6 +431,7 @@ export function syncCard(current: BeeState): SyncCard {
  */
 export function responseOpen(current: BeeState): boolean {
   if (current.expanded) return false;
+  if (current.asking) return true;
   if (current.computer?.confirm) return true;
   if (syncCard(current)) return false;
   return islandShowsBody(islandArgs(current));
@@ -1596,6 +1600,7 @@ export const actions = {
   dismissIsland(): Promise<void> {
     debugLog.info("ui", "dismiss", { confirm: state.computer?.confirm?.id ?? null, hint: state.hint?.id ?? null });
     closeConversation("dismissed");
+    if (state.asking) set({ asking: false });
     // Closing a Confirm prompt is Cancel.
     if (state.computer?.confirm) return actions.answerConfirm(false);
     if (!state.hint) return closeIsland();
@@ -1766,6 +1771,27 @@ export const actions = {
   },
 
   /** Settings: may computer use run here, and what macOS allows it. Unknown on failure. */
+  /** The show/hide shortcut brought Bee forward: open the typing box (the panel folds so the island shows it). */
+  openAsk(): void {
+    set({ asking: true, dismissed: false, islandClosing: false });
+    if (state.expanded) void actions.setExpanded(false);
+    void applyWindowSize();
+  },
+
+  closeAsk(): void {
+    if (!state.asking) return;
+    set({ asking: false });
+    void applyWindowSize();
+  },
+
+  /** A typed request: runs like one said after "Bee" (a leading "Bee," is fine). Empty text only closes the box. */
+  submitAsk(text: string): void {
+    const command = text.replace(/^\s*bee\b[\s,.:!-]*/i, "").trim();
+    set({ asking: false });
+    if (command) void runCommand(command.slice(0, COMMAND_MAX_CHARS));
+    else void applyWindowSize();
+  },
+
   /** A background task started, moved on a step, or ended. An ended task's result opens the island once no answer is on its way. */
   backgroundUpdate(job: BackgroundJobView): void {
     set({ background: [...state.background.filter((item) => item.id !== job.id), job].slice(-BACKGROUND_SHOWN) });
