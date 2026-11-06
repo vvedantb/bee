@@ -279,6 +279,28 @@ describe("desktop actions on Linux", () => {
     expect(runs.filter((call) => call.command === "list-apps")).toHaveLength(3);
   });
 
+  it("stops waiting for a cold app when the request is stopped or superseded (PR #80 review)", async () => {
+    const { actions, launched, runs } = makeLinux({ launch: { "google-chrome": { ok: false, code: "TIMEOUT" } }, lists: [apps()] });
+    const stop = new AbortController();
+    const result = actions.openApp("Chrome", stop.signal);
+    // The warm check, the launch that timed out and the first look run; then Stop lands during the pause.
+    await vi.advanceTimersByTimeAsync(0);
+    expect(runs.filter((call) => call.command === "list-apps")).toHaveLength(2);
+    stop.abort();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(await result).toEqual({ ok: false, message: "Stopped before Chrome opened" });
+    // No look after the stop, and no other name launched.
+    expect(runs.filter((call) => call.command === "list-apps")).toHaveLength(2);
+    expect(launched()).toEqual(["google-chrome"]);
+  });
+
+  it("never starts a launch or a look for a request already stopped", async () => {
+    const { actions, runs } = makeLinux({ launch: { "google-chrome": { ok: true, data: {} } } });
+    expect(await actions.openApp("Chrome", AbortSignal.abort())).toEqual({ ok: false, message: "Stopped before Chrome opened" });
+    expect(await actions.focusWindow({ app: "Chrome" }, AbortSignal.abort())).toEqual({ ok: false, message: "Stopped before Chrome came forward" });
+    expect(runs).toEqual([]);
+  });
+
   it("says no accessibility bus plainly, and stops trying names", async () => {
     const { actions, launched } = makeLinux({ lists: [{ ok: false, code: "PLATFORM_NOT_SUPPORTED" }] });
     expect(await actions.openApp("Chrome")).toEqual({ ok: false, message: "Could not open Chrome: Bee cannot reach the desktop session's accessibility bus" });

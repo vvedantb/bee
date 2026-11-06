@@ -448,6 +448,9 @@ export const pipelineResultSchema = z.object({
     lunaFirstToken: z.number().nullable(),
     lunaTotal: z.number(),
     loadNotes: z.number().optional(),
+    // A direct request only: choosing the path (word rules, and Jev when asked), and the whole request in main.
+    route: z.number().optional(),
+    total: z.number().optional(),
   }),
 });
 export type PipelineResult = z.infer<typeof pipelineResultSchema>;

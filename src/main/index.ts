@@ -487,7 +487,8 @@ if (clerk.isPrimaryInstance) {
       transcribe: (audio) => {
         const apiKey = settings.gatewayApiKey();
         if (!apiKey) return Promise.resolve({ text: null, error: NO_GATEWAY_KEY });
-        return transcribeSpeech({ model: createBeeGateway(apiKey).transcription(STT_MODEL), audio, source: "teams-audio" });
+        // Known names as recognition hints only: other people's words are never changed after speech-to-text.
+        return transcribeSpeech({ model: createBeeGateway(apiKey).transcription(STT_MODEL), audio, source: "teams-audio", knownNames: settings.knownNames() });
       },
       onLines: (id, lines) => {
         debugLog.info("teams-audio", "lines", { id, lines });

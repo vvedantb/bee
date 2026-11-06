@@ -566,6 +566,45 @@ describe("runDirectCommand: Jev routing, the fast pass and Bee's memory", () => 
     }
   });
 
+  it("skips Jev for one clear action on screen: the word rules already decide (no route wait)", async () => {
+    const { gateway, jevCalls } = gatewayWith({ jev: async () => choice("direct_answer"), guide: [{ text: "Clicked Inbox." }] });
+    const result = await runDirectCommand({ command: "click Inbox in Discord", snippets, gateway, actions: fakeActions().actions, computer: host().computer });
+    expect(result.tips).toEqual(["Clicked Inbox."]);
+    expect(jevCalls).toEqual([]);
+    expect(result.timingsMs.route).toBeGreaterThanOrEqual(0);
+  });
+
+  it("loads connectors beside Jev, not after it, and closes them when the loop takes the request", async () => {
+    // Jev answers only once the connectors started loading: run one after the other, Jev would time out and the word rules
+    // would send this request to the loop.
+    let answer: (value: unknown) => void = () => undefined;
+    const jevAnswer = new Promise((resolve) => (answer = resolve));
+    const closed: string[] = [];
+    const loadMcpTools = async () => {
+      answer(choice("direct_answer"));
+      return { tools: {}, close: async () => void closed.push("answer"), errors: [], servers: [] };
+    };
+    const { gateway } = gatewayWith({ jev: () => jevAnswer, stream: [text("- Bee would say hi.\n")] });
+    const { computer, commands } = host();
+    const result = await runDirectCommand({ command: "tell Sam hello means what in French", snippets, gateway, actions: fakeActions().actions, computer, loadMcpTools });
+    expect(result.tips).toEqual(["Bee would say hi."]);
+    expect(commands).toEqual([]);
+    await vi.waitFor(() => expect(closed).toEqual(["answer"]));
+
+    const loop = gatewayWith({ jev: async () => choice("computer_use"), command: [{ text: "Muted the call." }] });
+    const loopClosed: string[] = [];
+    const toLoop = await runDirectCommand({
+      command: "I need the Teams call muted",
+      snippets,
+      gateway: loop.gateway,
+      actions: fakeActions().actions,
+      computer: host().computer,
+      loadMcpTools: async () => ({ tools: {}, close: async () => void loopClosed.push("loop"), errors: [], servers: [] }),
+    });
+    expect(toLoop.tips).toEqual(["Muted the call."]);
+    await vi.waitFor(() => expect(loopClosed).toEqual(["loop"]));
+  });
+
   it("never asks Jev for a quick open", async () => {
     const { gateway, jevCalls } = gatewayWith({ jev: async () => choice("computer_use") });
     expect((await runDirectCommand({ command: "open Teams", snippets, gateway, actions: fakeActions().actions, computer: host().computer })).tips).toEqual(["Opened Teams"]);

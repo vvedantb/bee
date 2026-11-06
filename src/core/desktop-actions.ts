@@ -7,10 +7,13 @@ import { safeExternalUrl } from "./url-safety";
 /** What a desktop action did, as the short line the island shows, with no end stop ("Opened Teams", "Could not find Figma"). */
 export type DesktopActionResult = { ok: boolean; message: string };
 
-/** The runners behind Bee's desktop tools. Main implements them (main/desktop-actions.ts); tests pass fakes. */
+/**
+ * The runners behind Bee's desktop tools. Main implements them (main/desktop-actions.ts); tests pass fakes. The signal is the
+ * request's (Stop, a newer request): an app that is slow to start is not waited for once it aborts.
+ */
 export type DesktopActions = {
-  openApp: (name: string) => Promise<DesktopActionResult>;
-  focusWindow: (target: { app: string; title?: string }) => Promise<DesktopActionResult>;
+  openApp: (name: string, signal?: AbortSignal) => Promise<DesktopActionResult>;
+  focusWindow: (target: { app: string; title?: string }, signal?: AbortSignal) => Promise<DesktopActionResult>;
   openUrl: (url: string) => Promise<DesktopActionResult>;
 };
 
@@ -123,6 +126,11 @@ export function cleanAppName(raw: string): string | null {
 function knownApp(name: string): KnownApp | null {
   const key = appKey(name);
   return KNOWN_APPS.find((app) => app.aliases.includes(key)) ?? null;
+}
+
+/** A name Bee knows as an app ("Chrome", "teams"): never taken for a person's name (core/direct-command.ts). */
+export function isKnownApp(name: string): boolean {
+  return knownApp(name) !== null;
 }
 
 /**

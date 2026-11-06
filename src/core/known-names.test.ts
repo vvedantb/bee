@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
-  KNOWN_NAMES_MAX, correctedName, knownNamesBlock, mergeNames, nameAmbiguities, namesSoundingLike, normalizeNames, screenNames, soundKey, spelledName, whichNameQuestion,
+  KNOWN_NAMES_MAX, STT_TERMS_MAX, correctedName, knownNamesBlock, matchFirstName, mergeNames, nameAmbiguities, namesSoundingLike, normalizeNames, recentChoice, remapHeardNames,
+  screenNames, soundKey, soundsAlike, spelledName, sttTerms, whichNameQuestion,
 } from "./known-names";
 
 describe("known names", () => {
@@ -89,5 +90,111 @@ describe("name corrections", () => {
     expect(correctedName("not that, the other")).toBeNull();
     expect(correctedName("Chris, not that one")).toBeNull();
     expect(correctedName("open Chrome")).toBeNull();
+  });
+});
+
+describe("names that are not the same sound (PR #80 review)", () => {
+  it("no longer matches a name by a crude prefix of its sound key", () => {
+    expect(soundsAlike("John", "Joan")).toBe(false);
+    expect(matchFirstName("Alex", "Alexandra")).toBe("short");
+    expect(matchFirstName("Max", "Maxwell")).toBe("short");
+    expect(matchFirstName("John", "Joan")).toBeNull();
+    // Said the same: one sound, two spellings.
+    expect(soundsAlike("Sara", "Sarah")).toBe(true);
+    expect(soundsAlike("Chris", "Krzys")).toBe(true);
+    expect(soundsAlike("Susannah", "Zuzanna")).toBe(true);
+    expect(matchFirstName("Chris", "Krzysztof")).toBe("sound-short");
+  });
+
+  it("never asks between a name and a longer name that only starts with it", () => {
+    expect(nameAmbiguities("send Alex hi", ["Alex Smith", "Alexandra Jones"])).toEqual([]);
+    expect(namesSoundingLike("Alex", ["Alex Smith", "Alexandra Jones"])).toEqual(["Alex Smith"]);
+    expect(nameAmbiguities("send Alexandra hi", ["Alex Smith", "Alexandra Jones"])).toEqual([]);
+    expect(nameAmbiguities("message Max", ["Max Hall", "Maxwell Ode"])).toEqual([]);
+    expect(nameAmbiguities("call John", ["John Park", "Joan Reed"])).toEqual([]);
+    expect(nameAmbiguities("call Joan", ["John Park", "Joan Reed"])).toEqual([]);
+  });
+
+  it("still asks for names said the same way, which the user's voice cannot tell apart", () => {
+    // Sara and Sarah are one sound: with both known, asking is right.
+    expect(nameAmbiguities("send Sara the notes", ["Sara Kim", "Sarah Ode"])).toEqual([{ heard: "Sara", matches: ["Sara Kim", "Sarah Ode"] }]);
+    // Two people only known by a short form they both start with: asking is right too.
+    expect(nameAmbiguities("send Alex hi", ["Alexandra Jones", "Alexander Brown"])).toEqual([{ heard: "Alex", matches: ["Alexandra Jones", "Alexander Brown"] }]);
+  });
+
+  it("treats a one-word name inside a fuller known name as the same person", () => {
+    expect(namesSoundingLike("Krzysztof", ["Krzysztof", "Krzysztof Nowak"])).toEqual(["Krzysztof Nowak"]);
+  });
+});
+
+describe("which person, in more kinds of request (PR #80 review)", () => {
+  it("asks for open, find, call, a possessive chat and lower-case speech-to-text", () => {
+    for (const request of ["open chris's chat", "find krzys", "call chris", "send chris a message", "Open Chris’s DM", "chat with chris", "send a message to chris"]) {
+      const [first] = nameAmbiguities(request, KNOWN);
+      expect(first?.matches, request).toEqual(["Chris Lee", "Krzysztof Nowak"]);
+    }
+    expect(whichNameQuestion(nameAmbiguities("find krzys", KNOWN)[0]!)).toBe("Which Krzys: Chris Lee or Krzysztof Nowak?");
+  });
+
+  it("never asks about an app or an ordinary word", () => {
+    for (const request of ["open Chrome", "open chrome", "open teams", "send the same message", "find the file", "call me later"]) {
+      expect(nameAmbiguities(request, [...KNOWN, "Sam Lee", "Sam Hill"]), request).toEqual([]);
+    }
+  });
+});
+
+describe("a person from recent requests", () => {
+  const unclear = { heard: "Chris", matches: ["Chris Lee", "Krzysztof Nowak"] };
+
+  it("prefers the one person the newest recent text names, without asking", () => {
+    expect(recentChoice(unclear, ["send Chris Lee the deck", "Sent the deck to Krzysztof Nowak."])).toBe("Krzysztof Nowak");
+    expect(recentChoice(unclear, ["Opened the chat with Chris Lee."])).toBe("Chris Lee");
+    expect(recentChoice(unclear, ["message Nowak about lunch"])).toBe("Krzysztof Nowak");
+  });
+
+  it("asks when the newest mention names both, or nothing recent names either", () => {
+    expect(recentChoice(unclear, ["Sent the deck to Krzysztof Nowak.", "Which Chris: Chris Lee or Krzysztof Nowak?"])).toBeNull();
+    expect(recentChoice(unclear, ["what's the weather?"])).toBeNull();
+    // The heard word alone tells nothing.
+    expect(recentChoice(unclear, ["send Chris hi"])).toBeNull();
+  });
+
+  it("tells the AI who was meant instead of asking it to ask", () => {
+    const block = knownNamesBlock(KNOWN, "message Chris", [{ heard: "Chris", name: "Krzysztof Nowak" }]);
+    expect(block).toContain('"Chris" in this request means Krzysztof Nowak');
+    expect(block).not.toContain("never pick one yourself");
+  });
+});
+
+describe("misheard names after speech-to-text", () => {
+  it("puts a misheard name in the one known spelling it sounds like", () => {
+    expect(remapHeardNames("Bee, send Susannah the notes.", ["Zuzanna Szczepaniak-Moody"])).toEqual({ text: "Bee, send Zuzanna the notes.", changes: [{ from: "Susannah", to: "Zuzanna" }] });
+    expect(remapHeardNames("Bee, send Chris a message.", ["Krzysztof Nowak"]).text).toBe("Bee, send Krzysztof a message.");
+    expect(remapHeardNames("Bee, open chris's chat", ["Krzysztof Nowak"]).text).toBe("Bee, open Krzysztof's chat");
+  });
+
+  it("leaves a name alone when two known people could be it, or it is already a known spelling", () => {
+    const both = ["Chris Lee", "Krzysztof Nowak"];
+    expect(remapHeardNames("Bee, send Chris a message.", both)).toEqual({ text: "Bee, send Chris a message.", changes: [] });
+    // Krzys sounds like Chris Lee and starts Krzysztof: two people, so it stays.
+    expect(remapHeardNames("Bee, send Krzys a message.", both).text).toBe("Bee, send Krzys a message.");
+    expect(remapHeardNames("Bee, send Chris a message.", ["Chris Lee"]).changes).toEqual([]);
+  });
+
+  it("never changes a literal short form or an ordinary word", () => {
+    expect(remapHeardNames("send Alex the file", ["Alexandra Jones"]).text).toBe("send Alex the file");
+    expect(remapHeardNames("Same here, send the same file.", ["Sam Lee"]).text).toBe("Same here, send the same file.");
+    expect(remapHeardNames("Well, it is done.", ["Will Smith", "Dan Ode"]).text).toBe("Well, it is done.");
+    expect(remapHeardNames("send John the file", ["Joan Reed"]).text).toBe("send John the file");
+    expect(remapHeardNames("anything", []).changes).toEqual([]);
+    // An app the caller names stays as heard, whatever person it sounds like.
+    expect(remapHeardNames("Bee, open Chris", ["Krzysztof Nowak"]).text).toBe("Bee, open Krzysztof");
+    expect(remapHeardNames("Bee, open Chris", ["Krzysztof Nowak"], { skip: (word) => word === "Chris" }).text).toBe("Bee, open Chris");
+  });
+
+  it("gives speech-to-text the names, newest first, then first names, within a cap", () => {
+    expect(sttTerms(["Chris Lee", "Krzysztof Nowak"])).toEqual(["Krzysztof Nowak", "Chris Lee", "Krzysztof", "Chris"]);
+    expect(sttTerms(Array.from({ length: 80 }, (_, index) => `Name${index} Lee`))).toHaveLength(STT_TERMS_MAX);
+    expect(sttTerms([])).toEqual([]);
   });
 });

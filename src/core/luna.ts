@@ -7,7 +7,7 @@ import { debugLog, errorData, modelName, msSince, onceText, stepData } from "./d
 import { ANTHROPIC_CACHE, commandProviderOptions, guideProviderOptions } from "./gateway";
 import type { Snippet } from "./notes";
 import { MEMORY_RULES } from "./bee-memory";
-import { knownNamesBlock } from "./known-names";
+import { knownNamesBlock, type ResolvedName } from "./known-names";
 import { stopOnNoProgress } from "./loop-guard";
 import { MAX_TIPS, tipCap, tipKey } from "./steering";
 import { lunaTools, sourcesFromGenerateResult, type BeeSource } from "./tools";
@@ -299,6 +299,8 @@ export function buildLunaPrompt(args: {
   computerUse?: boolean;
   /** Names Bee should know (core/known-names.ts), for a direct request: in the context, so the AI spells them right. */
   knownNames?: readonly string[];
+  /** Names in the request Bee settled from the user's recent requests (core/known-names.ts recentChoice). */
+  resolvedNames?: readonly ResolvedName[];
   /**
    * For a direct request with the memory tools (core/bee-memory.ts): what Bee remembers, as a short summary for the context. Any
    * string, even empty, adds the memory rules to the system prompt.
@@ -321,7 +323,7 @@ export function buildLunaPrompt(args: {
   const mcp = lunaMcpSystem(args.connectedServers ?? [], args.unavailableServers ?? []);
   const command = args.command?.replace(/\s+/g, " ").trim();
   if (command) {
-    const names = knownNamesBlock(args.knownNames ?? [], command);
+    const names = knownNamesBlock(args.knownNames ?? [], command, args.resolvedNames);
     const remembered = args.memory?.trim() ?? "";
     return {
       system: [
@@ -965,6 +967,8 @@ export async function guideWithLuna(args: {
   summarise?: Summarise;
   /** For a direct request: names Bee should know (core/known-names.ts). */
   knownNames?: readonly string[];
+  /** For a direct request: names in it Bee settled from the user's recent requests (core/known-names.ts recentChoice). */
+  resolvedNames?: readonly ResolvedName[];
   /** For a direct request with the memory tools in desktopTools: what Bee remembers (buildLunaPrompt memory). */
   memory?: string;
 }): Promise<LunaResult> {

@@ -311,3 +311,49 @@ describe("main: Bee's history and the follow-up check", () => {
     await expect(setupWithModel("{}").handler(IPC.classifyFollowUp)({ ...request, sessionToken: "nope" })).rejects.toThrow(/Sign in/);
   });
 });
+
+describe("main: mic speech-to-text", () => {
+  beforeEach(() => {
+    vi.spyOn(console, "debug").mockImplementation(() => undefined);
+  });
+
+  /** The transcribe handler with a fake Gateway whose speech-to-text hears the given text, and the names Settings holds. */
+  function transcriber(heard: string, knownNames: string[]) {
+    electron.handlers.clear();
+    const options: unknown[] = [];
+    const transcription = {
+      specificationVersion: "v4",
+      provider: "gateway",
+      modelId: "xai/grok-stt",
+      doGenerate: async (call: { providerOptions?: unknown }) => {
+        options.push(call.providerOptions);
+        return { text: heard, segments: [], language: "en", durationInSeconds: 1, warnings: [], response: { timestamp: new Date(), modelId: "xai/grok-stt" } };
+      },
+    };
+    registerMeetingIpc({
+      notesDir: "/notes",
+      fsRoots: () => [],
+      mcpConfigs: () => [],
+      mcpSignedOut: () => [],
+      mcpPool: {} as never,
+      meeting: { brief: () => "" } as unknown as MeetingContext,
+      gatewayApiKey: () => "fixture-key",
+      gateway: () => ({ transcription: () => transcription }) as unknown as BeeGateway,
+      knownNames: () => knownNames,
+    });
+    const handler = electron.handlers.get(IPC.transcribe);
+    if (!handler) throw new Error("no transcribe handler");
+    return { transcribe: () => handler(event, { audio: new Uint8Array(64), sessionToken: "signed-in" }), options };
+  }
+
+  it("sends the known names as hints and puts a misheard name in its known spelling before the wake word is read", async () => {
+    const { transcribe, options } = transcriber("Bee, send Chris a message.", ["Krzysztof Nowak"]);
+    expect(await transcribe()).toEqual({ text: "Bee, send Krzysztof a message.", error: null });
+    expect(options[0]).toEqual({ xai: { keyterm: ["Krzysztof Nowak", "Krzysztof"] } });
+  });
+
+  it("leaves a name two known people share as heard, for Bee to ask which", async () => {
+    const { transcribe } = transcriber("Bee, send Chris a message.", ["Chris Lee", "Krzysztof Nowak"]);
+    expect(await transcribe()).toEqual({ text: "Bee, send Chris a message.", error: null });
+  });
+});

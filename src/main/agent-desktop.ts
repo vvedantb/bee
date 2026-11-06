@@ -214,7 +214,7 @@ export function createAgentDesktopRunner(binary: AgentDesktopBinary, deps: Runne
 }
 
 /** A desktop action command for Bee's desktop tools only: launch, focus-window, list-apps or list-windows (assertDesktopAction). */
-export type AgentDesktopActionRun = (command: DesktopActionCommand, args: string[], options?: { timeoutMs?: number }) => Promise<AgentDesktopResult>;
+export type AgentDesktopActionRun = (command: DesktopActionCommand, args: string[], options?: { timeoutMs?: number; signal?: AbortSignal }) => Promise<AgentDesktopResult>;
 
 export type AgentDesktopActionRunner = { run: AgentDesktopActionRun; cleanup: () => void };
 

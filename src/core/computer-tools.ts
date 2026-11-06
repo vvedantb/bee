@@ -1276,7 +1276,7 @@ export function computerTools(deps: ComputerToolDeps) {
       execute: ({ name }) =>
         step("open_app", `Opening ${shortName(name, 30)}…`, async () => {
           if (offLimitsApp(name)) return OFF_LIMITS_MESSAGE;
-          const result = await deps.desktop.openApp(name);
+          const result = await deps.desktop.openApp(name, control.signal);
           if (result.ok) {
             [currentApp, lastField] = [name, null];
             opened.set(appKey(name), now());
@@ -1306,7 +1306,7 @@ export function computerTools(deps: ComputerToolDeps) {
       execute: ({ app, title }) =>
         step("focus_window", `Switching to ${shortName(app, 30)}…`, async () => {
           if (offLimitsApp(app)) return OFF_LIMITS_MESSAGE;
-          const result = await deps.desktop.focusWindow({ app, ...(title ? { title } : {}) });
+          const result = await deps.desktop.focusWindow({ app, ...(title ? { title } : {}) }, control.signal);
           if (result.ok) [currentApp, lastField] = [app, null];
           return desktopLine(result);
         }),

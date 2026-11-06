@@ -1,6 +1,7 @@
-import { simulateReadableStream, type ModelMessage } from "ai";
+import { simulateReadableStream, tool, type ModelMessage } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 import { UNSEEN_CALENDAR_LINE } from "./claim-guard";
 import { LINUX_A11Y_LINE, type RunControl } from "./computer-control";
 import type { DesktopActions } from "./desktop-actions";
@@ -28,6 +29,26 @@ const streamTool = (toolName: string, input: unknown): Chunk[] => [
   finish("tool-calls"),
 ];
 type Turn = { tool: string; input: unknown } | { text: string };
+// A provider-run web search (Anthropic's), its result inside the same step, then the answer.
+const webSearchThen = (body: string): Chunk[] => [
+  { type: "stream-start", warnings: [] },
+  { type: "tool-call", toolCallId: "ws-1", toolName: "web_search", input: JSON.stringify({ query: "fixture" }), providerExecuted: true },
+  { type: "tool-result", toolCallId: "ws-1", toolName: "web_search", result: [{ type: "web_search_result", url: "https://example.com/", title: "Fixture" }] },
+  { type: "text-start", id: "t" },
+  { type: "text-delta", id: "t", delta: body },
+  { type: "text-end", id: "t" },
+  finish("stop"),
+];
+
+/** One connector tool that answers with fixed text, named like Bee names MCP tools (`{server}__{tool}`). */
+function connector(name: string, output: string) {
+  return async () => ({
+    tools: { [name]: tool({ description: "Fixture connector tool.", inputSchema: z.object({}).passthrough(), execute: async () => output }) },
+    close: async () => undefined,
+    errors: [],
+    servers: [{ name: name.split("__")[0] ?? "fixture", prefix: name.split("__")[0] ?? "fixture", toolCount: 1 }],
+  });
+}
 
 // test/fixtures/chrome-form.html as Chrome's accessibility tree would show it: a message box, Save draft and Send.
 const FIXTURE = {
@@ -186,6 +207,46 @@ describe("direct request: unseen facts need tool evidence", () => {
     expect(result.tips).toEqual(["Yes, Bee sent hi to Sam."]);
   });
 
+  it("rewrites a send the answer claims after only an app opened (PR #80 review)", async () => {
+    // Before: open_app came back Done, so any "Sent…" stood on the answer path.
+    const { gateway } = models({ stream: [streamTool("open_app", { name: "Chrome" }), streamText("- Sent hi to Sam.\n")] });
+    const result = await runDirectCommand({ command: "send Sam hi", snippets, gateway, actions: desktop(), computer: null });
+    expect(result.tips).toEqual(["Opened Chrome", "Bee could not confirm anything was sent."]);
+  });
+
+  it("rewrites a send the answer claims after a web search or a connector read (PR #80 review)", async () => {
+    const searched = models({ stream: [webSearchThen("- Sent the summary.\n")] });
+    const viaSearch = await runDirectCommand({ command: "what is the latest news on the fixture, and send the summary", snippets, gateway: searched.gateway, actions: desktop(), computer: null });
+    expect(viaSearch.tips).toEqual(["Bee could not confirm anything was sent."]);
+    const read = models({ stream: [streamTool("docs__search_pages", { query: "summary" }), streamText("- Sent the summary.\n")] });
+    const viaConnector = await runDirectCommand({ command: "find the summary and send it", snippets, gateway: read.gateway, actions: desktop(), computer: null, loadMcpTools: connector("docs__search_pages", '{"ok":true,"pages":[]}') });
+    expect(viaConnector.tips).toEqual(["Bee could not confirm anything was sent."]);
+  });
+
+  it("keeps a send a connector whose own name sends proved", async () => {
+    const { gateway } = models({ stream: [streamTool("chat__send_message", { to: "Sam", text: "hi" }), streamText("- Sent hi to Sam.\n")] });
+    const result = await runDirectCommand({ command: "send Sam hi on chat", snippets, gateway, actions: desktop(), computer: null, loadMcpTools: connector("chat__send_message", '{"ok":true}') });
+    expect(result.tips).toEqual(["Sent hi to Sam."]);
+  });
+
+  it("never answers \"no meetings\" when the calendar failed and only a web search succeeded (PR #80 review)", async () => {
+    const { gateway } = models({ stream: [streamTool("open_app", { name: "Calendar" }), webSearchThen("- No meetings today.\n")] });
+    const result = await runDirectCommand({ command: "do I have meetings today?", snippets, gateway, actions: desktop(["Calendar"]), computer: null });
+    expect(result.tips).toContain(UNSEEN_CALENDAR_LINE);
+    expect(result.tips).not.toContain("No meetings today.");
+    // A connector read that is not a calendar (before: any read that succeeded let the claim stand).
+    const read = models({ stream: [streamTool("open_app", { name: "Calendar" }), streamTool("docs__search_pages", { query: "meetings" }), streamText("- No meetings today.\n")] });
+    const viaConnector = await runDirectCommand({ command: "do I have meetings today?", snippets, gateway: read.gateway, actions: desktop(["Calendar"]), computer: null, loadMcpTools: connector("docs__search_pages", "[]") });
+    expect(viaConnector.tips).toContain(UNSEEN_CALENDAR_LINE);
+    expect(viaConnector.tips).not.toContain("No meetings today.");
+  });
+
+  it("keeps \"no meetings\" after a calendar read succeeded", async () => {
+    const { gateway } = models({ stream: [streamTool("cal__list_events", { day: "today" }), streamText("- No meetings today.\n")] });
+    const result = await runDirectCommand({ command: "do I have meetings today?", snippets, gateway, actions: desktop(), computer: null, loadMcpTools: connector("cal__list_events", "[]") });
+    expect(result.tips).toEqual(["No meetings today."]);
+  });
+
   it("leaves a plain answer alone", async () => {
     const { gateway } = models({ stream: [streamText("- 15% of 18,000 is 2,700.\n")] });
     expect((await runDirectCommand({ command: "what's 15% of 18000?", snippets, gateway, actions: desktop(), computer: null })).tips).toEqual(["15% of 18,000 is 2,700."]);
@@ -211,6 +272,53 @@ describe("direct request: names that sound alike", () => {
     const result = await runDirectCommand({ command: "send Chris Lee a message saying hi", snippets, gateway, actions: desktop(), computer: host().computer, knownNames: KNOWN });
     expect(result.tips).toEqual(["Opened the chat with Chris Lee."]);
     expect(calls().generates).toBe(1);
+  });
+
+  it("asks for open, find, call and lower-case requests too (PR #80 review)", async () => {
+    for (const command of ["open chris's chat", "find krzys", "call chris", "send chris a message"]) {
+      const { gateway, calls } = models({ turns: [{ tool: "snapshot", input: { app: "google-chrome" } }] });
+      const { computer, commands } = host();
+      const result = await runDirectCommand({ command, snippets, gateway, actions: desktop(), computer, knownNames: KNOWN });
+      expect(result.tips[0], command).toMatch(/^Which (?:Chris|Krzys): Chris Lee or Krzysztof Nowak\?$/);
+      expect(calls(), command).toEqual({ streams: 0, generates: 0 });
+      expect(commands, command).toEqual([]);
+    }
+  });
+
+  it("never asks which person for an app", async () => {
+    const { gateway } = models({});
+    const result = await runDirectCommand({ command: "open chrome", snippets, gateway, actions: desktop(), computer: host().computer, knownNames: [...KNOWN, "Chrome Ode", "Krome Ali"] });
+    expect(result.tips).toEqual(["Opened Chrome"]);
+  });
+
+  it("goes ahead with the person the last requests were about, and tells the AI which one", async () => {
+    const { gateway, calls } = models({ turns: [{ text: "Opened the chat with Krzysztof Nowak." }] });
+    const prompts: string[] = [];
+    const model = new MockLanguageModelV4({
+      doGenerate: async (options) => {
+        prompts.push(JSON.stringify(options.prompt));
+        return (await (gateway.languageModel("x") as MockLanguageModelV4).doGenerate(options)) as never;
+      },
+    });
+    const history: ModelMessage[] = [
+      { role: "user", content: [{ type: "text", text: "send Krzysztof Nowak the deck" }] },
+      { role: "assistant", content: [{ type: "text", text: "Sent the deck to Krzysztof Nowak." }] },
+    ];
+    const result = await runDirectCommand({ command: "send Chris a message saying hi", snippets, gateway: { languageModel: () => model } as unknown as BeeGateway, actions: desktop(), computer: host().computer, knownNames: KNOWN, history });
+    expect(result.tips).toEqual(["Opened the chat with Krzysztof Nowak."]);
+    expect(calls().generates).toBe(1);
+    expect(prompts[0]).toContain("means Krzysztof Nowak");
+    expect(prompts[0]).not.toContain("never pick one yourself");
+  });
+
+  it("still asks when the recent requests named both, or neither", async () => {
+    const history: ModelMessage[] = [
+      { role: "user", content: [{ type: "text", text: "send Chris hi" }] },
+      { role: "assistant", content: [{ type: "text", text: "Which Chris: Chris Lee or Krzysztof Nowak?" }] },
+    ];
+    const { gateway } = models({});
+    const result = await runDirectCommand({ command: "send Chris a message", snippets, gateway, actions: desktop(), computer: host().computer, knownNames: KNOWN, history });
+    expect(result.tips).toEqual(["Which Chris: Chris Lee or Krzysztof Nowak?"]);
   });
 
   it("learns the spelling from an explicit correction, and nothing else", async () => {
@@ -249,5 +357,17 @@ describe("direct request: Linux", () => {
     expect(result.tips).toEqual([LINUX_A11Y_LINE]);
     expect(commands).toEqual(["permissions"]);
     expect(calls().generates).toBe(0);
+  });
+});
+
+describe("direct request: timing", () => {
+  it("logs the path, the first reply, each tool and the whole request in the result's timings", async () => {
+    const { gateway } = models({ stream: [streamTool("open_app", { name: "Chrome" }), streamText("- Chrome is open.\n")] });
+    const result = await runDirectCommand({ command: "get Chrome up for me", snippets, gateway, actions: desktop(), computer: null });
+    expect(result.timingsMs.total).toBeGreaterThanOrEqual(0);
+    expect(result.timingsMs.lunaFirstToken).not.toBeNull();
+    const computer = await runDirectCommand({ command: "click Help in the fixture form", snippets, gateway: models({ turns: [{ text: "Clicked Help." }] }).gateway, actions: desktop(), computer: host().computer });
+    expect(computer.timingsMs.route).toBeGreaterThanOrEqual(0);
+    expect(computer.timingsMs.lunaFirstToken).not.toBeNull();
   });
 });

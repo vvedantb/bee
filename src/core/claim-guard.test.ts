@@ -1,6 +1,6 @@
 import type { ModelMessage } from "ai";
 import { describe, expect, it } from "vitest";
-import { UNSEEN_CALENDAR_LINE, claimedEffect, claimedEffects, claimsEmptyCalendar, guardLine, runEvidence, unprovenLine } from "./claim-guard";
+import { UNSEEN_CALENDAR_LINE, answerEvidence, claimedEffect, claimedEffects, claimsEmptyCalendar, connectorEffect, guardLine, runEvidence, unprovenLine } from "./claim-guard";
 
 // Synthetic runs only: tool calls and results shaped like computer-tools' own ("Done." / "Error …"), no real app or person.
 let seq = 0;
@@ -110,10 +110,43 @@ describe("guardLine: false completion", () => {
     expect(unprovenLine("send", ["x".repeat(80)])).toBe("Typed the message; Bee could not confirm it was sent.");
   });
 
-  it("on an answer with no computer tools, lets a claim stand only when some tool result succeeded", () => {
-    expect(guardLine("Sent the summary to the team.", runEvidence([]), { requireProof: false })).toMatchObject({ rewritten: true });
-    const connector = runEvidence(call("slack_post_message", { channel: "fixture" }, "{\"ok\":true}"));
-    expect(guardLine("Sent the summary to the team.", connector, { requireProof: false })).toMatchObject({ rewritten: false });
+  it("never lets an unrelated tool that succeeded prove a send (PR #80 review)", () => {
+    // Before: any result that succeeded let "Sent…" stand on the answer path.
+    const opened = answerEvidence(call("open_app", { name: "Chrome" }, 'Done. Bee showed the user "Opened Chrome".'), []);
+    expect(guardLine("Sent hi to Sam.", opened)).toEqual({ line: "Bee could not confirm anything was sent.", rewritten: true, reason: "send" });
+    const searched = answerEvidence(call("web_search", { query: "fixture" }, "Results: fixture page"), []);
+    expect(guardLine("Sent the summary.", searched)).toMatchObject({ rewritten: true, reason: "send" });
+    const listed = answerEvidence(call("list_apps", {}, "Done: google-chrome"), []);
+    expect(guardLine("Deleted the draft.", listed)).toMatchObject({ rewritten: true, reason: "delete" });
+    expect(guardLine("Sent the summary to the team.", runEvidence([]))).toMatchObject({ rewritten: true });
+  });
+
+  it("keeps a send this turn proved by an action's own effect", () => {
+    const proven = answerEvidence(call("click", { ref: "@s1:e3", effect: "send" }, "Done."), []);
+    expect(guardLine("Sent hi.", proven)).toEqual({ line: "Sent hi.", rewritten: false, reason: null });
+  });
+
+  it("counts a connector tool only when its own name says that action, and it did not fail", () => {
+    const posted = runEvidence(call("slack__chat_post_message", { channel: "fixture" }, '{"ok":true}'));
+    expect(guardLine("Sent the summary to the team.", posted)).toMatchObject({ rewritten: false });
+    // A send does not prove a delete.
+    expect(guardLine("Deleted the old summary.", posted)).toMatchObject({ rewritten: true, reason: "delete" });
+    const refused = runEvidence(call("slack__chat_post_message", { channel: "fixture" }, '{"ok":false,"error":"not_in_channel"}'));
+    expect(guardLine("Sent the summary to the team.", refused)).toMatchObject({ rewritten: true });
+    const read = runEvidence(call("slack__get_post", { id: "1" }, '{"ok":true}'));
+    expect(guardLine("Sent the summary to the team.", read)).toMatchObject({ rewritten: true });
+  });
+
+  it("reads a connector tool's action from its name, never Bee's own tools", () => {
+    expect(connectorEffect("slack__chat_post_message")).toBe("send");
+    expect(connectorEffect("gmail__send_email")).toBe("send");
+    expect(connectorEffect("outlook__replyToMessage")).toBe("send");
+    expect(connectorEffect("outlook__delete_event")).toBe("delete");
+    expect(connectorEffect("shop__place_order")).toBe("buy");
+    expect(connectorEffect("forms__submit_response")).toBe("submit");
+    for (const name of ["slack__list_sent_messages", "slack__get_post", "gmail__create_draft", "slack__search_messages", "shop__list_orders", "send_email", "web_search", "open_app"]) {
+      expect(connectorEffect(name), name).toBeNull();
+    }
   });
 });
 
@@ -131,6 +164,35 @@ describe("guardLine: unseen facts", () => {
     expect(guardLine("You have no meetings today.", runEvidence([])).rewritten).toBe(false);
     expect(claimsEmptyCalendar("The meeting with Sam is at 3 pm.")).toBe(false);
   });
+
+  it("never lets a web search or another app's read stand in for a calendar that failed to open (PR #80 review)", () => {
+    const failedThenSearched = runEvidence([
+      ...call("open_app", { name: "Calendar" }, "Error: Could not find Calendar."),
+      ...call("web_search", { query: "meetings today" }, "Results: a fixture page"),
+    ]);
+    expect(failedThenSearched).toMatchObject({ okReads: 1, calendarCalls: 1, calendarReads: 0 });
+    expect(guardLine("No meetings today.", failedThenSearched)).toEqual({ line: UNSEEN_CALENDAR_LINE, rewritten: true, reason: "unseen-calendar" });
+    const otherApp = runEvidence([
+      ...call("open_app", { name: "Calendar" }, "Error: Could not find Calendar."),
+      ...call("snapshot", { app: "google-chrome" }, 'App "google-chrome", window "Bee fixture form"'),
+    ]);
+    expect(guardLine("No meetings today.", otherApp).rewritten).toBe(true);
+    // Opened but never read: still unseen.
+    expect(guardLine("No meetings today.", runEvidence(call("open_app", { name: "Calendar" }, "Done: Opened Calendar."))).rewritten).toBe(true);
+  });
+
+  it("counts a calendar read by its app, the app it opened, a calendar window or a calendar connector", () => {
+    const named = runEvidence([...call("open_app", { name: "gnome-calendar" }, "Done: Opened Calendar."), ...call("snapshot", { app: "gnome-calendar" }, 'App "gnome-calendar"\n- list (empty)')]);
+    expect(guardLine("No meetings today.", named)).toMatchObject({ rewritten: false });
+    const current = runEvidence([...call("open_app", { name: "Calendar" }, "Done: Opened Calendar."), ...call("read", { ref: "@s1:e4" }, "Today: nothing scheduled")]);
+    expect(current).toMatchObject({ calendarReads: 1 });
+    const outlook = runEvidence(call("snapshot", { app: "Microsoft Outlook" }, 'App "Microsoft Outlook", window "Calendar - Outlook"\n- list (empty)'));
+    expect(guardLine("No meetings today.", outlook)).toMatchObject({ rewritten: false });
+    const connector = runEvidence(call("gcal__list_events", { day: "today" }, "[]"));
+    expect(guardLine("No meetings today.", connector)).toMatchObject({ rewritten: false });
+    const connectorFailed = runEvidence([...call("gcal__list_events", { day: "today" }, "Error: not signed in"), ...call("web_search", { query: "x" }, "Results")]);
+    expect(guardLine("No meetings today.", connectorFailed)).toMatchObject({ rewritten: true });
+  });
 });
 
 describe("earlier turns and the history", () => {
@@ -141,10 +203,18 @@ describe("earlier turns and the history", () => {
   ];
 
   it("lets an answer about an earlier, proven send stand, and still rewrites one with nothing behind it", async () => {
-    const { answerEvidence, claimsShown } = await import("./claim-guard");
+    const { claimsShown } = await import("./claim-guard");
     expect([...claimsShown(earlierSend)]).toEqual(["send"]);
-    expect(guardLine("Yes, Bee sent hi to Sam earlier.", answerEvidence([], earlierSend), { requireProof: false }).rewritten).toBe(false);
-    expect(guardLine("Yes, Bee sent hi to Sam earlier.", answerEvidence([], []), { requireProof: false }).rewritten).toBe(true);
+    expect(guardLine("Yes, Bee sent hi to Sam earlier.", answerEvidence([], earlierSend)).rewritten).toBe(false);
+    expect(guardLine("Yes, Bee sent hi to Sam earlier.", answerEvidence([], [])).rewritten).toBe(true);
+  });
+
+  it("keeps a follow-up about a send an earlier turn showed, even when this turn only opened an app", () => {
+    const shownOnly: ModelMessage[] = [{ role: "user", content: [{ type: "text", text: "send Sam hi" }] }, said("Sent hi to Sam.")];
+    const thisTurn = call("open_app", { name: "Chrome" }, 'Done. Bee showed the user "Opened Chrome".');
+    expect(guardLine("Yes, Bee sent it.", answerEvidence(thisTurn, shownOnly))).toMatchObject({ rewritten: false });
+    expect(guardLine("Yes, Bee sent it.", answerEvidence(thisTurn, earlierSend))).toMatchObject({ rewritten: false });
+    expect(guardLine("Yes, Bee sent it.", answerEvidence(thisTurn, []))).toMatchObject({ rewritten: true });
   });
 
   it("keeps the computer path strict: an earlier send does not prove this run's send", () => {

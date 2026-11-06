@@ -160,7 +160,9 @@ export function registerMeetingIpc(args: { notesDir: string; fsRoots: () => stri
       debugLog.warn("stt", "no-key", { source: "mic" });
       return { text: null, error: NO_GATEWAY_KEY };
     }
-    return transcribeSpeech({ model: createGateway(apiKey).transcription(STT_MODEL), audio: request.audio, source: "mic" });
+    // The user's own mic: known names go as recognition hints, and a misheard one is put in its known spelling before the
+    // renderer reads the wake word and the request (core/known-names.ts remapHeardNames).
+    return transcribeSpeech({ model: createGateway(apiKey).transcription(STT_MODEL), audio: request.audio, source: "mic", knownNames: args.knownNames?.() ?? [], remapNames: true });
   });
 
   // The meeting context poll runs every few seconds: only a changed view is logged.

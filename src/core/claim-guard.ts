@@ -5,8 +5,9 @@ import type { IrreversibleKind } from "./computer-control";
 // like "Sent hi to Zuzanna." from a run that never typed or sent anything, and "No meetings today." after the calendar failed to
 // open. This reads the run's own tool calls and results (and the kinds the confirm gate counted, core/computer-gate.ts) and, when
 // a line claims a send, delete, purchase or form submit that nothing in THIS run proves, or claims an empty calendar with no
-// successful read behind it, swaps it for a cautious line. Only a positive claim is checked: "Not sent yet" and "Could not send"
-// pass as written. Pure: no Electron, no model call.
+// successful calendar read behind it, swaps it for a cautious line. Only a positive claim is checked: "Not sent yet" and "Could
+// not send" pass as written. Proof is always of that kind: an open_app, a web search or any other tool that succeeded never
+// proves a send. Pure: no Electron, no model call.
 
 export type ClaimKind = IrreversibleKind;
 
@@ -51,16 +52,23 @@ export function claimsEmptyCalendar(line: string): boolean {
 
 /** What this run's tool calls and results prove. */
 export type RunEvidence = {
-  /** Irreversible kinds an action that succeeded was marked with (its effect) or the confirm gate counted. */
+  /**
+   * Irreversible kinds this run proved, and only these: an action marked with that effect came back Done, the confirm gate counted
+   * a Done action as that kind, or a connector tool whose own name says that action succeeded (connectorEffect).
+   */
   proven: Set<ClaimKind>;
   /** Text Bee put in a field this run (set_value or type_text that succeeded), the newest last. */
   typed: string[];
-  /** Tool calls made, results that succeeded, and results that were errors. */
+  /** Tool calls made, results that succeeded, and results that were errors. For the log: none of them proves a claim. */
   toolCalls: number;
   okResults: number;
   failedResults: number;
   /** Results that succeeded from a tool that reads something (a snapshot, find, read, a connector or web search): not an action. */
   okReads: number;
+  /** Tool calls aimed at a calendar: a calendar app opened, focused or read, or a calendar connector tool. */
+  calendarCalls: number;
+  /** Of those, reads that succeeded: a calendar's content was seen. A web search or another app's snapshot never counts. */
+  calendarReads: number;
 };
 
 // Computer and desktop tools that act or list rather than read content: their success proves nothing about what a page says.
@@ -68,8 +76,51 @@ const NOT_READS = new Set([
   "click", "type_text", "set_value", "focus", "select_option", "set_state", "scroll", "press_key", "act", "open_app", "focus_window", "open_url", "close_app",
   "wait", "list_apps", "list_windows", "use_computer", "memory_write", "append_note",
 ]);
+// Tools that bring an app forward: what Bee reads next with no app named is that app's window.
+const OPENS = new Set(["open_app", "focus_window"]);
+// Bee's own tools that read something other than an app or a connector: never a calendar.
+const NOT_CALENDAR = new Set(["web_search", "memory_read", "list_dir", "search_files", "read_file", "list_apps", "list_windows"]);
 const TYPES = new Set(["set_value", "type_text"]);
 const KINDS = new Set<string>(["send", "delete", "buy", "submit"]);
+
+// A calendar app by name: "Calendar", "gnome-calendar", "org.gnome.Calendar", "Fantastical", "BusyCal". Outlook is left out:
+// its window may be mail, so an Outlook read counts only when the window title shows a calendar (CALENDAR_WINDOW).
+const CALENDAR_APP = /calendar|kalender|fantastical|busycal|\bagenda\b|\bdiary\b/i;
+// A snapshot or find result from a calendar window: agent-desktop names the window first ('window "Calendar - Outlook"').
+const CALENDAR_WINDOW = /\bwindow\s+"[^"\n]*\b(?:calendar|agenda|schedule)\b/i;
+// A connector tool that reads a calendar, by the words in its name: outlook__list_calendar_events, gcal__list_events.
+const CALENDAR_TOOL = /(?:^|_)(?:calendars?|events?|schedules?|agenda|appointments?|availability|freebusy)(?:_|$)/;
+
+// A connector tool (Bee names them `{server}__{tool}`, core/mcp.ts) whose own name says it sends, deletes, buys or submits:
+// slack__chat_post_message, gmail__send_email, outlook__delete_event, shop__place_order, forms__submit_response. A name that also
+// reads (get, list, search…) never counts: get_post, list_sent_messages. Bee's built-in tools never match: they have no "__".
+const CONNECTOR_EFFECTS: readonly (readonly [ClaimKind, RegExp])[] = [
+  ["send", /^(?:send|post|reply|forward|publish|tweet|dm|email|mail|message)$/],
+  ["delete", /^(?:delete|remove|trash|erase|purge|discard|destroy)$/],
+  ["buy", /^(?:buy|purchase|checkout|pay)$/],
+  ["submit", /^(?:submit|signup|register)$/],
+];
+const READ_WORDS = /^(?:get|list|search|read|find|fetch|query|lookup|view|show|describe|count|check|preview|draft|drafts|schedule|scheduled)$/;
+
+/** The action a connector tool's name says it does ("slack__chat_post_message" → send), or null: Bee's own tools, reads, others. */
+export function connectorEffect(toolName: string): ClaimKind | null {
+  const split = toolName.indexOf("__");
+  if (split <= 0) return null;
+  const words = toolName
+    .slice(split + 2)
+    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+  if (words.length === 0 || words.some((word) => READ_WORDS.test(word))) return null;
+  // "place_order", "create_order": a purchase only with a verb that places it.
+  if (words.includes("order") && words.some((word) => word === "place" || word === "create" || word === "submit")) return "buy";
+  for (const [kind, verb] of CONNECTOR_EFFECTS) if (words.some((word) => verb.test(word))) return kind;
+  return null;
+}
+
+/** A connector tool's name says it reads a calendar ("gcal__list_events"). */
+const isCalendarTool = (toolName: string) => toolName.includes("__") && CALENDAR_TOOL.test(toolName.slice(toolName.indexOf("__") + 2).replace(/([a-z0-9])([A-Z])/g, "$1_$2").toLowerCase());
 
 type Part = { type: string; [key: string]: unknown };
 const parts = (message: ModelMessage): Part[] => (typeof message.content === "string" ? [{ type: "text", text: message.content }] : (message.content as unknown as Part[]));
@@ -90,19 +141,33 @@ function resultText(output: unknown): string {
 
 const isDone = (text: string) => /^(?:Using [^\n]{1,120}? for [^\n]{1,120}?\. )?Done\b/.test(text.trim());
 const isError = (text: string, output: unknown) => /^\s*Error\b/.test(text) || (output as { type?: string } | undefined)?.type?.startsWith("error") === true;
+// A connector's own failure inside a result that came back as text: {"ok":false}, {"isError":true}, {"error":"…"}.
+const CONNECTOR_FAILED = /"(?:ok|success)"\s*:\s*false|"isError"\s*:\s*true|"error"\s*:\s*(?:"|\{)/;
 
 /** The evidence in one run's messages (the AI's tool calls and their results), plus the kinds the confirm gate counted. */
 export function runEvidence(messages: readonly ModelMessage[], gateKinds: Iterable<ClaimKind> = []): RunEvidence {
-  const evidence: RunEvidence = { proven: new Set(gateKinds), typed: [], toolCalls: 0, okResults: 0, failedResults: 0, okReads: 0 };
-  const calls = new Map<string, { name: string; input: Record<string, unknown> }>();
+  const evidence: RunEvidence = { proven: new Set(gateKinds), typed: [], toolCalls: 0, okResults: 0, failedResults: 0, okReads: 0, calendarCalls: 0, calendarReads: 0 };
+  const calls = new Map<string, { name: string; input: Record<string, unknown>; calendar: boolean }>();
+  // The app Bee last opened, focused or read by name: a read that names no app reads that one.
+  let current = "";
+  // The app a desktop or computer tool works on: open_app and close_app take a name, the others an app.
+  const appOf = (name: string, input: Record<string, unknown>) => {
+    const app = name === "open_app" || name === "close_app" ? input.name : input.app;
+    return typeof app === "string" ? app : "";
+  };
   for (const message of messages) {
     for (const part of parts(message)) {
+      // The AI's own tool calls, and a provider's (web search), which come back inside the assistant message.
       if (part.type === "tool-call" && message.role === "assistant") {
         evidence.toolCalls += 1;
+        const name = String(part.toolName);
         const input = part.input && typeof part.input === "object" ? (part.input as Record<string, unknown>) : {};
-        calls.set(String(part.toolCallId), { name: String(part.toolName), input });
+        const app = appOf(name, input);
+        const calendar = !NOT_CALENDAR.has(name) && (isCalendarTool(name) || CALENDAR_APP.test(app) || (!app && !NOT_READS.has(name) && CALENDAR_APP.test(current)));
+        if (calendar) evidence.calendarCalls += 1;
+        calls.set(String(part.toolCallId), { name, input, calendar });
       }
-      if (part.type !== "tool-result" || message.role !== "tool") continue;
+      if (part.type !== "tool-result" || (message.role !== "tool" && message.role !== "assistant")) continue;
       const call = calls.get(String(part.toolCallId));
       const name = call?.name ?? String(part.toolName);
       const text = resultText(part.output);
@@ -111,8 +176,16 @@ export function runEvidence(messages: readonly ModelMessage[], gateKinds: Iterab
         continue;
       }
       evidence.okResults += 1;
-      if (!NOT_READS.has(name)) evidence.okReads += 1;
       const input = call?.input ?? {};
+      if (OPENS.has(name) || (!NOT_READS.has(name) && appOf(name, input))) current = appOf(name, input);
+      if (!NOT_READS.has(name)) {
+        evidence.okReads += 1;
+        // Seen only by a read of a calendar: its app, a calendar connector, or a window whose title says calendar.
+        if (!NOT_CALENDAR.has(name) && (call?.calendar === true || CALENDAR_WINDOW.test(text))) evidence.calendarReads += 1;
+      }
+      // A connector whose own name says it sends, deletes, buys or submits, and that did not report a failure.
+      const effect = connectorEffect(name);
+      if (effect && !CONNECTOR_FAILED.test(text)) evidence.proven.add(effect);
       if (name === "act" && Array.isArray(input.actions)) {
         // "1. click: Done." per action that ran, in order.
         for (const line of text.split("\n")) {
@@ -195,16 +268,21 @@ export const UNSEEN_CALENDAR_LINE = "Bee could not read the calendar, so it cann
 export type GuardedLine = { line: string; rewritten: boolean; reason: ClaimKind | "unseen-calendar" | null };
 
 /**
- * The line to show. A claimed send, delete, purchase or submit stays only when the run proves that kind; an empty-calendar claim
- * stays only when a read in the run succeeded. requireProof false (an answer with no computer tools): a claim stays when any
- * tool result succeeded, since a connector may have done it; with no successful result at all it is rewritten.
+ * The line to show. A claimed send, delete, purchase or submit stays only when evidence.proven has that kind: never because some
+ * other tool succeeded (an open_app, a list, a web search). For an answer about earlier turns, answerEvidence adds what those
+ * turns proved or showed. An empty-calendar claim after tools ran stays only when a calendar read succeeded. With no calendar
+ * tool tried, any read that succeeded will do, as before: the answer may come from the meeting brief.
  */
-export function guardLine(line: string, evidence: RunEvidence, options: { requireProof?: boolean } = {}): GuardedLine {
-  const requireProof = options.requireProof ?? true;
+export function guardLine(line: string, evidence: RunEvidence): GuardedLine {
   for (const claim of claimedEffects(line)) {
-    const proven = requireProof ? evidence.proven.has(claim) : evidence.proven.has(claim) || evidence.okResults > 0;
-    if (!proven) return { line: unprovenLine(claim, evidence.typed), rewritten: true, reason: claim };
+    if (!evidence.proven.has(claim)) return { line: unprovenLine(claim, evidence.typed), rewritten: true, reason: claim };
   }
-  if (claimsEmptyCalendar(line) && evidence.toolCalls > 0 && evidence.okReads === 0) return { line: UNSEEN_CALENDAR_LINE, rewritten: true, reason: "unseen-calendar" };
+  if (claimsEmptyCalendar(line) && unseenCalendar(evidence)) return { line: UNSEEN_CALENDAR_LINE, rewritten: true, reason: "unseen-calendar" };
   return { line, rewritten: false, reason: null };
+}
+
+/** Tools ran, and none read the calendar: a calendar tool was tried and no calendar read succeeded, or nothing was read at all. */
+function unseenCalendar(evidence: RunEvidence): boolean {
+  if (evidence.toolCalls === 0 || evidence.calendarReads > 0) return false;
+  return evidence.calendarCalls > 0 || evidence.okReads === 0;
 }

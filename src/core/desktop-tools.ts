@@ -35,7 +35,7 @@ export function desktopTools(actions: DesktopActions, onAction?: (line: string) 
       description:
         "Open an app on the user's computer, or bring it to the front if it is already open. Use only when the user asks to open, start or switch to an app.",
       inputSchema: z.object({ name: z.string().min(1).max(APP_NAME_MAX).describe("The app's name, for example Microsoft Teams, Outlook, Slack or Google Chrome.") }),
-      execute: async ({ name }) => act(() => actions.openApp(name)),
+      execute: async ({ name }, { abortSignal }) => act(() => actions.openApp(name, abortSignal)),
     }),
     focus_window: tool({
       description: "Bring one app's window to the front, optionally the window whose title contains some text. Use only when the user asks to switch to a window.",
@@ -43,7 +43,7 @@ export function desktopTools(actions: DesktopActions, onAction?: (line: string) 
         app: z.string().min(1).max(APP_NAME_MAX).describe("The app's name, for example Microsoft Teams."),
         title: z.string().max(WINDOW_TITLE_MAX).optional().describe("Part of the window's title, when the app has several windows."),
       }),
-      execute: async ({ app, title }) => act(() => actions.focusWindow({ app, ...(title ? { title } : {}) })),
+      execute: async ({ app, title }, { abortSignal }) => act(() => actions.focusWindow({ app, ...(title ? { title } : {}) }, abortSignal)),
     }),
     open_url: tool({
       description: "Open a web page in the user's default browser. Use only when the user asks to open a site or a page.",

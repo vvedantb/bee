@@ -5,7 +5,7 @@ import { stopLine, type ComputerPlatform, type RunControl } from "./computer-con
 import { debugLog, errorData, modelName, msSince, onceText, stepData } from "./debug-log";
 import { playbookBlock } from "./app-playbooks";
 import { ANTHROPIC_CACHE, commandProviderOptions, guideProviderOptions } from "./gateway";
-import { knownNamesBlock } from "./known-names";
+import { knownNamesBlock, type ResolvedName } from "./known-names";
 import { stopOnNoProgress } from "./loop-guard";
 
 // Computer use for a direct request: "Bee, open Discord, send Sam a message, then close the Discord tab in Chrome". The AI runs
@@ -244,6 +244,8 @@ export type ComputerUseResult = {
   stopped: boolean;
   steps: number;
   error: boolean;
+  /** Ms from the start of this run to the end of the model's first step (its first reply), or null when none ended. */
+  firstStepMs?: number | null;
   endedWhere?: string;
   messages: ModelMessage[];
   /** The fast pass only: the task should go on with the planning model, after these messages. The control is left running. */
@@ -296,6 +298,8 @@ export async function runComputerUse(args: {
   summarise?: Summarise;
   /** Names Bee should know (core/known-names.ts), sent with the request. */
   knownNames?: readonly string[];
+  /** Names in the request Bee settled from the user's recent requests (core/known-names.ts recentChoice). */
+  resolvedNames?: readonly ResolvedName[];
   /** agent-desktop's guides for this session (computerSkills). Absent or failing: the run goes on without them. */
   skills?: ComputerSkills;
   /** What Bee remembers about the user (core/bee-memory.ts memorySummary), sent with the request. */
@@ -315,18 +319,20 @@ export async function runComputerUse(args: {
   // True when the fast pass hands over: the control stays live for the planning model's run.
   let handOver = false;
   const lines = (args.transcript ?? []).slice(-TRANSCRIPT_LINES).map((line) => `- ${line.replace(/\s+/g, " ").trim()}`);
+  // When the model's first step (its first reply) ended: the computer path's "first token", for the timing log.
+  let firstStepMs: number | null = null;
   const ended = (line: string, error = false, where = "", messages: ModelMessage[] = []): ComputerUseResult => {
     const reason = control.reason();
     console.debug(`perf computer steps=${control.steps()} reason=${reason ?? (error ? "error" : "done")} ${Math.round(performance.now() - started)}ms`);
     const at = where ? { endedWhere: where } : {};
     return reason
-      ? { line: stopLine(reason, { maxSteps: args.maxSteps, declined: control.declined(), platform: args.platform }), stopped: true, steps: control.steps(), error: false, ...at, messages }
-      : { line, stopped: false, steps: control.steps(), error, ...at, messages };
+      ? { line: stopLine(reason, { maxSteps: args.maxSteps, declined: control.declined(), platform: args.platform }), stopped: true, steps: control.steps(), error: false, firstStepMs, ...at, messages }
+      : { line, stopped: false, steps: control.steps(), error, firstStepMs, ...at, messages };
   };
   try {
     const guides = args.skills ? await args.skills(control.signal).catch(() => "") : "";
     const system = `${COMPUTER_SYSTEM}\n${PLATFORM_SYSTEM[args.platform]}${guides ? `\n\n${SKILLS_INTRO}\n\n${guides}` : ""}`;
-    const names = knownNamesBlock(args.knownNames ?? [], args.command);
+    const names = knownNamesBlock(args.knownNames ?? [], args.command, args.resolvedNames);
     const history = args.history ?? [];
     const playbook = playbookBlock(`${recentRequests(history)}\n${args.command}`, args.platform);
     const content = [
@@ -350,7 +356,10 @@ export async function runComputerUse(args: {
       instructions: { role: "system", content: system, providerOptions: ANTHROPIC_CACHE },
       messages: [...cacheAtEnd(history, ANTHROPIC_CACHE), { role: "user", content }, ...carryOn(args.steps ?? [])],
       tools: args.tools,
-      onStepEnd: (step) => debugLog.info("computer", "ai-step", { ms: msSince(started), steps: control.steps(), ...stepData(step) }),
+      onStepEnd: (step) => {
+        firstStepMs ??= Math.round(performance.now() - started);
+        debugLog.info("computer", "ai-step", { ms: msSince(started), steps: control.steps(), ...stepData(step) });
+      },
       // No step cap: the AI stops itself, or the controls (Stop, time) or the loop guard stop it. A test may set a limit.
       stopWhen: args.fast
         ? [noProgress, isStepCount(FAST_MAX_TURNS)]
@@ -375,7 +384,7 @@ export async function runComputerUse(args: {
     if (args.fast && !control.reason() && (ESCALATE.test(result.text.trim()) || ESCALATE.test(line) || looped || (!line && result.finishReason === "tool-calls"))) {
       debugLog.info("computer", "fast-escalate", { steps: control.steps(), looped, finishReason: result.finishReason });
       handOver = true;
-      return { line: "", stopped: false, steps: control.steps(), error: false, messages: messages.filter((message) => message.role !== "assistant" || !isEscalateText(message)), escalate: true };
+      return { line: "", stopped: false, steps: control.steps(), error: false, firstStepMs, messages: messages.filter((message) => message.role !== "assistant" || !isEscalateText(message)), escalate: true };
     }
     if (looped) control.stop("loop");
     // Turns ran out with tools still being called: that is the step limit too.
@@ -386,7 +395,7 @@ export async function runComputerUse(args: {
     // The fast model failing is no reason to give up: the planning model takes the task.
     if (args.fast && !control.reason()) {
       handOver = true;
-      return { line: "", stopped: false, steps: control.steps(), error: false, messages: [], escalate: true };
+      return { line: "", stopped: false, steps: control.steps(), error: false, firstStepMs, messages: [], escalate: true };
     }
     return ended("The AI could not finish that.", true);
   } finally {
