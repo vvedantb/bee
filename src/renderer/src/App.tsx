@@ -37,7 +37,7 @@ import { NOTCH_LOGO_PX } from "./logo";
 import { focusKeyFieldWhenReady, GATEWAY_KEY_FIELD_ID, statusClick, type StatusClick } from "./island-click";
 import { CONVERSATION_LABEL, NOTCH_BUTTON, NOTCH_UPDATE_BUTTON, logoState, notchLine, workingLabel, type NotchLine } from "./notch";
 import { actions, answerFolded, displayResult, islandOpen, responseOpen, teamsAudioNow, useBee, type BeeState, type ComputerConfirm, type SummaryState, type TypedCommandOutcome, type UpdateState } from "./store";
-import { TYPED_COMMAND_HINT, TYPED_COMMAND_PLACEHOLDER, TYPED_COMMAND_TITLE, typedCommandNote } from "./typed-command";
+import { TYPED_COMMAND_HINT, TYPED_COMMAND_PLACEHOLDER, TYPED_COMMAND_TITLE, clearsTypedCommand, typedCommandNote } from "./typed-command";
 import { SyncCard, SyncSection, TeamSection, syncedWith } from "./Teams";
 import { TEAMS_AUDIO_LISTENING } from "./teams-audio-message";
 import { updateButton } from "./update";
@@ -315,11 +315,13 @@ function LiveTab({ state }: { state: BeeState }) {
   const chips = visibleChips(state.chips, state.dismissedChipIds);
   const mcpNote = mcpErrorNote(result?.mcpErrors);
 
+  // Controlled, so the field is empty after every submit, whatever the run does next.
+  const [meetingLine, setMeetingLine] = useState("");
+
   function onSubmit(event: FormEvent<HTMLFormElement>): void {
     event.preventDefault();
-    const form = event.currentTarget;
-    const line = formString(form, "line") || actions.nextSampleLine();
-    form.reset();
+    const line = meetingLine.trim() || actions.nextSampleLine();
+    setMeetingLine("");
     void actions.simulateLine(line);
   }
 
@@ -385,9 +387,16 @@ function LiveTab({ state }: { state: BeeState }) {
       {/* Manual test: runs the same pipeline as a spoken phrase. The line is not kept on screen. */}
       <section>
         <h2>Manual test</h2>
-        <TypedCommandForm busy={state.busy} />
+        <TypedCommandForm />
         <form className="simulate" onSubmit={onSubmit}>
-          <Input className="h-9" name="line" placeholder="A meeting line (never wakes Bee), or blank for a sample" autoComplete="off" />
+          <Input
+            className="h-9"
+            name="line"
+            placeholder="A meeting line (never wakes Bee), or blank for a sample"
+            autoComplete="off"
+            value={meetingLine}
+            onChange={(event) => setMeetingLine(event.currentTarget.value)}
+          />
           <Button type="submit" variant="secondary" size="sm" disabled={state.busy}>
             Simulate meeting line
           </Button>
@@ -408,25 +417,34 @@ function LiveTab({ state }: { state: BeeState }) {
 /**
  * Manual test → Talk to Bee (typed): a request through the wake word and request path, like a mic phrase after speech-to-text,
  * for testing without a microphone. Not a meeting line (that is the form below it), and not a test of audio or speech-to-text.
+ * The field is controlled and empties once Bee takes the request. It stays usable while a request runs: a newer request
+ * replaces it, and "Bee, stop" stops it, as from the mic.
  */
-function TypedCommandForm({ busy }: { busy: boolean }) {
+function TypedCommandForm() {
   const [outcome, setOutcome] = useState<TypedCommandOutcome | null>(null);
+  const [line, setLine] = useState("");
   const note = typedCommandNote(outcome);
 
   function onSubmit(event: FormEvent<HTMLFormElement>): void {
     event.preventDefault();
-    const form = event.currentTarget;
-    const line = formString(form, "command");
     const result = actions.typeCommand(line);
     setOutcome(result);
-    if (result === "taken") form.reset();
+    if (clearsTypedCommand(result)) setLine("");
   }
 
   return (
     <div className="flex flex-col gap-1">
       <form className="simulate typed-command" onSubmit={onSubmit} aria-label={TYPED_COMMAND_TITLE}>
-        <Input className="h-9" name="command" placeholder={TYPED_COMMAND_PLACEHOLDER} autoComplete="off" aria-describedby="typed-command-hint" />
-        <Button type="submit" size="sm" disabled={busy}>
+        <Input
+          className="h-9"
+          name="command"
+          placeholder={TYPED_COMMAND_PLACEHOLDER}
+          autoComplete="off"
+          aria-describedby="typed-command-hint"
+          value={line}
+          onChange={(event) => setLine(event.currentTarget.value)}
+        />
+        <Button type="submit" size="sm">
           {TYPED_COMMAND_TITLE}
         </Button>
       </form>

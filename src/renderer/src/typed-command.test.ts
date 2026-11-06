@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { TYPED_COMMAND_HINT, TYPED_COMMAND_NO_WAKE, TYPED_COMMAND_TITLE, TYPED_COMMAND_WAKE_OFF, typedCommandNote } from "./typed-command";
+import { TYPED_COMMAND_HINT, TYPED_COMMAND_NO_WAKE, TYPED_COMMAND_TITLE, TYPED_COMMAND_WAKE_OFF, clearsTypedCommand, typedCommandNote } from "./typed-command";
 
 describe("Talk to Bee (typed) copy", () => {
   it("says what it is and is not, so it is never read as a microphone or meeting-line test", () => {
@@ -15,5 +15,12 @@ describe("Talk to Bee (typed) copy", () => {
     expect(typedCommandNote("taken")).toBeNull();
     expect(typedCommandNote("empty")).toBeNull();
     expect(typedCommandNote(null)).toBeNull();
+  });
+
+  it("empties the field once Bee took the request, and keeps a line it did not take so the user can fix it", () => {
+    expect(clearsTypedCommand("taken")).toBe(true);
+    expect(clearsTypedCommand("empty")).toBe(true);
+    expect(clearsTypedCommand("no-wake")).toBe(false);
+    expect(clearsTypedCommand("wake-off")).toBe(false);
   });
 });

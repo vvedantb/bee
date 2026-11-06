@@ -11,6 +11,14 @@ export const TYPED_COMMAND_HINT =
 export const TYPED_COMMAND_NO_WAKE = 'Bee did not take that as a request. Start with "Bee," (for example: Bee, open Chrome).';
 export const TYPED_COMMAND_WAKE_OFF = "Talking to Bee by name is off in Settings.";
 
+/**
+ * Whether the field empties after a submit: yes once Bee took the request (or there was nothing in it), so the next one starts
+ * clean; no when Bee did not take it, so the user can add "Bee," and send it again.
+ */
+export function clearsTypedCommand(outcome: TypedCommandOutcome): boolean {
+  return outcome === "taken" || outcome === "empty";
+}
+
 /** The line under the field after a typed request, or null when there is nothing to say (Bee took it, or it was empty). */
 export function typedCommandNote(outcome: TypedCommandOutcome | null): string | null {
   if (outcome === "no-wake") return TYPED_COMMAND_NO_WAKE;
