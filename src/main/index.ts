@@ -368,12 +368,12 @@ if (clerk.isPrimaryInstance) {
     // Teams audio fallback uses the native helper instead (main/teams-audio-capture.ts, ARCHITECTURE.md). The mic is unaffected.
     session.defaultSession.setDisplayMediaRequestHandler((_request, callback) => callback({}));
 
-    // Experimental meeting window reader (Settings, off by default): agent-desktop, read-only and headless. Missing binary or
-    // any failure leaves the built-in detector on its own.
+    // Meeting window reader: always on. agent-desktop, read-only and headless. Missing binary, no permission or any failure leaves
+    // the built-in detector on its own.
     const agentDesktopBinary = resolveAgentDesktop({ packaged: app.isPackaged, resourcesPath: process.resourcesPath, appPath: app.getAppPath() });
     const agentDesktop = agentDesktopBinary ? createAgentDesktopRunner(agentDesktopBinary) : null;
     const meetingWindow = createMeetingWindowReader({
-      enabled: settings.readMeetingWindow,
+      enabled: () => true,
       run: agentDesktop?.run ?? null,
       onCaptions: (lines) => {
         if (win && !win.isDestroyed()) win.webContents.send(IPC.meetingWindowCaptions, { lines } satisfies MeetingWindowCaptions);

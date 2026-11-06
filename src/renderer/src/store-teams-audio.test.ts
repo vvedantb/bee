@@ -67,7 +67,6 @@ const SETTINGS: SettingsView = {
   meetingContextEnabled: true,
   meetingCalendarEnabled: true,
   meetingMemoryEnabled: true,
-  readMeetingWindowEnabled: true,
   teamsAudioFallbackEnabled: true,
   hintsEnabled: false,
   wakeWordEnabled: true,

@@ -45,7 +45,6 @@ const SETTINGS: SettingsView = {
   meetingContextEnabled: true,
   meetingCalendarEnabled: true,
   meetingMemoryEnabled: true,
-  readMeetingWindowEnabled: true,
   teamsAudioFallbackEnabled: true,
   hintsEnabled: false,
   wakeWordEnabled: true,
@@ -112,13 +111,6 @@ describe("store: live captions", () => {
     expect(store.getBeeState().session.lines.map((line) => line.own)).toEqual([false, false]);
     // Captions are never shared with a Teams sync.
     expect(published).toEqual([]);
-  });
-
-  it("ignores captions while the setting is off", async () => {
-    const { store, send, requests } = await loadStore({ readMeetingWindowEnabled: false });
-    await send([{ speaker: "Priya Patel", text: "When does SSO ship?" }]);
-    expect(requests).toEqual([]);
-    expect(store.getBeeState().session.lines).toEqual([]);
   });
 
   it("drops a caption of the user's own mic line while the mic is on, and keeps other speakers", async () => {

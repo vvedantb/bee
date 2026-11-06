@@ -9,7 +9,7 @@ import { teamsAudioMessage, teamsAudioNeedsScreenRecording, type TeamsAudioView 
 // without the store or Electron.
 
 export type MeetingContextSettings = Pick<SettingsView, "meetingContextEnabled" | "meetingCalendarEnabled" | "meetingMemoryEnabled"> &
-  Partial<Pick<SettingsView, "readMeetingWindowEnabled" | "teamsAudioFallbackEnabled">>;
+  Partial<Pick<SettingsView, "teamsAudioFallbackEnabled">>;
 
 function clearMessage(count: number): string {
   return count === 0 ? "No saved meeting notes to clear." : `Cleared ${count} saved meeting ${count === 1 ? "note" : "notes"}.`;
@@ -20,12 +20,13 @@ const APP_NAME: Record<NonNullable<MeetingWindowStatus["app"]>, string> = { team
 /** The status line under the meeting window switch. Null while it is off. */
 export function meetingWindowMessage(status: MeetingWindowStatus | undefined): string | null {
   if (!status || status.state === "off") return null;
-  if (status.state === "starting") return "Checking access…";
+  // Quiet while it checks access or no call is open: the reader runs by itself, so only what needs the user, or a call it reads.
+  if (status.state === "starting") return null;
   if (status.state === "needs-permission") {
     return "Bee needs Accessibility access. In System Settings → Privacy & Security → Accessibility, turn on Bee. Bee checks again by itself.";
   }
   if (status.state === "unavailable") return "Cannot read meeting windows on this device. Bee carries on without it.";
-  if (!status.app) return "No Teams, Zoom or Google Meet call found yet.";
+  if (!status.app) return null;
   const app = APP_NAME[status.app];
   if (status.captions) return `Reading ${app}, with live captions.`;
   return status.app === "meet" ? `Reading ${app}.` : `Reading ${app}. Turn on live captions in ${app} to send what others say to the AI.`;
@@ -57,7 +58,7 @@ export function MeetingContextSection({
   const [step, setStep] = useState<"idle" | "confirm" | "busy">("idle");
   const [message, setMessage] = useState<string | null>(null);
   const on = settings.meetingContextEnabled;
-  const windowMessage = meetingWindowMessage(settings.readMeetingWindowEnabled ? (reader ?? { state: "starting", app: null, captions: false }) : undefined);
+  const windowMessage = meetingWindowMessage(reader);
   const audioOn = settings.teamsAudioFallbackEnabled ?? false;
   const audioMessage = audioOn ? teamsAudioMessage(teamsAudio) : null;
   const needsScreenRecording = audioOn && teamsAudioNeedsScreenRecording(teamsAudio);
@@ -110,19 +111,12 @@ export function MeetingContextSection({
         </Button>
       </div>
       {message ? <p className="muted">{message}</p> : null}
-      <SettingRow
-        id="read-meeting-window"
-        label="Read meeting window"
-        description="Reads the Teams, Zoom or Google Meet window for its name, people and live captions. Never clicks or types."
-        checked={settings.readMeetingWindowEnabled ?? true}
-        onCheckedChange={(readMeetingWindowEnabled) => onChange({ readMeetingWindowEnabled })}
-      />
-      {settings.readMeetingWindowEnabled && windowMessage ? (
+      {windowMessage ? (
         <p className={reader?.state === "needs-permission" ? "error" : "muted"} role="status">
           {windowMessage}
         </p>
       ) : null}
-      {settings.readMeetingWindowEnabled && reader?.state === "needs-permission" && onOpenAccessibility ? (
+      {reader?.state === "needs-permission" && onOpenAccessibility ? (
         <div className="row actions">
           <Button type="button" variant="secondary" size="sm" onClick={onOpenAccessibility}>
             Open Accessibility settings
