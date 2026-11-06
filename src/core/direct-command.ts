@@ -46,6 +46,13 @@ const MCP_ERROR_CHARS = 300;
 const PARTIAL_MAX = 5;
 
 const FAST_TOOL = { "open-app": "open_app", "focus-app": "focus_window", "open-url": "open_url" } as const;
+// The computer tools a direct answer may use to read windows ("what am I working on?"): they look, and never act.
+const READ_TOOLS = ["list_windows", "list_apps", "snapshot", "find", "read"] as const;
+
+/** The named tools out of a tool set. */
+function pickTools<T extends Record<string, unknown>>(tools: T, names: readonly string[]): Partial<T> {
+  return Object.fromEntries(Object.entries(tools).filter(([name]) => names.includes(name))) as Partial<T>;
+}
 
 /** Action lines then reply lines, without repeats (the reply may say "Opened Teams." again). */
 function joinLines(actions: readonly string[], reply: TipFields): TipFields {
@@ -326,6 +333,15 @@ export async function runDirectCommand(args: {
   };
   // use_computer hands a task on screen over to the loop: this answer stops at once, and the loop runs instead.
   const handOver = new AbortController();
+  // Read-only window tools for questions about the screen, with their own control (no step line, no Stop: they only read).
+  const readControl = computer ? createRunControl({ ...(args.signal ? { signal: args.signal } : {}) }) : null;
+  const readTools =
+    computer && readControl
+      ? pickTools(
+          computerTools({ run: computer.host.run, desktop: computer.actions, control: readControl, platform: computer.host.platform, askFirst: () => true, confirm: async () => false, onActivity: args.onActivity }),
+          READ_TOOLS,
+        )
+      : {};
   const desktop = args.actions
     ? {
         ...desktopTools(args.actions, (line) => {
@@ -333,6 +349,7 @@ export async function runDirectCommand(args: {
           actionLines.push(line);
           emit();
         }),
+        ...readTools,
         ...(computer
           ? {
               use_computer: tool({
@@ -376,6 +393,7 @@ export async function runDirectCommand(args: {
     },
     signal: args.signal ? AbortSignal.any([args.signal, handOver.signal]) : handOver.signal,
   });
+  readControl?.dispose();
   if (handOver.signal.aborted && !args.signal?.aborted) {
     void mcp?.close().catch(() => undefined);
     console.debug("perf command computer handover");
