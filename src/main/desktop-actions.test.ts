@@ -260,9 +260,52 @@ describe("desktop actions on Linux", () => {
     expect(launched()).toEqual([]);
   });
 
-  it("falls back to launch --activate when focus-window is refused (Wayland)", async () => {
-    const { actions, launched } = makeLinux({ lists: [apps("google-chrome")], launch: { "google-chrome": { ok: true, data: {} } } });
-    expect(await actions.focusWindow({ app: "Chrome" })).toEqual({ ok: true, message: "Opened Chrome" });
+  it("never launches a second copy when focus-window is refused (Wayland): it says the app is already open", async () => {
+    // agent-desktop's launch attaches only to a process with the same executable and arguments, so launching a running Chrome
+    // started a second one (a first-run dialog, and up to 8 s of waiting) on a Linux test desktop.
+    const { actions, launched, runs } = makeLinux({ lists: [apps("google-chrome")], launch: { "google-chrome": { ok: true, data: {} } } });
+    expect(await actions.openApp("Chrome")).toEqual({ ok: true, message: "Chrome is already open; Bee could not bring it to the front" });
+    expect(await actions.focusWindow({ app: "Chrome" })).toEqual({ ok: true, message: "Chrome is already open; Bee could not bring it to the front" });
+    expect(await actions.focusWindow({ app: "Chrome", title: "Fixture" })).toEqual({ ok: true, message: "Chrome is already open; Bee could not bring that window to the front" });
+    expect(launched()).toEqual([]);
+    // One list-apps and one focus-window per request: nothing else.
+    expect(runs.map((call) => call.command)).toEqual(["list-apps", "focus-window", "list-apps", "focus-window", "list-apps", "focus-window"]);
+  });
+
+  it("focuses a running Chrome under any name Linux lists it by, and never launches it", async () => {
+    for (const listed of ["google-chrome", "Google Chrome", "chrome", "chromium", "Chromium", "chromium-browser", "google-chrome-stable", "Fixture form - Google Chrome"]) {
+      const { actions, launched, runs } = makeLinux({ lists: [apps("Slack", listed)], focus: { ok: true, data: {} } });
+      expect(await actions.openApp("Chrome"), listed).toEqual({ ok: true, message: "Opened Chrome" });
+      expect(launched(), listed).toEqual([]);
+      expect(runs.find((call) => call.command === "focus-window")?.args, listed).toEqual(["--app", listed]);
+    }
+    // A desktop id from list-apps counts too.
+    const byId = makeLinux({ lists: [{ ok: true, data: { apps: [{ name: "Something", pid: 9, bundle_id: "google-chrome.desktop" }] } }], focus: { ok: true, data: {} } });
+    expect(await byId.actions.openApp("Chrome")).toEqual({ ok: true, message: "Opened Chrome" });
+    expect(byId.launched()).toEqual([]);
+  });
+
+  it("opens LibreOffice Writer though soffice runs (another LibreOffice app), and waits longer for it to show", async () => {
+    // soffice runs every LibreOffice app: it never stops Writer from opening, and once launched, it counts as Writer starting.
+    const { actions, launched, runs } = makeLinux({
+      lists: [apps("soffice"), apps(), apps(), apps(), apps(), apps(), apps("soffice")],
+      launch: { "libreoffice-writer": { ok: false, code: "TIMEOUT" } },
+    });
+    const result = actions.openApp("LibreOffice Writer");
+    await vi.runAllTimersAsync();
+    expect(await result).toEqual({ ok: true, message: "Opened LibreOffice Writer" });
+    expect(launched()).toEqual(["libreoffice-writer"]);
+    expect(runs.filter((call) => call.command === "focus-window")).toEqual([]);
+    // The warm check, then looks past the usual four while it starts.
+    expect(runs.filter((call) => call.command === "list-apps")).toHaveLength(7);
+  });
+
+  it("looks for an app whose launch may have started it, rather than launch another name", async () => {
+    // A launcher that handed off and exited: delivered, not safe to retry.
+    const { actions, launched } = makeLinux({ launch: { "google-chrome": { ok: false, code: "ACTION_FAILED", retry: "unsafe" } }, lists: [apps(), apps("chrome")] });
+    const result = actions.openApp("Chrome");
+    await vi.runAllTimersAsync();
+    expect(await result).toEqual({ ok: true, message: "Opened Chrome" });
     expect(launched()).toEqual(["google-chrome"]);
   });
 

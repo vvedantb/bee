@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { BLOCKED_APP_MESSAGE, appKey, cleanAppName, cleanWindowTitle, matchRunningApp, openedUrlMessage, requestedUrl, resolveApp, routeCommand } from "./desktop-actions";
+import {
+  BLOCKED_APP_MESSAGE, appKey, appNames, cleanAppName, cleanWindowTitle, isSlowStart, listedAppName, matchRunningApp, openedUrlMessage, requestedUrl, resolveApp, routeCommand,
+} from "./desktop-actions";
 
 describe("cleanAppName", () => {
   it("keeps plain app names, without quotes, end stops, 'the' or 'app'", () => {
@@ -85,6 +87,52 @@ describe("matchRunningApp", () => {
     if (!figma.ok) throw new Error("Figma resolves");
     expect(matchRunningApp(figma.app, [{ name: "Figma Agent" }])).toEqual({ name: "Figma Agent" });
     expect(matchRunningApp(figma.app, [{ name: "NotFigma" }])).toBeNull();
+  });
+
+  const target = (name: string) => {
+    const resolved = resolveApp(name);
+    if (!resolved.ok) throw new Error(`${name} resolves`);
+    return resolved.app;
+  };
+
+  it("finds a running Chrome under every name Linux lists it by: process, desktop id, Flatpak id or window title", () => {
+    const chrome = target("Chrome");
+    for (const name of ["google-chrome", "Google Chrome", "chrome", "Chromium", "chromium-browser", "google-chrome-stable", "com.google.Chrome", "Bee fixture form - Google Chrome", "New Tab — Chromium"]) {
+      expect(matchRunningApp(chrome, [{ name: "thunar" }, { name }]), name).toEqual({ name });
+    }
+    expect(matchRunningApp(chrome, [{ name: "x", bundleId: "google-chrome.desktop" }])).toEqual({ name: "x", bundleId: "google-chrome.desktop" });
+    expect(appKey("google-chrome.desktop")).toBe("google-chrome");
+    // Not another browser, and not a page about Chrome in Firefox.
+    for (const name of ["firefox", "Notes on Chrome - Mozilla Firefox", "chromebook-helper"]) expect(matchRunningApp(chrome, [{ name }]), name).toBeNull();
+  });
+
+  it("finds LibreOffice Writer by its window, and by soffice only when asked for its suite's process", () => {
+    const writer = target("LibreOffice Writer");
+    expect(matchRunningApp(writer, [{ name: "Untitled 1 - LibreOffice Writer" }])).toEqual({ name: "Untitled 1 - LibreOffice Writer" });
+    expect(matchRunningApp(writer, [{ name: "lowriter" }])).toEqual({ name: "lowriter" });
+    // soffice may be Calc alone: it never says Writer's window is open, so Bee still opens Writer.
+    expect(matchRunningApp(writer, [{ name: "soffice" }])).toBeNull();
+    expect(matchRunningApp(writer, [{ name: "soffice.bin" }, { name: "LibreOffice" }])).toBeNull();
+    expect(matchRunningApp(writer, [{ name: "soffice" }], { shared: true })).toEqual({ name: "soffice" });
+    expect(appNames(writer)).not.toContain("libreoffice");
+    expect(appNames(writer, { shared: true })).toContain("soffice");
+    // The suite itself is soffice, and Calc's window is not Writer.
+    expect(matchRunningApp(target("LibreOffice"), [{ name: "soffice" }])).toEqual({ name: "soffice" });
+    expect(matchRunningApp(writer, [{ name: "Budget - LibreOffice Calc" }])).toBeNull();
+    // Nothing unrelated: a writer app that is not LibreOffice.
+    expect(matchRunningApp(writer, [{ name: "ghostwriter" }, { name: "abiword" }], { shared: true })).toBeNull();
+  });
+
+  it("names the listed app to read for an app the AI named, and which apps start slowly", () => {
+    expect(listedAppName("LibreOffice Writer", ["thunar", "soffice"])).toBe("soffice");
+    expect(listedAppName("Chrome", ["thunar", "google-chrome"])).toBe("google-chrome");
+    expect(listedAppName("Chrome", ["thunar"])).toBeNull();
+    expect(listedAppName("Figma", ["Figma"])).toBeNull();
+    expect(listedAppName("Terminal", ["gnome-terminal-server"])).toBeNull();
+    expect(isSlowStart("LibreOffice Writer")).toBe(true);
+    expect(isSlowStart("libreoffice")).toBe(true);
+    expect(isSlowStart("Chrome")).toBe(false);
+    expect(isSlowStart("Figma")).toBe(false);
   });
 });
 

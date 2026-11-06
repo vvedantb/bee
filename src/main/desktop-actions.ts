@@ -2,9 +2,10 @@ import { execFile } from "node:child_process";
 import { readdirSync, type Dirent } from "node:fs";
 import { basename, extname, join } from "node:path";
 import { parseApps, type AdApp } from "../core/agent-desktop-envelope";
-import { afterLaunchFailure, linuxLaunchNames, waitForListed } from "../core/app-discovery";
+import { afterLaunchFailure, linuxLaunchNames, listedTries, waitForListed } from "../core/app-discovery";
 import {
   cleanWindowTitle,
+  isSlowStart,
   matchRunningApp,
   openedUrlMessage,
   resolveApp,
@@ -21,7 +22,10 @@ import { withoutSecrets, type AgentDesktopActionRun } from "./agent-desktop";
 // own action runner (launch, focus-window, list-apps only). Windows apps open by a fixed URI, a Start menu shortcut or a fixed
 // system exe. Linux apps open through agent-desktop launch by desktop-entry name (google-chrome, then chromium, …), which needs
 // the desktop session's accessibility bus; a launch that times out is looked for in list-apps before Bee calls it missing
-// (core/app-discovery.ts). Console lines carry codes only, never names.
+// (core/app-discovery.ts). On Linux an app list-apps already shows is never launched again: agent-desktop's launch attaches
+// only to a process with the same executable and arguments, so for a running Chrome it starts a second one (a first-run
+// dialog, and up to LAUNCH_TIMEOUT_MS of waiting). Bee brings it forward with focus-window (X11), or says it is already open
+// when focus-window is refused (Wayland). Console lines carry codes only, never names.
 
 export type DesktopActionDeps = {
   platform: NodeJS.Platform;
@@ -110,8 +114,11 @@ export function createDesktopActions(deps: DesktopActionDeps): DesktopActions {
   // A run that the request's signal (Stop, a newer request) stops, in flight or before it starts.
   const options = (timeoutMs: number, signal?: AbortSignal) => (signal ? { timeoutMs, signal } : { timeoutMs });
 
-  /** The running app that matches, from agent-desktop list-apps. Null when none does or agent-desktop cannot tell. */
-  async function runningApp(app: AppTarget, signal?: AbortSignal): Promise<AdApp | null> {
+  /**
+   * The running app that matches, from agent-desktop list-apps. Null when none does or agent-desktop cannot tell. shared: a
+   * process the app shares with its suite counts (soffice for LibreOffice Writer), for a look after Bee launched it.
+   */
+  async function runningApp(app: AppTarget, signal?: AbortSignal, shared = false): Promise<AdApp | null> {
     if (!run || signal?.aborted) return null;
     const listed = await run("list-apps", [], options(LIST_TIMEOUT_MS, signal));
     if (!listed.ok) {
@@ -119,17 +126,21 @@ export function createDesktopActions(deps: DesktopActionDeps): DesktopActions {
       if (deps.platform === "linux" && afterLaunchFailure(listed.code) === "stop") noBus = true;
       return null;
     }
-    return matchRunningApp(app, parseApps(listed.data));
+    return matchRunningApp(app, parseApps(listed.data), { shared });
   }
 
-  /** agent-desktop focus-window for a running app's own name, optionally one window by title. */
-  async function focusRunning(app: AppTarget, title: string | null, signal?: AbortSignal): Promise<boolean> {
-    if (!run) return false;
+  /**
+   * agent-desktop focus-window for a running app's own name, optionally one window by title. focused: it came forward; refused:
+   * the app is running, but focus-window failed (a Wayland session, or no window with that title); absent: not running, or
+   * agent-desktop cannot tell.
+   */
+  async function focusRunning(app: AppTarget, title: string | null, signal?: AbortSignal): Promise<"focused" | "refused" | "absent"> {
+    if (!run) return "absent";
     const running = await runningApp(app, signal);
-    if (!running || signal?.aborted) return false;
+    if (!running || signal?.aborted) return "absent";
     const focused = await run("focus-window", ["--app", running.name, ...(title ? ["--title", title] : [])], options(LIST_TIMEOUT_MS, signal));
     if (!focused.ok) console.debug(`desktop-action focus-window ${focused.code}`);
-    return focused.ok;
+    return focused.ok ? "focused" : "refused";
   }
 
   /** macOS: open -a opens the app, or brings it forward if it is running. agent-desktop launch also takes bundle ids. */
@@ -170,10 +181,12 @@ export function createDesktopActions(deps: DesktopActionDeps): DesktopActions {
   }
 
   /**
-   * Linux: agent-desktop launch by each desktop-entry name in turn (--activate waits for a window, so a warm app comes forward).
-   * A launch that timed out may be a cold app still starting: Bee looks for it in list-apps a few times rather than start
-   * another name. No accessibility bus: stops at once. The signal (Stop, a newer request) ends the launches and the looks: the
-   * pauses between looks end early, and no further launch or look starts.
+   * Linux: agent-desktop launch by each desktop-entry name in turn (--activate waits for a window). Only for an app list-apps
+   * does not show: launch starts a new process for anything it cannot prove is the same one. A launch that timed out, or one
+   * that may have started the app before it failed (a launcher that handed off), may be a cold app still starting: Bee looks
+   * for it in list-apps a few times (more for a slow app such as LibreOffice), counting its suite's process (soffice), rather
+   * than start another name. No accessibility bus: stops at once. The signal (Stop, a newer request) ends the launches and the
+   * looks: the pauses between looks end early, and no further launch or look starts.
    */
   async function openLinux(app: AppTarget, signal?: AbortSignal): Promise<boolean> {
     if (!run) return false;
@@ -183,37 +196,48 @@ export function createDesktopActions(deps: DesktopActionDeps): DesktopActions {
       if (launched.ok) return true;
       console.debug(`desktop-action launch ${launched.code}`);
       if (signal?.aborted) return false;
-      const next = afterLaunchFailure(launched.code);
+      const next = afterLaunchFailure(launched.code, launched.retry);
       if (next === "stop") {
         noBus = true;
         return false;
       }
-      if (next === "look") return (await waitForListed({ list: () => runningApp(app, signal), ...(signal ? { signal } : {}) })).found !== null;
+      if (next === "look") {
+        const tries = listedTries(isSlowStart(app.label));
+        return (await waitForListed({ list: () => runningApp(app, signal, true), tries, ...(signal ? { signal } : {}) })).found !== null;
+      }
     }
     return false;
   }
 
-  async function open(app: AppTarget, signal?: AbortSignal): Promise<boolean> {
-    if (deps.platform === "darwin") return openMac(app);
+  /** opened: it opened or came forward; open: it was already running and did not come forward (Linux, Wayland); missed: neither. */
+  type Opened = "opened" | "open" | "missed";
+
+  async function open(app: AppTarget, signal?: AbortSignal): Promise<Opened> {
+    if (deps.platform === "darwin") return (await openMac(app)) ? "opened" : "missed";
     if (deps.platform === "win32") {
       // Already running: bring it forward rather than start another copy.
-      if (await focusRunning(app, null, signal)) return true;
-      if (signal?.aborted) return false;
-      return openWindows(app);
+      if ((await focusRunning(app, null, signal)) === "focused") return "opened";
+      if (signal?.aborted) return "missed";
+      return (await openWindows(app)) ? "opened" : "missed";
     }
     if (deps.platform === "linux") {
-      // Already running and focusable (X11): bring it forward. On Wayland focus-window refuses, and launch --activate does it.
-      if (await focusRunning(app, null, signal)) return true;
-      if (noBus) return false;
-      return openLinux(app, signal);
+      // Already running: bring it forward (X11). When focus-window refuses (Wayland), it is still open, and launching it again
+      // would start a second copy: never.
+      const focus = await focusRunning(app, null, signal);
+      if (focus === "focused") return "opened";
+      if (focus === "refused") return "open";
+      if (noBus || signal?.aborted) return "missed";
+      return (await openLinux(app, signal)) ? "opened" : "missed";
     }
-    return false;
+    return "missed";
   }
 
   const unsupported = () => deps.platform !== "darwin" && deps.platform !== "win32" && deps.platform !== "linux";
   /** Why an app did not open: on Linux with no accessibility bus, that; otherwise not found. */
   const notOpened = (app: AppTarget, what = "") =>
     fail(noBus ? `Could not open ${app.label}: Bee cannot reach the desktop session's accessibility bus` : `Could not find ${what}${app.label}`);
+  /** A running app that would not come forward: true, and no second copy. */
+  const alreadyOpen = (app: AppTarget, what = "it") => ok(`${app.label} is already open; Bee could not bring ${what} to the front`);
 
   return {
     async openApp(name, signal) {
@@ -221,7 +245,9 @@ export function createDesktopActions(deps: DesktopActionDeps): DesktopActions {
       if (!resolved.ok) return fail(resolved.message);
       if (unsupported()) return fail("Bee opens apps on Windows, Mac and Linux only");
       const { app } = resolved;
-      if (await open(app, signal)) return ok(`Opened ${app.label}`);
+      const opened = await open(app, signal);
+      if (opened === "opened") return ok(`Opened ${app.label}`);
+      if (opened === "open") return alreadyOpen(app);
       return signal?.aborted ? fail(`Stopped before ${app.label} opened`) : notOpened(app);
     },
 
@@ -234,9 +260,12 @@ export function createDesktopActions(deps: DesktopActionDeps): DesktopActions {
       if (rawTitle !== undefined && rawTitle.trim() !== "" && !title) return fail("That is not a window title Bee can use");
       // macOS without a title: open -a brings the app's windows forward. Otherwise agent-desktop focuses one window.
       if (deps.platform === "darwin" && !title) return (await openMac(app)) ? ok(`Focused ${app.label}`) : fail(`Could not find ${app.label}`);
-      if (await focusRunning(app, title, signal)) return ok(`Focused ${app.label}`);
+      const focus = await focusRunning(app, title, signal);
+      if (focus === "focused") return ok(`Focused ${app.label}`);
       if (signal?.aborted) return fail(`Stopped before ${app.label} came forward`);
-      // Not running, or agent-desktop could not focus it (on Linux, a Wayland session): opening it brings it forward.
+      // Linux: running, but focus-window refused (Wayland, or no window with that title). Launching would start a second copy.
+      if (deps.platform === "linux" && focus === "refused") return alreadyOpen(app, title ? "that window" : "it");
+      // Not running, or (Windows) agent-desktop could not focus it: opening it brings it forward.
       const opened = deps.platform === "darwin" ? await openMac(app) : deps.platform === "linux" ? !noBus && (await openLinux(app, signal)) : await openWindows(app);
       if (opened) return ok(`Opened ${app.label}`);
       return signal?.aborted ? fail(`Stopped before ${app.label} came forward`) : notOpened(app, "a window for ");

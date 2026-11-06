@@ -10,6 +10,16 @@ export const COLD_START_MS = 30_000;
 export const LISTED_TRIES = 4;
 /** The pause between those looks. With LISTED_TRIES, at most about 4.5 s of waiting in all. */
 export const LISTED_DELAY_MS = 1500;
+/**
+ * Looks for an app that is slow on a first start (an office suite: LibreOffice took well over 4.5 s to list on a Linux test
+ * desktop). With LISTED_DELAY_MS, at most about 10.5 s of waiting in all, still under a cap.
+ */
+export const LISTED_TRIES_SLOW = 8;
+
+/** How many looks a starting app gets: more for one that is slow to start (core/desktop-actions.ts isSlowStart). */
+export function listedTries(slow: boolean): number {
+  return slow ? LISTED_TRIES_SLOW : LISTED_TRIES;
+}
 
 /** True when the app was opened (openedAt, ms) within COLD_START_MS of now: a miss may only mean it is still starting. */
 export function isColdStart(openedAt: number | undefined, now: number, windowMs = COLD_START_MS): boolean {
@@ -57,10 +67,15 @@ const STILL_STARTING = new Set(["TIMEOUT", "TIMEOUT_LOCAL", "APP_UNRESPONSIVE"])
 /** Codes that mean no accessibility bus or permission: every other name fails the same way. */
 const NO_ACCESS = new Set(["PERM_DENIED", "PLATFORM_NOT_SUPPORTED"]);
 
-/** What to do after a launch name failed: look for the app (it may be starting), stop (no access), or try the next name. */
-export function afterLaunchFailure(code: string): "look" | "stop" | "next" {
-  if (STILL_STARTING.has(code)) return "look";
+/**
+ * What to do after a launch name failed: look for the app (it may be starting), stop (no access), or try the next name. retry is
+ * agent-desktop's disposition: anything but "safe" means the launch may have started the app (a launcher that handed off, an
+ * app that exited after starting another), so Bee looks for it rather than start a second copy under another name.
+ */
+export function afterLaunchFailure(code: string, retry?: string): "look" | "stop" | "next" {
   if (NO_ACCESS.has(code)) return "stop";
+  if (STILL_STARTING.has(code)) return "look";
+  if (retry !== undefined && retry !== "safe") return "look";
   return "next";
 }
 
