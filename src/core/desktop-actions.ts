@@ -218,8 +218,12 @@ export function appNames(app: AppTarget, options: { shared?: boolean } = {}): st
   return [...new Set(options.shared ? [...own, ...shared] : own)];
 }
 
-/** A listed row: its name, and a desktop or bundle id when agent-desktop gives one ("google-chrome.desktop"). */
-type Listed = { name: string; bundleId?: string | null };
+/**
+ * A listed row: its name, and a desktop or bundle id when agent-desktop gives one ("google-chrome.desktop"). title: the name is a
+ * window title, which only counts by its whole or by its app part after a dash, never by how it starts ("Slack - Mozilla
+ * Firefox" is a Firefox window, not Slack).
+ */
+type Listed = { name: string; bundleId?: string | null; title?: boolean };
 
 // A window title's app part after the document: "Untitled 1 - LibreOffice Writer", "Fixture - Google Chrome".
 const TITLE_SEPARATOR = /\s[-–—|]\s/u;
@@ -241,12 +245,34 @@ export function matchRunningApp<T extends Listed>(app: AppTarget, running: reado
   });
   const exact = rows.find((row) => row.keys.some((key) => names.has(key)));
   if (exact) return exact.item;
-  const prefixed = rows.find((row) => long.some((name) => row.key.startsWith(`${name} `)));
+  const prefixed = rows.find((row) => !row.item.title && long.some((name) => row.key.startsWith(`${name} `)));
   if (prefixed) return prefixed.item;
   const titled = rows.find((row) => row.title !== null && row.title.length >= 3 && names.has(row.title));
   if (titled || !options.shared) return titled?.item ?? null;
   const shared = appNames(app, { shared: true }).filter((name) => !names.has(name));
-  return rows.find((row) => row.keys.some((key) => shared.includes(key)))?.item ?? null;
+  return rows.find((row) => !row.item.title && row.keys.some((key) => shared.includes(key)))?.item ?? null;
+}
+
+/** A window as agent-desktop list-windows gives it: its id, title and app name (core/agent-desktop-envelope.ts parseWindows). */
+type ListedWindow = { id: string; title: string; app: string };
+
+// Bee's own computer-use test page, open in Chrome. When several Chrome windows are open, that one comes forward.
+const FIXTURE_TITLE = /\bfixture\b/i;
+
+/**
+ * The open window that belongs to the app, from list-windows, or null. On Linux an app can have windows on the X11 session and
+ * still be missing from list-apps (not registered on the accessibility bus): a Chrome with a custom profile, a LibreOffice
+ * Writer that is still starting. A window counts by its app name (google-chrome, soffice with shared) or its title's app part
+ * ("Bee fixture form - Google Chrome", "Untitled 1 - LibreOffice Writer"). Best first: one whose title contains the asked title;
+ * then Bee's fixture page; then the focused one; then list order.
+ */
+export function matchRunningWindow<T extends ListedWindow>(app: AppTarget, windows: readonly T[], options: { shared?: boolean; title?: string | null } = {}): T | null {
+  const own = windows.filter((window) => matchRunningApp(app, [{ name: window.app }, { name: window.title, title: true }], { shared: options.shared ?? false }) !== null);
+  if (own.length === 0) return null;
+  const asked = options.title?.toLowerCase();
+  const rank = (window: T) =>
+    (asked && window.title.toLowerCase().includes(asked) ? 0 : 4) + (FIXTURE_TITLE.test(window.title) ? 0 : 2) + ("focused" in window && window.focused === true ? 0 : 1);
+  return own.reduce((best, window) => (rank(window) < rank(best) ? window : best));
 }
 
 /**

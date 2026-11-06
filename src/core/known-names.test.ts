@@ -159,6 +159,19 @@ describe("a person from recent requests", () => {
     expect(recentChoice(unclear, ["send Chris hi"])).toBeNull();
   });
 
+  it("never takes heard Krzys for Chris Lee from a recent Chris (real desktop run)", () => {
+    // Bee mapped Krzys → Chris Lee after its own "Which Chris…" question. A word that sounds like the heard one is the same doubt.
+    const krzys = nameAmbiguities("message Krzys", ["Chris Lee", "Krzysztof Nowak"])[0]!;
+    expect(krzys.matches).toEqual(["Chris Lee", "Krzysztof Nowak"]);
+    for (const recent of [["Which Chris do you mean?"], ["Which Chris", "send Chris hi"], ["Opened the chat with Chris."]]) {
+      expect(recentChoice(krzys, recent), recent.join(" | ")).not.toBe("Chris Lee");
+    }
+    expect(recentChoice(krzys, ["Which Chris do you mean?"])).toBeNull();
+    // Krzysztof named in full, or Chris Lee by surname, still decides.
+    expect(recentChoice(krzys, ["Sent it to Krzysztof."])).toBe("Krzysztof Nowak");
+    expect(recentChoice(krzys, ["Opened the chat with Chris Lee."])).toBe("Chris Lee");
+  });
+
   it("tells the AI who was meant instead of asking it to ask", () => {
     const block = knownNamesBlock(KNOWN, "message Chris", [{ heard: "Chris", name: "Krzysztof Nowak" }]);
     expect(block).toContain('"Chris" in this request means Krzysztof Nowak');

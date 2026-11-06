@@ -268,12 +268,14 @@ export const RECENT_TEXTS_MAX = 24;
 /**
  * The one person of an ambiguity the user's recent requests were about, or null. The newest recent text that names any of them
  * decides: by full name, or by a word of the name that is not the heard word and no other match shares ("Nowak", "Krzysztof",
- * "Lee"). When it names two or more, or none does, null: Bee asks. Per request only: nothing is stored.
+ * "Lee"), never by one that sounds like the heard word (heard Krzys: a recent "Chris" says nothing about Chris Lee). When it
+ * names two or more, or none does, null: Bee asks. Per request only: nothing is stored.
  */
 export function recentChoice(ambiguity: NameAmbiguity, recent: readonly string[]): string | null {
   const heard = letters(ambiguity.heard);
   const marks = ambiguity.matches.map((name) => {
-    const words = name.split(/[\s]+/).filter((word) => letters(word).length >= 3 && letters(word) !== heard);
+    // Never the heard word, nor a word that sounds like it: "Chris" in a recent "Which Chris…?" is the same doubt, not Chris Lee.
+    const words = name.split(/[\s]+/).filter((word) => letters(word).length >= 3 && letters(word) !== heard && !soundsAlike(word, ambiguity.heard));
     const own = words.filter((word) => !ambiguity.matches.some((other) => other !== name && other.split(/\s+/).some((part) => letters(part) === letters(word))));
     const terms = [...new Set([name, ...own])].map((term) => new RegExp(`(?<![\\p{L}])${escapeRegExp(term)}(?![\\p{L}])`, "iu"));
     return { name, terms };

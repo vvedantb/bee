@@ -215,16 +215,21 @@ describe("desktop actions everywhere", () => {
 });
 
 // Linux: agent-desktop launch by desktop-entry name, list-apps and focus-window, all faked. A launch result per name, a list-apps
-// result per call (the last repeats), and focus-window refusing as it does on Wayland.
-function makeLinux(options: { launch?: Record<string, AgentDesktopResult>; lists?: AgentDesktopResult[]; focus?: AgentDesktopResult } = {}) {
+// result per call (the last repeats), a list-windows result per call (the same), and focus-window refusing as it does on Wayland.
+function makeLinux(options: { launch?: Record<string, AgentDesktopResult>; lists?: AgentDesktopResult[]; windows?: AgentDesktopResult[]; focus?: AgentDesktopResult } = {}) {
   const runs: RunCall[] = [];
   const execs: string[] = [];
   let listCall = 0;
+  let windowCall = 0;
   const run = async (command: DesktopActionCommand, args: string[]): Promise<AgentDesktopResult> => {
     runs.push({ command, args });
     if (command === "list-apps") {
       const lists = options.lists ?? [{ ok: true, data: { apps: [] } }];
       return lists[Math.min(listCall++, lists.length - 1)] as AgentDesktopResult;
+    }
+    if (command === "list-windows") {
+      const windows = options.windows ?? [{ ok: true, data: { windows: [] } }];
+      return windows[Math.min(windowCall++, windows.length - 1)] as AgentDesktopResult;
     }
     if (command === "focus-window") return options.focus ?? { ok: false, code: "ACTION_NOT_SUPPORTED" };
     return options.launch?.[args[0] ?? ""] ?? { ok: false, code: "APP_NOT_FOUND" };
@@ -241,6 +246,12 @@ function makeLinux(options: { launch?: Record<string, AgentDesktopResult>; lists
   return { actions, runs, execs, launched: () => runs.filter((call) => call.command === "launch").map((call) => call.args[0]) };
 }
 const apps = (...names: string[]): AgentDesktopResult => ({ ok: true, data: { apps: names.map((name, index) => ({ name, pid: index + 1 })) } });
+const windows = (...rows: Array<[app: string, title: string]>): AgentDesktopResult => ({
+  ok: true,
+  data: { windows: rows.map(([app_name, title], index) => ({ id: `w-${index + 1}`, title, app_name, pid: 100 + index, is_focused: false, accessible: true })) },
+});
+// The real X11 test desktop: list-apps saw only the panel and the window manager while Chrome and Writer were open.
+const PANEL_ONLY = apps("xfce4-panel", "xfwm4");
 
 describe("desktop actions on Linux", () => {
   beforeEach(() => vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] }));
@@ -268,8 +279,9 @@ describe("desktop actions on Linux", () => {
     expect(await actions.focusWindow({ app: "Chrome" })).toEqual({ ok: true, message: "Chrome is already open; Bee could not bring it to the front" });
     expect(await actions.focusWindow({ app: "Chrome", title: "Fixture" })).toEqual({ ok: true, message: "Chrome is already open; Bee could not bring that window to the front" });
     expect(launched()).toEqual([]);
-    // One list-apps and one focus-window per request: nothing else.
-    expect(runs.map((call) => call.command)).toEqual(["list-apps", "focus-window", "list-apps", "focus-window", "list-apps", "focus-window"]);
+    // One list-apps, one list-windows and one focus-window per request: nothing else.
+    const once = ["list-apps", "list-windows", "focus-window"];
+    expect(runs.map((call) => call.command)).toEqual([...once, ...once, ...once]);
   });
 
   it("focuses a running Chrome under any name Linux lists it by, and never launches it", async () => {
@@ -283,6 +295,60 @@ describe("desktop actions on Linux", () => {
     const byId = makeLinux({ lists: [{ ok: true, data: { apps: [{ name: "Something", pid: 9, bundle_id: "google-chrome.desktop" }] } }], focus: { ok: true, data: {} } });
     expect(await byId.actions.openApp("Chrome")).toEqual({ ok: true, message: "Opened Chrome" });
     expect(byId.launched()).toEqual([]);
+  });
+
+  it("focuses a Chrome window list-apps misses (not on the accessibility bus), by window id, and never launches", async () => {
+    const { actions, launched, runs } = makeLinux({
+      lists: [PANEL_ONLY],
+      windows: [windows(["xfce4-panel", "Panel"], ["Google-chrome", "New Tab - Google Chrome"], ["Google-chrome", "Bee fixture form - Google Chrome"])],
+      focus: { ok: true, data: {} },
+      launch: { "google-chrome": { ok: true, data: {} } },
+    });
+    expect(await actions.openApp("Chrome")).toEqual({ ok: true, message: "Opened Chrome" });
+    expect(launched()).toEqual([]);
+    // The fixture page's window, when several Chromes are open.
+    expect(runs.find((call) => call.command === "focus-window")?.args).toEqual(["--window-id", "w-3"]);
+    // A window known only by its title counts too, and a refused focus still never launches a second copy.
+    const byTitle = makeLinux({ lists: [PANEL_ONLY], windows: [windows(["", "x"], ["unknown", "Google Chrome"])], launch: { "google-chrome": { ok: true, data: {} } } });
+    expect(await byTitle.actions.openApp("Chrome")).toEqual({ ok: true, message: "Chrome is already open; Bee could not bring it to the front" });
+    expect(byTitle.launched()).toEqual([]);
+    // A window whose title only starts with an app's name is not that app.
+    const firefox = makeLinux({ lists: [PANEL_ONLY], windows: [windows(["firefox", "Slack - Mozilla Firefox"])], launch: { slack: { ok: true, data: {} } } });
+    expect(await firefox.actions.openApp("Slack")).toEqual({ ok: true, message: "Opened Slack" });
+    expect(firefox.launched()).toEqual(["slack"]);
+  });
+
+  it("focuses the Chrome window whose title was asked for", async () => {
+    const { actions, runs } = makeLinux({
+      lists: [PANEL_ONLY],
+      windows: [windows(["Google-chrome", "Bee fixture form - Google Chrome"], ["Google-chrome", "Inbox - Google Chrome"])],
+      focus: { ok: true, data: {} },
+    });
+    expect(await actions.focusWindow({ app: "Chrome", title: "inbox" })).toEqual({ ok: true, message: "Focused Chrome" });
+    expect(runs.find((call) => call.command === "focus-window")?.args).toEqual(["--window-id", "w-2"]);
+  });
+
+  it("counts a LibreOffice Writer window list-apps misses: open focuses it, and a cold launch that timed out finds it", async () => {
+    const warm = makeLinux({ lists: [PANEL_ONLY], windows: [windows(["soffice", "Untitled 1 - LibreOffice Writer"])], focus: { ok: true, data: {} } });
+    expect(await warm.actions.openApp("LibreOffice Writer")).toEqual({ ok: true, message: "Opened LibreOffice Writer" });
+    expect(warm.launched()).toEqual([]);
+    // Cold: the launch timed out (about 30 s on the test desktop), and the window shows on the second look. Never "not found".
+    const cold = makeLinux({
+      lists: [PANEL_ONLY],
+      windows: [windows(), windows(), windows(["libreoffice-writer", "Untitled 1 - LibreOffice Writer"])],
+      launch: { "libreoffice-writer": { ok: false, code: "TIMEOUT" } },
+    });
+    const result = cold.actions.openApp("LibreOffice Writer");
+    await vi.runAllTimersAsync();
+    expect(await result).toEqual({ ok: true, message: "Opened LibreOffice Writer" });
+    expect(cold.launched()).toEqual(["libreoffice-writer"]);
+    // A launch that said not found, while the window opened meanwhile: the last look finds it.
+    const late = makeLinux({ lists: [PANEL_ONLY], windows: [windows(), windows(["soffice", "Untitled 1 - LibreOffice Writer"])] });
+    expect(await late.actions.openApp("LibreOffice Writer")).toEqual({ ok: true, message: "Opened LibreOffice Writer" });
+    // The Start Center alone is not Writer: Bee still opens Writer.
+    const center = makeLinux({ lists: [PANEL_ONLY], windows: [windows(["soffice", "LibreOffice"])], launch: { "libreoffice-writer": { ok: true, data: {} } } });
+    expect(await center.actions.openApp("LibreOffice Writer")).toEqual({ ok: true, message: "Opened LibreOffice Writer" });
+    expect(center.launched()).toEqual(["libreoffice-writer"]);
   });
 
   it("opens LibreOffice Writer though soffice runs (another LibreOffice app), and waits longer for it to show", async () => {
