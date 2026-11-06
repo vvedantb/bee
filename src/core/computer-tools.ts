@@ -132,6 +132,26 @@ const WAIT_MAX_MS = 15_000;
  */
 export const CANNOT_CONTROL = "stop and say Bee cannot control this app";
 const KEEPS_FAILING = `If it keeps failing, ${CANNOT_CONTROL}.`;
+// A document app's page (LibreOffice Writer's canvas) often has no editable field in the tree, though its window takes keys.
+const KEYBOARD_NOTE = "To type into a document whose page shows no editable field (LibreOffice Writer), call type_text with app and no ref: Bee types into that window with the keyboard.";
+
+/** The most characters the keyboard fallback types: one key press each. */
+export const KEYBOARD_TYPE_MAX = 200;
+// Characters the keyboard fallback can press, by agent-desktop key name. Letters, digits, space and a few marks with the same key
+// on every common layout; anything else is refused before a key is pressed.
+const KEY_NAMES: Record<string, string> = { " ": "space", ",": "comma", ".": "period", "/": "slash", "-": "minus" };
+
+/** The key presses that type this text, one per character, or null when a character has no key here (a line break, "?", "é"). */
+export function keyPresses(text: string): string[] | null {
+  const keys: string[] = [];
+  for (const char of text) {
+    if (/^[a-z0-9]$/.test(char)) keys.push(char);
+    else if (/^[A-Z]$/.test(char)) keys.push(`shift+${char.toLowerCase()}`);
+    else if (KEY_NAMES[char]) keys.push(KEY_NAMES[char]);
+    else return null;
+  }
+  return keys;
+}
 
 const HINTS: Record<string, string> = {
   STALE_REF: "the screen changed. Take a new snapshot and use its refs.",
@@ -641,6 +661,11 @@ const UNREADABLE = `Error: Bee could not read that snapshot. Take a skeleton sna
 // What a whole-window read says when Bee's second read did not fix it. Bee has already waited for the app by then, so the AI
 // tries the tree another way, then stops: there is no other way in.
 const THIN_NOTE = `Few elements came back, though Bee gave the app time to load. Try find by role (textfield, button) or name, or a skeleton snapshot then root. If those show nothing usable either, ${CANNOT_CONTROL}.`;
+// A document app, whose page may take keys with no editable field in the tree: LibreOffice runs as soffice.
+const DOCUMENT_APP = /\b(?:soffice|libreoffice|writer)\b/i;
+/** The thin-read note, with the keyboard fallback for a document app: a page with no field is not an app Bee cannot control. */
+const thinNote = (app: string | null) =>
+  app && DOCUMENT_APP.test(app) ? THIN_NOTE.replace(`If those show nothing usable either,`, `${KEYBOARD_NOTE} If those show nothing usable either,`) : THIN_NOTE;
 const SHALLOW_NOTE = `The controls sit deeper than this read: snapshot one region marked inside with root, or use find by role or name. If those show no usable controls, ${CANNOT_CONTROL}.`;
 const UNPROVEN_NOTE = `Bee could not read the whole window in time, so some refs may be refused (AMBIGUOUS_TARGET). If one is, snapshot again or use find. If they keep being refused, ${CANNOT_CONTROL}.`;
 
@@ -982,6 +1007,48 @@ export function computerTools(deps: ComputerToolDeps) {
       onRef("type", ref, [...(physical ? [HEADED_FLAG] : []), STDIN_FLAG], ACT_MS + Math.min(40_000, text.length * 40), cleanText(text), (to) => gateFor("type", to, { effect, text })())(),
     gate: gateFor("type", ref, { effect, text }),
   });
+  /**
+   * type_text with an app and no ref: the keyboard fallback for a focused document whose page has no editable field in the tree
+   * (LibreOffice Writer). agent-desktop's type needs a ref, so Bee brings the window forward, then presses one key per character
+   * with physical delivery in that app (press --headed --app focuses its window first). Every character is checked before any key
+   * is pressed. Stops at the first key that fails and says how much was typed; only a whole run comes back Done.
+   */
+  const keyboardTypeAction = ({ app, window_id, text, effect }: { app: string; window_id?: string | undefined; text: string; effect: Effect }): Action => ({
+    name: "type_text",
+    label: `Typing in ${shortName(app, 30)}…`,
+    work: async () => {
+      const invalid = badApp(app) ?? badWindow(window_id);
+      if (invalid) return invalid;
+      if (offLimitsApp(app)) return OFF_LIMITS_MESSAGE;
+      if (shellElement(lastField)) return SHELL_MESSAGE;
+      if ([...text].length > KEYBOARD_TYPE_MAX) return `Error: the keyboard types at most ${KEYBOARD_TYPE_MAX} characters at a time. Nothing was typed.`;
+      const keys = keyPresses(text);
+      if (!keys) return "Error: the keyboard can type only letters, digits, spaces, commas, full stops, slashes and hyphens. Press other keys, such as return, with press_key. Nothing was typed.";
+      const focused = await deps.desktop.focusWindow({ app }, control.signal);
+      // On Wayland Bee cannot bring a window forward; the headed press still asks agent-desktop to focus it, and refuses if it cannot.
+      const note = focused.ok ? "" : `Bee could not bring ${shortName(app, 30)} to the front first (${focused.message}). `;
+      const press = (name: string | undefined, key: string) => exec("press", [key, ...scope({ app: name, window_id }), HEADED_FLAG], ACT_MS);
+      const first = await withApp(app, (name) => press(name, keys[0]!));
+      currentApp = first.app ?? currentApp;
+      lastField = null;
+      let typed = first.result.ok ? 1 : 0;
+      let failed = first.result.ok ? null : first.result;
+      for (const key of keys.slice(1)) {
+        if (failed || control.reason()) break;
+        const result = await press(first.app, key);
+        if (result.ok) typed += 1;
+        else failed = result;
+      }
+      debugLog.info("computer", "keyboard-type", { chars: keys.length, typed, ok: typed === keys.length });
+      if (typed === keys.length) {
+        // "Done" first (after any app-name note), so actionDone and the claim guard read it as done.
+        return `${first.note}Done: typed ${keys.length} characters into ${shortName(first.app ?? app, 30)} with the keyboard. ${note}No field shows the text yet: check with find by text, or a snapshot.`;
+      }
+      const why = failed ? errorLine(failed) : STOPPED;
+      return `${first.note}${note}${why} Bee typed ${typed} of ${keys.length} characters with the keyboard before it stopped. Look before you type again.`;
+    },
+    gate: () => ({ command: "type", target: null, lastField, effect, text }),
+  });
   const setValueAction = ({ ref, value, effect }: { ref: string; value: string; effect: Effect }): Action =>
     value === ""
       ? {
@@ -1147,7 +1214,7 @@ export function computerTools(deps: ComputerToolDeps) {
           if (!shown.ok) return shown.text;
           const notes = whole
             ? [
-                thinTree(result.data) ? THIN_NOTE : !skeleton && shallowTree(result.data) ? SHALLOW_NOTE : null,
+                thinTree(result.data) ? thinNote(currentApp) : !skeleton && shallowTree(result.data) ? SHALLOW_NOTE : null,
                 unproven(result.data) ? UNPROVEN_NOTE : null,
               ].filter((line) => line !== null)
             : [];
@@ -1257,9 +1324,22 @@ export function computerTools(deps: ComputerToolDeps) {
     }),
 
     type_text: tool({
-      description: "Type text into the text field with this ref, as keystrokes. A line break presses Return, which sends in most chat apps.",
-      inputSchema: z.object({ ref: refSchema, text: z.string().min(1).max(4000), effect: effectSchema, physical: physicalSchema }),
-      execute: (input) => run(typeAction(input)),
+      description: `Type text into the text field with this ref, as keystrokes. A line break presses Return, which sends in most chat apps. For a document whose page shows no editable field (LibreOffice Writer), give app and no ref: Bee brings that window forward and types with the keyboard (letters, digits, spaces, commas, full stops, slashes and hyphens; at most ${KEYBOARD_TYPE_MAX} characters).`,
+      inputSchema: z
+        .object({
+          ref: refSchema.optional().describe("The text field to type in. Leave it out only for the keyboard fallback, with app."),
+          app: appSchema.optional().describe("With no ref: the app whose window to type into with the keyboard."),
+          window_id: windowSchema.optional(),
+          text: z.string().min(1).max(4000),
+          effect: effectSchema,
+          physical: physicalSchema,
+        })
+        .refine((input) => input.ref !== undefined || input.app !== undefined, { message: "Give ref, or app for the keyboard fallback." }),
+      execute: ({ ref, app, window_id, text, effect, physical }) => {
+        if (ref) return run(typeAction({ ref, text, effect, physical }));
+        if (app) return run(keyboardTypeAction({ app, window_id, text, effect }));
+        return Promise.resolve("Error: give ref (a text field), or app to type into its window with the keyboard.");
+      },
     }),
 
     set_value: tool({

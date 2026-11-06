@@ -953,7 +953,7 @@ describe("computerTools: the tree is the only way in", () => {
     tree: { role: "window", name: TEAMS, children },
   });
 
-  it("has no screenshot or click at a point, sends the AI text only, and types only into a ref", () => {
+  it("has no screenshot or click at a point, sends the AI text only, and types only into a ref or, by keyboard, a named app", () => {
     const { tools } = setup();
     for (const name of ["screenshot", "click_at"]) {
       expect(Object.keys(tools), name).not.toContain(name);
@@ -1330,5 +1330,129 @@ describe("computerTools: after a send, delete, purchase or submit", () => {
     const declined = setup({ confirm: async () => false });
     await declined.call("snapshot", { app: "Discord" });
     expect(await declined.call("click", { ref: "@s1abc:e3", effect: "delete" })).toBe(STOPPED);
+  });
+});
+
+describe("computerTools: typing into a document page with no editable field (LibreOffice Writer, PR #80 e2e H)", () => {
+  // Writer's page as AT-SPI showed it on the Linux test desktop: the window's own controls and a toolbar, no text field.
+  const WRITER = {
+    app: "soffice",
+    window: { id: "w-310", title: "Untitled 1 - LibreOffice Writer" },
+    snapshot_id: "s9w",
+    complete: true,
+    tree: {
+      role: "frame",
+      name: "Untitled 1 - LibreOffice Writer",
+      children: [
+        { role: "button", name: "Close", ref_id: "@s9w:e1" },
+        { role: "toolbar", name: "Standard", ref_id: "@s9w:e2", children: [{ role: "button", name: "Save", ref_id: "@s9w:e3" }] },
+      ],
+    },
+  };
+
+  function writer() {
+    const calls: Call[] = [];
+    const pressed: string[] = [];
+    const focused: string[] = [];
+    const run: ComputerRun = async (command, args, options) => {
+      // Every call passes Bee's own allowlist, as main/agent-desktop.ts checks before it spawns anything.
+      assertComputerUse(command, args);
+      calls.push({ command, args, ...(options?.stdin !== undefined ? { stdin: options.stdin } : {}) });
+      if (command === "snapshot") return { ok: true, data: WRITER };
+      if (command === "find" && args.includes("--role=textfield")) return { ok: true, data: { matches: [], roles_present: ["frame", "button", "toolbar"] } };
+      if (command === "find") {
+        // After the keys, the page's paragraph holds what was typed.
+        const text = pressed.map((key) => (key === "space" ? " " : key.replace(/^shift\+/, ""))).join("");
+        return { ok: true, data: { matches: text.includes("hello") ? [{ role: "paragraph", name: text, ref_id: "@s9x:e5" }] : [] } };
+      }
+      if (command === "press") {
+        pressed.push(args[0] ?? "");
+        return { ok: true, data: { disposition: { delivery: "delivered_verified" } } };
+      }
+      return { ok: true, data: {} };
+    };
+    const tools = computerTools({
+      run,
+      desktop: { ...desktop, focusWindow: async ({ app }) => (focused.push(app), { ok: true, message: `Focused ${app}` }) },
+      control: createRunControl(),
+      platform: "linux",
+      askFirst: () => true,
+      confirm: async () => true,
+    });
+    const call = (name: keyof typeof tools, input: unknown) =>
+      (tools[name].execute as (input: unknown, options: unknown) => Promise<string>)(input, { toolCallId: `t-${String(name)}`, messages: [] });
+    return { tools, call, calls, pressed, focused };
+  }
+
+  it("types hello with the keyboard into the focused Writer window, and never says Bee cannot control it", async () => {
+    const { call, calls, pressed, focused } = writer();
+    const read = await call("snapshot", { app: "soffice" });
+    expect(read).not.toMatch(/^\s*(?:textfield|textarea|text field|document text)\b/m);
+    // The thin read points at the keyboard, not only at stopping.
+    expect(read).toContain("call type_text with app and no ref");
+    expect(await call("find", { app: "soffice", role: "textfield" })).toMatch(/^No matches/);
+
+    const typed = await call("type_text", { app: "soffice", text: "hello", effect: "none" });
+    expect(actionDone(typed)).toBe(true);
+    expect(typed).toMatch(/^Done: typed 5 characters into soffice with the keyboard\./);
+    expect(typed).not.toMatch(/cannot control|isn['’]t exposed|not exposed/i);
+    expect(focused).toEqual(["soffice"]);
+    expect(pressed).toEqual(["h", "e", "l", "l", "o"]);
+    // One headed press per character, into the app: never agent-desktop's type, which needs a ref.
+    const presses = calls.filter((item) => item.command === "press");
+    expect(presses.map((item) => item.args)).toEqual(["h", "e", "l", "l", "o"].map((key) => [key, "--app=soffice", HEADED_FLAG]));
+    expect(calls.some((item) => item.command === "type")).toBe(false);
+
+    // The check after: the text is on the page.
+    expect(await call("find", { app: "soffice", text: "hello" })).toContain("hello");
+  });
+
+  it("presses shift for capitals and names the marks it can type, and checks every character before pressing any", async () => {
+    const { call, pressed } = writer();
+    expect(await call("type_text", { app: "soffice", text: "Hi, Bee.", effect: "none" })).toMatch(/^Done: typed 8 characters/);
+    expect(pressed).toEqual(["shift+h", "i", "comma", "space", "shift+b", "e", "e", "period"]);
+
+    const refused = writer();
+    expect(await refused.call("type_text", { app: "soffice", text: "hi?", effect: "none" })).toMatch(/^Error: the keyboard can type only letters/);
+    expect(await refused.call("type_text", { app: "soffice", text: "line one\nline two", effect: "none" })).toMatch(/^Error: /);
+    expect(await refused.call("type_text", { app: "soffice", text: "x".repeat(201), effect: "none" })).toMatch(/^Error: the keyboard types at most 200/);
+    expect(refused.pressed).toEqual([]);
+  });
+
+  it("says how much was typed when a key fails, and never comes back Done", async () => {
+    let presses = 0;
+    const run: ComputerRun = async (command) => {
+      if (command !== "press") return { ok: true, data: {} };
+      presses += 1;
+      return presses <= 2 ? { ok: true, data: {} } : { ok: false, code: "ACTION_FAILED", message: "keyboard focus not proven" };
+    };
+    const { call } = setup({ run, platform: "linux" });
+    const output = (await call("type_text", { app: "soffice", text: "hello", effect: "none" })) as string;
+    expect(actionDone(output)).toBe(false);
+    expect(output).toContain("Bee typed 2 of 5 characters with the keyboard before it stopped.");
+    expect(presses).toBe(3);
+  });
+
+  // A thin read of an app that is no document keeps the plain cannot-control note: see the Teams test above.
+  it("still needs a ref or an app", async () => {
+    const { tools } = setup();
+    type Schema = { safeParse: (value: unknown) => { success: boolean } };
+    const typeText = tools.type_text.inputSchema as unknown as Schema;
+    expect(typeText.safeParse({ app: "soffice", text: "hello", effect: "none" }).success).toBe(true);
+    expect(typeText.safeParse({ text: "hello", effect: "none" }).success).toBe(false);
+  });
+
+  it("feeds the claim guard: a typed claim stands after the keyboard typed it, and not after it failed", async () => {
+    const { runEvidence, guardLine } = await import("./claim-guard");
+    const { call } = writer();
+    const output = await call("type_text", { app: "soffice", text: "hello", effect: "none" });
+    const turn = (result: string) => [
+      { role: "assistant" as const, content: [{ type: "tool-call" as const, toolCallId: "t1", toolName: "type_text", input: { app: "soffice", text: "hello", effect: "none" } }] },
+      { role: "tool" as const, content: [{ type: "tool-result" as const, toolCallId: "t1", toolName: "type_text", output: { type: "text" as const, value: result } }] },
+    ];
+    expect(runEvidence(turn(output)).typed).toEqual(["hello"]);
+    expect(guardLine("Typed hello in LibreOffice Writer.", runEvidence(turn(output)))).toMatchObject({ rewritten: false });
+    const failed = "Error: keyboard focus not proven. Bee typed 2 of 5 characters with the keyboard before it stopped. Look before you type again.";
+    expect(guardLine("Typed hello in LibreOffice Writer.", runEvidence(turn(failed)))).toMatchObject({ rewritten: true, reason: "unproven-typing" });
   });
 });
