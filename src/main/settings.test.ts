@@ -500,32 +500,10 @@ describe("settings meeting context", () => {
   });
 });
 
-describe("settings read meeting window (experimental)", () => {
-  it("is off by default and in the view", () => {
-    const store = create();
-    expect(store.view().readMeetingWindowEnabled).toBe(false);
-    expect(store.readMeetingWindow()).toBe(false);
-  });
-
-  it("round-trips through settings.json and survives unrelated saves", () => {
-    const store = create();
-    expect(store.save({ readMeetingWindowEnabled: true }).readMeetingWindowEnabled).toBe(true);
-    expect(JSON.parse(readFileSync(join(dir, "settings.json"), "utf8")).readMeetingWindowEnabled).toBe(true);
-    store.save({ meetingMode: true });
-    expect(create().readMeetingWindow()).toBe(true);
-    store.save({ readMeetingWindowEnabled: false });
-    expect(create().readMeetingWindow()).toBe(false);
-  });
-
-  it("reads a bad stored value as off", () => {
-    writeFileSync(join(dir, "settings.json"), JSON.stringify({ readMeetingWindowEnabled: "yes" }));
-    expect(create().readMeetingWindow()).toBe(false);
-  });
-
-  it("rejects a non-boolean update at the IPC schema", async () => {
-    const { settingsUpdateSchema } = await import("../shared/ipc");
-    expect(() => settingsUpdateSchema.parse({ readMeetingWindowEnabled: "on" })).toThrow();
-    expect(settingsUpdateSchema.parse({ readMeetingWindowEnabled: true })).toEqual({ readMeetingWindowEnabled: true });
+describe("settings: the meeting window reader is always on", () => {
+  it("has no switch, and ignores one left in an old file", () => {
+    writeFileSync(join(dir, "settings.json"), JSON.stringify({ readMeetingWindowEnabled: false, meetingWindowReader: false }));
+    expect(create().view()).not.toHaveProperty("readMeetingWindowEnabled");
   });
 });
 
@@ -545,7 +523,7 @@ describe("settings Teams audio fallback", () => {
     const store = create();
     expect(store.save({ teamsAudioFallbackEnabled: true }).teamsAudioFallbackEnabled).toBe(true);
     expect(JSON.parse(readFileSync(join(dir, "settings.json"), "utf8")).teamsAudioFallbackEnabled).toBe(true);
-    store.save({ readMeetingWindowEnabled: true });
+    store.save({ meetingMode: true });
     expect(create().teamsAudioFallback()).toBe(true);
     store.save({ teamsAudioFallbackEnabled: false });
     expect(create().teamsAudioFallback()).toBe(false);

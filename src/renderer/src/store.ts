@@ -1709,12 +1709,11 @@ export const actions = {
   },
 
   /**
-   * New live caption lines from the call window (experimental meeting window reader). They join the session like teammates'
+   * New live caption lines from the call window (the meeting window reader). They join the session like teammates'
    * lines ("Alice: …") and follow the same steering rules. They are never shared with the Teams sync. With the mic on, a caption
    * that repeats the user's own recent line is dropped: the mic already sent it.
    */
   captionLines(lines: MeetingWindowCaptions["lines"]): void {
-    if (!state.settings?.readMeetingWindowEnabled) return;
     const now = Date.now();
     const own = state.mic.on ? state.session.lines.filter((line) => line.own && now - line.clientTs < CAPTION_ECHO_MS).map((line) => line.text) : [];
     const fresh = lines

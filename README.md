@@ -24,8 +24,8 @@ Download `Bee-x.y.z-arm64.dmg` (Apple Silicon) or `Bee-x.y.z.dmg` (Intel), or th
 - **Shortcut.** `Cmd+Shift+Space` brings Bee forward with a typing box ready: type a request ("open Figma", "summarise this") and press Enter, the same as saying it after "Bee". Esc closes the box; a second press hides Bee (`Ctrl+Shift+Space` on Windows and Linux). Change it in **Settings → Show or hide Bee**: click Change and press the new keys. Bee saves a shortcut only if it can hold it, and Settings says when another app holds the current one.
 - **Notes folder.** `~/Library/Application Support/Bee/notes`.
 - **Debug logs.** `~/Library/Application Support/Bee/logs` (see [Debug logs](#debug-logs)).
-- **Teams detector.** Windows only. On macOS use **Live → Manual test → Simulate Teams meeting**, or try **Settings → Experimental: read meeting window**.
-- **Experimental: read meeting window.** Off by default. With it on, Bee reads the Teams, Zoom or Google Meet window (its name, the people listed and live captions) through the accessibility tree, read-only. On macOS it needs Accessibility: turn on Bee under System Settings → Privacy & Security → Accessibility. Settings shows whether access is granted.
+- **Teams detector.** Windows only. On macOS use **Live → Manual test → Simulate Teams meeting**, or open a Teams, Zoom or Google Meet call: Bee reads its window.
+- **Meeting window.** Always on, with no setting. Bee reads the Teams, Zoom or Google Meet window (its name, the people listed and live captions) through the accessibility tree, read-only. On macOS it needs Accessibility: turn on Bee under System Settings → Privacy & Security → Accessibility. Settings shows whether access is granted.
 
 **From source:**
 ```bash
@@ -200,7 +200,7 @@ If the relay cannot be reached, Bee says "Bee is working solo" and carries on wi
 **Settings → Meeting context → Hear Teams when not everyone has Bee** (off by default). The idea: when some people in a Teams call have no Bee, Bee hears the Teams app itself, so their words reach the AI too. It listens only when all of these hold:
 
 - you are in a Teams call (never Zoom or Google Meet) and your Bee mic is on;
-- someone may not be covered: you are not in a sync, or Bee cannot see the call's people list (see **Experimental: read meeting window**), or someone on that list is not in your sync.
+- someone may not be covered: you are not in a sync, or Bee cannot see the call's people list (see **Meeting window**), or someone on that list is not in your sync.
 
 What it hears joins your transcript as "Meeting: …". It is never shared with the sync. A phrase that repeats one of your lines, a teammate's or a caption from the last 20 seconds is dropped.
 

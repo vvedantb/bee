@@ -282,7 +282,6 @@ describe("settingsChange", () => {
     meetingContextEnabled: true,
     meetingCalendarEnabled: true,
     meetingMemoryEnabled: true,
-    readMeetingWindowEnabled: false,
     teamsAudioFallbackEnabled: false,
     hintsEnabled: true,
     wakeWordEnabled: true,
