@@ -306,31 +306,32 @@ describe("direct request: names that sound alike", () => {
     const { gateway, calls } = models({ turns: [{ tool: "snapshot", input: { app: "google-chrome" } }] });
     const { computer, commands } = host();
     const turns: ModelMessage[][] = [];
-    const result = await runDirectCommand({ command: "send Chris a message on Teams saying hi", snippets, gateway, actions: desktop(), computer, knownNames: KNOWN, onTurn: (turn) => turns.push(turn) });
-    expect(result.tips).toEqual(["Which Chris: Chris Lee or Krzysztof Nowak?"]);
+    const result = await runDirectCommand({ command: "send Kris a message on Teams saying hi", snippets, gateway, actions: desktop(), computer, knownNames: KNOWN, onTurn: (turn) => turns.push(turn) });
+    expect(result.tips).toEqual(["Which Kris: Chris Lee or Krzysztof Nowak?"]);
     expect(calls()).toEqual({ streams: 0, generates: 0 });
     expect(commands).toEqual([]);
-    expect(lastText(turns[0] ?? [])).toBe("Which Chris: Chris Lee or Krzysztof Nowak?");
+    expect(lastText(turns[0] ?? [])).toBe("Which Kris: Chris Lee or Krzysztof Nowak?");
   });
 
-  it("asks which person, which app and what to say in one question, with no AI turn (Linux e2e: message Chris)", async () => {
+  it("asks which person, which app and what to say in one question, with no AI turn (Linux e2e, with Kris for a genuine tie)", async () => {
     // Before: "Which app should Bee use to message Chris, and what should the message say?" from a 20 s AI turn, and no
-    // question about which Chris. The typed path hands runDirectCommand the request after "Bee,".
+    // question about which person. Kris spells neither known name and sounds like both, so it is a genuine tie. The typed path
+    // hands runDirectCommand the request after "Bee,".
     const cases: [string, string][] = [
-      ["message Chris", "Which Chris (Chris Lee or Krzysztof Nowak), which app, and what should the message say?"],
-      ["message chris", "Which Chris (Chris Lee or Krzysztof Nowak), which app, and what should the message say?"],
-      ["Message Chris.", "Which Chris (Chris Lee or Krzysztof Nowak), which app, and what should the message say?"],
-      ["send Chris a message saying hi", "Which Chris (Chris Lee or Krzysztof Nowak), and which app?"],
-      ["message Chris on Teams", "Which Chris (Chris Lee or Krzysztof Nowak), and what should the message say?"],
-      ["email chris", "Which Chris (Chris Lee or Krzysztof Nowak), and what should the message say?"],
-      ["call chris", "Which Chris (Chris Lee or Krzysztof Nowak), and which app?"],
-      ["open chris's chat", "Which Chris: Chris Lee or Krzysztof Nowak?"],
+      ["message Kris", "Which Kris (Chris Lee or Krzysztof Nowak), which app, and what should the message say?"],
+      ["message kris", "Which Kris (Chris Lee or Krzysztof Nowak), which app, and what should the message say?"],
+      ["Message Kris.", "Which Kris (Chris Lee or Krzysztof Nowak), which app, and what should the message say?"],
+      ["send Kris a message saying hi", "Which Kris (Chris Lee or Krzysztof Nowak), and which app?"],
+      ["message Kris on Teams", "Which Kris (Chris Lee or Krzysztof Nowak), and what should the message say?"],
+      ["email kris", "Which Kris (Chris Lee or Krzysztof Nowak), and what should the message say?"],
+      ["call kris", "Which Kris (Chris Lee or Krzysztof Nowak), and which app?"],
+      ["open kris's chat", "Which Kris: Chris Lee or Krzysztof Nowak?"],
     ];
     // The typed line as the user wrote it reaches runDirectCommand as the request after the wake word.
-    expect(wakeCommand("Bee, message Chris")).toBe("message Chris");
-    expect(wakeCommand("Bee, message chris")).toBe("message chris");
+    expect(wakeCommand("Bee, message Kris")).toBe("message Kris");
+    expect(wakeCommand("Bee, message kris")).toBe("message kris");
     for (const [command, question] of cases) {
-      const { gateway, calls } = models({ turns: [{ text: "Which app should Bee use to message Chris, and what should the message say?" }] });
+      const { gateway, calls } = models({ turns: [{ text: "Which app should Bee use to message Kris, and what should the message say?" }] });
       const { computer, commands } = host();
       const result = await runDirectCommand({ command, snippets, gateway, actions: desktop(), computer, knownNames: KNOWN });
       expect(result.tips, command).toEqual([question]);
@@ -345,11 +346,11 @@ describe("direct request: names that sound alike", () => {
       { role: "assistant", content: [{ type: "text", text: "Opened Teams" }] },
     ];
     const { gateway } = models({});
-    const fromHistory = await runDirectCommand({ command: "message Chris", snippets, gateway, actions: desktop(), computer: host().computer, knownNames: KNOWN, history });
-    expect(fromHistory.tips).toEqual(["Which Chris (Chris Lee or Krzysztof Nowak), and what should the message say?"]);
+    const fromHistory = await runDirectCommand({ command: "message Kris", snippets, gateway, actions: desktop(), computer: host().computer, knownNames: KNOWN, history });
+    expect(fromHistory.tips).toEqual(["Which Kris (Chris Lee or Krzysztof Nowak), and what should the message say?"]);
     const memory = { facts: () => [{ text: "The user messages colleagues on Slack.", at: 1 }] } as unknown as BeeMemory;
-    const fromMemory = await runDirectCommand({ command: "message Chris saying hi", snippets, gateway, actions: desktop(), computer: host().computer, knownNames: KNOWN, memory });
-    expect(fromMemory.tips).toEqual(["Which Chris: Chris Lee or Krzysztof Nowak?"]);
+    const fromMemory = await runDirectCommand({ command: "message Kris saying hi", snippets, gateway, actions: desktop(), computer: host().computer, knownNames: KNOWN, memory });
+    expect(fromMemory.tips).toEqual(["Which Kris: Chris Lee or Krzysztof Nowak?"]);
   });
 
   it("goes ahead when the request names the person in full", async () => {
@@ -360,11 +361,11 @@ describe("direct request: names that sound alike", () => {
   });
 
   it("asks for open, find, call and lower-case requests too (PR #80 review)", async () => {
-    for (const command of ["open chris's chat", "find chris", "call chris", "send chris a message"]) {
+    for (const command of ["open kris's chat", "find kris", "call kris", "send kris a message"]) {
       const { gateway, calls } = models({ turns: [{ tool: "snapshot", input: { app: "google-chrome" } }] });
       const { computer, commands } = host();
       const result = await runDirectCommand({ command, snippets, gateway, actions: desktop(), computer, knownNames: KNOWN });
-      expect(result.tips[0], command).toMatch(/^Which (?:Chris|Krzys)(?:: | \()Chris Lee or Krzysztof Nowak(?:\?$|\), )/);
+      expect(result.tips[0], command).toMatch(/^Which Kris(?:: | \()Chris Lee or Krzysztof Nowak(?:\?$|\), )/);
       expect(calls(), command).toEqual({ streams: 0, generates: 0 });
       expect(commands, command).toEqual([]);
     }
@@ -389,25 +390,33 @@ describe("direct request: names that sound alike", () => {
       { role: "user", content: [{ type: "text", text: "send Krzysztof Nowak the deck" }] },
       { role: "assistant", content: [{ type: "text", text: "Sent the deck to Krzysztof Nowak." }] },
     ];
-    const result = await runDirectCommand({ command: "send Chris a message saying hi", snippets, gateway: { languageModel: () => model } as unknown as BeeGateway, actions: desktop(), computer: host().computer, knownNames: KNOWN, history });
+    const result = await runDirectCommand({ command: "send Kris a message saying hi", snippets, gateway: { languageModel: () => model } as unknown as BeeGateway, actions: desktop(), computer: host().computer, knownNames: KNOWN, history });
     expect(result.tips).toEqual(["Opened the chat with Krzysztof Nowak."]);
     expect(calls().generates).toBe(1);
     expect(prompts[0]).toContain("means Krzysztof Nowak");
     expect(prompts[0]).not.toContain("never pick one yourself");
   });
 
-  it("settles a literal short form by similarity before recent requests: Krzys is Krzysztof, not Chris (PR #80)", async () => {
-    // Before: "Krzys" went to Chris Lee because the last lines named Chris Lee ("name-recent"), though Krzys is the literal start
-    // of Krzysztof and only sounds like Chris.
+  it("settles a name spelled like one person, whatever sounds like it or recent text says (PR #80 e2e B and G)", async () => {
+    // Before: "type hi Krzys in the message box in Chrome" asked "Which Krzys: Chris Lee or Krzysztof Nowak?" and typed
+    // nothing; "message Chris" offered Krzysztof Nowak as a Chris. Spelling wins: Krzys is the literal start of Krzysztof, and
+    // Chris is Chris Lee's exact first name; a name that only sounds alike is no rival.
     const history: ModelMessage[] = [
-      { role: "user", content: [{ type: "text", text: "message Chris" }] },
-      { role: "assistant", content: [{ type: "text", text: "Which Chris (Chris Lee or Krzysztof Nowak), which app, and what should the message say?" }] },
       { role: "user", content: [{ type: "text", text: "send Chris Lee the deck" }] },
       { role: "assistant", content: [{ type: "text", text: "Sent the deck to Chris Lee." }] },
+      { role: "user", content: [{ type: "text", text: "send Krzysztof Nowak the notes" }] },
+      { role: "assistant", content: [{ type: "text", text: "Sent the notes to Krzysztof Nowak." }] },
     ];
-    for (const command of ["send Krzys a message saying hi", "please message krzys on Teams saying hi"]) {
+    const cases: [string, string, string][] = [
+      ["type hi Krzys in the message box in Chrome", "Krzysztof Nowak", "Chris Lee"],
+      ["message Krzys", "Krzysztof Nowak", "Chris Lee"],
+      ["please message krzys on Teams saying hi", "Krzysztof Nowak", "Chris Lee"],
+      ["message Chris", "Chris Lee", "Krzysztof Nowak"],
+      ["send Chris a message on Teams saying hi", "Chris Lee", "Krzysztof Nowak"],
+    ];
+    for (const [command, meant, other] of cases) {
       const prompts: string[] = [];
-      const { gateway } = models({ turns: [{ text: "Opened the chat with Krzysztof Nowak." }] });
+      const { gateway } = models({ turns: [{ text: `Opened the chat with ${meant}.` }] });
       const model = new MockLanguageModelV4({
         doGenerate: async (options) => {
           prompts.push(JSON.stringify(options.prompt));
@@ -416,19 +425,22 @@ describe("direct request: names that sound alike", () => {
       });
       const result = await runDirectCommand({ command, snippets, gateway: { languageModel: () => model } as unknown as BeeGateway, actions: desktop(), computer: host().computer, knownNames: KNOWN, history });
       expect(result.tips[0], command).not.toMatch(/^Which /);
-      expect(prompts[0], command).toContain("means Krzysztof Nowak");
-      expect(prompts[0], command).not.toContain("means Chris Lee");
+      expect(result.tips.join(" "), command).not.toContain(other);
+      expect(prompts.length, command).toBe(1);
+      expect(prompts[0], command).toContain(`means ${meant}`);
+      expect(prompts[0], command).not.toContain(`means ${other}`);
+      expect(prompts[0], command).not.toContain("in this request could be");
     }
   });
 
   it("still asks when the recent requests named both, or neither", async () => {
     const history: ModelMessage[] = [
-      { role: "user", content: [{ type: "text", text: "send Chris hi" }] },
-      { role: "assistant", content: [{ type: "text", text: "Which Chris: Chris Lee or Krzysztof Nowak?" }] },
+      { role: "user", content: [{ type: "text", text: "send Kris hi" }] },
+      { role: "assistant", content: [{ type: "text", text: "Which Kris: Chris Lee or Krzysztof Nowak?" }] },
     ];
     const { gateway } = models({});
-    const result = await runDirectCommand({ command: "send Chris a message", snippets, gateway, actions: desktop(), computer: host().computer, knownNames: KNOWN, history });
-    expect(result.tips).toEqual(["Which Chris (Chris Lee or Krzysztof Nowak), which app, and what should the message say?"]);
+    const result = await runDirectCommand({ command: "send Kris a message", snippets, gateway, actions: desktop(), computer: host().computer, knownNames: KNOWN, history });
+    expect(result.tips).toEqual(["Which Kris (Chris Lee or Krzysztof Nowak), which app, and what should the message say?"]);
   });
 
   it("learns the spelling from an explicit correction, and nothing else", async () => {
@@ -443,11 +455,11 @@ describe("direct request: names that sound alike", () => {
     const model = new MockLanguageModelV4({
       doStream: async (options) => {
         prompts.push(JSON.stringify(options.prompt));
-        return { stream: simulateReadableStream({ chunks: streamText("- Which Chris?\n") }) as never };
+        return { stream: simulateReadableStream({ chunks: streamText("- Which Kris?\n") }) as never };
       },
     });
-    await runDirectCommand({ command: "what did Chris say yesterday?", snippets, gateway: { languageModel: () => model } as unknown as BeeGateway, actions: desktop(), computer: null, knownNames: KNOWN });
-    expect(prompts[0]).toContain('\\"Chris\\" in this request could be');
+    await runDirectCommand({ command: "what did Kris say yesterday?", snippets, gateway: { languageModel: () => model } as unknown as BeeGateway, actions: desktop(), computer: null, knownNames: KNOWN });
+    expect(prompts[0]).toContain('\\"Kris\\" in this request could be');
   });
 });
 

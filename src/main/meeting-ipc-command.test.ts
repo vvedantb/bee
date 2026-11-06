@@ -297,12 +297,13 @@ describe("main: Bee's history and the follow-up check", () => {
     expect(prompts[0]).not.toContain("r6");
   });
 
-  it("asks which Chris, which app and what to say for a typed 'message Chris', from Settings names, before any AI call (Linux e2e)", async () => {
-    // Before: the AI took about 20 s to ask only which app and what to say. The renderer sends the request after "Bee,".
-    const { handler, prompts } = setupWithModel("Which app should Bee use to message Chris, and what should the message say?", { names: ["Chris Lee", "Krzysztof Nowak"] });
-    for (const command of ["message Chris", "message chris"]) {
+  it("asks which Kris, which app and what to say for a typed 'message Kris', from Settings names, before any AI call (Linux e2e)", async () => {
+    // Before: the AI took about 20 s to ask only which app and what to say. The renderer sends the request after "Bee,". Kris
+    // spells neither known name and sounds like both, so it is a genuine tie (Chris is Chris Lee, by spelling).
+    const { handler, prompts } = setupWithModel("Which app should Bee use to message Kris, and what should the message say?", { names: ["Chris Lee", "Krzysztof Nowak"] });
+    for (const command of ["message Kris", "message kris"]) {
       const result = (await handler(IPC.runCommand)({ command, runId: 7, sessionToken: "signed-in" })) as { tips: string[] };
-      expect(result.tips, command).toEqual(["Which Chris (Chris Lee or Krzysztof Nowak), which app, and what should the message say?"]);
+      expect(result.tips, command).toEqual(["Which Kris (Chris Lee or Krzysztof Nowak), which app, and what should the message say?"]);
     }
     expect(prompts).toEqual([]);
   });

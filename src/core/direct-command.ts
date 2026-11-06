@@ -15,7 +15,7 @@ import { COMMAND_MODEL, GUIDE_MODEL, JEV_MODEL, NO_GATEWAY_KEY, type BeeGateway 
 import type { McpTools } from "./mcp";
 import { isKnownApp, routeCommand, type DesktopActionResult, type DesktopActions } from "./desktop-actions";
 import { desktopTools } from "./desktop-tools";
-import { correctedName, nameAmbiguities, recentChoice, screenNames, similarityChoice, spelledName, type ResolvedName } from "./known-names";
+import { correctedName, nameAmbiguities, recentChoice, screenNames, spelledName, type ResolvedName } from "./known-names";
 import { guideWithLuna, noteCitation, type LunaToolActivity, type TipFields } from "./luna";
 import type { Snippet } from "./notes";
 import { loadMcp } from "./pipeline";
@@ -409,25 +409,18 @@ export async function runDirectCommand(args: {
     return finish("fast", { notes: [], rankSource: "fallback", rankError: null, tips: [result.message], tipSources: [null], sources: [], guideError: null, actions: [result.message], timingsMs: timings() });
   }
 
-  // A message, a send, a call or a chat for a name that could be more than one person the user has taught Bee ("Chris": Chris Lee
+  // A message, a send, a call or a chat for a name that could be more than one person the user has taught Bee ("Kris": Chris Lee
   // or Krzysztof Nowak) asks which one first, before any AI call or action: never a silent pick. The answer is a follow-up. When
   // the user's last few requests were about one of them, that one is meant, and the AI is told so (nothing is stored).
   const ambiguous = nameAmbiguities(command, args.knownNames ?? []).filter((item) => !isKnownApp(item.heard));
   const recent = ambiguous.length > 0 ? recentTexts(history) : [];
-  // The heard word first: a literal short form that only sounds like the other ("Krzys": Krzysztof, not Chris) is settled by
-  // similarity, and recent text never overrides it. Only a tie goes to recent text, then to a question.
-  const bySimilarity: ResolvedName[] = ambiguous.flatMap((item) => {
-    const name = similarityChoice(item, args.knownNames ?? []);
-    return name ? [{ heard: item.heard, name }] : [];
-  });
-  if (bySimilarity.length > 0) debugLog.info("ai", "name-similar", { command, resolved: bySimilarity });
-  const byRecent: ResolvedName[] = ambiguous.flatMap((item) => {
-    if (bySimilarity.some((done) => done.heard === item.heard)) return [];
+  // A name spelled like one known person never gets here ("Krzys": Krzysztof Nowak; "Chris": Chris Lee): nameMatches drops
+  // sound-alike rivals of a spelling match. Only a genuine tie ("Kris", "Sara") goes to recent text, then to a question.
+  const resolvedNames: ResolvedName[] = ambiguous.flatMap((item) => {
     const name = recentChoice(item, recent);
     return name ? [{ heard: item.heard, name }] : [];
   });
-  if (byRecent.length > 0) debugLog.info("ai", "name-recent", { command, resolved: byRecent });
-  const resolvedNames: ResolvedName[] = [...bySimilarity, ...byRecent];
+  if (resolvedNames.length > 0) debugLog.info("ai", "name-recent", { command, resolved: resolvedNames });
   const unclear = REACHES_PERSON.test(command) ? ambiguous.find((item) => !resolvedNames.some((done) => done.heard === item.heard)) : undefined;
   if (unclear) {
     // One question for everything missing (which person, which app, what to say), so the answer needs no second question. An

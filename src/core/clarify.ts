@@ -1,7 +1,7 @@
 import { nameChoices, whichNameQuestion, type NameAmbiguity } from "./known-names";
 
-// One question back, with no AI call, when a request to reach a person names one Bee cannot pick ("message Chris", with Chris Lee
-// and Krzysztof Nowak known). Before, Bee asked "Which Chris?" and the user's answer then cost a full AI turn (about 20 s on a
+// One question back, with no AI call, when a request to reach a person names one Bee cannot pick ("message Kris", with Chris Lee
+// and Krzysztof Nowak known). Before, Bee asked "Which Kris?" and the user's answer then cost a full AI turn (about 20 s on a
 // Linux test desktop) for the AI to ask which app and what to say. Now the one question asks for each missing part at once:
 // which person, which app (when neither the request nor the user's recent requests or Bee's memory name one), and what to say
 // (for a message with no words in it). Pure: direct-command.ts asks it before any AI call or action.
@@ -49,8 +49,8 @@ export function requestGaps(command: string, heard: string, context: readonly st
 }
 
 /**
- * The one question for an ambiguous person, with the other missing parts: "Which Chris (Chris Lee or Krzysztof Nowak), which
- * app, and what should the message say?". With nothing else missing, the plain "Which Chris: Chris Lee or Krzysztof Nowak?".
+ * The one question for an ambiguous person, with the other missing parts: "Which Kris (Chris Lee or Krzysztof Nowak), which
+ * app, and what should the message say?". With nothing else missing, the plain "Which Kris: Chris Lee or Krzysztof Nowak?".
  */
 export function clarifyingQuestion(args: { command: string; ambiguity: NameAmbiguity; context?: readonly string[] }): string {
   const gaps = requestGaps(args.command, args.ambiguity.heard, args.context);

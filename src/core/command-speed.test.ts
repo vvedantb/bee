@@ -38,8 +38,8 @@ describe("command path: which way a request goes, with no AI call to decide", ()
       expect(shortComputerTask(command), command).toBe(true);
     }
     // An ambiguous person: one question back, no AI.
-    const ambiguity = nameAmbiguities("message Chris", ["Chris Lee", "Krzysztof Nowak"])[0];
-    expect(ambiguity && clarifyingQuestion({ command: "message Chris", ambiguity })).toBe("Which Chris (Chris Lee or Krzysztof Nowak), which app, and what should the message say?");
+    const ambiguity = nameAmbiguities("message Kris", ["Chris Lee", "Krzysztof Nowak"])[0];
+    expect(ambiguity && clarifyingQuestion({ command: "message Kris", ambiguity })).toBe("Which Kris (Chris Lee or Krzysztof Nowak), which app, and what should the message say?");
   });
 
   it("decides in well under a millisecond", () => {
@@ -47,8 +47,8 @@ describe("command path: which way a request goes, with no AI call to decide", ()
       routeCommand("open Chrome");
       simpleComputerTask("type hi in the message box in Chrome");
       shortComputerTask("send hi from the fixture message box");
-      const ambiguity = nameAmbiguities("message Chris", ["Chris Lee", "Krzysztof Nowak"])[0];
-      return ambiguity ? clarifyingQuestion({ command: "message Chris", ambiguity }) : null;
+      const ambiguity = nameAmbiguities("message Kris", ["Chris Lee", "Krzysztof Nowak"])[0];
+      return ambiguity ? clarifyingQuestion({ command: "message Kris", ambiguity }) : null;
     };
     expect(averageMs(500, decide)).toBeLessThan(1);
   });

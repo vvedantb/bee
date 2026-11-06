@@ -2,8 +2,9 @@
 // that the user can edit, plus names Bee learns by itself: a spelling the user gives ("It's Z U Z A N N A") and chat names it
 // reads on screen during computer use ("Chat | Zuzanna Szczepaniak-Moody | …" in Teams), and a correction the user says ("I meant
 // Krzysztof"). Sent with each direct request so the AI spells them right and can match a misheard name ("Susannah") to a known
-// one. When a heard name sounds like more than one known person (Chris: Chris Lee or Krzysztof Nowak), Bee asks which one: no
-// name is ever mapped to another for good, as two people can share a sound. Pure: no Electron, no fs.
+// one. A name spelled like a known person is that person (Chris: Chris Lee; Krzys: Krzysztof Nowak), and a sound-alike never
+// competes with it. When a heard name only sounds like more than one known person (Kris: Chris Lee or Krzysztof Nowak), or is
+// spelled like two (Sara: Sara Kim or Sarah Ode), Bee asks which one: no name is ever mapped to another for good. Pure: no Electron, no fs.
 
 /** Names kept at most. The oldest learned ones drop off first. */
 export const KNOWN_NAMES_MAX = 200;
@@ -190,21 +191,40 @@ function people(known: readonly string[]): string[] {
   return names.filter((name) => name.includes(" ") || !names.some((other) => other.toLowerCase().startsWith(`${name.toLowerCase()} `)));
 }
 
-/**
- * Known people whose first name the heard word could be, and how. An exact first name rules out plain short forms of others: with
- * Alex Smith and Alexandra Jones known, "Alex" is Alex Smith. A short form spelled another way still counts (with Chris Lee and
- * Krzysztof Nowak known, "Chris" may be either: STT writes the short form Krzys as Chris).
- */
-export function nameMatches(heard: string, known: readonly string[]): { name: string; how: NameMatch }[] {
-  const found: { name: string; how: NameMatch }[] = [];
-  for (const name of people(known)) {
-    const how = matchFirstName(heard, name.split(" ")[0] ?? "");
-    if (how) found.push({ name, how });
-  }
-  return found.some((match) => match.how === "exact") ? found.filter((match) => match.how !== "short") : found;
+// A match by spelling: the heard word is the first name, its literal start (Krzys for Krzysztof), or the same name with a letter
+// more or less at the end that is said the same (Sara, Sarah). Anything else only sounds alike (Chris for Krzys).
+function spelled(heard: string, first: string, how: NameMatch): boolean {
+  if (how === "exact" || how === "short") return true;
+  const [h, k] = [letters(heard), letters(first)];
+  return how === "sound" && (h.startsWith(k) || k.startsWith(h));
 }
 
-/** Known names whose first word the heard word could be: "Chris" → Chris Lee, Krzysztof Nowak. */
+// Every known person whose first name the heard word matches in any way, before spelling wins.
+function everyMatch(heard: string, known: readonly string[]): { name: string; how: NameMatch; spelled: boolean }[] {
+  const found: { name: string; how: NameMatch; spelled: boolean }[] = [];
+  for (const name of people(known)) {
+    const first = name.split(" ")[0] ?? "";
+    const how = matchFirstName(heard, first);
+    if (how) found.push({ name, how, spelled: spelled(heard, first, how) });
+  }
+  return found;
+}
+
+/**
+ * Known people whose first name the heard word could be, and how. Spelling wins: when any person matches by spelling (exact, a
+ * literal short form, or a same-sounding spelling of the same letters: Sara, Sarah), people who only sound alike are dropped. With
+ * Chris Lee and Krzysztof Nowak known, "Krzys" is Krzysztof Nowak and "Chris" is Chris Lee; only "Kris", which spells neither,
+ * could be both. An exact first name also rules out plain short forms of others: with Alex Smith and Alexandra Jones known,
+ * "Alex" is Alex Smith.
+ */
+export function nameMatches(heard: string, known: readonly string[]): { name: string; how: NameMatch }[] {
+  const found = everyMatch(heard, known);
+  const bySpelling = found.some((match) => match.spelled) ? found.filter((match) => match.spelled) : found;
+  const kept = bySpelling.some((match) => match.how === "exact") ? bySpelling.filter((match) => match.how !== "short") : bySpelling;
+  return kept.map(({ name, how }) => ({ name, how }));
+}
+
+/** Known names whose first word the heard word could be: "Kris" → Chris Lee, Krzysztof Nowak; "Chris" → Chris Lee. */
 export function namesSoundingLike(heard: string, known: readonly string[]): string[] {
   return nameMatches(heard, known).map((match) => match.name);
 }
@@ -243,8 +263,8 @@ function nameTokens(text: string): Token[] {
 
 /**
  * Names in a request that could be more than one known person: a word that may be a name (nameTokens: capitalised, or where a
- * person goes, in any case) matching two or more known people, unless the request also names one in full (a surname). "send
- * Chris hi" or "send chris hi" with Chris Lee and Krzysztof Nowak known → Chris: both. "send Chris Lee hi" → none.
+ * person goes, in any case) matching two or more known people (nameMatches: spelling first), unless the request also names one in
+ * full (a surname). "send Kris hi" with Chris Lee and Krzysztof Nowak known → Kris: both. "send Chris hi" → none (Chris Lee).
  */
 export function nameAmbiguities(request: string, known: readonly string[]): NameAmbiguity[] {
   const lower = request.toLowerCase();
@@ -256,6 +276,21 @@ export function nameAmbiguities(request: string, known: readonly string[]): Name
     if (matches.some((name) => name.includes(" ") && lower.includes(name.toLowerCase()))) continue;
     const heard = /^\p{Lu}/u.test(word) ? word : cap(word);
     if (!found.some((item) => item.heard.toLowerCase() === heard.toLowerCase())) found.push({ heard, matches: matches.slice(0, 4) });
+  }
+  return found;
+}
+
+/**
+ * Names in a request that spelling settles against a sound-alike: the word matches one known person by spelling and another only
+ * by sound. "type hi Krzys" with Chris Lee and Krzysztof Nowak known → Krzys: Krzysztof Nowak; "message Chris" → Chris: Chris
+ * Lee. Told to the AI so it never picks the sound-alike. A word matching only one person in any way needs no line.
+ */
+export function spellingSettled(request: string, known: readonly string[]): ResolvedName[] {
+  const found: ResolvedName[] = [];
+  for (const { word } of nameTokens(request)) {
+    const matches = nameMatches(word, known);
+    if (matches.length !== 1 || everyMatch(word, known).length < 2) continue;
+    if (!found.some((item) => item.heard.toLowerCase() === word.toLowerCase())) found.push({ heard: word, name: matches[0]!.name });
   }
   return found;
 }
@@ -286,22 +321,7 @@ export function recentChoice(ambiguity: NameAmbiguity, recent: readonly string[]
   return null;
 }
 
-/**
- * The one person of an ambiguity the heard word itself points to, before any recent text, or null. Only a literal match (the
- * exact first name, or its literal start: Krzys for Krzysztof) wins, and only when every other match is merely a sound-alike
- * (Krzys → Chris). With Chris Lee and Krzysztof Nowak known, "Krzys" is Krzysztof Nowak. A rival that is a sound-alike short
- * form keeps it open: "Chris" is exact for Chris Lee, but STT writes Krzys as Chris (sound-short for Krzysztof), so Bee still asks.
- * Two literal matches, or none ("Kris": sound for both), also keep it open.
- */
-export function similarityChoice(ambiguity: NameAmbiguity, known: readonly string[]): string | null {
-  const found = nameMatches(ambiguity.heard, known).filter((match) => ambiguity.matches.includes(match.name));
-  const literal = found.filter((match) => match.how === "exact" || match.how === "short");
-  if (literal.length !== 1) return null;
-  const rivals = found.filter((match) => match !== literal[0]);
-  return rivals.every((match) => match.how === "sound") ? literal[0]!.name : null;
-}
-
-/** A name Bee settled from the user's recent requests: "Chris" in this request means Krzysztof Nowak. */
+/** A name Bee settled from the user's recent requests: "Kris" in this request means Krzysztof Nowak. */
 export type ResolvedName = { heard: string; name: string };
 
 /**
@@ -309,7 +329,7 @@ export type ResolvedName = { heard: string; name: string };
  * message" with only Krzysztof Nowak known → "send Krzysztof a message"; "Susannah" → "Zuzanna" with only Zuzanna known. Only a
  * word that may be a name (nameTokens), only when exactly one known person matches it, and only by sound (another spelling): an
  * exact or literal short form ("Alex" for Alexandra) stays as heard. With Chris Lee and Krzysztof Nowak both known, "Chris" stays
- * "Chris", and the request asks which one. Nothing is stored.
+ * "Chris" (Chris Lee), and "Kris" stays "Kris", and the request asks which one. Nothing is stored.
  */
 export function remapHeardNames(
   text: string,
@@ -346,7 +366,7 @@ export function nameChoices(options: readonly string[]): string {
   return options.length <= 2 ? options.join(" or ") : `${options.slice(0, -1).join(", ")} or ${options.at(-1)}`;
 }
 
-/** The question Bee asks for the first ambiguous name: "Which Chris: Chris Lee or Krzysztof Nowak?" */
+/** The question Bee asks for the first ambiguous name: "Which Kris: Chris Lee or Krzysztof Nowak?" */
 export function whichNameQuestion(ambiguity: NameAmbiguity): string {
   return `Which ${ambiguity.heard}: ${nameChoices(ambiguity.matches)}?`;
 }
@@ -362,7 +382,9 @@ export function knownNamesBlock(names: readonly string[], request?: string, reso
   const block = `Names the user has taught Bee (spell them this way; a misheard name, such as Susannah for Zuzanna, may be one of these; when it could be more than one of them, ask which): ${list.join(", ")}.`;
   const settled = (heard: string) => resolved.some((item) => item.heard.toLowerCase() === heard.toLowerCase());
   const unclear = request ? nameAmbiguities(request, list).filter((item) => !settled(item.heard)) : [];
+  const spelledOut = request ? spellingSettled(request, list).filter((item) => !settled(item.heard)) : [];
   const lines = [
+    ...spelledOut.map(({ heard, name }) => `"${heard}" in this request means ${name}: it is spelled like ${name}, and a name that only sounds like it is someone else.`),
     ...resolved.map(({ heard, name }) => `"${heard}" in this request means ${name}: the user's recent requests were about ${name}. If the user says otherwise, follow them.`),
     ...unclear.map(({ heard, matches }) => `"${heard}" in this request could be ${matches.join(" or ")}. Ask the user which one before acting on that name; never pick one yourself.`),
   ];

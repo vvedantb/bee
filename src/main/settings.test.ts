@@ -764,8 +764,11 @@ describe("settings: a name correction persists (temp profile)", () => {
     const again = create();
     expect(again.knownNames()).toEqual(["Chris Lee", "Krzysztof Nowak"]);
     expect(JSON.parse(readFileSync(join(dir, "settings.json"), "utf8")).knownNames).toEqual(["Chris Lee", "Krzysztof Nowak"]);
-    // Both stay known, so the next "Chris" is asked about, not silently sent to either.
-    expect(nameAmbiguities("send Chris hi", again.knownNames())).toEqual([{ heard: "Chris", matches: ["Chris Lee", "Krzysztof Nowak"] }]);
+    // Both stay known: "Chris" is spelled like Chris Lee, "Krzys" like Krzysztof Nowak, and "Kris", which sounds like both, is
+    // asked about, not silently sent to either.
+    expect(nameAmbiguities("send Chris hi", again.knownNames())).toEqual([]);
+    expect(nameAmbiguities("send Krzys hi", again.knownNames())).toEqual([]);
+    expect(nameAmbiguities("send Kris hi", again.knownNames())).toEqual([{ heard: "Kris", matches: ["Chris Lee", "Krzysztof Nowak"] }]);
     expect(knownNamesBlock(again.knownNames())).toContain("Krzysztof Nowak, Chris Lee.");
   });
 });

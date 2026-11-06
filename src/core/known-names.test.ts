@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  KNOWN_NAMES_MAX, STT_TERMS_MAX, correctedName, knownNamesBlock, matchFirstName, mergeNames, nameAmbiguities, namesSoundingLike, normalizeNames, recentChoice, remapHeardNames, similarityChoice,
+  KNOWN_NAMES_MAX, STT_TERMS_MAX, correctedName, knownNamesBlock, matchFirstName, mergeNames, nameAmbiguities, namesSoundingLike, normalizeNames, recentChoice, remapHeardNames, spellingSettled,
   screenNames, soundKey, soundsAlike, spelledName, sttTerms, whichNameQuestion,
 } from "./known-names";
 
@@ -50,15 +50,20 @@ describe("same-pronunciation names", () => {
     expect(soundKey("Sam")).not.toBe(soundKey("Susan"));
   });
 
-  it("finds every known person a heard name could be", () => {
-    expect(namesSoundingLike("Chris", KNOWN)).toEqual(["Chris Lee", "Krzysztof Nowak"]);
-    expect(namesSoundingLike("Krzys", KNOWN)).toEqual(["Chris Lee", "Krzysztof Nowak"]);
+  it("finds every known person a heard name could be, spelling first", () => {
+    // Spelling wins: a name spelled like one person drops people who only sound like it.
+    expect(namesSoundingLike("Chris", KNOWN)).toEqual(["Chris Lee"]);
+    expect(namesSoundingLike("Krzys", KNOWN)).toEqual(["Krzysztof Nowak"]);
+    expect(namesSoundingLike("Kris", KNOWN)).toEqual(["Chris Lee", "Krzysztof Nowak"]);
+    expect(namesSoundingLike("Krzys", ["Chris Lee", "Krzysztof Nowak"])).toEqual(["Krzysztof Nowak"]);
+    expect(namesSoundingLike("Chris", ["Chris Lee", "Krzysztof Nowak"])).toEqual(["Chris Lee"]);
     expect(namesSoundingLike("Susannah", KNOWN)).toEqual(["Zuzanna Szczepaniak-Moody"]);
     expect(namesSoundingLike("Sam", KNOWN)).toEqual(["Sam Lee"]);
   });
 
   it("calls a name ambiguous only when two or more people match and nothing in the request tells them apart", () => {
-    expect(nameAmbiguities("send Chris a message saying hi", KNOWN)).toEqual([{ heard: "Chris", matches: ["Chris Lee", "Krzysztof Nowak"] }]);
+    expect(nameAmbiguities("send Kris a message saying hi", KNOWN)).toEqual([{ heard: "Kris", matches: ["Chris Lee", "Krzysztof Nowak"] }]);
+    expect(nameAmbiguities("send Chris a message saying hi", KNOWN)).toEqual([]);
     expect(nameAmbiguities("send Chris Lee a message", KNOWN)).toEqual([]);
     expect(nameAmbiguities("send Krzysztof Nowak the notes", KNOWN)).toEqual([]);
     expect(nameAmbiguities("send Susannah the notes", KNOWN)).toEqual([]);
@@ -68,11 +73,12 @@ describe("same-pronunciation names", () => {
   });
 
   it("never maps one name to another for good: the same request asks again with the same people known", () => {
-    const first = nameAmbiguities("message Chris", KNOWN);
+    const first = nameAmbiguities("message Kris", KNOWN);
     const learned = mergeNames(KNOWN, ["Krzysztof"]);
-    expect(nameAmbiguities("message Chris", learned).map((item) => item.heard)).toEqual(first.map((item) => item.heard));
-    expect(knownNamesBlock(KNOWN, "message Chris")).toMatch(/"Chris" in this request could be .*Krzysztof Nowak.*Chris Lee|"Chris" in this request could be .*Chris Lee.*Krzysztof Nowak/);
-    expect(knownNamesBlock(KNOWN, "message Chris")).toContain("never pick one yourself");
+    expect(first.map((item) => item.heard)).toEqual(["Kris"]);
+    expect(nameAmbiguities("message Kris", learned).map((item) => item.heard)).toEqual(first.map((item) => item.heard));
+    expect(knownNamesBlock(KNOWN, "message Kris")).toMatch(/"Kris" in this request could be .*Krzysztof Nowak.*Chris Lee|"Kris" in this request could be .*Chris Lee.*Krzysztof Nowak/);
+    expect(knownNamesBlock(KNOWN, "message Kris")).toContain("never pick one yourself");
     expect(knownNamesBlock(KNOWN, "message Sam")).not.toContain("in this request could be");
   });
 });
@@ -129,11 +135,11 @@ describe("names that are not the same sound (PR #80 review)", () => {
 
 describe("which person, in more kinds of request (PR #80 review)", () => {
   it("asks for open, find, call, a possessive chat and lower-case speech-to-text", () => {
-    for (const request of ["open chris's chat", "find krzys", "call chris", "send chris a message", "Open Chris’s DM", "chat with chris", "send a message to chris"]) {
+    for (const request of ["open kris's chat", "find kris", "call kris", "send kris a message", "Open Kris’s DM", "chat with kris", "send a message to kris"]) {
       const [first] = nameAmbiguities(request, KNOWN);
       expect(first?.matches, request).toEqual(["Chris Lee", "Krzysztof Nowak"]);
     }
-    expect(whichNameQuestion(nameAmbiguities("find krzys", KNOWN)[0]!)).toBe("Which Krzys: Chris Lee or Krzysztof Nowak?");
+    expect(whichNameQuestion(nameAmbiguities("find kris", KNOWN)[0]!)).toBe("Which Kris: Chris Lee or Krzysztof Nowak?");
   });
 
   it("never asks about an app or an ordinary word", () => {
@@ -144,7 +150,7 @@ describe("which person, in more kinds of request (PR #80 review)", () => {
 });
 
 describe("a person from recent requests", () => {
-  const unclear = { heard: "Chris", matches: ["Chris Lee", "Krzysztof Nowak"] };
+  const unclear = { heard: "Kris", matches: ["Chris Lee", "Krzysztof Nowak"] };
 
   it("prefers the one person the newest recent text names, without asking", () => {
     expect(recentChoice(unclear, ["send Chris Lee the deck", "Sent the deck to Krzysztof Nowak."])).toBe("Krzysztof Nowak");
@@ -153,35 +159,47 @@ describe("a person from recent requests", () => {
   });
 
   it("asks when the newest mention names both, or nothing recent names either", () => {
-    expect(recentChoice(unclear, ["Sent the deck to Krzysztof Nowak.", "Which Chris: Chris Lee or Krzysztof Nowak?"])).toBeNull();
+    expect(recentChoice(unclear, ["Sent the deck to Krzysztof Nowak.", "Which Kris: Chris Lee or Krzysztof Nowak?"])).toBeNull();
     expect(recentChoice(unclear, ["what's the weather?"])).toBeNull();
     // The heard word alone tells nothing.
-    expect(recentChoice(unclear, ["send Chris hi"])).toBeNull();
+    expect(recentChoice(unclear, ["send Kris hi"])).toBeNull();
   });
 
   it("tells the AI who was meant instead of asking it to ask", () => {
-    const block = knownNamesBlock(KNOWN, "message Chris", [{ heard: "Chris", name: "Krzysztof Nowak" }]);
-    expect(block).toContain('"Chris" in this request means Krzysztof Nowak');
+    const block = knownNamesBlock(KNOWN, "message Kris", [{ heard: "Kris", name: "Krzysztof Nowak" }]);
+    expect(block).toContain('"Kris" in this request means Krzysztof Nowak');
     expect(block).not.toContain("never pick one yourself");
   });
 });
 
-describe("similarity before recent requests (PR #80)", () => {
+describe("spelling wins over sound (PR #80 e2e B and G)", () => {
   const known = ["Chris Lee", "Krzysztof Nowak"];
 
-  it("settles Krzys as Krzysztof Nowak: a literal short form beats a sound-alike, whatever recent text says", () => {
-    const [krzys] = nameAmbiguities("message Krzys", known);
-    expect(krzys).toEqual({ heard: "Krzys", matches: ["Chris Lee", "Krzysztof Nowak"] });
-    expect(similarityChoice(krzys!, known)).toBe("Krzysztof Nowak");
-    // recentChoice alone would have picked Chris Lee here; similarity is checked first (direct-command.ts).
-    expect(recentChoice(krzys!, ["Which Chris: Chris Lee or Krzysztof Nowak?", "Sent the deck to Chris Lee."])).toBe("Chris Lee");
+  it("drops sound-alike rivals of a spelling match, so Krzys and Chris are never asked about", () => {
+    expect(namesSoundingLike("Krzys", known)).toEqual(["Krzysztof Nowak"]);
+    expect(namesSoundingLike("Chris", known)).toEqual(["Chris Lee"]);
+    expect(nameAmbiguities("type hi Krzys in the message box", known)).toEqual([]);
+    expect(nameAmbiguities("message Krzys", known)).toEqual([]);
+    expect(nameAmbiguities("message Chris", known)).toEqual([]);
+    // Recent text naming Chris Lee cannot turn Krzys back into Chris: there is no ambiguity for it to settle.
+    expect(nameAmbiguities("send krzys hi", known)).toEqual([]);
   });
 
-  it("leaves plain Chris, Kris and two literal matches to recent text or a question", () => {
-    // Chris: exact for Chris Lee, but STT writes Krzys as Chris (sound-short for Krzysztof), so it stays open.
-    expect(similarityChoice({ heard: "Chris", matches: known }, known)).toBeNull();
-    expect(similarityChoice({ heard: "Kris", matches: known }, known)).toBeNull();
-    expect(similarityChoice({ heard: "Sam", matches: ["Sam Lee", "Sam Hill"] }, ["Sam Lee", "Sam Hill"])).toBeNull();
+  it("tells the AI which person spelling settled, and never asks it to choose", () => {
+    expect(spellingSettled("type hi Krzys in the message box", known)).toEqual([{ heard: "Krzys", name: "Krzysztof Nowak" }]);
+    expect(spellingSettled("message Chris", known)).toEqual([{ heard: "Chris", name: "Chris Lee" }]);
+    // One person matching in any way needs no line.
+    expect(spellingSettled("message Chris", ["Chris Lee", "Sam Lee"])).toEqual([]);
+    const block = knownNamesBlock(known, "type hi Krzys in the message box");
+    expect(block).toContain('"Krzys" in this request means Krzysztof Nowak');
+    expect(block).not.toContain("in this request could be");
+  });
+
+  it("still asks for a genuine tie: a name that only sounds like both, or is spelled like both", () => {
+    expect(nameAmbiguities("message Kris", known)).toEqual([{ heard: "Kris", matches: ["Chris Lee", "Krzysztof Nowak"] }]);
+    expect(nameAmbiguities("send Sara the notes", ["Sara Kim", "Sarah Ode"])).toEqual([{ heard: "Sara", matches: ["Sara Kim", "Sarah Ode"] }]);
+    expect(nameAmbiguities("send Sarah the notes", ["Sara Kim", "Sarah Ode"])).toEqual([{ heard: "Sarah", matches: ["Sara Kim", "Sarah Ode"] }]);
+    expect(nameAmbiguities("message Sam", ["Sam Lee", "Sam Hill"])).toEqual([{ heard: "Sam", matches: ["Sam Lee", "Sam Hill"] }]);
   });
 });
 
