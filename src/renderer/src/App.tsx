@@ -16,6 +16,7 @@ import {
 } from "@tabler/icons-react";
 import { Badge, Button, Input, PillTabs, Textarea } from "@vvedantb/ui";
 import { useEffect, useState, type FormEvent } from "react";
+import { BackgroundChip, BackgroundSection } from "./Background";
 import { BeeLogo } from "./BeeLogo";
 import { Favicon } from "./Favicon";
 import { Connectors } from "./Connectors";
@@ -217,6 +218,7 @@ function Island({ state }: { state: BeeState }) {
             <IconPlayerStop {...ICON} /> Stop
           </Button>
         ) : null}
+        <BackgroundChip jobs={state.background} onOpen={() => void actions.openTab("live")} />
         {state.teams?.room ? (
           <Button
             type="button"
@@ -345,6 +347,8 @@ function LiveTab({ state }: { state: BeeState }) {
         {mcpNote ? <p className="muted">{mcpNote}</p> : null}
         {state.error ? <p className="error">{state.error}</p> : null}
       </section>
+
+      <BackgroundSection jobs={state.background} onStop={(id) => actions.stopBackground(id)} />
 
       <SyncSection state={state} />
 
@@ -710,8 +714,14 @@ function useSignInLog(): void {
   }, [isLoaded, isSignedIn, userId]);
 }
 
+/** Background task updates from main (core/background.ts) for the store, for as long as the app runs. */
+function useBackgroundUpdates(): void {
+  useEffect(() => window.bee.onBackgroundUpdate((job) => actions.backgroundUpdate(job)), []);
+}
+
 export function App() {
   const state = useBee();
+  useBackgroundUpdates();
   useMotionAttribute(state.settings?.motionPreference ?? DEFAULT_MOTION_PREFERENCE);
   useSignInLog();
   return (

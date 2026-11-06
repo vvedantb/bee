@@ -27,6 +27,8 @@ export const IPC = {
   teamsAction: "bee:teams:action",
   teamsPublish: "bee:teams:publish",
   lunaActivity: "bee:luna:activity",
+  backgroundUpdate: "bee:background:update",
+  stopBackground: "bee:background:stop",
   lunaPartial: "bee:luna:partial",
   cancelPipeline: "bee:pipeline:cancel",
   mcpList: "bee:mcp:list",
@@ -462,6 +464,17 @@ export const pipelineResultSchema = z.object({
   }),
 });
 export type PipelineResult = z.infer<typeof pipelineResultSchema>;
+
+// A background task (core/background.ts) as main reports it: on start, on each tool, and when it ends with its result.
+export const backgroundJobSchema = z.object({
+  id: z.string().max(100),
+  title: z.string().max(100),
+  status: z.enum(["running", "done", "failed", "stopped"]),
+  tool: z.string().max(200).nullable(),
+  result: pipelineResultSchema.nullable(),
+  startedAt: z.number(),
+});
+export type BackgroundJobView = z.infer<typeof backgroundJobSchema>;
 
 // Main → renderer while Luna runs: a tool call starting or ending, for the run that asked (renderer/src/island.ts: activityLabel).
 export const lunaActivitySchema = z.object({ runId: runIdSchema.optional(), tool: z.string().max(80), phase: z.enum(["start", "end"]) });

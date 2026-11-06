@@ -157,7 +157,7 @@ export type BeeMemory = {
 
 /** Added to a direct request's system prompt when the memory tools are there. */
 export const MEMORY_RULES =
-  "Bee has a small memory that lasts across sessions. When the user asks Bee to remember something, or states a lasting preference, who someone is, or how they use an app, save one short fact with memory_write (third person, for example: Sam in Teams is Samuel Jones). Correct an old fact with replaces; forget one when asked. Never save passwords, codes, health details or what is only true for this request. Use memory_read when the summary may not hold everything.";
+  "Bee has a small memory that lasts across sessions. Save one short fact with memory_write (third person, for example: Sam in Teams is Samuel Jones) when the user asks Bee to remember something, and also on your own when a request shows something lasting: who someone is or what they own, a preference, how the user works or uses an app. Do it quietly, alongside the request, and only for facts that will still be true next week; skip anything you already have. Correct an old fact with replaces; forget one when asked. Never save passwords, codes, health details or what is only true for this request. Use memory_read when the summary may not hold everything.";
 
 /** memory_read and memory_write for a direct request (never a meeting tip turn). Each fails soft: an error is a line, never a throw. */
 export function memoryTools(memory: BeeMemory, onChange?: (result: MemoryWriteResult) => void) {

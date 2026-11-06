@@ -201,10 +201,10 @@ describe("main: computer use for a direct request", () => {
     await expect(ipc.answer({ runId: 7, id: confirm?.id, confirmed: "yes" })).rejects.toThrow();
     await new Promise((resolve) => setTimeout(resolve, 20));
     // agent-desktop's guides load once, before the first step.
-    expect(ipc.commands).toEqual(["permissions", "skills", "skills", "snapshot"]);
+    expect(ipc.commands).toEqual(["list-windows", "permissions", "skills", "skills", "snapshot"]);
     await ipc.answer({ runId: 7, id: confirm?.id, confirmed: true });
     expect((await running).tips).toEqual(["Sent the message."]);
-    expect(ipc.commands).toEqual(["permissions", "skills", "skills", "snapshot", "click"]);
+    expect(ipc.commands).toEqual(["list-windows", "permissions", "skills", "skills", "snapshot", "click"]);
     expect(ipc.cleaned()).toBe(1);
   });
 

@@ -1,9 +1,10 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ModelMessage } from "ai";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { inMemoryBeeMemory } from "../src/core/bee-memory";
+import { createBackgroundJobs, type BackgroundJob } from "../src/core/background";
 import type { CommandAgent } from "../src/core/claude-agent";
 import type { DesktopActions } from "../src/core/desktop-actions";
 import { runDirectCommand, type ComputerHost } from "../src/core/direct-command";
@@ -201,5 +202,30 @@ describe("Claude Agent SDK: Bee, …", () => {
     const result = await runDirectCommand({ command: `what's the project codename in ${join(dir, "fact.txt")}?`, snippets, agent, gateway: null, actions: null, onActivity: ({ tool, phase }) => phase === "start" && activity.push(tool) });
     console.log(`outside tips=${JSON.stringify(result.tips)} activity=${JSON.stringify(activity)}`);
     expect(result.tips.join(" ")).toMatch(/SILVERKITE/);
+  });
+
+  it("hands a long job to the background, finishes it in a fork, and the session knows the result", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "bee-background-"));
+    const updates: BackgroundJob[] = [];
+    const jobs = createBackgroundJobs({ agent: () => claudeCode.agent(), tools: () => ({}), history: () => [], onUpdate: (job) => updates.push(job) });
+    const started = performance.now();
+    const handed = await runDirectCommand({
+      command: `in the background, write a short markdown file at ${join(dir, "fruits.md")} listing three fruits with one fact each, and tell me when it's done`,
+      snippets,
+      agent,
+      gateway: null,
+      actions: null,
+      background: jobs.start,
+    });
+    const handedMs = Math.round(performance.now() - started);
+    await vi.waitFor(() => expect(updates.at(-1)?.status).not.toBe("running"), { timeout: 150_000, interval: 500 });
+    const doneMs = Math.round(performance.now() - started);
+    const last = updates.at(-1);
+    console.log(`background handed=${handedMs}ms done=${doneMs}ms reply=${JSON.stringify(handed.tips)} status=${last?.status} result=${JSON.stringify(last?.result?.tips ?? last?.result?.guideError)} tools=${JSON.stringify([...new Set(updates.map((job) => job.tool).filter(Boolean))])}`);
+    expect(last?.status).toBe("done");
+    expect(existsSync(join(dir, "fruits.md"))).toBe(true);
+    const asked = await runDirectCommand({ command: "what was in the fruits file you just wrote?", snippets, agent, gateway: null, actions: null });
+    console.log(`background follow-up tips=${JSON.stringify(asked.tips)}`);
+    expect(asked.tips.length).toBeGreaterThan(0);
   });
 });
