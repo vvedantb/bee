@@ -44,8 +44,9 @@ import { motionReduced } from "./motion";
 import { framePeak, startMicSession, type PhraseOutcome } from "./speech";
 import { openTeamsAudio } from "./teams-audio";
 import { downloadUpdate, installUpdate, updateNow } from "./update";
+import type { Tab } from "./panel-tabs";
 
-export type Tab = "live" | "connectors" | "settings";
+export type { Tab };
 
 // ready: the installer is downloaded. check: the last successful check, kept while downloading.
 export type UpdateState = {

@@ -24,6 +24,7 @@ import { MeetingContextSection } from "./MeetingContextSection";
 import { ClaudeCodeSection } from "./ClaudeCodeSection";
 import { MemorySection } from "./MemorySection";
 import { NotchStatus } from "./NotchStatus";
+import { PANEL_TABS } from "./panel-tabs";
 import { MicHint } from "./MicHint";
 import { SecretField } from "./SecretField";
 import { SettingRow } from "./SettingRow";
@@ -649,8 +650,6 @@ function SettingsTab({ state, settings }: { state: BeeState; settings: SettingsV
 
       <MemorySection onLoad={() => actions.listMemory()} onClear={() => actions.clearMemory()} />
 
-      <TeamSection state={state} />
-
       <UpdateSection update={update} />
 
       <p className="muted">{STORAGE_LABEL[settings.secretStorage]}</p>
@@ -663,11 +662,7 @@ function Panel({ state }: { state: BeeState }) {
     <main className="panel">
       <nav className="tabs">
         <PillTabs
-          tabs={[
-            { value: "live", label: "Live" },
-            { value: "connectors", label: "Connectors" },
-            { value: "settings", label: "Settings" },
-          ]}
+          tabs={[...PANEL_TABS]}
           value={state.tab}
           onValueChange={(tab) => actions.setTab(tab as BeeState["tab"])}
         />
@@ -679,6 +674,11 @@ function Panel({ state }: { state: BeeState }) {
       {state.tab === "connectors" ? (
         <div className="tab-body">
           <Connectors servers={state.mcp.servers} tests={state.mcp.tests} error={state.mcp.error} />
+        </div>
+      ) : null}
+      {state.tab === "teams" ? (
+        <div className="tab-body">
+          <TeamSection state={state} />
         </div>
       ) : null}
       {state.tab === "settings" && state.settings ? <SettingsTab state={state} settings={state.settings} /> : null}
