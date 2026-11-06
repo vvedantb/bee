@@ -239,7 +239,6 @@ export async function runDirectCommand(args: {
   /** For Jev's routing and the history summary only. Null: the word rules route, and old turns fold without the AI. */
   gateway: BeeGateway | null;
   notesDir?: string;
-  extraRoots?: readonly string[];
   loadMcpTools?: () => Promise<McpTools>;
   /** Main's desktop actions (main/desktop-actions.ts). Null: no desktop tools, so the AI only answers. */
   actions: DesktopActions | null;
@@ -386,7 +385,6 @@ export async function runDirectCommand(args: {
     meetingBrief: args.meetingBrief,
     webSearch: needsWebSearch({ lines: [command] }),
     notesDir: args.notesDir,
-    extraRoots: args.extraRoots,
     extraTools: mcp?.tools,
     connectedServers: mcp?.servers,
     unavailableServers: mcp?.errors.map(({ server, error }) => ({ name: server, error })),

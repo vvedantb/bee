@@ -60,7 +60,7 @@ const SETTINGS: SettingsView = {
   secretStorage: "os",
   notesDir: "/notes",
   logsDir: "/logs",
-  fsRoots: [], knownNames: [],
+  knownNames: [],
   meetingContextEnabled: false,
   meetingCalendarEnabled: false,
   meetingMemoryEnabled: false,

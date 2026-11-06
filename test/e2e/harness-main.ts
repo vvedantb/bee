@@ -213,7 +213,6 @@ void app.whenReady().then(async () => {
   reportPipelineRuns();
   registerMeetingIpc({
     notesDir,
-    fsRoots: () => [],
     mcpConfigs: mcpFile ? () => mcpConfigsFromFile(mcpFile) : () => [],
     mcpSignedOut: () => [],
     mcpPool: mcpFile ? reportingPool(createMcpPool()) : createMcpPool(),

@@ -56,7 +56,6 @@ function setup(options: { enabled?: boolean } = {}) {
   const state = { enabled: options.enabled ?? true };
   registerMeetingIpc({
     notesDir: "/notes",
-    fsRoots: () => [],
     mcpConfigs: () => [],
     mcpSignedOut: () => [],
     mcpPool: {} as never,
@@ -105,7 +104,7 @@ describe("main: direct request handler", () => {
       update: async () => ({ status: { state: "signed-out", path: "/usr/local/bin/claude", version: "2.1.318" }, error: null }),
       close: () => undefined,
     };
-    registerMeetingIpc({ notesDir: "/notes", fsRoots: () => [], mcpConfigs: () => [], mcpSignedOut: () => [], mcpPool: {} as never, meeting: { brief: () => "" } as unknown as MeetingContext, gatewayApiKey: () => undefined, claudeCode: signedOut });
+    registerMeetingIpc({ notesDir: "/notes", mcpConfigs: () => [], mcpSignedOut: () => [], mcpPool: {} as never, meeting: { brief: () => "" } as unknown as MeetingContext, gatewayApiKey: () => undefined, claudeCode: signedOut });
     const command = electron.handlers.get(IPC.runCommand);
     const status = electron.handlers.get(IPC.claudeCode);
     expect(await command?.(event, { command: "what's 15% of 18000?", sessionToken: "signed-in" })).toMatchObject({ tips: [], guideError: "Sign in to Claude Code to talk to Bee: run claude, then /login." });
@@ -147,8 +146,7 @@ describe("main: computer use for a direct request", () => {
     };
     registerMeetingIpc({
       notesDir: "/notes",
-      fsRoots: () => [],
-      mcpConfigs: () => [],
+        mcpConfigs: () => [],
       mcpSignedOut: () => [],
       mcpPool: {} as never,
       meeting: { brief: () => "" } as unknown as MeetingContext,
@@ -257,8 +255,7 @@ describe("main: Bee's history and the follow-up check", () => {
     });
     registerMeetingIpc({
       notesDir: "/notes",
-      fsRoots: () => [],
-      mcpConfigs: () => [],
+        mcpConfigs: () => [],
       mcpSignedOut: () => [],
       mcpPool: {} as never,
       meeting: { brief: () => "" } as unknown as MeetingContext,

@@ -985,7 +985,6 @@ export async function guideWithLuna(args: {
   timeoutMs?: number;
   /** Notes folder and extra approved folders for the file tools. Without notesDir, Luna gets no file tools. */
   notesDir?: string;
-  extraRoots?: readonly string[];
   /** False leaves out web_search for a turn that needs no fresh facts (web-search.ts needsWebSearch). Defaults to true. */
   webSearch?: boolean;
   /** The user's approximate place for web_search (web-search.ts searchLocation). */
@@ -1042,7 +1041,7 @@ export async function guideWithLuna(args: {
   const run = async () => {
     const prompt = buildLunaPrompt({ ...args, web, ...mcpServers(args.connectedServers ?? [], args.unavailableServers ?? [], extra, dropped.length > 0) });
     const abortSignal = withTimeout(args.signal, args.timeoutMs ?? LUNA_TIMEOUT_MS);
-    const tools = lunaTools({ notesDir: args.notesDir, extraRoots: args.extraRoots, extra, web, location: searchOptions ? args.searchLocation : undefined });
+    const tools = lunaTools({ notesDir: args.notesDir, extra, web, location: searchOptions ? args.searchLocation : undefined });
     attempts += 1;
     // The whole prompt, on this computer only. The system prompt barely changes, so its text is written once per session.
     debugLog.info("ai", "luna-request", {
@@ -1183,7 +1182,6 @@ export async function answerCommand(args: {
   meetingBrief?: string;
   timeoutMs?: number;
   notesDir?: string;
-  extraRoots?: readonly string[];
   webSearch?: boolean;
   extraTools?: ToolSet;
   connectedServers?: readonly LunaMcpServer[];
@@ -1215,7 +1213,7 @@ export async function answerCommand(args: {
   const report = activityReporter(args.onActivity);
   const stream = answerStream({ startedAt, maxTips: MAX_DIRECT_LINES, fresh: (tips) => tips, onPartial: args.onPartial, onFirstToken: (ms) => (firstTokenMs = ms) });
   const prompt = buildLunaPrompt({ ...args, web });
-  const tools = lunaTools({ notesDir: args.notesDir, extraRoots: args.extraRoots, extra: args.extraTools, web, desktop: args.desktopTools });
+  const tools = lunaTools({ notesDir: args.notesDir, extra: args.extraTools, web, desktop: args.desktopTools });
   const signal = withTimeout(args.signal, args.timeoutMs ?? COMMAND_TIMEOUT_MS);
   debugLog.info("ai", "luna-request", { kind: "command", web, tools: Object.keys(tools), system: onceText(prompt.system), context: prompt.context, transcript: prompt.transcript, tail: prompt.tail, history: args.historyMessages?.length ?? 0 });
   try {

@@ -56,7 +56,7 @@ import type { VmemTranscripts } from "./vmem-transcript-queue";
  * Mic phrases → Grok STT, lines → retrieve → Jev → Luna, and the end-of-meeting summary into the notes folder.
  * The Gateway key never leaves main.
  */
-export function registerMeetingIpc(args: { notesDir: string; fsRoots: () => string[];
+export function registerMeetingIpc(args: { notesDir: string;
   mcpConfigs: () => McpServerConfig[];
   /** Enabled sign-in servers with no tokens. mcpConfigs leaves them out; Luna is told they are not signed in. */
   mcpSignedOut: () => string[];
@@ -247,7 +247,6 @@ export function registerMeetingIpc(args: { notesDir: string; fsRoots: () => stri
         snippets,
         gateway: apiKey ? createGateway(apiKey) : null,
         notesDir: args.notesDir,
-        extraRoots: args.fsRoots(),
         // Settings are read now, so changes apply without a restart. Tool lists come from the pool's cache; servers connect on first call.
         loadMcpTools: mcpTools,
         signal: controller.signal,
@@ -317,7 +316,6 @@ export function registerMeetingIpc(args: { notesDir: string; fsRoots: () => stri
         ...(await commandAgent()),
         gateway: apiKey ? createGateway(apiKey) : null,
         notesDir: args.notesDir,
-        extraRoots: args.fsRoots(),
         loadMcpTools: mcpTools,
         actions: args.desktop ?? null,
         computer,

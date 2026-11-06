@@ -278,7 +278,7 @@ describe("settingsChange", () => {
     secretStorage: "os",
     notesDir: "/notes",
     logsDir: "/logs",
-    fsRoots: [], knownNames: [],
+    knownNames: [],
     meetingContextEnabled: true,
     meetingCalendarEnabled: true,
     meetingMemoryEnabled: true,
@@ -291,10 +291,10 @@ describe("settingsChange", () => {
   };
 
   it("lists the keys sent and what changed, with non-secret values", () => {
-    const after = { ...view, verboseLogging: false, interfaceScale: 1.25, fsRoots: ["/docs"] };
-    expect(settingsChange({ verboseLogging: false, interfaceScale: 1.25, fsRoots: ["/docs"], meetingMode: false }, view, after)).toEqual({
-      keys: ["verboseLogging", "interfaceScale", "fsRoots", "meetingMode"],
-      changed: { verboseLogging: false, interfaceScale: 1.25, fsRoots: ["/docs"] },
+    const after = { ...view, verboseLogging: false, interfaceScale: 1.25, knownNames: ["Zuzanna"] };
+    expect(settingsChange({ verboseLogging: false, interfaceScale: 1.25, knownNames: ["Zuzanna"], meetingMode: false }, view, after)).toEqual({
+      keys: ["verboseLogging", "interfaceScale", "knownNames", "meetingMode"],
+      changed: { verboseLogging: false, interfaceScale: 1.25, knownNames: ["Zuzanna"] },
     });
   });
 

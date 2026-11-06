@@ -10,6 +10,15 @@ export const READ_WORDS_PER_SECOND = 3.3;
 
 const ACTIVITY_LABELS = new Map([
   ["web_search", "The AI is searching the web…"],
+  // Claude Code's own tools, for a direct request on the user's Claude Code (core/claude-agent.ts).
+  ["Read", "Reading a file…"],
+  ["Glob", "Searching files…"],
+  ["Grep", "Searching files…"],
+  ["Edit", "Editing a file…"],
+  ["Write", "Writing a file…"],
+  ["NotebookEdit", "Editing a file…"],
+  ["Bash", "Running a command…"],
+  ["WebFetch", "Reading a web page…"],
   ["read_file", "Reading notes"],
   ["list_dir", "Reading notes"],
   ["search_files", "Reading notes"],

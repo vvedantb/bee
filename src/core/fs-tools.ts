@@ -4,11 +4,11 @@ import { basename, extname, join, relative, resolve } from "node:path";
 import { z } from "zod";
 import { FS_LIMITS, hasBinaryExtension, isInside, looksBinary, resolveInRoots } from "./fs-sandbox";
 
-export type FsRoots = { notesDir: string; extraRoots?: readonly string[] };
+/** Bee's file tools reach the notes folder only. Other folders are Claude Code's own tools' job for "Bee, …" requests. */
+export type FsRoots = { notesDir: string };
 
 function rootsOf(roots: FsRoots): string[] {
-  const notes = resolve(roots.notesDir);
-  return [notes, ...(roots.extraRoots ?? []).map((root) => resolve(root)).filter((root) => root !== notes)];
+  return [resolve(roots.notesDir)];
 }
 
 /** Path shown to Luna: relative to the notes folder (with "/"), or absolute for an extra folder. */

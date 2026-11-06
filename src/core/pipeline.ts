@@ -55,7 +55,6 @@ export async function runPipeline(args: {
   snippets: Snippet[];
   gateway: BeeGateway | null;
   notesDir?: string;
-  extraRoots?: readonly string[];
   /** Connects the user's MCP servers. It starts at once, beside Jev. The run lets go of them in the background when it ends. */
   loadMcpTools?: () => Promise<McpTools>;
   onActivity?: (activity: LunaToolActivity) => void;
@@ -114,7 +113,6 @@ export async function runPipeline(args: {
       searchLocation: args.searchLocation,
       notes: guideNotes,
       notesDir: args.notesDir,
-      extraRoots: args.extraRoots,
       extraTools: mcp?.tools,
       connectedServers: mcp?.servers,
       unavailableServers: mcp?.errors.map(({ server, error }) => ({ name: server, error })),

@@ -17,7 +17,6 @@ export type BeeSource = { title: string; url: string };
 export function lunaTools(
   options: {
     notesDir?: string;
-    extraRoots?: readonly string[];
     extra?: ToolSet;
     web?: boolean;
     location?: SearchLocation;
@@ -33,7 +32,7 @@ export function lunaTools(
     ...(options.location ? { userLocation: options.location } : {}),
   });
   const web: ToolSet = options.web === false ? {} : { web_search: search };
-  const local = options.notesDir ? { ...web, ...fsTools({ notesDir: options.notesDir, extraRoots: options.extraRoots }) } : web;
+  const local = options.notesDir ? { ...web, ...fsTools({ notesDir: options.notesDir }) } : web;
   // MCP tools (core/mcp.ts) are namespaced; spreading them first also means they can never replace a built-in.
   return { ...options.extra, ...local, ...options.desktop };
 }
