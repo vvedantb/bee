@@ -8,6 +8,7 @@ import { debugLog, errorData, msSince } from "../core/debug-log";
 import type { DesktopActions } from "../core/desktop-actions";
 import { historySummariser } from "../core/bee-history";
 import type { BeeMemory } from "../core/bee-memory";
+import type { CommandAgent } from "../core/claude-agent";
 import { runDirectCommand, type ComputerHost } from "../core/direct-command";
 import { classifyFollowUp } from "../core/follow-up";
 import { loadMcpTools, type McpPool, type McpServerConfig } from "../core/mcp";
@@ -59,6 +60,8 @@ export function registerMeetingIpc(args: { notesDir: string; fsRoots: () => stri
   /** Experimental meeting window reader: the call's name and people (retrieval boost and brief) and its Settings status. */
   meetingWindow?: { read: () => Promise<unknown>; context: () => MeetingWindowContext | null; status: () => MeetingWindowStatus };
   gatewayApiKey: () => string | undefined;
+  /** The agent for "Bee, …" requests on the user's Claude account (main/claude-agent.ts), or null without a token. Absent: none. */
+  commandAgent?: () => CommandAgent | null;
   /** Builds the Gateway models from the key. Defaults to the real Gateway; the E2E harness records or replays them. */
   gateway?: (apiKey: string) => BeeGateway;
   /** Desktop tools for a direct request ("Bee, open Teams", main/desktop-actions.ts). Without them the AI only answers. */
@@ -297,8 +300,8 @@ export function registerMeetingIpc(args: { notesDir: string; fsRoots: () => stri
         memory: args.memory ?? null,
         meetingBrief,
         meetingTerms: meetingTerms(windowContext) || undefined,
-        searchLocation: searchLocation({ timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone, locale: app.getSystemLocale() }),
         snippets: loadSnippets(args.notesDir),
+        agent: args.commandAgent?.() ?? null,
         gateway: apiKey ? createGateway(apiKey) : null,
         notesDir: args.notesDir,
         extraRoots: args.fsRoots(),

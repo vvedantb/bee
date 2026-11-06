@@ -46,7 +46,8 @@ async function bundle(page: string): Promise<{ main: string; html: string }> {
     bundle: true,
     platform: "node",
     format: "cjs",
-    external: ["electron"],
+    // The Agent SDK finds its Claude Code binary next to its own files, so it loads from node_modules, as in the app.
+    external: ["electron", "@anthropic-ai/claude-agent-sdk"],
     define,
     logLevel: "error",
   });

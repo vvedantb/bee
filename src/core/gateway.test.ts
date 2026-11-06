@@ -1,13 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
-  ANTHROPIC_COMMAND_THINKING,
   ANTHROPIC_CACHE,
   ANTHROPIC_NO_THINKING,
-  COMMAND_MODEL,
   FLEX_PROVIDER_OPTIONS,
   GUIDE_MODEL,
   GUIDE_PROVIDER,
-  commandProviderOptions,
   gatewayTier,
   guideProviderOptions,
 } from "./gateway";
@@ -53,26 +50,9 @@ describe("guideProviderOptions", () => {
   });
 });
 
-describe("commandProviderOptions", () => {
-  it("names Sonnet for commands and keeps Haiku for tips", () => {
-    expect(COMMAND_MODEL).toBe("anthropic/claude-sonnet-5.5");
+describe("models", () => {
+  it("keeps Haiku for tips, with thinking off", () => {
     expect(GUIDE_MODEL).toBe("anthropic/claude-haiku-5.5");
-  });
-
-  it("routes like guideProviderOptions, with adaptive thinking at medium effort (no budgetTokens)", () => {
-    expect(ANTHROPIC_COMMAND_THINKING).toEqual({ anthropic: { thinking: { type: "adaptive" }, effort: "medium" } });
-    for (const tier of ["flex", "default", "ultrafast"] as const) {
-      for (const web of [true, false]) {
-        const options = commandProviderOptions(tier, { web });
-        expect(options.gateway).toEqual(guideProviderOptions(tier, { web }).gateway);
-        expect(options.anthropic).toEqual({ thinking: { type: "adaptive" }, effort: "medium" });
-        expect(JSON.stringify(options)).not.toContain("budgetTokens");
-      }
-    }
-  });
-
-  it("leaves the cache marker to the messages, and tips still think nothing", () => {
-    expect(commandProviderOptions("default", { web: true }).anthropic).not.toHaveProperty("cacheControl");
     expect(guideProviderOptions("default", { web: true }).anthropic).toEqual({ thinking: { type: "disabled" } });
   });
 });

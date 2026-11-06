@@ -32,6 +32,7 @@ const EMPTY: PipelineResult = {
 
 const SETTINGS: SettingsView = {
   gatewayKeySource: "saved",
+  claudeTokenSource: "none",
   personalisedLinks: false,
   vmemConnected: false,
   sendSessionsToVmem: false,

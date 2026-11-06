@@ -26,6 +26,7 @@ const HISS = 0.0005;
 
 const SETTINGS: SettingsView = {
   gatewayKeySource: "saved",
+  claudeTokenSource: "none",
   personalisedLinks: false,
   vmemConnected: false,
   sendSessionsToVmem: false,

@@ -346,5 +346,6 @@ export function settingsChange(update: SettingsUpdate, before: SettingsView, aft
     keys,
     changed,
     ...(update.gatewayApiKey === undefined ? {} : { gatewayApiKey: update.gatewayApiKey.trim() === "" ? "cleared" : "set" }),
+    ...(update.claudeToken === undefined ? {} : { claudeToken: update.claudeToken.trim() === "" ? "cleared" : "set" }),
   };
 }

@@ -1,13 +1,14 @@
 import { createGateway, type GatewayProvider } from "@ai-sdk/gateway";
 
-// The model behind Luna's meeting tips, the follow-up check and meeting summaries: fast, thinking off.
+// The model behind Luna's meeting tips, the follow-up check, meeting summaries and the history summary: fast, thinking off.
+// Direct requests to Bee ("Bee, …") and computer use do not use the Gateway: they run on the user's own Claude account
+// (core/claude-agent.ts AGENT_MODEL).
 export const GUIDE_MODEL = "anthropic/claude-haiku-5.5";
-// The model behind direct requests to Bee ("Bee, …") and computer use: it chains tool calls and thinks first.
-export const COMMAND_MODEL = "anthropic/claude-sonnet-5.5";
 // Context windows in tokens, from the Gateway catalog (ai-gateway.vercel.sh/v1/models) and Anthropic's docs. The 1M window is native
 // and the default for Sonnet 5.5 and Haiku 5.5: no beta header or provider option unlocks it, and the legacy context-1m-* beta header
 // must not be sent (Anthropic's Sonnet 5.5 migration guide says to remove it). Sonnet 5.5 has flat pricing across the window;
-// Haiku 5.5 bills input over 100k tokens at a higher tier (Gateway input_tiers), but its window is still 1M.
+// Haiku 5.5 bills input over 100k tokens at a higher tier (Gateway input_tiers), but its window is still 1M. COMMAND_CONTEXT_TOKENS is
+// the agent's Sonnet 5.5 window, for compacting Bee's history (core/bee-history.ts).
 export const COMMAND_CONTEXT_TOKENS = 1_000_000;
 export const GUIDE_CONTEXT_TOKENS = 1_000_000;
 export const JEV_MODEL = "typesafe-ai/jev";
@@ -60,21 +61,6 @@ type GatewayRouting = { serviceTier?: string; only?: string[]; order?: string[] 
 function anthropicRouting(tier: GatewayTier, options: { web: boolean }): GatewayRouting {
   const routing = options.web ? { only: [GUIDE_PROVIDER] } : { order: [GUIDE_PROVIDER] };
   return { ...gatewayTier(tier).gateway, ...routing };
-}
-
-/**
- * Thinking for a COMMAND_MODEL call (direct requests and computer use), so the model plans before it answers or calls the next
- * tool. COMMAND_MODEL (claude-sonnet-5*) always thinks adaptively: the installed @ai-sdk/anthropic marks it
- * supportsAdaptiveThinking, warns that budget-based thinking ({ type: "enabled", budgetTokens }) is not supported and rewrites it
- * to adaptive (the 0.3.36 debug log had that warning on every step). So the depth is set with `effort`, not a token budget:
- * "medium" (not "high") balances planning depth against latency and thinking tokens. Checked against the installed package's
- * model caps and option schema; no live Gateway call (no key in CI). Thinking tokens count against maxOutputTokens, so those calls raise it. Never send to tips (GUIDE_MODEL).
- */
-export const ANTHROPIC_COMMAND_THINKING = { anthropic: { thinking: { type: "adaptive" }, effort: "medium" } } as const;
-
-/** Like guideProviderOptions, with adaptive thinking at medium effort. Cache markers stay on the messages (ANTHROPIC_CACHE). */
-export function commandProviderOptions(tier: GatewayTier, options: { web: boolean }): { gateway: GatewayRouting } & typeof ANTHROPIC_COMMAND_THINKING {
-  return { gateway: anthropicRouting(tier, options), ...ANTHROPIC_COMMAND_THINKING };
 }
 
 /**

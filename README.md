@@ -48,6 +48,7 @@ Typical use: in a weekly meeting someone says "last time we discussed the Acme r
 - Windows 10 or 11 (x64), or macOS (Apple Silicon arm64 or Intel x64). Linux runs in development.
 - Node.js 22 or later, with npm.
 - A Vercel AI Gateway API key with access to `xai/grok-stt`, `anthropic/claude-haiku-5.5` and `typesafe-ai/jev`.
+- For "Bee, …" requests and computer use: your own Claude account (Pro or Max). Run `claude setup-token` once and paste the token in **Settings → Claude token**. These requests run on the Claude Agent SDK, not the Gateway, and fail with "No Claude token" without one.
 - A Bee account. Sign-in uses Clerk (the vedantb.com instance). See [Sign-in (Clerk)](#sign-in-clerk).
 
 ## Run on Windows
@@ -85,7 +86,7 @@ The installer is not code-signed. Windows SmartScreen will warn on first run unt
 ## Use
 
 1. Click **▾** on the notch to open the panel, then sign in (or sign up). Bee does not run guidance until you are signed in.
-2. Open **Settings** and paste your AI Gateway key, then click **Save**.
+2. Open **Settings** and paste your AI Gateway key, then click **Save**. To talk to Bee by name ("Bee, …"), also paste your Claude token (from `claude setup-token`).
 3. Click the **microphone** on the notch and talk. The bar in the mic button shows the input level. Each phrase you say runs the pipeline. Bee does not show what was said; only tips and notes appear. Click the microphone again to stop.
 4. To test without speaking, use **Manual test** at the bottom of **Live**: type a line (or leave it blank for a sample) and click **Simulate meeting line**. Typed and spoken lines take the same path.
 5. Bee retrieves matching notes, ranks them with Jev, and shows up to two tips. While the AI works, the notch shows what it is doing (for example "Searching the web"). When the answer arrives, the notch grows downward into an island with the tips and any source links. Click **×** to dismiss it. If you leave the pointer off it, it folds back to one line in the notch after at least 30 seconds (longer for longer answers), and the same tips stay on **Live**. Click that line to read the answer in full in the island again; click outside to fold it. The chevron opens the full panel. A new question after an answer has finished shows only the new answer; speaking while Bee is still answering updates the answer on screen.
@@ -278,12 +279,15 @@ The installer registers the `bee` scheme for **Return to Bee** and team invites.
 | Field | Storage | Used in v1 |
 | --- | --- | --- |
 | AI Gateway API key | Encrypted with Electron `safeStorage` (DPAPI on Windows, Keychain on macOS) | Yes |
+| Claude token (`claude setup-token`) | Encrypted the same way | Yes |
 | Connector tokens (Connectors tab) | Encrypted the same way | Yes |
 | Personalised links switch, meeting mode | Plain JSON | Yes |
 
 Settings live in `settings.json` in the Electron user data folder. Secrets never reach the renderer: the UI only sees whether a key is set. A saved key shows as `•••••••• (saved)` with a **Replace** button; the real key is never put in the page.
 
-If no key is saved, Bee uses `BEE_AI_GATEWAY_API_KEY` from the environment. A saved key takes precedence.
+If no key is saved, Bee uses `BEE_AI_GATEWAY_API_KEY` from the environment. A saved key takes precedence. The Claude token works the same way with `BEE_CLAUDE_CODE_OAUTH_TOKEN`.
+
+`npm run test:claude` runs live "Bee, …" requests on the Claude Agent SDK (needs `BEE_CLAUDE_CODE_OAUTH_TOKEN`); `test/command.e2e.test.ts` runs one through Electron's main process.
 
 On Linux without a keyring (for example, under Xvfb), Electron cannot encrypt to disk. Bee then keeps secrets in memory for the session only, and Settings says so.
 

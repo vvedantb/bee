@@ -19,6 +19,7 @@
     "build:teams-audio:win": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-teams-audio-windows.ps1",
     "build:teams-audio:mac": "bash scripts/build-teams-audio-macos.sh",
     "test:gateway": "vitest run --config vitest.gateway.config.ts",
+    "test:claude": "vitest run --config vitest.claude.config.ts",
     "test:e2e": "electron-vite build && vitest run --config vitest.e2e.config.ts",
     "test:replay": "electron-vite build && BEE_E2E_MODE=replay vitest run --config vitest.e2e.config.ts test/conversation-live.e2e.test.ts",
     "relay:mock": "esbuild relay/src/dev.ts --bundle --platform=node --format=esm --outfile=out/relay-dev.mjs --log-level=warning && node out/relay-dev.mjs",
@@ -29,6 +30,8 @@
     "@ai-sdk/anthropic": "4.0.65",
     "@ai-sdk/gateway": "^4.0.94",
     "@ai-sdk/openai": "^4.0.78",
+    "@anthropic-ai/claude-agent-sdk": "^0.3.318",
+    "@anthropic-ai/sdk": "^1.6.0",
     "@clerk/electron": "^0.0.47",
     "@modelcontextprotocol/sdk": "^1.32.1",
     "@vvedantb/server": "^0.7.1",
@@ -88,6 +91,7 @@
       "!resources/icon{,-mac}.{png,icns,ico}",
       "package.json",
       "!node_modules/agent-desktop{,/**}",
+      "!node_modules/@anthropic-ai/claude-agent-sdk-*{,/**}",
       "!node_modules/esbuild{,/**}",
       "!node_modules/@esbuild{,/**}",
       "!node_modules/vite{,/**}",
@@ -140,6 +144,10 @@
         {
           "from": "native/teams-audio/dist/win32-${arch}/teams-audio-helper.exe",
           "to": "teams-audio/teams-audio-helper.exe"
+        },
+        {
+          "from": "node_modules/@anthropic-ai/claude-agent-sdk-win32-${arch}/claude.exe",
+          "to": "claude/claude.exe"
         }
       ]
     },
@@ -184,6 +192,10 @@
         {
           "from": "native/teams-audio/dist/darwin-${arch}/teams-audio-helper",
           "to": "teams-audio/teams-audio-helper"
+        },
+        {
+          "from": "node_modules/@anthropic-ai/claude-agent-sdk-darwin-${arch}/claude",
+          "to": "claude/claude"
         }
       ],
       "hardenedRuntime": true,

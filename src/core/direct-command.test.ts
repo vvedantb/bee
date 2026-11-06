@@ -7,8 +7,13 @@ import { MEMORY_RULES, inMemoryBeeMemory } from "./bee-memory";
 import { ACCESSIBILITY_LINE, type RunControl } from "./computer-control";
 import type { DesktopActions } from "./desktop-actions";
 import { runDirectCommand, type ComputerHost } from "./direct-command";
-import { COMMAND_MODEL, GUIDE_MODEL, type BeeGateway } from "./gateway";
-import { COMMAND_MAX_OUTPUT_TOKENS, LUNA_COMPUTER, LUNA_DIRECT_SYSTEM, LUNA_NO_COMPUTER, LUNA_SYSTEM, MAX_DIRECT_LINES, TIP_MAX_STEPS, buildLunaPrompt, guideWithLuna } from "./luna";
+import { GUIDE_MODEL, type BeeGateway } from "./gateway";
+
+// The test gateway's id for the agent's planning tier (test/helpers/model-agent.ts); the fast pass uses GUIDE_MODEL.
+const COMMAND_MODEL = "plan";
+import { modelAgent } from "../../test/helpers/model-agent";
+import { AGENT_MODEL } from "./claude-agent";
+import { LUNA_COMPUTER, LUNA_DIRECT_SYSTEM, LUNA_NO_COMPUTER, LUNA_SYSTEM, MAX_DIRECT_LINES, TIP_MAX_STEPS, buildLunaPrompt, guideWithLuna } from "./luna";
 import { SEED_NOTES, chunkNotes } from "./notes";
 
 // A direct request ("Bee, …") with a mock model and fake desktop runners: no network, no OS. One model call per step.
@@ -61,6 +66,12 @@ function fakeActions() {
 
 const snippets = chunkNotes(SEED_NOTES);
 
+/** runDirectCommand with an agent on the test gateway's models (test/helpers/model-agent.ts): the planning tier on COMMAND_MODEL, the fast pass on GUIDE_MODEL. No gateway, no agent. */
+function run(args: Omit<Parameters<typeof runDirectCommand>[0], "agent">) {
+  const gateway = args.gateway;
+  return runDirectCommand({ ...args, agent: gateway ? modelAgent((tier) => gateway.languageModel(tier === "fast" ? GUIDE_MODEL : COMMAND_MODEL)) : null });
+}
+
 beforeEach(() => {
   vi.spyOn(console, "debug").mockImplementation(() => undefined);
 });
@@ -71,7 +82,7 @@ describe("runDirectCommand: no AI for a plain open", () => {
     const { actions, calls } = fakeActions();
     const { gateway, calls: modelCalls } = stepsModel([]);
     const activity: string[] = [];
-    const result = await runDirectCommand({ command: "open Teams", snippets, gateway, actions, onActivity: ({ tool, phase }) => activity.push(`${phase} ${tool}`) });
+    const result = await run({ command: "open Teams", snippets, gateway, actions, onActivity: ({ tool, phase }) => activity.push(`${phase} ${tool}`) });
     expect(calls).toEqual(["openApp Teams"]);
     expect(modelCalls).toEqual([]);
     expect(activity).toEqual(["start open_app", "end open_app"]);
@@ -80,15 +91,15 @@ describe("runDirectCommand: no AI for a plain open", () => {
 
   it("works without a Gateway key, for apps, windows and web addresses", async () => {
     const { actions, calls } = fakeActions();
-    expect((await runDirectCommand({ command: "switch to Slack.", snippets, gateway: null, actions })).tips).toEqual(["Focused Slack"]);
-    expect((await runDirectCommand({ command: "open bbc.co.uk", snippets, gateway: null, actions })).tips).toEqual(["Opened https://bbc.co.uk/"]);
+    expect((await run({ command: "switch to Slack.", snippets, gateway: null, actions })).tips).toEqual(["Focused Slack"]);
+    expect((await run({ command: "open bbc.co.uk", snippets, gateway: null, actions })).tips).toEqual(["Opened https://bbc.co.uk/"]);
     expect(calls).toEqual(["focusWindow Slack", "openUrl https://bbc.co.uk/"]);
   });
 
   it("asks the AI for anything else, and says when there is no key", async () => {
     const { actions, calls } = fakeActions();
-    const result = await runDirectCommand({ command: "what's 15% of 18000?", snippets, gateway: null, actions });
-    expect(result.guideError).toContain("No AI Gateway key");
+    const result = await run({ command: "what's 15% of 18000?", snippets, gateway: null, actions });
+    expect(result.guideError).toBe("No Claude token. Add one in Settings.");
     expect(calls).toEqual([]);
   });
 });
@@ -98,7 +109,7 @@ describe("runDirectCommand: the AI with desktop tools", () => {
     const { actions, calls } = fakeActions();
     const { gateway, calls: modelCalls } = stepsModel([toolCall("open_app", { name: "Figma" }), text("- Tokyo is 9 hours ahead of London.\n")]);
     const partials: string[][] = [];
-    const result = await runDirectCommand({
+    const result = await run({
       command: "open Figma and tell me how far ahead Tokyo is",
       transcript: ["Let's pick up the Acme renewal."],
       snippets,
@@ -123,28 +134,28 @@ describe("runDirectCommand: the AI with desktop tools", () => {
 
   it("is a fine end when the AI says nothing after an action, and drops a reply that repeats the action line", async () => {
     const quiet = stepsModel([toolCall("open_app", { name: "Figma" }), text("")]);
-    const silent = await runDirectCommand({ command: "get Figma up", snippets, gateway: quiet.gateway, actions: fakeActions().actions });
+    const silent = await run({ command: "get Figma up", snippets, gateway: quiet.gateway, actions: fakeActions().actions });
     expect(silent).toMatchObject({ tips: ["Opened Figma"], guideError: null });
     const echo = stepsModel([toolCall("open_app", { name: "Figma" }), text("- Opened Figma.\n")]);
-    expect((await runDirectCommand({ command: "get Figma up", snippets, gateway: echo.gateway, actions: fakeActions().actions })).tips).toEqual(["Opened Figma"]);
+    expect((await run({ command: "get Figma up", snippets, gateway: echo.gateway, actions: fakeActions().actions })).tips).toEqual(["Opened Figma"]);
   });
 
   it("shows a failed action as its own line", async () => {
     const { gateway } = stepsModel([toolCall("open_app", { name: "Nope" }), text("NONE")]);
-    expect((await runDirectCommand({ command: "get Nope up", snippets, gateway, actions: fakeActions().actions })).tips).toEqual(["Could not find Nope"]);
+    expect((await run({ command: "get Nope up", snippets, gateway, actions: fakeActions().actions })).tips).toEqual(["Could not find Nope"]);
   });
 
   it("answers a question directly, with no tools run", async () => {
     const { actions, calls } = fakeActions();
     const { gateway } = stepsModel([text("- 15% of 18,000 is 2,700.\n")]);
-    const result = await runDirectCommand({ command: "what's 15% of 18000?", snippets, gateway, actions });
+    const result = await run({ command: "what's 15% of 18000?", snippets, gateway, actions });
     expect(result.tips).toEqual(["15% of 18,000 is 2,700."]);
     expect(calls).toEqual([]);
   });
 
   it("gives the AI no desktop tools without desktop actions", async () => {
     const { gateway, calls } = stepsModel([text("- Bee cannot open apps here.\n")]);
-    await runDirectCommand({ command: "get Figma up", snippets, gateway, actions: null });
+    await run({ command: "get Figma up", snippets, gateway, actions: null });
     expect(calls[0]?.tools).not.toContain("open_app");
   });
 });
@@ -252,7 +263,7 @@ describe("runDirectCommand: computer use", () => {
   it("sends a task on screen straight to the loop, with no answer call, and ends with its one line", async () => {
     const { gateway, streamCalls, generateCalls } = bothModel({ turns: [{ tool: "snapshot", input: { app: "Discord" } }, { tool: "click", input: { ref: "@s1:e2", effect: "send" } }, { text: "Sent the message." }] });
     const { computer, commands, steps } = host();
-    const result = await runDirectCommand({ command: "send Sam a message in Discord", snippets, gateway, actions: fakeActions().actions, computer });
+    const result = await run({ command: "send Sam a message in Discord", snippets, gateway, actions: fakeActions().actions, computer });
     expect(pipelineResultSchema.parse(result)).toMatchObject({ tips: ["Sent the message."], guideError: null });
     expect(streamCalls).toEqual([]);
     expect(generateCalls()).toBe(3);
@@ -263,7 +274,7 @@ describe("runDirectCommand: computer use", () => {
   it("lets the answer path hand a task over with use_computer", async () => {
     const { gateway, streamCalls, generateCalls } = bothModel({ stream: [toolCall("use_computer", {})], turns: [{ text: "Made a new file in Figma." }] });
     const { computer } = host();
-    const result = await runDirectCommand({ command: "get a fresh Figma file going", snippets, gateway, actions: fakeActions().actions, computer });
+    const result = await run({ command: "get a fresh Figma file going", snippets, gateway, actions: fakeActions().actions, computer });
     expect(result.tips).toEqual(["Made a new file in Figma."]);
     expect(streamCalls).toHaveLength(1);
     expect(streamCalls[0]?.tools).toContain("use_computer");
@@ -273,7 +284,7 @@ describe("runDirectCommand: computer use", () => {
 
   it("answers a question without the loop, even with computer use on", async () => {
     const { gateway, generateCalls } = bothModel({ stream: [text("- 15% of 18,000 is 2,700.\n")] });
-    const result = await runDirectCommand({ command: "what's 15% of 18000?", snippets, gateway, actions: fakeActions().actions, computer: host().computer });
+    const result = await run({ command: "what's 15% of 18000?", snippets, gateway, actions: fakeActions().actions, computer: host().computer });
     expect(result.tips).toEqual(["15% of 18,000 is 2,700."]);
     expect(generateCalls()).toBe(0);
   });
@@ -281,7 +292,7 @@ describe("runDirectCommand: computer use", () => {
   it("keeps the quick path for a plain open", async () => {
     const { gateway, generateCalls } = bothModel({});
     const { computer, commands } = host();
-    expect((await runDirectCommand({ command: "open Teams", snippets, gateway, actions: fakeActions().actions, computer })).tips).toEqual(["Opened Teams"]);
+    expect((await run({ command: "open Teams", snippets, gateway, actions: fakeActions().actions, computer })).tips).toEqual(["Opened Teams"]);
     expect(generateCalls()).toBe(0);
     expect(commands).toEqual([]);
   });
@@ -289,7 +300,7 @@ describe("runDirectCommand: computer use", () => {
   it("on a Mac without Accessibility, runs no loop and says to allow Bee in Settings", async () => {
     const { gateway, generateCalls } = bothModel({ turns: [{ tool: "snapshot", input: { app: "Discord" } }] });
     const { computer, commands } = host({ accessibility: "denied" });
-    const result = await runDirectCommand({ command: "send Sam a message in Discord", snippets, gateway, actions: fakeActions().actions, computer });
+    const result = await run({ command: "send Sam a message in Discord", snippets, gateway, actions: fakeActions().actions, computer });
     expect(result.tips).toEqual([ACCESSIBILITY_LINE]);
     expect(generateCalls()).toBe(0);
     expect(commands).toEqual(["permissions"]);
@@ -298,14 +309,14 @@ describe("runDirectCommand: computer use", () => {
   it("ends with Stopped when main stops the run", async () => {
     const { gateway } = bothModel({ turns: [{ tool: "snapshot", input: { app: "Discord" } }, { tool: "snapshot", input: { app: "Discord" } }, { text: "Sent." }] });
     const { computer, commands } = host({ onRun: (command, control) => command === "snapshot" && control?.stop("user") });
-    const result = await runDirectCommand({ command: "send Sam a message in Discord", snippets, gateway, actions: fakeActions().actions, computer });
+    const result = await run({ command: "send Sam a message in Discord", snippets, gateway, actions: fakeActions().actions, computer });
     expect(result.tips).toEqual(["Stopped."]);
     expect(commands).toEqual(["permissions", "snapshot"]);
   });
 
   it("offers no use_computer, and keeps the old line, without computer use", async () => {
     const { gateway, streamCalls } = bothModel({ stream: [text("- Bee cannot send messages.\n")] });
-    const result = await runDirectCommand({ command: "send Sam a message in Discord", snippets, gateway, actions: fakeActions().actions, computer: null });
+    const result = await run({ command: "send Sam a message in Discord", snippets, gateway, actions: fakeActions().actions, computer: null });
     expect(result.tips).toEqual(["Bee cannot send messages."]);
     expect(streamCalls[0]?.tools).not.toContain("use_computer");
     expect(streamCalls[0]?.tools).not.toContain("click");
@@ -323,29 +334,28 @@ describe("runDirectCommand: Bee's history and no blank replies", () => {
     assistantMessage("Which team?"),
   ];
   type Prompt = Array<{ role: string; content: unknown; providerOptions?: unknown }>;
-  const cacheMarks = (prompt: Prompt) => (JSON.stringify(prompt).match(/"cacheControl"/g) ?? []).length;
 
-  it("sends the whole history, tool calls and results included, before the request, within four cache breakpoints", async () => {
+  it("sends the whole history as text, tool calls and results included, before the request, in the one user message", async () => {
     const { model } = stepsModel([text("- The Acme team usage page is open.\n")]);
     const gateway = { languageModel: () => model } as unknown as BeeGateway;
-    const result = await runDirectCommand({ command: "the Acme one", history, snippets, gateway, actions: fakeActions().actions });
+    const result = await run({ command: "the Acme one", history, snippets, gateway, actions: fakeActions().actions });
     expect(result.tips).toEqual(["The Acme team usage page is open."]);
     const prompt = (model.doStreamCalls[0]?.prompt ?? []) as Prompt;
-    expect(prompt.map((message) => message.role)).toEqual(["system", "user", "assistant", "tool", "assistant", "user", "assistant", "user"]);
-    expect(JSON.stringify(prompt[1])).toContain("open Vercel usage");
-    expect(JSON.stringify(prompt[2])).toContain("tool-call");
-    expect(JSON.stringify(prompt[3])).toContain("Opened https://vercel.com/acme/~/usage");
-    expect(JSON.stringify(prompt[6])).toContain("Which team?");
-    // The current request is last, never in the history.
-    expect(JSON.stringify(prompt[7])).toContain("the Acme one");
-    // System, the end of the history, and the notes context: three, within Anthropic's four.
-    expect(cacheMarks(prompt)).toBe(3);
-    expect(JSON.stringify(prompt[6])).toContain("cacheControl");
+    // The SDK takes no assistant turns: the earlier turns go as text, ahead of the request.
+    expect(prompt.map((message) => message.role)).toEqual(["system", "user"]);
+    const sent = JSON.stringify(prompt[1]);
+    expect(sent).toContain("User: open Vercel usage");
+    expect(sent).toContain("Opened https://vercel.com/acme/~/usage");
+    expect(sent).toContain("Bee: Which team?");
+    // The current request comes after the history, never in it.
+    expect(sent.indexOf("Which team?")).toBeLessThan(sent.indexOf("the Acme one"));
+    // Prompt caching is the SDK's own: Bee sets no Gateway cache markers.
+    expect(sent).not.toContain("cacheControl");
   });
 
   it("hands back each request's own messages for the history: the request, tool calls, results and the reply", async () => {
     const turns: ModelMessage[][] = [];
-    await runDirectCommand({
+    await run({
       command: "get Figma up",
       snippets,
       gateway: stepsModel([toolCall("open_app", { name: "Figma" }), text("- Figma is open.\n")]).gateway,
@@ -361,30 +371,30 @@ describe("runDirectCommand: Bee's history and no blank replies", () => {
     expect(JSON.stringify(turn)).not.toContain("cacheControl");
     // The quick path with no AI call is kept as a tool call and result too.
     const fast: ModelMessage[][] = [];
-    await runDirectCommand({ command: "open Teams", snippets, gateway: null, actions: fakeActions().actions, onTurn: (turn) => fast.push(turn) });
+    await run({ command: "open Teams", snippets, gateway: null, actions: fakeActions().actions, onTurn: (turn) => fast.push(turn) });
     expect(fast[0]?.map((message) => message.role)).toEqual(["user", "assistant", "tool", "assistant"]);
     expect(JSON.stringify(fast[0])).toContain("Opened Teams");
   });
 
-  it("keeps two breakpoints with no history", async () => {
+  it("sends no earlier-turns block with no history", async () => {
     const { model } = stepsModel([text("- 15% of 18,000 is 2,700.\n")]);
-    await runDirectCommand({ command: "what's 15% of 18000?", snippets, gateway: { languageModel: () => model } as unknown as BeeGateway, actions: null });
+    await run({ command: "what's 15% of 18000?", snippets, gateway: { languageModel: () => model } as unknown as BeeGateway, actions: null });
     const prompt = (model.doStreamCalls[0]?.prompt ?? []) as Prompt;
     expect(prompt.map((message) => message.role)).toEqual(["system", "user"]);
-    expect(cacheMarks(prompt)).toBe(2);
+    expect(JSON.stringify(prompt[1])).not.toContain("Earlier turns with Bee");
   });
 
   it("never leaves the island blank: NONE or no text with no action gives a fallback line", async () => {
-    const none = await runDirectCommand({ command: "do the thing", snippets, gateway: stepsModel([text("NONE")]).gateway, actions: fakeActions().actions });
+    const none = await run({ command: "do the thing", snippets, gateway: stepsModel([text("NONE")]).gateway, actions: fakeActions().actions });
     expect(none).toMatchObject({ tips: ["Bee isn't sure what to do next."], guideError: null });
-    const empty = await runDirectCommand({ command: "open the team one", snippets, gateway: stepsModel([text("")]).gateway, actions: fakeActions().actions });
+    const empty = await run({ command: "open the team one", snippets, gateway: stepsModel([text("")]).gateway, actions: fakeActions().actions });
     expect(empty).toMatchObject({ tips: ["Which one?"], guideError: null });
   });
 
   it("marks action lines, for the next request's history", async () => {
-    const after = await runDirectCommand({ command: "get Figma up", snippets, gateway: stepsModel([toolCall("open_app", { name: "Figma" }), text("- Figma is open.\n")]).gateway, actions: fakeActions().actions });
+    const after = await run({ command: "get Figma up", snippets, gateway: stepsModel([toolCall("open_app", { name: "Figma" }), text("- Figma is open.\n")]).gateway, actions: fakeActions().actions });
     expect(after).toMatchObject({ tips: ["Opened Figma", "Figma is open."], actions: ["Opened Figma"] });
-    expect((await runDirectCommand({ command: "open Teams", snippets, gateway: null, actions: fakeActions().actions })).actions).toEqual(["Opened Teams"]);
+    expect((await run({ command: "open Teams", snippets, gateway: null, actions: fakeActions().actions })).actions).toEqual(["Opened Teams"]);
   });
 
   it("tells the AI to confirm or ask, never to reply NONE, while meeting tips keep NONE", () => {
@@ -409,66 +419,41 @@ describe("runDirectCommand: Bee's history and no blank replies", () => {
       askFirst: () => false,
       confirm: async () => true,
     };
-    const result = await runDirectCommand({ command: "click the team usage tab", history, snippets, gateway: { languageModel: () => model } as unknown as BeeGateway, actions: fakeActions().actions, computer });
+    const result = await run({ command: "click the team usage tab", history, snippets, gateway: { languageModel: () => model } as unknown as BeeGateway, actions: fakeActions().actions, computer });
     expect(result).toMatchObject({ tips: ["Opened the team usage page."], endedWhere: "vercel.com/acme/~/usage, 404" });
     const prompt = prompts[0] as Prompt;
-    expect(prompt.map((message) => message.role)).toEqual(["system", "user", "assistant", "tool", "assistant", "user", "assistant", "user"]);
-    expect(JSON.stringify(prompt[3])).toContain("Opened https://vercel.com/acme/~/usage");
-    expect(cacheMarks(prompt)).toBe(2);
+    expect(prompt.map((message) => message.role)).toEqual(["system", "user"]);
+    expect(JSON.stringify(prompt[1])).toContain("Opened https://vercel.com/acme/~/usage");
   });
 });
 
-describe("runDirectCommand: the command model, adaptive thinking and caching", () => {
-  // claude-sonnet-5* always thinks adaptively (installed @ai-sdk/anthropic): effort, never budgetTokens.
-  const THINKING = { anthropic: { thinking: { type: "adaptive" }, effort: "medium" } };
-  /** A gateway that records which model ids were asked for. */
-  function idGateway(model: MockLanguageModelV4) {
-    const ids: string[] = [];
-    const gateway = {
-      languageModel: (id: string) => {
-        ids.push(id);
-        return model;
-      },
-    } as unknown as BeeGateway;
-    return { gateway, ids };
-  }
-
-  it("answers with COMMAND_MODEL, thinking at medium effort, with room to think and the cache markers kept", async () => {
+describe("runDirectCommand: the agent tier", () => {
+  it("answers on the planning tier (Sonnet, adaptive thinking at medium effort in the SDK)", async () => {
     const { model } = stepsModel([text("- 15% of 18,000 is 2,700.\n")]);
-    const { gateway, ids } = idGateway(model);
-    await runDirectCommand({ command: "what's 15% of 18000?", snippets, gateway, actions: null });
-    expect(COMMAND_MODEL).toBe("anthropic/claude-sonnet-5.5");
-    expect(ids).toEqual([COMMAND_MODEL]);
-    expect(ids).not.toContain(GUIDE_MODEL);
-    const call = model.doStreamCalls[0];
-    expect(call?.providerOptions).toMatchObject({ gateway: { order: ["anthropic"] }, ...THINKING });
-    expect(call?.maxOutputTokens).toBe(COMMAND_MAX_OUTPUT_TOKENS);
-    expect(COMMAND_MAX_OUTPUT_TOKENS).toBeGreaterThanOrEqual(12_000);
-    expect(JSON.stringify(call?.providerOptions)).not.toContain("budgetTokens");
-    expect(JSON.stringify(call?.prompt)).toContain("cacheControl");
+    const agent = modelAgent(model);
+    await runDirectCommand({ command: "what's 15% of 18000?", snippets, agent, gateway: null, actions: null });
+    expect(agent.requests.map((request) => request.tier)).toEqual(["plan"]);
+    expect(AGENT_MODEL.plan).toBe("claude-sonnet-5-5");
+    expect(agent.requests[0]?.maxTurns).toBeUndefined();
   });
 
-  it("runs computer use on COMMAND_MODEL with adaptive thinking and the cache markers kept", async () => {
+  it("runs computer use on the planning tier, with no Gateway key at all", async () => {
     const model = new MockLanguageModelV4({
       doGenerate: async () => ({ content: [{ type: "text", text: "Sent the message." }], finishReason: { unified: "stop", raw: undefined }, usage, warnings: [] }),
     });
-    const { gateway, ids } = idGateway(model);
+    const agent = modelAgent(model);
     const computer: ComputerHost = {
       platform: "windows",
       run: async () => ({ ok: true, data: {} }),
       askFirst: () => false,
       confirm: async () => true,
     };
-    const result = await runDirectCommand({ command: "send Sam a message in Discord", snippets, gateway, actions: fakeActions().actions, computer });
+    const result = await runDirectCommand({ command: "send Sam a message in Discord", snippets, agent, gateway: null, actions: fakeActions().actions, computer });
     expect(result.tips).toEqual(["Sent the message."]);
-    expect(ids).toEqual([COMMAND_MODEL]);
-    const call = model.doGenerateCalls[0];
-    expect(call?.providerOptions).toMatchObject({ gateway: { order: ["anthropic"] }, ...THINKING });
-    expect(call?.maxOutputTokens).toBeGreaterThanOrEqual(12_000);
-    expect(JSON.stringify(call?.prompt)).toContain("cacheControl");
+    expect(agent.requests.map((request) => request.tier)).toEqual(["plan"]);
   });
 
-  it("keeps meeting tips on thinking off, with the smaller output budget", async () => {
+  it("keeps meeting tips on the Gateway with thinking off, with the smaller output budget", async () => {
     const { model } = stepsModel([text("- Ask about the budget.\n")]);
     await guideWithLuna({ model, transcript: ["Alice: What's the budget?"], notes: [] });
     const call = model.doStreamCalls[0];
@@ -540,7 +525,7 @@ describe("runDirectCommand: Jev routing, the fast pass and Bee's memory", () => 
 
   it("lets Jev send a request the word rules would answer to the loop", async () => {
     const { gateway, ids, jevCalls } = gatewayWith({ jev: async () => choice("computer_use"), command: [{ text: "Muted the call." }] });
-    const result = await runDirectCommand({ command: "I need the Teams call muted", snippets, gateway, actions: fakeActions().actions, computer: host().computer });
+    const result = await run({ command: "I need the Teams call muted", snippets, gateway, actions: fakeActions().actions, computer: host().computer });
     expect(result.tips).toEqual(["Muted the call."]);
     expect(jevCalls).toHaveLength(1);
     expect(ids).toContain(COMMAND_MODEL);
@@ -549,7 +534,7 @@ describe("runDirectCommand: Jev routing, the fast pass and Bee's memory", () => 
   it("lets Jev keep a request off the screen, and the answer path still runs", async () => {
     const { gateway, models } = gatewayWith({ jev: async () => choice("direct_answer"), stream: [text("- Bee would say hi.\n")] });
     const { computer, commands } = host();
-    const result = await runDirectCommand({ command: "tell Sam hello means what in French", snippets, gateway, actions: fakeActions().actions, computer });
+    const result = await run({ command: "tell Sam hello means what in French", snippets, gateway, actions: fakeActions().actions, computer });
     expect(result.tips).toEqual(["Bee would say hi."]);
     expect(commands).toEqual([]);
     expect(models[COMMAND_MODEL]?.doStreamCalls).toHaveLength(1);
@@ -560,7 +545,7 @@ describe("runDirectCommand: Jev routing, the fast pass and Bee's memory", () => 
       const { gateway } = gatewayWith({ jev, command: [{ text: "Sent the message." }] });
       const { computer, commands } = host();
       const started = performance.now();
-      const result = await runDirectCommand({ command: "send Sam a message in Discord", snippets, gateway, actions: fakeActions().actions, computer });
+      const result = await run({ command: "send Sam a message in Discord", snippets, gateway, actions: fakeActions().actions, computer });
       expect(result.tips).toEqual(["Sent the message."]);
       expect(performance.now() - started).toBeLessThan(2000);
     }
@@ -568,20 +553,19 @@ describe("runDirectCommand: Jev routing, the fast pass and Bee's memory", () => 
 
   it("never asks Jev for a quick open", async () => {
     const { gateway, jevCalls } = gatewayWith({ jev: async () => choice("computer_use") });
-    expect((await runDirectCommand({ command: "open Teams", snippets, gateway, actions: fakeActions().actions, computer: host().computer })).tips).toEqual(["Opened Teams"]);
+    expect((await run({ command: "open Teams", snippets, gateway, actions: fakeActions().actions, computer: host().computer })).tips).toEqual(["Opened Teams"]);
     expect(jevCalls).toEqual([]);
   });
 
   it("runs a simple click on the fast model with thinking off, and never the planning model when it finishes", async () => {
     const { gateway, ids, models } = gatewayWith({ guide: [{ tool: "snapshot", input: { app: "Discord" } }, { tool: "click", input: { ref: "@s1:e3", effect: "none" } }, { text: "Opened the inbox." }] });
     const { computer, commands } = host();
-    const result = await runDirectCommand({ command: "click Inbox in Discord", snippets, gateway, actions: fakeActions().actions, computer });
+    const result = await run({ command: "click Inbox in Discord", snippets, gateway, actions: fakeActions().actions, computer });
     expect(result.tips).toEqual(["Opened the inbox."]);
     expect(ids).toContain(GUIDE_MODEL);
     expect(ids).not.toContain(COMMAND_MODEL);
     expect(commands).toEqual(["snapshot", "click"]);
     const call = models[GUIDE_MODEL]?.doGenerateCalls[0];
-    expect(call?.providerOptions).toMatchObject({ anthropic: { thinking: { type: "disabled" } } });
     expect(JSON.stringify(call?.prompt)).toContain("ESCALATE");
     // The playbook for the app the request names goes with it.
     expect(JSON.stringify(call?.prompt)).toContain("ctrl+k opens the quick switcher");
@@ -594,12 +578,11 @@ describe("runDirectCommand: Jev routing, the fast pass and Bee's memory", () => 
     });
     const turns: ModelMessage[][] = [];
     const { computer, commands } = host();
-    const result = await runDirectCommand({ command: "click the inbox button", snippets, gateway, actions: fakeActions().actions, computer, onTurn: (turn) => turns.push(turn) });
+    const result = await run({ command: "click the inbox button", snippets, gateway, actions: fakeActions().actions, computer, onTurn: (turn) => turns.push(turn) });
     expect(result.tips).toEqual(["Opened the inbox."]);
     expect(commands).toEqual(["snapshot", "click"]);
     const planned = models[COMMAND_MODEL]?.doGenerateCalls[0];
-    expect(planned?.providerOptions).toMatchObject({ anthropic: { thinking: { type: "adaptive" }, effort: "medium" } });
-    // The planning model sees the fast pass's snapshot and its refs, but never the ESCALATE line.
+    // The planning model sees the fast pass's snapshot and its refs, as text after the request, but never the ESCALATE line.
     const prompt = JSON.stringify(planned?.prompt);
     expect(prompt).toContain("@s1:e3");
     expect(prompt).not.toContain('"ESCALATE"');
@@ -611,7 +594,7 @@ describe("runDirectCommand: Jev routing, the fast pass and Bee's memory", () => 
   it("never runs a send or a two-step task on the fast model", async () => {
     for (const command of ["send Sam a message in Discord", "click Inbox, then click Send"]) {
       const { gateway, ids } = gatewayWith({ command: [{ text: "Done it." }] });
-      await runDirectCommand({ command, snippets, gateway, actions: fakeActions().actions, computer: host().computer });
+      await run({ command, snippets, gateway, actions: fakeActions().actions, computer: host().computer });
       expect(ids, command).not.toContain(GUIDE_MODEL);
     }
   });
@@ -619,7 +602,7 @@ describe("runDirectCommand: Jev routing, the fast pass and Bee's memory", () => 
   it("gives the answer path the memory tools and summary, and saves a fact it writes", async () => {
     const memory = inMemoryBeeMemory([{ text: "Sam in Teams is Samuel Jones", kind: "person", updated: "2026-11-01" }]);
     const { gateway, models } = gatewayWith({ stream: [toolCall("memory_write", { fact: "Prefers British English", kind: "preference" }), text("- Bee will remember that.\n")] });
-    const result = await runDirectCommand({ command: "remember I prefer British English", snippets, gateway, actions: fakeActions().actions, memory });
+    const result = await run({ command: "remember I prefer British English", snippets, gateway, actions: fakeActions().actions, memory });
     expect(result.tips).toEqual(["Bee will remember that."]);
     expect(memory.facts().map((fact) => fact.text)).toEqual(["Sam in Teams is Samuel Jones", "Prefers British English"]);
     const call = models[COMMAND_MODEL]?.doStreamCalls[0];
@@ -631,12 +614,12 @@ describe("runDirectCommand: Jev routing, the fast pass and Bee's memory", () => 
   it("gives computer use the memory summary and tools, and no memory at all without a store", async () => {
     const memory = inMemoryBeeMemory([{ text: "Sam in Discord is sammyj", kind: "person", updated: "2026-11-01" }]);
     const { gateway, models } = gatewayWith({ command: [{ text: "Sent the message." }] });
-    await runDirectCommand({ command: "send Sam a message in Discord", snippets, gateway, actions: fakeActions().actions, computer: host().computer, memory });
+    await run({ command: "send Sam a message in Discord", snippets, gateway, actions: fakeActions().actions, computer: host().computer, memory });
     const call = models[COMMAND_MODEL]?.doGenerateCalls[0];
     expect(JSON.stringify(call?.prompt)).toContain("Sam in Discord is sammyj");
     expect((call?.tools ?? []).map((item) => item.name)).toEqual(expect.arrayContaining(["memory_read", "memory_write", "act"]));
     const bare = gatewayWith({ stream: [text("- Hi.\n")] });
-    await runDirectCommand({ command: "what's 2 plus 2?", snippets, gateway: bare.gateway, actions: null });
+    await run({ command: "what's 2 plus 2?", snippets, gateway: bare.gateway, actions: null });
     expect(bare.models[COMMAND_MODEL]?.doStreamCalls[0]?.tools ?? []).toEqual([]);
     expect(JSON.stringify(bare.models[COMMAND_MODEL]?.doStreamCalls[0]?.prompt)).not.toContain("memory_write");
   });

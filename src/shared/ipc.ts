@@ -76,6 +76,8 @@ export const secretStorageSchema = z.enum(["os", "weak", "memory"]);
 
 export const settingsViewSchema = z.object({
   gatewayKeySource: z.enum(["saved", "env", "none"]),
+  // The Claude token for "Bee, …" requests (core/claude-agent.ts): saved in Settings, from BEE_CLAUDE_CODE_OAUTH_TOKEN, or none.
+  claudeTokenSource: z.enum(["saved", "env", "none"]),
   // Personalised link suggestions: the effective toggle, and whether an enabled vmem connector (Connectors tab) exists.
   personalisedLinks: z.boolean(),
   vmemConnected: z.boolean(),
@@ -119,6 +121,7 @@ export type SettingsView = z.infer<typeof settingsViewSchema>;
 // Secrets: omitted = unchanged, "" = clear.
 export const settingsUpdateSchema = z.object({
   gatewayApiKey: z.string().max(500).optional(),
+  claudeToken: z.string().max(500).optional(),
   meetingMode: z.boolean().optional(),
   interfaceScale: interfaceScaleSchema.optional(),
   motionPreference: motionPreferenceSchema.optional(),

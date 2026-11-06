@@ -2,7 +2,6 @@ import { generateText, modelMessageSchema, type LanguageModel, type ModelMessage
 import { redactSecretValues } from "./debug-redact";
 import { COMMAND_CONTEXT_TOKENS, GUIDE_CONTEXT_TOKENS, guideProviderOptions } from "./gateway";
 
-type ProviderOptions = NonNullable<ModelMessage["providerOptions"]>;
 
 // Bee's history with the user: every direct request ("Bee, …") and everything the AI did about it, as real model messages: the
 // user's words, the AI's text, its tool calls and the tool results. Kept forever on this computer (main/bee-history-store.ts,
@@ -25,9 +24,9 @@ export type BeeExchange = {
 /** Rough size of text for the AI (about 4 characters a token), like the rest of Bee. */
 export const CHARS_PER_TOKEN = 4;
 /**
- * Room left in COMMAND_MODEL's window (COMMAND_CONTEXT_TOKENS) above the history when it compacts. Most of it is deliberate:
+ * Room left in the agent's window (COMMAND_CONTEXT_TOKENS) above the history when it compacts. Most of it is deliberate:
  * models answer worse deep into a very long context, so Bee compacts at 400k rather than near the 1M limit. The rest covers the
- * system prompt, tools, agent-desktop guides and skills, the current turn, the reply (COMMAND_MAX_OUTPUT_TOKENS, 16k) and slack,
+ * system prompt, tools, agent-desktop guides and skills, the current turn, the reply and slack,
  * since the 4-characters estimate runs low on JSON and code.
  */
 export const COMMAND_HEADROOM_TOKENS = 600_000;
@@ -401,46 +400,6 @@ export async function compactMessages(
   }
   return [{ role: "user", content: [head] }, ...kept];
 }
-
-/**
- * A prepareStep for streamText / generateText that compacts the messages before a step once they near the window
- * (compactMessages). The override carries forward to later steps, so it compacts again only when they grow back.
- */
-export function compactingStep(options: { summarise?: Summarise; maxTokens?: number; keepTokens?: number; signal?: AbortSignal; onCompact?: (info: { before: number; after: number }) => void }) {
-  return async ({ messages }: { messages: ModelMessage[] }): Promise<{ messages: ModelMessage[] } | undefined> => {
-    const next = await compactMessages(messages, options);
-    if (next === messages) return undefined;
-    options.onCompact?.({ before: messages.length, after: next.length });
-    return { messages: next };
-  };
-}
-
-/**
- * The messages with a cache breakpoint on the last part of the last one (the history is stable from one request to the next).
- * The caller passes the cache options (gateway.ts ANTHROPIC_CACHE) and keeps the request within CACHE_BREAKPOINTS_MAX.
- */
-export function cacheAtEnd(messages: readonly ModelMessage[], cache: ProviderOptions): ModelMessage[] {
-  const last = messages.at(-1);
-  if (!last) return [];
-  const content = typeof last.content === "string" ? [{ type: "text" as const, text: last.content }] : last.content;
-  const end = content.length - 1;
-  const marked = content.map((part, index) => (index === end ? { ...part, providerOptions: cache } : part));
-  return [...messages.slice(0, -1), { ...last, content: marked } as ModelMessage];
-}
-
-/** Cache breakpoints in a request: the system and every message part with Anthropic cacheControl. Anthropic allows four. */
-export function cacheBreakpoints(request: { instructions?: { providerOptions?: unknown }; messages: readonly ModelMessage[] }): number {
-  const marked = (options: unknown) => Boolean((options as { anthropic?: { cacheControl?: unknown } } | undefined)?.anthropic?.cacheControl);
-  let count = marked(request.instructions?.providerOptions) ? 1 : 0;
-  for (const message of request.messages) {
-    if (marked(message.providerOptions)) count += 1;
-    if (Array.isArray(message.content)) for (const part of message.content) if (marked((part as { providerOptions?: unknown }).providerOptions)) count += 1;
-  }
-  return count;
-}
-
-/** Anthropic's limit on cache breakpoints per request. */
-export const CACHE_BREAKPOINTS_MAX = 4;
 
 /** A short line for a direct request that got no reply and did nothing: a question back for "the X one", else a plain line. */
 export function commandFallbackReply(command: string): string {
