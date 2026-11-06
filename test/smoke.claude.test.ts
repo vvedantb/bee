@@ -123,4 +123,27 @@ describe("Claude Agent SDK: Bee, …", () => {
     expect(ms).toBeLessThan(8000);
     expect(result.guideError).not.toBeNull();
   });
+
+  it("reads the window at the front for 'what am I working on', and only reads", async () => {
+    const commands: string[] = [];
+    const computer: ComputerHost = {
+      platform: "mac",
+      run: async (command, args) => {
+        commands.push(`${command} ${args.join(" ")}`.trim());
+        if (command === "list-windows") return { ok: true, data: { windows: [{ id: "7", app_name: "Bee", title: "Bee", is_focused: true }, { id: "12", app_name: "Cursor", title: "invoice-export.ts — billing-service", is_focused: true }, { id: "3", app_name: "Slack", title: "Slack", is_focused: false }] } };
+        if (command === "snapshot") return { ok: true, data: { app: "Cursor", window: { id: "12", title: "invoice-export.ts — billing-service" }, tree: { role: "window", name: "invoice-export.ts — billing-service", children: [
+          { role: "tab", name: "invoice-export.ts", ref_id: "@s1:e1" },
+          { role: "textarea", name: "Editor", value: "export async function exportInvoices(month: string) {\n  const rows = await db.invoices.forMonth(month);\n  // TODO: add VAT column\n  return toCsv(rows);\n}", ref_id: "@s1:e2" },
+          { role: "statictext", name: "Problems: 1 — Property 'vat' does not exist on type 'Invoice'", ref_id: "@s1:e3" },
+        ] } } };
+        return { ok: true, data: {} };
+      },
+      askFirst: () => true,
+      confirm: async () => false,
+    };
+    const r = await runDirectCommand({ command: "can you see what I'm working on?", snippets: [], agent: agent, gateway: null, actions: { openApp: async () => ({ ok: true, message: "" }), focusWindow: async () => ({ ok: true, message: "" }), openUrl: async () => ({ ok: true, message: "" }) }, computer });
+    process.stdout.write(`PROBE ${JSON.stringify({ commands, tips: r.tips, err: r.guideError })}\n`);
+    expect(commands.some((c) => c.startsWith("snapshot") && c.includes("Cursor"))).toBe(true);
+    expect(commands.every((c) => /^(list-windows|list-apps|snapshot|find|get|is)\b/.test(c))).toBe(true);
+  });
 });

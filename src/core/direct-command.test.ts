@@ -282,6 +282,43 @@ describe("runDirectCommand: computer use", () => {
     expect(generateCalls()).toBe(1);
   });
 
+  it("reads the window at the front for a question about the screen, and never acts", async () => {
+    const { gateway, streamCalls, generateCalls } = bothModel({
+      stream: [toolCall("list_windows", {}), toolCall("snapshot", { app: "Discord", window_id: "w-1" }), text("- You are in Discord, on the Inbox and Help channels.\n")],
+    });
+    const commands: string[] = [];
+    const computer: ComputerHost = {
+      platform: "mac",
+      run: async (command) => {
+        commands.push(command);
+        if (command === "list-windows")
+          return { ok: true, data: { windows: [{ id: "w-0", app_name: "Bee", title: "Bee", is_focused: true }, { id: "w-1", app_name: "Discord", title: "Discord", is_focused: true }] } };
+        if (command === "snapshot") return { ok: true, data: SNAPSHOT };
+        return { ok: true, data: {} };
+      },
+      askFirst: () => true,
+      confirm: async () => true,
+    };
+    const result = await run({ command: "can you see what I'm working on?", snippets, gateway, actions: fakeActions().actions, computer });
+    expect(result.tips).toEqual(["You are in Discord, on the Inbox and Help channels."]);
+    // The answer path, not the loop: it read the window list and the window, and acted on nothing.
+    expect(generateCalls()).toBe(0);
+    expect(commands).toEqual(["list-windows", "snapshot"]);
+    const tools = streamCalls[0]?.tools ?? [];
+    expect(tools).toEqual(expect.arrayContaining(["list_windows", "snapshot", "find", "read", "use_computer"]));
+    for (const act of ["click", "type_text", "set_value", "press_key", "act"]) expect(tools).not.toContain(act);
+    expect(streamCalls[0]?.prompt).toContain("window marked (focused)");
+    // Bee never shows itself to the AI.
+    expect(streamCalls[1]?.prompt).not.toContain("w-0");
+  });
+
+  it("gives no window tools without computer use", async () => {
+    const { gateway, streamCalls } = bothModel({ stream: [text("- Bee cannot see your screen here.\n")] });
+    await run({ command: "can you see what I'm working on?", snippets, gateway, actions: fakeActions().actions });
+    expect(streamCalls[0]?.tools).not.toContain("snapshot");
+    expect(streamCalls[0]?.tools).not.toContain("list_windows");
+  });
+
   it("answers a question without the loop, even with computer use on", async () => {
     const { gateway, generateCalls } = bothModel({ stream: [text("- 15% of 18,000 is 2,700.\n")] });
     const result = await run({ command: "what's 15% of 18000?", snippets, gateway, actions: fakeActions().actions, computer: host().computer });
