@@ -2,13 +2,13 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { FS_LIMITS, normalizeFsRoots, resolveInRoots } from "./fs-sandbox";
+import { FS_LIMITS, resolveInRoots } from "./fs-sandbox";
 import { appendNote, fsTools, listDir, readFile, searchFiles } from "./fs-tools";
 
 let base: string;
 let notes: string;
 let extra: string;
-let roots: { notesDir: string; extraRoots: string[] };
+let roots: { notesDir: string };
 
 beforeEach(() => {
   base = mkdtempSync(join(tmpdir(), "bee-fs-"));
@@ -24,7 +24,7 @@ beforeEach(() => {
   writeFileSync(join(notes, "sneaky.txt"), Buffer.from([0x68, 0x69, 0x00, 0x68, 0x69]));
   writeFileSync(join(notes, "huge.md"), "needle ".repeat(FS_LIMITS.maxFileBytes / 4));
   writeFileSync(join(extra, "outside.md"), "Extra folder fact: BLUEHERON.");
-  roots = { notesDir: notes, extraRoots: [extra] };
+  roots = { notesDir: notes };
 });
 
 afterEach(() => rmSync(base, { recursive: true, force: true }));
@@ -43,8 +43,8 @@ describe("list_dir", () => {
     expect(listDir(roots, {})).not.toContain("orchard.md");
   });
 
-  it("lists an approved extra folder by absolute path", () => {
-    expect(listDir(roots, { path: extra })).toContain(`file ${join(extra, "outside.md")}`);
+  it("never lists a folder outside the notes folder", () => {
+    expect(listDir(roots, { path: extra })).not.toContain("outside.md");
   });
 
   it("caps the entry count", () => {
@@ -73,9 +73,9 @@ describe("search_files", () => {
     expect(searchFiles(roots, { query: "ACME" })).toContain("acme.md");
   });
 
-  it("searches extra roots and can be limited to one folder", () => {
-    expect(searchFiles(roots, { query: "blueheron" })).toContain("outside.md");
-    expect(searchFiles(roots, { query: "blueheron", path: "projects" })).toBe("No matches.");
+  it("searches only the notes folder, and can be limited to one subfolder", () => {
+    expect(searchFiles(roots, { query: "blueheron" })).toBe("No matches.");
+    expect(searchFiles(roots, { query: "wobblefinch", path: "projects" })).toContain("orchard.md");
   });
 
   it("skips binaries, NUL files and files over the size limit", () => {
@@ -103,7 +103,7 @@ describe("read_file", () => {
   it("returns the content, relative or absolute", () => {
     expect(readFile(roots, { path: "acme.md" })).toContain("Renewal discount is 10%");
     expect(readFile(roots, { path: "projects/orchard.md" })).toContain("WOBBLEFINCH");
-    expect(readFile(roots, { path: join(extra, "outside.md") })).toContain("BLUEHERON");
+    expect(readFile(roots, { path: join(extra, "outside.md") })).not.toContain("BLUEHERON");
   });
 
   it("refuses oversize and binary files", () => {
@@ -242,8 +242,3 @@ describe("resolveInRoots", () => {
   });
 });
 
-describe("normalizeFsRoots", () => {
-  it("trims, drops empties and duplicates, and flags relative paths", () => {
-    expect(normalizeFsRoots([`  ${extra}  `, "", extra, "relative/dir"])).toEqual({ roots: [extra], invalid: ["relative/dir"] });
-  });
-});

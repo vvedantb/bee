@@ -92,7 +92,6 @@ export const settingsViewSchema = z.object({
   notesDir: z.string(),
   // The local debug log folder (main/debug-log.ts), beside the notes folder. Logs stay on this computer and are never deleted.
   logsDir: z.string(),
-  fsRoots: z.array(z.string()),
   // Names Bee should know (core/known-names.ts): typed here or learned from spelling corrections and chat names on screen.
   knownNames: z.array(z.string()),
   // Meeting context (core/meeting-context.ts). All on by default. Calendar and memory only matter while the master switch is on.
@@ -127,7 +126,6 @@ export const settingsUpdateSchema = z.object({
   personalisedLinks: z.boolean().optional(),
   sendSessionsToVmem: z.boolean().optional(),
   // Extra absolute folders Luna may read; replaces the saved list.
-  fsRoots: z.array(z.string().max(1000)).max(20).optional(),
   // Names Bee should know; replaces the saved list (core/known-names.ts KNOWN_NAMES_MAX, NAME_MAX_CHARS).
   knownNames: z.array(z.string().max(200)).max(400).optional(),
   meetingContextEnabled: z.boolean().optional(),

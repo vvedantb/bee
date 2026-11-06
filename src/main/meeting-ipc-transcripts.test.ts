@@ -34,7 +34,6 @@ function setup() {
   const sent: Array<SessionTranscript | null> = [];
   registerMeetingIpc({
     notesDir: "/notes",
-    fsRoots: () => [],
     mcpConfigs: () => [],
     mcpSignedOut: () => [],
     mcpPool: {} as never,

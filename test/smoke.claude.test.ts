@@ -1,4 +1,4 @@
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ModelMessage } from "ai";
@@ -192,5 +192,14 @@ describe("Claude Agent SDK: Bee, …", () => {
     const resumed = await runDirectCommand({ command: "and which app did I ask you to open earlier?", snippets, agent, gateway: null, actions: null });
     console.log(`resume ms=${Math.round(performance.now() - started)} tips=${JSON.stringify(resumed.tips)}`);
     expect(resumed.tips.join(" ")).toMatch(/Spotify/);
+  });
+
+  it("reads a file outside the notes folder with Claude Code's own tools, in auto mode", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "bee-outside-"));
+    writeFileSync(join(dir, "fact.txt"), "The project codename is SILVERKITE.");
+    const activity: string[] = [];
+    const result = await runDirectCommand({ command: `what's the project codename in ${join(dir, "fact.txt")}?`, snippets, agent, gateway: null, actions: null, onActivity: ({ tool, phase }) => phase === "start" && activity.push(tool) });
+    console.log(`outside tips=${JSON.stringify(result.tips)} activity=${JSON.stringify(activity)}`);
+    expect(result.tips.join(" ")).toMatch(/SILVERKITE/);
   });
 });

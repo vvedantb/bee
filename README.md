@@ -94,7 +94,7 @@ The installer is not code-signed. Windows SmartScreen will warn on first run unt
 
 Notes are markdown files in the notes folder (Settings shows the path and has an **Open** button). On Windows this is `%APPDATA%\Bee\notes`; on macOS it is `~/Library/Application Support/Bee/notes`. Four fictional seed notes are written the first time the folder is empty. Edits are picked up on the next line; no restart is needed.
 
-The AI can also list, search and read these notes with file tools, for questions the top three notes do not cover. In Settings, **Extra folders the AI may read** takes one absolute path per line; the AI can read them but never write to them. The AI can add to a note (create or append, `.md` only, notes folder only) when you clearly ask it to. It never overwrites a file. Limits: paths must stay inside the notes folder or an approved folder (`..`, either slash style, and symbolic links are refused); binary files and files over 256 KiB are skipped; lists stop at 200 entries, searches at 20 hits, and a read returns at most 64 KiB.
+The AI can also list, search and read these notes with file tools, for questions the top three notes do not cover. For "Bee, …" requests, Claude Code's own tools can read any other folder; meeting tips read only the notes folder. The AI can add to a note (create or append, `.md` only, notes folder only) when you clearly ask it to. It never overwrites a file. Limits: paths must stay inside the notes folder (`..`, either slash style, and symbolic links are refused); binary files and files over 256 KiB are skipped; lists stop at 200 entries, searches at 20 hits, and a read returns at most 64 KiB.
 
 **Meeting mode** hides Bee from screen sharing and keeps it above full-screen apps.
 

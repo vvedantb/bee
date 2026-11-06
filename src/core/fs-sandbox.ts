@@ -40,23 +40,6 @@ export function looksBinary(path: string): boolean {
   }
 }
 
-/** Parse the Settings textarea or a saved list: trim, drop empties and duplicates, require absolute paths. */
-export function normalizeFsRoots(input: readonly string[]): { roots: string[]; invalid: string[] } {
-  const roots: string[] = [];
-  const invalid: string[] = [];
-  for (const raw of input) {
-    const value = raw.trim();
-    if (value === "") continue;
-    if (value.includes("\0") || !isAbsolute(value)) {
-      invalid.push(value);
-      continue;
-    }
-    const path = resolve(value);
-    if (!roots.includes(path)) roots.push(path);
-  }
-  return { roots, invalid };
-}
-
 export function isInside(root: string, target: string): boolean {
   const rel = relative(root, target);
   return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));

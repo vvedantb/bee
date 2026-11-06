@@ -6,7 +6,6 @@ import { lunaTools, sourcesFromGenerateResult } from "./tools";
 describe("lunaTools", () => {
   it("offers only web_search without a notes folder", () => {
     expect(Object.keys(lunaTools())).toEqual(["web_search"]);
-    expect(Object.keys(lunaTools({ extraRoots: ["/x"] }))).toEqual(["web_search"]);
   });
 
   it("uses Anthropic's basic web search (not dynamic filtering) with a small search budget", () => {
@@ -22,7 +21,6 @@ describe("lunaTools", () => {
       "read_file",
       "append_note",
     ]);
-    expect(Object.keys(lunaTools({ notesDir: "/notes", extraRoots: ["/more"] }))).toHaveLength(5);
   });
 });
 

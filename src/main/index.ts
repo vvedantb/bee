@@ -448,7 +448,6 @@ if (clerk.isPrimaryInstance) {
       knownNames: settings.knownNames,
       learnNames: settings.learnNames,
       notesDir,
-      fsRoots: settings.fsRoots,
       mcpConfigs: settings.mcpConfigs,
       mcpSignedOut: settings.mcpSignedOut,
       mcpPool,

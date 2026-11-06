@@ -39,3 +39,16 @@ describe("version and login", () => {
     expect(claudeCodeMessage({ state: "ready", path: "/c", version: "2.1.318" })).toBeNull();
   });
 });
+
+describe("beeToolName", () => {
+  it("names Bee's tools, Claude Code's and the user's MCP tools for the island", async () => {
+    const { beeToolName } = await import("./claude-agent");
+    const { activityLabel } = await import("../renderer/src/island");
+    expect(beeToolName("mcp__bee__open_app")).toBe("open_app");
+    expect(beeToolName("WebSearch")).toBe("web_search");
+    expect(beeToolName("mcp__linear__list_issues")).toBe("linear__list_issues");
+    expect(activityLabel(beeToolName("mcp__linear__list_issues"))).toBe("Using linear…");
+    expect(activityLabel(beeToolName("Read"))).toBe("Reading a file…");
+    expect(activityLabel(beeToolName("Bash"))).toBe("Running a command…");
+  });
+});
