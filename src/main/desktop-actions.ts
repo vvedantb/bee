@@ -25,7 +25,8 @@ import { withoutSecrets, type AgentDesktopActionRun } from "./agent-desktop";
 // (core/app-discovery.ts). On Linux an app list-apps already shows is never launched again: agent-desktop's launch attaches
 // only to a process with the same executable and arguments, so for a running Chrome it starts a second one (a first-run
 // dialog, and up to LAUNCH_TIMEOUT_MS of waiting). Bee brings it forward with focus-window (X11), or says it is already open
-// when focus-window is refused (Wayland). Console lines carry codes only, never names.
+// when focus-window is refused (Wayland). When list-apps shows no match, a visible X11 window for the app (wmctrl -lx, fixed
+// arguments) still counts as open, so Bee never launches a second copy. Console lines carry codes only, never names.
 
 export type DesktopActionDeps = {
   platform: NodeJS.Platform;
@@ -41,9 +42,19 @@ export type DesktopActionDeps = {
   startMenuDirs?: readonly string[];
   /** Lists a folder (tests pass a fake). */
   readDir?: (dir: string) => Dirent[];
+  /**
+   * Linux (X11): the visible top-level windows, by title and WM_CLASS (index.ts passes listX11Windows, tests a fake). Asked only
+   * before a launch, when list-apps showed no match: a window for the app means it is open, and Bee never launches a second
+   * copy. Absent: no check.
+   */
+  listVisibleWindows?: () => Promise<VisibleWindow[]>;
 };
 
+/** A visible top-level window: its title, and its WM_CLASS ("google-chrome.Google-chrome") when known. */
+export type VisibleWindow = { title: string; wmClass?: string };
+
 const MAC_OPEN = "/usr/bin/open";
+const WMCTRL = "/usr/bin/wmctrl";
 const EXEC_TIMEOUT_MS = 10_000;
 const LAUNCH_TIMEOUT_MS = 8000;
 const LIST_TIMEOUT_MS = 6000;
@@ -57,6 +68,44 @@ function execFixed(file: string, args: string[]): Promise<void> {
   return new Promise((resolve, reject) => {
     execFile(file, args, { timeout: EXEC_TIMEOUT_MS, windowsHide: true, env: withoutSecrets(process.env), shell: false }, (error) => (error ? reject(error) : resolve()));
   });
+}
+
+/**
+ * wmctrl -lx rows as windows: "0x03a00003  0 google-chrome.Google-chrome  host Bee fixture form - Google Chrome". Sticky rows
+ * (desktop -1: panels, docks) are skipped. Odd lines are skipped.
+ */
+export function parseWmctrlWindows(output: string): VisibleWindow[] {
+  const windows: VisibleWindow[] = [];
+  for (const line of output.split("\n")) {
+    const row = line.trim().match(/^0x[0-9a-f]+\s+(-?\d+)\s+(\S+)\s+\S+\s?(.*)$/i);
+    if (!row || row[1] === "-1") continue;
+    windows.push({ title: (row[3] ?? "").trim(), wmClass: row[2] ?? "" });
+  }
+  return windows;
+}
+
+/**
+ * Linux (X11): the visible windows, from /usr/bin/wmctrl -lx with fixed arguments, no shell. Empty when wmctrl is missing, the
+ * session is Wayland, or it fails: Bee then decides by list-apps alone, as before.
+ */
+export function listX11Windows(): Promise<VisibleWindow[]> {
+  return new Promise((resolve) => {
+    execFile(WMCTRL, ["-lx"], { timeout: EXEC_TIMEOUT_MS, windowsHide: true, env: withoutSecrets(process.env), shell: false, maxBuffer: 1024 * 1024 }, (error, stdout) =>
+      resolve(error ? [] : parseWmctrlWindows(String(stdout))),
+    );
+  });
+}
+
+/**
+ * Whether a visible window belongs to the app: its WM_CLASS parts ("google-chrome", "Google-chrome") or its title's app part
+ * ("Bee fixture form - Google Chrome") is one of the app's own names. A suite's shared process (soffice) never counts.
+ */
+export function windowShowsApp(app: AppTarget, windows: readonly VisibleWindow[]): boolean {
+  const rows = windows.flatMap((window) => [
+    ...(window.title ? [{ name: window.title }] : []),
+    ...(window.wmClass ?? "").split(".").filter((part) => part.length > 0).map((part) => ({ name: part })),
+  ]);
+  return matchRunningApp(app, rows) !== null;
 }
 
 /** Start menu shortcuts (.lnk) under the folders, by name without the extension. Hidden and odd entries are skipped. */
@@ -143,6 +192,18 @@ export function createDesktopActions(deps: DesktopActionDeps): DesktopActions {
     return focused.ok ? "focused" : "refused";
   }
 
+  /**
+   * Linux, before any launch: a visible X11 window for the app when list-apps showed none (the accessibility bus may not list
+   * every app). True: the app is open, so Bee must not launch it again.
+   */
+  async function visibleWindowFor(app: AppTarget, signal?: AbortSignal): Promise<boolean> {
+    if (!deps.listVisibleWindows || signal?.aborted) return false;
+    const windows = await deps.listVisibleWindows().catch(() => [] as VisibleWindow[]);
+    const shown = windowShowsApp(app, windows);
+    if (shown) console.debug("desktop-action visible-window match");
+    return shown;
+  }
+
   /** macOS: open -a opens the app, or brings it forward if it is running. agent-desktop launch also takes bundle ids. */
   async function openMac(app: AppTarget): Promise<boolean> {
     if (!app.mac) return false;
@@ -226,6 +287,9 @@ export function createDesktopActions(deps: DesktopActionDeps): DesktopActions {
       const focus = await focusRunning(app, null, signal);
       if (focus === "focused") return "opened";
       if (focus === "refused") return "open";
+      if (signal?.aborted) return "missed";
+      // list-apps showed no match, but a visible window for it means it is open: never a second copy.
+      if (await visibleWindowFor(app, signal)) return "open";
       if (noBus || signal?.aborted) return "missed";
       return (await openLinux(app, signal)) ? "opened" : "missed";
     }
@@ -265,6 +329,8 @@ export function createDesktopActions(deps: DesktopActionDeps): DesktopActions {
       if (signal?.aborted) return fail(`Stopped before ${app.label} came forward`);
       // Linux: running, but focus-window refused (Wayland, or no window with that title). Launching would start a second copy.
       if (deps.platform === "linux" && focus === "refused") return alreadyOpen(app, title ? "that window" : "it");
+      // Linux: list-apps showed no match, but a visible window for it means it is open. Launching would start a second copy.
+      if (deps.platform === "linux" && (await visibleWindowFor(app, signal))) return alreadyOpen(app, title ? "that window" : "it");
       // Not running, or (Windows) agent-desktop could not focus it: opening it brings it forward.
       const opened = deps.platform === "darwin" ? await openMac(app) : deps.platform === "linux" ? !noBus && (await openLinux(app, signal)) : await openWindows(app);
       if (opened) return ok(`Opened ${app.label}`);

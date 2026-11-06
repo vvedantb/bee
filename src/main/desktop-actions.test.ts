@@ -2,7 +2,16 @@ import type { Dirent } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import type { AgentDesktopResult, DesktopActionCommand } from "../core/agent-desktop-envelope";
-import { createDesktopActions, findShortcut, startMenuShortcuts, windowsStartMenuDirs, type DesktopActionDeps } from "./desktop-actions";
+import {
+  createDesktopActions,
+  findShortcut,
+  parseWmctrlWindows,
+  startMenuShortcuts,
+  windowShowsApp,
+  windowsStartMenuDirs,
+  type DesktopActionDeps,
+  type VisibleWindow,
+} from "./desktop-actions";
 import { resolveApp } from "../core/desktop-actions";
 
 // Desktop actions in main with every OS call faked: agent-desktop's action runner, execFile, and Electron's shell.
@@ -162,6 +171,31 @@ describe("desktop actions on Windows", () => {
   });
 });
 
+describe("parseWmctrlWindows and windowShowsApp", () => {
+  it("reads wmctrl -lx rows, skipping sticky panels and odd lines", () => {
+    const out = [
+      "0x01000003 -1 xfce4-panel.Xfce4-panel  box xfce4-panel",
+      "0x03a00003  0 google-chrome.Google-chrome  box Bee fixture form - Google Chrome",
+      "0x04000001  0 N/A  N/A ",
+      "garbage",
+    ].join("\n");
+    expect(parseWmctrlWindows(out)).toEqual([
+      { title: "Bee fixture form - Google Chrome", wmClass: "google-chrome.Google-chrome" },
+      { title: "", wmClass: "N/A" },
+    ]);
+  });
+
+  it("matches an app by WM_CLASS part or title, never by a suite's shared process", () => {
+    const chrome = resolveApp("Chrome");
+    const writer = resolveApp("LibreOffice Writer");
+    if (!chrome.ok || !writer.ok) throw new Error("known apps");
+    expect(windowShowsApp(chrome.app, [{ title: "x", wmClass: "google-chrome.Google-chrome" }])).toBe(true);
+    expect(windowShowsApp(chrome.app, [{ title: "Bee fixture form - Google Chrome" }])).toBe(true);
+    expect(windowShowsApp(chrome.app, [{ title: "Terminal", wmClass: "xfce4-terminal.Xfce4-terminal" }])).toBe(false);
+    expect(windowShowsApp(writer.app, [{ title: "Untitled 1 - LibreOffice Calc", wmClass: "soffice.Soffice" }])).toBe(false);
+  });
+});
+
 describe("startMenuShortcuts and findShortcut", () => {
   it("lists .lnk files in subfolders and skips the rest", () => {
     expect(startMenuShortcuts([START], readDir).map((shortcut) => shortcut.name)).toEqual(["Word", "Slack", "Uninstall Zoom", "Zoom Workplace"]);
@@ -216,7 +250,7 @@ describe("desktop actions everywhere", () => {
 
 // Linux: agent-desktop launch by desktop-entry name, list-apps and focus-window, all faked. A launch result per name, a list-apps
 // result per call (the last repeats), and focus-window refusing as it does on Wayland.
-function makeLinux(options: { launch?: Record<string, AgentDesktopResult>; lists?: AgentDesktopResult[]; focus?: AgentDesktopResult } = {}) {
+function makeLinux(options: { launch?: Record<string, AgentDesktopResult>; lists?: AgentDesktopResult[]; focus?: AgentDesktopResult; windows?: VisibleWindow[] } = {}) {
   const runs: RunCall[] = [];
   const execs: string[] = [];
   let listCall = 0;
@@ -237,6 +271,7 @@ function makeLinux(options: { launch?: Record<string, AgentDesktopResult>; lists
     },
     openExternal: async () => undefined,
     openPath: async () => "",
+    ...(options.windows ? { listVisibleWindows: async () => options.windows ?? [] } : {}),
   });
   return { actions, runs, execs, launched: () => runs.filter((call) => call.command === "launch").map((call) => call.args[0]) };
 }
@@ -270,6 +305,38 @@ describe("desktop actions on Linux", () => {
     expect(launched()).toEqual([]);
     // One list-apps and one focus-window per request: nothing else.
     expect(runs.map((call) => call.command)).toEqual(["list-apps", "focus-window", "list-apps", "focus-window", "list-apps", "focus-window"]);
+  });
+
+  it("never launches Chrome when list-apps misses it but a visible X11 window shows it", async () => {
+    for (const window of [{ title: "Bee fixture form - Google Chrome" }, { title: "", wmClass: "google-chrome.Google-chrome" }, { title: "New Tab", wmClass: "chromium.Chromium" }]) {
+      const { actions, launched } = makeLinux({
+        lists: [apps("xfce4-panel", "xfwm4")],
+        windows: [{ title: "xfce4-panel", wmClass: "xfce4-panel.Xfce4-panel" }, window],
+        launch: { "google-chrome": { ok: true, data: {} } },
+      });
+      expect(await actions.openApp("Chrome"), JSON.stringify(window)).toEqual({ ok: true, message: "Chrome is already open; Bee could not bring it to the front" });
+      expect(await actions.focusWindow({ app: "Chrome" }), JSON.stringify(window)).toEqual({ ok: true, message: "Chrome is already open; Bee could not bring it to the front" });
+      expect(launched(), JSON.stringify(window)).toEqual([]);
+    }
+    // list-apps failing outright (no access to the bus) does not stop the window check either.
+    const noBus = makeLinux({ lists: [{ ok: false, code: "PERM_DENIED" }], windows: [{ title: "Bee fixture form - Google Chrome" }] });
+    expect(await noBus.actions.openApp("Chrome")).toEqual({ ok: true, message: "Chrome is already open; Bee could not bring it to the front" });
+    expect(noBus.launched()).toEqual([]);
+  });
+
+  it("never launches Writer when a visible Writer window shows it, but a Calc window or bare soffice does not count", async () => {
+    const writer = makeLinux({ lists: [apps("xfwm4")], windows: [{ title: "Untitled 1 - LibreOffice Writer", wmClass: "libreoffice-writer.libreoffice-writer" }], launch: { "libreoffice-writer": { ok: true, data: {} } } });
+    expect(await writer.actions.openApp("LibreOffice Writer")).toEqual({ ok: true, message: "LibreOffice Writer is already open; Bee could not bring it to the front" });
+    expect(writer.launched()).toEqual([]);
+    const calc = makeLinux({ lists: [apps("xfwm4")], windows: [{ title: "Untitled 1 - LibreOffice Calc", wmClass: "soffice.Soffice" }], launch: { "libreoffice-writer": { ok: true, data: {} } } });
+    expect(await calc.actions.openApp("LibreOffice Writer")).toEqual({ ok: true, message: "Opened LibreOffice Writer" });
+    expect(calc.launched()).toEqual(["libreoffice-writer"]);
+  });
+
+  it("launches as before when neither list-apps nor a visible window shows the app", async () => {
+    const { actions, launched } = makeLinux({ lists: [apps("xfwm4")], windows: [{ title: "Terminal", wmClass: "xfce4-terminal.Xfce4-terminal" }], launch: { "google-chrome": { ok: true, data: {} } } });
+    expect(await actions.openApp("Chrome")).toEqual({ ok: true, message: "Opened Chrome" });
+    expect(launched()).toEqual(["google-chrome"]);
   });
 
   it("focuses a running Chrome under any name Linux lists it by, and never launches it", async () => {

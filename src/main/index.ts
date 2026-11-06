@@ -24,7 +24,7 @@ import { createDebugLog, settingsChange, type DebugLogWriter } from "./debug-log
 import { registerDebugLogIpc } from "./debug-log-ipc";
 import { computerPlatformOf, createAgentDesktopActionRunner, createAgentDesktopComputerRunner, createAgentDesktopRunner, resolveAgentDesktop } from "./agent-desktop";
 import { bringToFront, registerClerkOAuthIpc } from "./clerk-oauth-ipc";
-import { createDesktopActions, windowsStartMenuDirs } from "./desktop-actions";
+import { createDesktopActions, listX11Windows, windowsStartMenuDirs } from "./desktop-actions";
 import { registerFaviconIpc } from "./favicon-ipc";
 import { registerGatewayKeyIpc } from "./gateway-key-ipc";
 import { registerLinkIpc } from "./link-ipc";
@@ -374,6 +374,7 @@ if (clerk.isPrimaryInstance) {
       openExternal: (url) => shell.openExternal(url),
       openPath: (path) => shell.openPath(path),
       startMenuDirs: windowsStartMenuDirs(process.env),
+      ...(process.platform === "linux" ? { listVisibleWindows: listX11Windows } : {}),
     });
     // Computer use for a direct request ("Bee, send Sam a message in Discord"): a third agent-desktop runner, with its own
     // allowlist (assertComputerUse) and state folder. Never the meeting window reader's. Windows, macOS and Linux; on Linux it
