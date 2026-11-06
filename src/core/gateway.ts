@@ -12,14 +12,16 @@ export const GUIDE_MODEL = "anthropic/claude-haiku-5.5";
 export const COMMAND_CONTEXT_TOKENS = 1_000_000;
 export const GUIDE_CONTEXT_TOKENS = 1_000_000;
 export const JEV_MODEL = "typesafe-ai/jev";
-// Gateway also lists this model as spacexai/grok-stt; both ids resolve.
-export const STT_MODEL = "xai/grok-stt";
+// Speech-to-text. Voxtral Small takes a list of words to listen for (core/transcribe.ts sttVocabulary), which fixes most misheard
+// names. Picked on a 30-clip name-heavy benchmark (06 Nov 2026): 1.8% word errors with Bee's terms as hints, against 7.5% for
+// xai/grok-stt, at $0.0040/min against $0.0017/min.
+export const STT_MODEL = "mistral/voxtral-small-transcribe-3";
 
 // Service tier is a per-call choice. No sampling parameters are ever sent to the Gateway.
 //  - "flex": cheaper, may queue and be slower. For background work only (summary, link ranking, Jev ranking).
 //  - "default": the Gateway's standard tier (no serviceTier sent). User-facing STT and Luna use it: they sit on the
 //    path between the end of speech and the first tip, so a flex queue shows up as felt latency.
-//  - "ultrafast": NOT used. It may be rejected by these models (xai/grok-stt, anthropic/claude-haiku-5.5), and no call in this repo
+//  - "ultrafast": NOT used. It may be rejected by these models (STT_MODEL, anthropic/claude-haiku-5.5), and no call in this repo
 //    has confirmed support. Try it only behind a real-key A/B (test/smoke.gateway.test.ts), then read
 //    providerMetadata.gateway.serviceTier to see what the Gateway applied.
 export type GatewayTier = "flex" | "default" | "ultrafast";

@@ -24,7 +24,7 @@ import { runPipeline } from "../core/pipeline";
 import { searchLocation } from "../core/web-search";
 import { conversationTranscript, meetingTranscript } from "../core/session-transcript";
 import { buildLocalSummary, generateMeetingSummary } from "../core/summary";
-import { transcribeSpeech } from "../core/transcribe";
+import { sttVocabulary, transcribeSpeech } from "../core/transcribe";
 import {
   COMPUTER_LINE_MAX,
   IPC,
@@ -198,7 +198,7 @@ export function registerMeetingIpc(args: { notesDir: string;
       debugLog.warn("stt", "no-key", { source: "mic" });
       return { text: null, error: NO_GATEWAY_KEY };
     }
-    return transcribeSpeech({ model: createGateway(apiKey).transcription(STT_MODEL), audio: request.audio, source: "mic" });
+    return transcribeSpeech({ model: createGateway(apiKey).transcription(STT_MODEL), audio: request.audio, source: "mic", vocabulary: sttVocabulary(args.knownNames?.() ?? []) });
   });
 
   // The meeting context poll runs every few seconds: only a changed view is logged.

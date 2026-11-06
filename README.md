@@ -47,7 +47,7 @@ Typical use: in a weekly meeting someone says "last time we discussed the Acme r
 
 - Windows 10 or 11 (x64), or macOS (Apple Silicon arm64 or Intel x64). Linux runs in development.
 - Node.js 22 or later, with npm.
-- A Vercel AI Gateway API key with access to `xai/grok-stt`, `anthropic/claude-haiku-5.5` and `typesafe-ai/jev`.
+- A Vercel AI Gateway API key with access to `mistral/voxtral-small-transcribe-3`, `anthropic/claude-haiku-5.5` and `typesafe-ai/jev`.
 - For "Bee, …" requests and computer use: [Claude Code](https://claude.com/claude-code) 2.1.318 or later, installed and signed in to your Claude account (run `claude`, then `/login`). Bee uses that install and its login through the Claude Agent SDK, not the Gateway, and ships no copy of its own. Settings shows whether Bee found it; without it, Bee says to install, update or sign in.
 - A Bee account. Sign-in uses Clerk (the vedantb.com instance). See [Sign-in (Clerk)](#sign-in-clerk).
 
@@ -138,10 +138,10 @@ With the mic on, start a phrase with **"Bee"** (or "Hey Bee") and the rest is a 
 
 ### Speech-to-text
 
-Bee transcribes with **Grok STT** (`xai/grok-stt`) through Vercel AI Gateway, using the same Gateway key as the AI and Jev.
+Bee transcribes with **Voxtral Small** (`mistral/voxtral-small-transcribe-3`) through Vercel AI Gateway, using the same Gateway key as the AI and Jev. Each call lists the words to listen for: "Bee", Luna, Jev, vmem and the names in **Settings → Known names**. This fixes most misheard names.
 
 1. The mic is captured with Web Audio. A simple level detector cuts the audio into phrases: speech, then 0.8 s of silence, up to 15 s per phrase. Blips under 0.3 s are dropped without a Gateway call. Bee never mixes system audio into the mic. The [Teams audio fallback](#teams-audio-fallback) is a separate stream of the Teams app alone.
-2. Each phrase is sent to the main process as a 16 kHz mono WAV. Main calls Grok STT (flex tier) and returns the text.
+2. Each phrase is sent to the main process as a 16 kHz mono WAV. Main calls Voxtral (Gateway default tier) and returns the text.
 3. The text joins a short internal buffer (the last 8 lines), and the pipeline runs. The words are never shown on screen.
 
 If a phrase fails to transcribe, the notch shows a short error (for example "Speech-to-text failed: AI Gateway authentication failed…"). The mic stays on and the error clears after the next phrase succeeds. Without a key, the notch says to add one in Settings.
@@ -309,8 +309,8 @@ npm run build:teams-audio:mac   # Teams audio helpers (macOS only; needs Xcode)
 
 `test:gateway` makes eight calls:
 
-1. `xai/grok-stt`: transcribes `test/fixtures/sso-question.wav` (a synthesised question with silence either side).
-2. `xai/grok-stt` with an invalid key: checks for a short `Speech-to-text failed:` error.
+1. `mistral/voxtral-small-transcribe-3`: transcribes `test/fixtures/sso-question.wav` (a synthesised question with silence either side).
+2. `mistral/voxtral-small-transcribe-3` with an invalid key: checks for a short `Speech-to-text failed:` error.
 3. `anthropic/claude-haiku-5.5`: one short guidance completion.
 4. `anthropic/claude-haiku-5.5`: a current-events question ("who is the current Prime Minister of the UK?"), checked for a tip and at least one `https://` source.
 5. `anthropic/claude-haiku-5.5`: a question about a local note (a room number in a temp notes folder), checked that the tip holds the answer, so the AI used the file tools.

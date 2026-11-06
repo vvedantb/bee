@@ -1,12 +1,12 @@
 import type { TranscriptionModel } from "ai";
 import { describe, expect, it, vi } from "vitest";
-import { transcribeSpeech } from "./transcribe";
+import { STT_TERMS, sttVocabulary, transcribeSpeech } from "./transcribe";
 
 type ModelV4 = Extract<TranscriptionModel, { specificationVersion: "v4" }>;
 type Generate = ModelV4["doGenerate"];
 
 function model(doGenerate: Generate): ModelV4 {
-  return { specificationVersion: "v4", provider: "gateway", modelId: "xai/grok-stt", doGenerate };
+  return { specificationVersion: "v4", provider: "gateway", modelId: "mistral/voxtral-small-transcribe-3", doGenerate };
 }
 
 function result(text: string): Awaited<ReturnType<Generate>> {
@@ -16,7 +16,7 @@ function result(text: string): Awaited<ReturnType<Generate>> {
     language: "en",
     durationInSeconds: 1,
     warnings: [],
-    response: { timestamp: new Date(), modelId: "xai/grok-stt" },
+    response: { timestamp: new Date(), modelId: "mistral/voxtral-small-transcribe-3" },
   };
 }
 
@@ -50,5 +50,22 @@ describe("transcribeSpeech", () => {
     });
     expect(outcome.text).toBeNull();
     expect(outcome.error).toMatch(/^Speech-to-text failed: /);
+  });
+
+  it("sends the words to listen for as Mistral's contextBias, and nothing when there are none", async () => {
+    const doGenerate = vi.fn<Generate>(async () => result("Bee, message Zuzanna"));
+    await transcribeSpeech({ model: model(doGenerate), audio, vocabulary: ["Bee", "Zuzanna Szczepaniak-Moody"] });
+    expect(doGenerate.mock.calls[0]?.[0].providerOptions).toEqual({ mistral: { contextBias: ["Bee", "Zuzanna Szczepaniak-Moody"] } });
+    await transcribeSpeech({ model: model(doGenerate), audio, vocabulary: [] });
+    expect(doGenerate.mock.calls[1]?.[0].providerOptions).toEqual({});
+  });
+});
+
+describe("sttVocabulary", () => {
+  it("puts Bee's terms first, then the newest known names, with no repeats and at most 100 words", () => {
+    expect(sttVocabulary(["Priya", "Zuzanna", "bee", "Bee"])).toEqual([...STT_TERMS, "Zuzanna", "Priya"]);
+    const many = sttVocabulary(Array.from({ length: 300 }, (_, i) => `Name${i}`));
+    expect(many).toHaveLength(100);
+    expect(many[STT_TERMS.length]).toBe("Name299");
   });
 });

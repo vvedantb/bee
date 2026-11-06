@@ -12,7 +12,7 @@ import { IPC, TEAMS_AUDIO_LINE_MAX, settingsUpdateSchema, windowSizeSchema, type
 import { debugLog, errorData, msSince, setDebugSink, teeConsole } from "../core/debug-log";
 import { NO_GATEWAY_KEY, STT_MODEL, createBeeGateway } from "../core/gateway";
 import { teamsAudioOsSupported, teamsAudioPlatform } from "../core/teams-audio";
-import { transcribeSpeech } from "../core/transcribe";
+import { sttVocabulary, transcribeSpeech } from "../core/transcribe";
 import { createMcpPool } from "../core/mcp";
 import { createMeetingContext } from "../core/meeting-context";
 import { createMeetingMemoryStore } from "../core/meeting-memory";
@@ -515,7 +515,7 @@ if (clerk.isPrimaryInstance) {
       transcribe: (audio) => {
         const apiKey = settings.gatewayApiKey();
         if (!apiKey) return Promise.resolve({ text: null, error: NO_GATEWAY_KEY });
-        return transcribeSpeech({ model: createBeeGateway(apiKey).transcription(STT_MODEL), audio, source: "teams-audio" });
+        return transcribeSpeech({ model: createBeeGateway(apiKey).transcription(STT_MODEL), audio, source: "teams-audio", vocabulary: sttVocabulary(settings.knownNames()) });
       },
       onLines: (id, lines) => {
         debugLog.info("teams-audio", "lines", { id, lines });

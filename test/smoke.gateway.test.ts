@@ -38,7 +38,7 @@ describe("Vercel AI Gateway smoke", () => {
     // 16 kHz mono WAV: 1 s silence, a synthesised question, 1.5 s silence.
     const audio = readFileSync(new URL("./fixtures/sso-question.wav", import.meta.url));
     const outcome = await transcribeSpeech({ model: gateway.transcription(STT_MODEL), audio });
-    console.log("Grok STT:", outcome);
+    console.log("STT:", outcome);
     expect(outcome.error).toBeNull();
     expect(outcome.text).toMatch(/SSO ship/i);
   });
