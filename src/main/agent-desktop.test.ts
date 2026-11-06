@@ -521,7 +521,7 @@ describe("source scan: agent-desktop stays read-only", () => {
     const callers = all.filter(({ text }) => text.includes("AgentDesktopActionRun"));
     expect(callers.map(({ path }) => fromSrc(path)).sort()).toEqual(["main/agent-desktop.ts", "main/desktop-actions.ts", "main/index.ts"]);
     const commands = callers.flatMap(({ text }) => commandsIn(text));
-    expect(new Set(commands)).toEqual(new Set(["list-apps", "list-windows", "focus-window", "launch"]));
+    expect(new Set(commands)).toEqual(new Set(["list-apps", "focus-window", "launch"]));
     for (const command of commands) expect(DESKTOP_ACTION_COMMANDS as readonly (string | undefined)[]).toContain(command);
     const actions = readFileSync(repo("src/main/desktop-actions.ts"), "utf8");
     expect(actions).not.toMatch(/\bexec\(|execSync|spawn\(|shell:\s*true|"cmd(?:\.exe)?"|powershell|"\/bin\/(?:ba|z)?sh"|osascript/i);

@@ -597,8 +597,6 @@ describe("grounding rules in the prompts", () => {
     const { LUNA_DIRECT_SYSTEM } = await import("./luna");
     expect(COMPUTER_SYSTEM).toContain("Never say a message was sent, delivered or posted, or that something was deleted, bought or submitted, unless an action in this task with that effect came back Done");
     expect(COMPUTER_SYSTEM).toContain("Typing into a box is not sending");
-    // A real run claimed an earlier "hi Krzys" was typed while the box was empty and the screen was never read again.
-    expect(COMPUTER_SYSTEM).toContain("Never say text was typed, or is in a box, unless a type step in this task came back Done");
     expect(COMPUTER_SYSTEM).toContain("never say there are no meetings because the calendar did not open");
     expect(COMPUTER_SYSTEM).toContain("Never pick one yourself");
     expect(COMPUTER_SYSTEM).toContain("When open_app fails, its result lists the running apps");

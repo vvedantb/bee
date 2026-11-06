@@ -1,13 +1,12 @@
 import { execFile } from "node:child_process";
 import { readdirSync, type Dirent } from "node:fs";
 import { basename, extname, join } from "node:path";
-import { parseApps, parseWindows, type AdWindow } from "../core/agent-desktop-envelope";
+import { parseApps, type AdApp } from "../core/agent-desktop-envelope";
 import { afterLaunchFailure, linuxLaunchNames, listedTries, waitForListed } from "../core/app-discovery";
 import {
   cleanWindowTitle,
   isSlowStart,
   matchRunningApp,
-  matchRunningWindow,
   openedUrlMessage,
   resolveApp,
   type AppTarget,
@@ -20,12 +19,10 @@ import { withoutSecrets, type AgentDesktopActionRun } from "./agent-desktop";
 // Bee's desktop tools in main: open or bring forward an app or a window, and open a web page, for a direct request only
 // ("Bee, open Teams"). No Electron imports: index.ts passes shell.openExternal and shell.openPath. Nothing here runs a shell.
 // Processes start with execFile and fixed arguments: macOS /usr/bin/open -a <a checked app name>, and agent-desktop through its
-// own action runner (launch, focus-window, list-apps and list-windows only). Windows apps open by a fixed URI, a Start menu shortcut or a fixed
+// own action runner (launch, focus-window, list-apps only). Windows apps open by a fixed URI, a Start menu shortcut or a fixed
 // system exe. Linux apps open through agent-desktop launch by desktop-entry name (google-chrome, then chromium, …), which needs
 // the desktop session's accessibility bus; a launch that times out is looked for in list-apps before Bee calls it missing
-// (core/app-discovery.ts). On Linux Bee also reads list-windows: an app missing from list-apps (not on the accessibility bus,
-// such as a Chrome with its own profile) still has X11 windows, and an app with a window counts as running. On Linux an app
-// list-apps or list-windows already shows is never launched again: agent-desktop's launch attaches
+// (core/app-discovery.ts). On Linux an app list-apps already shows is never launched again: agent-desktop's launch attaches
 // only to a process with the same executable and arguments, so for a running Chrome it starts a second one (a first-run
 // dialog, and up to LAUNCH_TIMEOUT_MS of waiting). Bee brings it forward with focus-window (X11), or says it is already open
 // when focus-window is refused (Wayland). Console lines carry codes only, never names.
@@ -117,47 +114,31 @@ export function createDesktopActions(deps: DesktopActionDeps): DesktopActions {
   // A run that the request's signal (Stop, a newer request) stops, in flight or before it starts.
   const options = (timeoutMs: number, signal?: AbortSignal) => (signal ? { timeoutMs, signal } : { timeoutMs });
 
-  /** A running app: its name as list-apps gives it, or one of its windows from list-windows (Linux), or both. */
-  type Running = { name: string | null; window: AdWindow | null };
-
   /**
-   * The running app that matches, from agent-desktop list-apps and, on Linux, list-windows. Null when neither shows it or
-   * agent-desktop cannot tell. shared: a process the app shares with its suite counts (soffice for LibreOffice Writer), for a
-   * look after Bee launched it. title: the window wanted, when there are several.
+   * The running app that matches, from agent-desktop list-apps. Null when none does or agent-desktop cannot tell. shared: a
+   * process the app shares with its suite counts (soffice for LibreOffice Writer), for a look after Bee launched it.
    */
-  async function runningApp(app: AppTarget, signal?: AbortSignal, shared = false, title: string | null = null): Promise<Running | null> {
+  async function runningApp(app: AppTarget, signal?: AbortSignal, shared = false): Promise<AdApp | null> {
     if (!run || signal?.aborted) return null;
-    const linux = deps.platform === "linux";
-    const [listed, windows] = await Promise.all([
-      run("list-apps", [], options(LIST_TIMEOUT_MS, signal)),
-      linux ? run("list-windows", [], options(LIST_TIMEOUT_MS, signal)) : null,
-    ]);
-    let name: string | null = null;
-    if (listed.ok) name = matchRunningApp(app, parseApps(listed.data), { shared })?.name ?? null;
-    else {
+    const listed = await run("list-apps", [], options(LIST_TIMEOUT_MS, signal));
+    if (!listed.ok) {
       console.debug(`desktop-action list-apps ${listed.code}`);
-      if (linux && afterLaunchFailure(listed.code) === "stop") noBus = true;
+      if (deps.platform === "linux" && afterLaunchFailure(listed.code) === "stop") noBus = true;
+      return null;
     }
-    let window: AdWindow | null = null;
-    if (windows?.ok) window = matchRunningWindow(app, parseWindows(windows.data), { shared, title });
-    else if (windows) console.debug(`desktop-action list-windows ${windows.code}`);
-    return name !== null || window !== null ? { name, window } : null;
+    return matchRunningApp(app, parseApps(listed.data), { shared });
   }
 
   /**
-   * agent-desktop focus-window for a running app: its window by id when list-windows showed one (with an asked title, the window
-   * whose title contains it), else its listed name, optionally one window by title. focused: it came forward; refused: the app
-   * is running, but focus-window failed (a Wayland session, or no window with that title); absent: not running, or agent-desktop
-   * cannot tell.
+   * agent-desktop focus-window for a running app's own name, optionally one window by title. focused: it came forward; refused:
+   * the app is running, but focus-window failed (a Wayland session, or no window with that title); absent: not running, or
+   * agent-desktop cannot tell.
    */
   async function focusRunning(app: AppTarget, title: string | null, signal?: AbortSignal): Promise<"focused" | "refused" | "absent"> {
     if (!run) return "absent";
-    const running = await runningApp(app, signal, false, title);
+    const running = await runningApp(app, signal);
     if (!running || signal?.aborted) return "absent";
-    const { name, window } = running;
-    const titled = !title || (window !== null && window.title.toLowerCase().includes(title.toLowerCase()));
-    const args = window && titled ? ["--window-id", window.id] : ["--app", name ?? window?.app ?? app.label, ...(title ? ["--title", title] : [])];
-    const focused = await run("focus-window", args, options(LIST_TIMEOUT_MS, signal));
+    const focused = await run("focus-window", ["--app", running.name, ...(title ? ["--title", title] : [])], options(LIST_TIMEOUT_MS, signal));
     if (!focused.ok) console.debug(`desktop-action focus-window ${focused.code}`);
     return focused.ok ? "focused" : "refused";
   }
@@ -200,13 +181,12 @@ export function createDesktopActions(deps: DesktopActionDeps): DesktopActions {
   }
 
   /**
-   * Linux: agent-desktop launch by each desktop-entry name in turn (--activate waits for a window). Only for an app neither
-   * list-apps nor list-windows shows: launch starts a new process for anything it cannot prove is the same one. A launch that
-   * timed out, or one that may have started the app before it failed (a launcher that handed off), may be a cold app still
-   * starting: Bee looks for it a few times (more for a slow app such as LibreOffice), counting its suite's process (soffice) and
-   * any window of it ("Untitled 1 - LibreOffice Writer"), rather than start another name. When every name failed, one last look
-   * for the app's own name or window: a window that opened meanwhile is never called missing. No accessibility bus: stops at once. The signal (Stop, a newer
-   * request) ends the launches and the looks: the pauses between looks end early, and no further launch or look starts.
+   * Linux: agent-desktop launch by each desktop-entry name in turn (--activate waits for a window). Only for an app list-apps
+   * does not show: launch starts a new process for anything it cannot prove is the same one. A launch that timed out, or one
+   * that may have started the app before it failed (a launcher that handed off), may be a cold app still starting: Bee looks
+   * for it in list-apps a few times (more for a slow app such as LibreOffice), counting its suite's process (soffice), rather
+   * than start another name. No accessibility bus: stops at once. The signal (Stop, a newer request) ends the launches and the
+   * looks: the pauses between looks end early, and no further launch or look starts.
    */
   async function openLinux(app: AppTarget, signal?: AbortSignal): Promise<boolean> {
     if (!run) return false;
@@ -226,8 +206,7 @@ export function createDesktopActions(deps: DesktopActionDeps): DesktopActions {
         return (await waitForListed({ list: () => runningApp(app, signal, true), tries, ...(signal ? { signal } : {}) })).found !== null;
       }
     }
-    // Its own window or name only: soffice alone (the Start Center) is not Writer, after a launch that said it found nothing.
-    return !signal?.aborted && (await runningApp(app, signal)) !== null;
+    return false;
   }
 
   /** opened: it opened or came forward; open: it was already running and did not come forward (Linux, Wayland); missed: neither. */
