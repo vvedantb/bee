@@ -172,11 +172,21 @@ function watchWindow(window: BrowserWindow): void {
   contents.on("did-finish-load", () => debugLog.info("window", "loaded"));
 }
 
+/**
+ * The show/hide shortcut. Bee hidden, or showing but not in front: show it, take focus and open the typing box ("Bee, …" by
+ * typing). Already in front: hide it. So one press asks, a second press hides.
+ */
 function toggleWindow(): void {
   if (!win) return;
-  debugLog.info("window", "toggle", { visible: !win.isVisible() });
-  if (win.isVisible()) win.hide();
-  else win.show();
+  const hide = win.isVisible() && win.isFocused();
+  debugLog.info("window", "toggle", { hide });
+  if (hide) {
+    win.hide();
+    return;
+  }
+  win.show();
+  win.focus();
+  win.webContents.send(IPC.askOpen);
 }
 
 // The show/hide shortcut Bee holds now, or null when it holds none (another app has it, or it could not register).

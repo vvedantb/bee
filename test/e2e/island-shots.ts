@@ -9,6 +9,7 @@ import { IconChevronDown, IconDownload, IconMicrophone, IconMicrophoneOff, IconX
 import { Button } from "@vvedantb/ui";
 import { sourceChips, type LinkChip } from "../../src/core/link-suggest";
 import { isNewTurn } from "../../src/core/steering";
+import { AskBox } from "../../src/renderer/src/AskBox";
 import { BeeLogo } from "../../src/renderer/src/BeeLogo";
 import { Favicon } from "../../src/renderer/src/Favicon";
 import { HINT_TEXT, type HintId } from "../../src/renderer/src/hints";
@@ -171,6 +172,8 @@ const states: Record<string, string> = {
   "hint-no-input": hintShot("no-input"),
   "hint-clipping": hintShot("clipping"),
   "hint-noisy": hintShot("noisy"),
+  // The show/hide shortcut brought Bee forward: the typing box, empty and ready.
+  ask: `<div class="island open">${pill("Bee is ready", false)}${islandBody(renderToStaticMarkup(createElement(AskBox, { onSubmit: () => undefined, onClose: () => undefined })))}</div>`,
 };
 const html = states[shot];
 if (!html) throw new Error(`Unknown shot: ${shot}`);

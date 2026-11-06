@@ -41,6 +41,11 @@ export type ComputerToolDeps = {
   onStep?: (label: string) => void;
   onActivity?: (activity: LunaToolActivity) => void;
   confirmTimeoutMs?: number;
+  /**
+   * An action finished that the confirm gate (core/computer-gate.ts, which reads the tree, not just the AI's effect) counts as a
+   * send, delete, purchase or form submit: the proof the run's last line may claim it by (core/claim-guard.ts).
+   */
+  onEffect?: (kind: IrreversibleKind) => void;
 };
 
 /** The step line while a Confirm waits for the user. */
@@ -718,9 +723,12 @@ export function computerTools(deps: ComputerToolDeps) {
     debugLog.info("computer", "step", { n: control.steps(), tool: name, label, app: currentApp });
     deps.onStep?.(clip(label, 60));
     deps.onActivity?.({ tool: name, phase: "start" });
+    // What the gate counts this action as, read before it runs (a key press can move focus): proof once it is done.
+    const before = gate ? gate() : null;
+    const committed = before ? irreversibleKind(before) : null;
     try {
-      if (gate && deps.askFirst()) {
-        const action = gate();
+      if (before && deps.askFirst()) {
+        const action = before;
         const kind = needsConfirm(action, deps.askFirst());
         if (kind) {
           deps.onStep?.(CONFIRM_LABEL);
@@ -739,6 +747,7 @@ export function computerTools(deps: ComputerToolDeps) {
       if (control.reason()) return STOPPED;
       const output = await work();
       debugLog.debug("computer", "step-done", { n: control.steps(), tool: name, ms: msSince(started), output });
+      if (committed && actionDone(output)) deps.onEffect?.(committed);
       return output;
     } catch (error) {
       debugLog.warn("computer", "step-failed", { n: control.steps(), tool: name, ms: msSince(started), reason: control.reason(), error: error instanceof Error ? error.message : String(error) });

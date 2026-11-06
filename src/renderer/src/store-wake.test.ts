@@ -222,6 +222,22 @@ describe("store: Bee wake word", () => {
     expect(store.responseOpen(state())).toBe(true);
   });
 
+  it("runs a typed request from the typing box like one said after Bee, and closes the box", async () => {
+    const { store, commands, pipeline, state } = await loadStore();
+    store.actions.openAsk();
+    expect(state().asking).toBe(true);
+    expect(store.responseOpen(state())).toBe(true);
+    store.actions.submitAsk("Bee, open Teams");
+    await vi.waitFor(() => expect(state().result?.tips).toEqual(["Opened Teams"]));
+    expect(commands.map((request) => request.command)).toEqual(["open Teams"]);
+    expect(pipeline).toEqual([]);
+    expect(state().asking).toBe(false);
+    store.actions.openAsk();
+    store.actions.submitAsk("   ");
+    expect(state().asking).toBe(false);
+    expect(commands).toHaveLength(1);
+  });
+
   it("keeps other mic phrases on the meeting path, shared with the sync", async () => {
     const { say, pipeline, commands, published, state } = await loadStore();
     await say("Let's pick up the Acme renewal.");

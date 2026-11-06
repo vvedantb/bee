@@ -26,6 +26,7 @@ const SHOTS = [
   "hint-no-input",
   "hint-clipping",
   "hint-noisy",
+  "ask",
 ];
 const HINTS: HintId[] = ["quiet", "no-input", "clipping", "noisy"];
 

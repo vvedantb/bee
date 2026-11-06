@@ -65,6 +65,8 @@ export const IPC = {
   claudeCodeUpdate: "bee:claude-code:update",
   classifyFollowUp: "bee:command:classify-follow-up",
   conversationEnded: "bee:command:conversation-ended",
+  // Main → renderer: the show/hide shortcut brought Bee forward, so open the typing box.
+  askOpen: "bee:ask:open",
 };
 
 // Collapsed notch, notch plus the sync popup, notch plus the island response, or the full panel.
