@@ -72,6 +72,8 @@ export type MeetingContext = {
   clearMemory: () => number;
   /** The detected name of a meeting (by id, else the current one), for a finished session's title. Undefined when unknown. */
   subject?: (meetingId?: number) => string | undefined;
+  /** The detected attendees of a meeting (by id, else the current one), for its follow-up email. Empty when unknown. */
+  attendees?: (meetingId?: number) => string[];
 };
 
 export function createMeetingContext(deps: MeetingContextDeps): MeetingContext {
@@ -121,6 +123,9 @@ export function createMeetingContext(deps: MeetingContextDeps): MeetingContext {
       card: meeting?.brief?.card ?? [],
     };
   };
+
+  /** A meeting by id (the current or a recent one), else the current one. */
+  const byId = (meetingId?: number) => (meetingId === undefined ? current : [current, ...recent].find((item) => item?.id === meetingId));
 
   function endCurrent(): void {
     if (current) current.ended = true;
@@ -273,13 +278,15 @@ export function createMeetingContext(deps: MeetingContextDeps): MeetingContext {
       return settings.enabled && current && !current.ended ? current.brief?.text : undefined;
     },
     subject(meetingId) {
-      const meeting = meetingId === undefined ? current : [current, ...recent].find((item) => item?.id === meetingId);
-      return meeting?.identity?.subject || undefined;
+      return byId(meetingId)?.identity?.subject || undefined;
+    },
+    attendees(meetingId) {
+      return byId(meetingId)?.identity?.attendees ?? [];
     },
     remember({ meetingId, summaryMarkdown, usedLlm, tips }) {
       const settings = deps.settings();
       if (!settings.enabled || !settings.memory) return false;
-      const meeting = meetingId === undefined ? current : [current, ...recent].find((item) => item?.id === meetingId);
+      const meeting = byId(meetingId);
       const identity = meeting?.identity;
       if (!meeting || !identity?.subject) return false;
       const fields = extractSummaryFields(summaryMarkdown);

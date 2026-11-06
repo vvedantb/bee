@@ -17,6 +17,7 @@ import {
 import { Badge, Button, Input, PillTabs, Textarea } from "@vvedantb/ui";
 import { useEffect, useState, type FormEvent } from "react";
 import { AskBox } from "./AskBox";
+import { IslandCard } from "./IslandCard";
 import { BackgroundChip, BackgroundSection } from "./Background";
 import { BeeLogo } from "./BeeLogo";
 import { Favicon } from "./Favicon";
@@ -41,7 +42,7 @@ import { displayTip, islandClick, mcpErrorNote, timingsLabel, timingsTitle } fro
 import { NOTCH_LOGO_PX } from "./logo";
 import { focusKeyFieldWhenReady, GATEWAY_KEY_FIELD_ID, statusClick, type StatusClick } from "./island-click";
 import { CONVERSATION_LABEL, NOTCH_BUTTON, NOTCH_UPDATE_BUTTON, logoState, notchLine, workingLabel, type NotchLine } from "./notch";
-import { actions, answerFolded, displayResult, islandOpen, responseOpen, teamsAudioNow, useBee, type BeeState, type ComputerConfirm, type SummaryState, type UpdateState } from "./store";
+import { actions, answerFolded, displayResult, islandOpen, responseOpen, teamsAudioNow, useBee, type BeeState, type ComputerConfirm, type MeetingCard, type SummaryState, type UpdateState } from "./store";
 import { SyncCard, SyncSection, TeamSection, syncedWith } from "./Teams";
 import { TEAMS_AUDIO_LISTENING } from "./teams-audio-message";
 import { updateButton } from "./update";
@@ -108,7 +109,7 @@ function IslandBody({
   chips: LinkChip[];
   closing: boolean;
   keptTips: string[];
-  card: string[];
+  card: MeetingCard | null;
   hint: BeeState["hint"];
   hintClosing: boolean;
   confirm: ComputerConfirm | null;
@@ -127,13 +128,7 @@ function IslandBody({
           <div className="island-content">
             {asking ? <AskBox onSubmit={(text) => actions.submitAsk(text)} onClose={() => actions.closeAsk()} /> : null}
             {confirm ? <ConfirmPrompt confirm={confirm} /> : null}
-            {card.length > 0 ? (
-              <div className="island-card">
-                {card.map((line, index) => (
-                  <p key={index}>{line}</p>
-                ))}
-              </div>
-            ) : null}
+            {card && card.lines.length > 0 ? <IslandCard card={card} onPress={(button) => void actions.pressCard(button)} /> : null}
             {tips.length > 0 ? (
               <ul className="island-tips">
                 {/* Keyed by position: a streaming line grows in place instead of replaying the entrance. Kept tips are dimmed while Bee updates them. */}
@@ -200,7 +195,7 @@ function Island({ state }: { state: BeeState }) {
   // While Luna thinks, chips may open the body but the pill keeps its thinking text.
   const cardOnly = (state.meetingCard?.lines.length ?? 0) > 0 && (result?.tips.length ?? 0) === 0;
   // In the conversation window after a request, the pill says Bee is listening for a follow-up (notch.ts CONVERSATION_LABEL).
-  const answerText = state.conversationOpen ? CONVERSATION_LABEL : cardOnly ? "Last time" : "Tips";
+  const answerText = state.conversationOpen ? CONVERSATION_LABEL : cardOnly ? (state.meetingCard?.label ?? "Tips") : "Tips";
   const line: NotchLine = showResponse && !state.busy && !state.heard && !state.mic.error ? { kind: "answer", text: answerText } : notchLine(state, isSignedIn);
   const status = line.text;
   // A folded answer opens in full in the island, even under a hint; status that asks for action opens its place in the panel (island-click.ts).
@@ -269,7 +264,7 @@ function Island({ state }: { state: BeeState }) {
           chips={showResponse ? chips : []}
           closing={state.islandClosing || (state.hintClosing && !showResponse)}
           keptTips={state.revising ? state.keptTips : []}
-          card={showResponse ? (state.meetingCard?.lines ?? []) : []}
+          card={showResponse ? state.meetingCard : null}
           hint={state.hint}
           hintClosing={state.hintClosing}
           confirm={showResponse ? (state.computer?.confirm ?? null) : null}
@@ -731,6 +726,11 @@ function useBackgroundUpdates(): void {
   useEffect(() => window.bee.onBackgroundUpdate((job) => actions.backgroundUpdate(job)), []);
 }
 
+/** Briefings from main, a couple of minutes before each meeting, for as long as the app runs. */
+function useBriefings(): void {
+  useEffect(() => window.bee.onBriefing((view) => actions.briefing(view)), []);
+}
+
 /** The show/hide shortcut's "open the typing box" from main, for as long as the app runs. */
 function useAskOpen(): void {
   useEffect(() => window.bee.onAskOpen(() => actions.openAsk()), []);
@@ -739,6 +739,7 @@ function useAskOpen(): void {
 export function App() {
   const state = useBee();
   useBackgroundUpdates();
+  useBriefings();
   useAskOpen();
   useMotionAttribute(state.settings?.motionPreference ?? DEFAULT_MOTION_PREFERENCE);
   useSignInLog();

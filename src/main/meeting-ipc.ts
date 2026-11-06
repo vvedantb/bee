@@ -8,7 +8,9 @@ import { debugLog, errorData, msSince } from "../core/debug-log";
 import type { DesktopActions } from "../core/desktop-actions";
 import { historySummariser } from "../core/bee-history";
 import { memoryTools, type BeeMemory } from "../core/bee-memory";
-import { createBackgroundJobs } from "../core/background";
+import { BACKGROUND_MAX, createBackgroundJobs } from "../core/background";
+import { briefingTask, type Briefing } from "../core/briefing";
+import { followThrough, followThroughLines, followThroughTask, type FollowThrough } from "../core/follow-through";
 import { CLAUDE_CODE_MISSING, claudeCodeMessage } from "../core/claude-code";
 import type { ClaudeCode } from "./claude-code";
 import type { ClaudeCodeStatus } from "../core/claude-code";
@@ -38,6 +40,9 @@ import {
   pipelineCancelSchema,
   pipelineRequestSchema,
   transcribeRequestSchema,
+  cardActionRequestSchema,
+  type CardAction,
+  type CardActionResult,
   type ClaudeCodeUpdateResult,
   type BackgroundJobView,
   type ClaudeCodeView,
@@ -55,7 +60,7 @@ import type { BeeHistoryStore } from "./bee-history-store";
 import type { VmemTranscripts } from "./vmem-transcript-queue";
 
 /**
- * Mic phrases → Grok STT, lines → retrieve → Jev → Luna, and the end-of-meeting summary into the notes folder.
+ * Mic phrases → speech-to-text, lines → retrieve → Jev → Luna, and the end-of-meeting summary into the notes folder.
  * The Gateway key never leaves main.
  */
 export function registerMeetingIpc(args: { notesDir: string;
@@ -90,7 +95,9 @@ export function registerMeetingIpc(args: { notesDir: string;
   memory?: BeeMemory;
   /** Names Bee should know (Settings, core/known-names.ts), read per request, and the names a request taught it. */
   knownNames?: () => string[];
-  learnNames?: (names: string[]) => void }): void {
+  learnNames?: (names: string[]) => void;
+  /** Briefings shown before meetings (main/briefing-watcher.ts), by key, for "Dig deeper". */
+  briefings?: (key: string) => Briefing | undefined }): void {
   const createGateway = args.gateway ?? createBeeGateway;
   // One controller per run in flight. The renderer cancels a run when a newer line supersedes it.
   const runs = new Map<string, AbortController>();
@@ -126,6 +133,34 @@ export function registerMeetingIpc(args: { notesDir: string;
 
   ipcMain.handle(IPC.stopBackground, (_event, payload) => {
     background.stop(z.string().max(100).parse(payload));
+  });
+
+  // Saved meetings with action items, by summary path, for the follow-up card's buttons. The newest few only.
+  const followThroughs = new Map<string, FollowThrough>();
+  const FOLLOW_THROUGHS_KEPT = 5;
+
+  /** The background task behind a card's button, or null when Bee no longer has that meeting. */
+  function cardJob(action: CardAction): { title: string; task: string } | null {
+    if (action.kind === "brief") {
+      const briefing = args.briefings?.(action.key);
+      return briefing ? briefingTask(briefing) : null;
+    }
+    const follow = followThroughs.get(action.path);
+    return follow ? followThroughTask(action.kind, follow) : null;
+  }
+
+  // A button on an island card: "Dig deeper" before a meeting, or a follow-up after one. Each is a background task.
+  ipcMain.handle(IPC.cardAction, (event, payload): CardActionResult => {
+    const { action, sessionToken } = cardActionRequestSchema.parse(payload);
+    assertSignedIn(sessionToken);
+    lastSender = event.sender;
+    const job = cardJob(action);
+    debugLog.info("ai", "card-action", { kind: action.kind, found: job !== null });
+    if (!job) return { ok: false, message: "Bee no longer has that meeting. Ask Bee about it instead." };
+    const started = background.start(job.title, job.task);
+    return started.ok
+      ? { ok: true, message: `Started: ${job.title}. Bee shows the result when it is done.` }
+      : { ok: false, message: `Bee is already running ${BACKGROUND_MAX} background tasks. Try again when one finishes.` };
   });
 
   /** Main's side of one request's computer use: step lines and Confirm prompts go to the window that asked. */
@@ -460,7 +495,17 @@ export function registerMeetingIpc(args: { notesDir: string;
     } catch (error) {
       debugLog.error("vmem", "transcript-render-failed", { kind: "meeting", error: errorData(error) });
     }
-    return { path, usedLlm: summary.usedLlm, error: summary.error };
+    const follow = followThrough({
+      markdown: summary.markdown,
+      usedLlm: summary.usedLlm,
+      subject: args.meeting.subject?.(input.meetingId) ?? null,
+      attendees: args.meeting.attendees?.(input.meetingId) ?? [],
+    });
+    if (follow) {
+      followThroughs.set(path, follow);
+      for (const old of [...followThroughs.keys()].slice(0, Math.max(0, followThroughs.size - FOLLOW_THROUGHS_KEPT))) followThroughs.delete(old);
+    }
+    return { path, usedLlm: summary.usedLlm, error: summary.error, followUp: follow ? followThroughLines(follow) : [] };
   });
 
   // Finished session 2 of 2: a conversation of direct requests, when the renderer sees no exchange with Bee for

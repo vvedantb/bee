@@ -91,8 +91,8 @@ export function MeetingContextSection({
       />
       <SettingRow
         id="meeting-calendar"
-        label="Read my Outlook calendar"
-        description="Classic Outlook on Windows only."
+        label="Read my calendar"
+        description="Classic Outlook on Windows, else your calendar tools in Claude Code. Shows a briefing 2 minutes before each meeting."
         checked={settings.meetingCalendarEnabled}
         disabled={!on}
         onCheckedChange={(meetingCalendarEnabled) => onChange({ meetingCalendarEnabled })}

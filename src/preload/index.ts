@@ -22,6 +22,11 @@ import {
   mcpListSchema,
   mcpTestResultSchema,
   meetingSummaryResultSchema,
+  briefingViewSchema,
+  cardActionResultSchema,
+  type BriefingView,
+  type CardAction,
+  type CardActionResult,
   openExternalUrlResultSchema,
   pipelineResultSchema,
   followUpResultSchema,
@@ -212,6 +217,20 @@ const api = {
   stopBackground: async (id: string) => {
     z.void().parse(await ipcRenderer.invoke(IPC.stopBackground, id));
   },
+  /** A briefing a couple of minutes before a meeting (core/briefing.ts). */
+  onBriefing: (listener: (view: BriefingView) => void): (() => void) => {
+    const handler = (_event: unknown, payload: unknown) => {
+      const parsed = briefingViewSchema.safeParse(payload);
+      if (parsed.success) listener(parsed.data);
+    };
+    ipcRenderer.on(IPC.briefing, handler);
+    return () => {
+      ipcRenderer.removeListener(IPC.briefing, handler);
+    };
+  },
+  /** A button on an island card: starts its background task. */
+  cardAction: async (action: CardAction, sessionToken: string): Promise<CardActionResult> =>
+    cardActionResultSchema.parse(await ipcRenderer.invoke(IPC.cardAction, { action, sessionToken })),
   onLunaActivity: (listener: (activity: LunaActivity) => void): (() => void) => {
     const handler = (_event: unknown, payload: unknown) => {
       const parsed = lunaActivitySchema.safeParse(payload);

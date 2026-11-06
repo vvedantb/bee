@@ -31,6 +31,8 @@ import { registerFaviconIpc } from "./favicon-ipc";
 import { registerGatewayKeyIpc } from "./gateway-key-ipc";
 import { registerLinkIpc } from "./link-ipc";
 import { createCalendarReader, createWindowTitleReader } from "./local-readers";
+import { createBriefingWatcher } from "./briefing-watcher";
+import { AGENT_CALENDAR_SYSTEM, agentCalendarPrompt, createAgentCalendarReader, fallbackCalendarReader } from "../core/agent-calendar";
 import { registerMcpIpc } from "./mcp-ipc";
 import { registerOpenUrlIpc } from "./open-url";
 import { registerMeetingIpc } from "./meeting-ipc";
@@ -449,18 +451,46 @@ if (clerk.isPrimaryInstance) {
     const detector = withMeetingWindow(teamsDetector, meetingWindow);
     // Which meeting the user is in: window titles and the classic Outlook calendar (Windows), saved meetings, connected tools.
     // The brief is built here in main and sent to Luna; saved meetings stay in meeting-memory.json in the user data folder.
+    // "Bee, …" requests: one Claude Code session on the user's own install, resumed from Bee's own folder.
+    const claudeCode = createClaudeCode({ sessionDir: join(userDataDir, "claude-session") });
+    app.on("will-quit", () => claudeCode.close());
+    // Today's calendar: classic Outlook on Windows; else the user's own calendar tools through Claude Code (core/agent-calendar.ts).
+    const calendar = fallbackCalendarReader(
+      createCalendarReader(),
+      createAgentCalendarReader({
+        ask: async (now) => {
+          const found = await claudeCode.agent();
+          if ("error" in found) throw new Error(found.error);
+          const run = found.agent.background ?? found.agent;
+          const result = await run({ tier: "fast", system: AGENT_CALENDAR_SYSTEM, history: [], content: [agentCalendarPrompt(now)], tools: {}, maxTurns: 6, signal: AbortSignal.timeout(90_000) });
+          return result.text;
+        },
+        onError: (error) => debugLog.warn("meeting", "agent-calendar-failed", { error: errorData(error) }),
+      }),
+    );
+    const meetingMemory = createMeetingMemoryStore({ path: join(userDataDir, "meeting-memory.json") });
     const teamsTitles = createWindowTitleReader();
     const meeting = createMeetingContext({
       inCall: async () => (await detector.read()).inMeeting,
       // While the call the meeting window reader sees is Zoom or Google Meet, an open Teams window does not name it.
       titles: { read: async () => (["zoom", "meet"].includes(meetingWindow.status().app ?? "") ? [] : teamsTitles.read()) },
-      calendar: createCalendarReader(),
-      memory: createMeetingMemoryStore({ path: join(userDataDir, "meeting-memory.json") }),
+      calendar,
+      memory: meetingMemory,
       searchNotes: (query) => searchMcpNotes({ configs: settings.mcpConfigs(), pool: mcpPool, query }),
       settings: settings.meetingContext,
       // macOS has no in-call detector, so it reads Teams window names on its own schedule.
       pollTitlesWhenIdle: isMac,
     });
+    // A briefing in the island a couple of minutes before each meeting (core/briefing.ts).
+    const briefings = createBriefingWatcher({
+      calendar,
+      records: () => meetingMemory.list(),
+      settings: settings.meetingContext,
+      send: (view) => {
+        if (win && !win.isDestroyed()) win.webContents.send(IPC.briefing, view);
+      },
+    });
+    app.on("will-quit", () => briefings.stop());
     // Finished meetings and conversations to vmem's transcript_submit, when the setting is on. A small queue in the user data
     // folder (not the logs folder) keeps a send that failed offline; it is tried again now, on wake and on its own backoff timer.
     const transcripts = createVmemTranscripts({ path: join(userDataDir, "vmem-transcripts.json"), settings: settings.transcriptSettings, pool: mcpPool });
@@ -473,9 +503,6 @@ if (clerk.isPrimaryInstance) {
     const beeMemory = createBeeMemoryStore({ userDataDir });
     // Settings → Saved memory lists and clears this same store, so a clear reaches the next direct request at once.
     registerBeeMemoryIpc(beeMemory);
-    // "Bee, …" requests: one Claude Code session on the user's own install, resumed from Bee's own folder.
-    const claudeCode = createClaudeCode({ sessionDir: join(userDataDir, "claude-session") });
-    app.on("will-quit", () => claudeCode.close());
     registerMeetingIpc({
       transcripts,
       history: beeHistory,
@@ -490,6 +517,7 @@ if (clerk.isPrimaryInstance) {
       meetingWindow,
       gatewayApiKey: settings.gatewayApiKey,
       claudeCode,
+      briefings: briefings.get,
       desktop,
       wakeWordEnabled: settings.wakeWord,
       computer: computerRunner
