@@ -9,7 +9,8 @@ import { createRunControl, stopLine, type ComputerPlatform, type RunControl } fr
 import { computerTools, type ConfirmRequest } from "./computer-tools";
 import { computerAccess, runComputerUse, simpleComputerTask, wantsComputerUse, type ComputerSkills, type ComputerUseResult } from "./computer-use";
 import { debugLog, errorData } from "./debug-log";
-import { NO_CLAUDE_TOKEN, type CommandAgent } from "./claude-agent";
+import type { CommandAgent } from "./claude-agent";
+import { CLAUDE_CODE_MISSING } from "./claude-code";
 import { GUIDE_MODEL, JEV_MODEL, type BeeGateway } from "./gateway";
 import type { McpTools } from "./mcp";
 import { routeCommand, type DesktopActionResult, type DesktopActions } from "./desktop-actions";
@@ -23,8 +24,8 @@ import { tipKey } from "./steering";
 import { needsWebSearch } from "./web-search";
 
 // A direct request to Bee: a mic phrase that started with the wake word ("Bee, open Teams", core/wake-word.ts). Bee answers
-// the user, not the meeting. Every AI step here runs on the user's own Claude account (core/claude-agent.ts); without a Claude
-// token only the quick opens work. The Gateway is used only for Jev's routing and the history summary, when its key is set. "Open <a known app>" and "open <a web address>" run at once with no AI call. A task on screen
+// the user, not the meeting. Every AI step here runs on the user's own Claude Code and its login (core/claude-agent.ts); without
+// it only the quick opens work. The Gateway is used only for Jev's routing and the history summary, when its key is set. "Open <a known app>" and "open <a web address>" run at once with no AI call. A task on screen
 // ("send Sam a message in Discord", core/computer-use.ts wantsComputerUse) runs the computer-use loop. Anything else goes to
 // Luna with the desktop tools, and use_computer to hand a task on screen over to the loop. The result has the pipeline's
 // shape, so the island shows it like tips: action lines first ("Opened Teams"), then the reply, or the loop's one last line.
@@ -224,8 +225,10 @@ export async function runDirectCommand(args: {
   meetingBrief?: string;
   meetingTerms?: string;
   snippets: Snippet[];
-  /** The user's Claude account (core/claude-agent.ts). Null: no Claude token, so only quick opens work. */
+  /** The agent on the user's Claude Code (core/claude-agent.ts). Null: not installed, too old or signed out, so only quick opens work. */
   agent: CommandAgent | null;
+  /** Why there is no agent, for the island (core/claude-code.ts claudeCodeMessage). Defaults to CLAUDE_CODE_MISSING. */
+  noAgent?: string;
   /** For Jev's routing and the history summary only. Null: the word rules route, and old turns fold without the AI. */
   gateway: BeeGateway | null;
   notesDir?: string;
@@ -306,8 +309,9 @@ export async function runDirectCommand(args: {
   const guideNotes = candidates.slice(0, GUIDE_NOTE_LIMIT);
   const notes = candidates.map((note, index) => ({ ...note, jevScore: null, cite: index < GUIDE_NOTE_LIMIT ? noteCitation(index) : null }));
   if (!args.agent) {
-    record([assistantMessage(`Error: ${NO_CLAUDE_TOKEN}`)]);
-    return { notes, rankSource: "fallback", rankError: null, tips: [], tipSources: [], sources: [], guideError: NO_CLAUDE_TOKEN, timingsMs: timings({ retrieve: retrieveMs }) };
+    const reason = args.noAgent ?? CLAUDE_CODE_MISSING;
+    record([assistantMessage(`Error: ${reason}`)]);
+    return { notes, rankSource: "fallback", rankError: null, tips: [], tipSources: [], sources: [], guideError: reason, timingsMs: timings({ retrieve: retrieveMs }) };
   }
 
   const mcpStarted = performance.now();

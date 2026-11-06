@@ -8,6 +8,8 @@ import type { DesktopActions } from "../core/desktop-actions";
 import type { BeeGateway } from "../core/gateway";
 import type { MeetingContext } from "../core/meeting-context";
 import { modelAgent } from "../../test/helpers/model-agent";
+import type { CommandAgent } from "../core/claude-agent";
+import type { ClaudeCode } from "./claude-code";
 
 // Main's direct request handler (bee:command:run): it checks sign-in and the wake word setting itself, runs desktop actions
 // through the runners it was given, and never needs a key for a plain "open". Electron, sign-in and the notes folder are stubbed.
@@ -31,6 +33,12 @@ const { createBeeHistoryStore } = await import("./bee-history-store");
 type BeeHistoryStore = import("./bee-history-store").BeeHistoryStore;
 
 const event = { sender: { isDestroyed: () => false, send: () => undefined } };
+
+/** A Claude Code that is installed and signed in, with a test agent (test/helpers/model-agent.ts). */
+const readyClaudeCode = (agent: () => CommandAgent): ClaudeCode => ({
+  status: async () => ({ state: "ready", path: "/usr/local/bin/claude", version: "2.1.318" }),
+  agent: async () => ({ agent: agent() }),
+});
 
 function setup(options: { enabled?: boolean } = {}) {
   electron.handlers.clear();
@@ -83,8 +91,21 @@ describe("main: direct request handler", () => {
 
   it("needs the AI, and says so without a key, for anything but a plain open", async () => {
     const { run, opened } = setup();
-    expect(await run({ command: "what's 15% of 18000?", sessionToken: "signed-in" })).toMatchObject({ tips: [], guideError: "No Claude token. Add one in Settings." });
+    expect(await run({ command: "what's 15% of 18000?", sessionToken: "signed-in" })).toMatchObject({ tips: [], guideError: "Install Claude Code and sign in to talk to Bee." });
     expect(opened).toEqual([]);
+  });
+
+  it("says what to do when Claude Code is signed out, and reports it to Settings", async () => {
+    electron.handlers.clear();
+    const signedOut: ClaudeCode = {
+      status: async () => ({ state: "signed-out", path: "/usr/local/bin/claude", version: "2.1.318" }),
+      agent: async () => ({ error: "Sign in to Claude Code to talk to Bee: run claude, then /login." }),
+    };
+    registerMeetingIpc({ notesDir: "/notes", fsRoots: () => [], mcpConfigs: () => [], mcpSignedOut: () => [], mcpPool: {} as never, meeting: { brief: () => "" } as unknown as MeetingContext, gatewayApiKey: () => undefined, claudeCode: signedOut });
+    const command = electron.handlers.get(IPC.runCommand);
+    const status = electron.handlers.get(IPC.claudeCode);
+    expect(await command?.(event, { command: "what's 15% of 18000?", sessionToken: "signed-in" })).toMatchObject({ tips: [], guideError: "Sign in to Claude Code to talk to Bee: run claude, then /login." });
+    expect(await status?.(event, true)).toEqual({ state: "signed-out", version: "2.1.318", message: "Sign in to Claude Code to talk to Bee: run claude, then /login." });
   });
 });
 
@@ -129,7 +150,7 @@ describe("main: computer use for a direct request", () => {
       meeting: { brief: () => "" } as unknown as MeetingContext,
       gatewayApiKey: () => "vck_FAKE",
       gateway,
-      commandAgent: () => modelAgent(gateway().languageModel("plan")),
+      claudeCode: readyClaudeCode(() => modelAgent(gateway().languageModel("plan"))),
       desktop: { openApp: async (name) => ({ ok: true, message: `Opened ${name}` }), focusWindow: async ({ app }) => ({ ok: true, message: `Focused ${app}` }), openUrl: async (url) => ({ ok: true, message: url }) },
       wakeWordEnabled: () => true,
       computer:
@@ -239,7 +260,7 @@ describe("main: Bee's history and the follow-up check", () => {
       meeting: { brief: () => "" } as unknown as MeetingContext,
       gatewayApiKey: () => (options.key === false ? undefined : "vck_FAKE"),
       gateway: () => ({ languageModel: () => model }) as unknown as BeeGateway,
-      commandAgent: () => modelAgent(model),
+      claudeCode: readyClaudeCode(() => modelAgent(model)),
       desktop: { openApp: async (name) => ({ ok: true, message: `Opened ${name}` }), focusWindow: async ({ app }) => ({ ok: true, message: `Focused ${app}` }), openUrl: async (url) => ({ ok: true, message: url }) },
       wakeWordEnabled: () => true,
       computer: { platform: "windows", run: async () => ({ ok: true, data: {} }), askFirst: () => false, cleanup: () => undefined },

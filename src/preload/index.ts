@@ -12,6 +12,7 @@ import {
   memoryClearResultSchema,
   memoryListResultSchema,
   computerAccessSchema,
+  claudeCodeViewSchema,
   computerUpdateSchema,
   copyGatewayKeyResultSchema,
   meetingContextViewSchema,
@@ -150,6 +151,8 @@ const api = {
     },
     access: async () => computerAccessSchema.parse(await ipcRenderer.invoke(IPC.computerAccess)),
   },
+  /** The user's Claude Code for "Bee, …" requests. `fresh` checks again now (Settings → Check again). */
+  claudeCode: async (fresh: boolean) => claudeCodeViewSchema.parse(await ipcRenderer.invoke(IPC.claudeCode, fresh)),
   transcribe: async (request: TranscribeRequest) =>
     transcribeResultSchema.parse(await ipcRenderer.invoke(IPC.transcribe, request)),
   writeMeetingSummary: async (request: MeetingSummaryRequest) =>

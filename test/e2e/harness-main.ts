@@ -30,7 +30,7 @@ import { createMeetingMemoryStore, inMemoryFs } from "../../src/core/meeting-mem
 import { unsupportedCalendarReader } from "../../src/core/calendar";
 import { CLERK_ISSUER } from "../../src/main/auth";
 import { registerMeetingIpc } from "../../src/main/meeting-ipc";
-import { createCommandAgent } from "../../src/main/claude-agent";
+import { createClaudeCode } from "../../src/main/claude-code";
 import { ensureNotesDir } from "../../src/main/notes";
 import { createStubDetector } from "../../src/main/teams-detector";
 import { registerTeamsIpc, relayUrlFromEnv } from "../../src/main/teams-sync";
@@ -220,7 +220,7 @@ void app.whenReady().then(async () => {
     meeting,
     gatewayApiKey: mode === "replay" ? () => REPLAY_KEY : liveKey,
     gateway: mode && fixturesDir ? e2eGateway(mode, fixturesDir) : undefined,
-    commandAgent: createCommandAgent(() => process.env.BEE_CLAUDE_CODE_OAUTH_TOKEN?.trim() || undefined),
+    claudeCode: createClaudeCode(),
   });
   // Short timings so the popup and the debounced leave happen within the test.
   registerTeamsIpc({ relayUrl: relayUrlFromEnv(process.env.BEE_RELAY_URL), detector: createStubDetector(), timing: { enterMs: 300, leaveMs: 1000 } });

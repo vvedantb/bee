@@ -1,23 +1,20 @@
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import type { ModelMessage } from "ai";
-import { afterAll, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { inMemoryBeeMemory } from "../src/core/bee-memory";
 import { claudeAgent } from "../src/core/claude-agent";
 import type { DesktopActions } from "../src/core/desktop-actions";
 import { runDirectCommand, type ComputerHost } from "../src/core/direct-command";
 import type { ComputerRun } from "../src/core/agent-desktop-envelope";
 import { SEED_NOTES, chunkNotes } from "../src/core/notes";
+import { createClaudeCode } from "../src/main/claude-code";
 
-// Live smoke test for "Bee, …" requests on the user's Claude account: the real Claude Agent SDK and Claude Code process, Bee's real
+// Live smoke test for "Bee, …" requests on this machine's own Claude Code and its login: the real Agent SDK and Claude Code, Bee's real
 // prompts and tools, and fake desktop and computer-use runners (no OS). No Gateway key: Jev routing falls back to the word rules.
 
-const token = process.env.BEE_CLAUDE_CODE_OAUTH_TOKEN?.trim();
-if (!token) throw new Error("BEE_CLAUDE_CODE_OAUTH_TOKEN is not set. Run `claude setup-token`, export it, then run npm run test:claude again.");
-const configDir = mkdtempSync(join(tmpdir(), "bee-claude-"));
-afterAll(() => rmSync(configDir, { recursive: true, force: true }));
-const agent = claudeAgent({ token, configDir });
+const found = await createClaudeCode().status();
+if (found.state !== "ready") throw new Error(`Claude Code is ${found.state}. Install it and sign in (claude, then /login), then run npm run test:claude again.`);
+console.log(`Claude Code ${found.version} at ${found.path}`);
+const agent = claudeAgent({ executable: found.path });
 const snippets = chunkNotes(SEED_NOTES);
 
 function fakeDesktop() {

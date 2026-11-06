@@ -18,7 +18,7 @@ import { createMeetingMemoryStore } from "../core/meeting-memory";
 import { searchMcpNotes } from "../core/meeting-search";
 import { createVmemSearch } from "../core/vmem-history";
 import { createBeeHistoryStore } from "./bee-history-store";
-import { createCommandAgent } from "./claude-agent";
+import { createClaudeCode } from "./claude-code";
 import { registerBeeMemoryIpc } from "./bee-memory-ipc";
 import { createBeeMemoryStore } from "./bee-memory-store";
 import { createDebugLog, settingsChange, type DebugLogWriter } from "./debug-log";
@@ -301,7 +301,6 @@ if (clerk.isPrimaryInstance) {
       notesDir,
       logsDir,
       envGatewayKey: process.env.BEE_AI_GATEWAY_API_KEY,
-      envClaudeToken: process.env.BEE_CLAUDE_CODE_OAUTH_TOKEN,
     });
     const debug = startDebugLog(logsDir, settings.verboseLogging());
     // Always written, verbose or not, so every session leaves one line saying what ran.
@@ -453,7 +452,7 @@ if (clerk.isPrimaryInstance) {
       meeting,
       meetingWindow,
       gatewayApiKey: settings.gatewayApiKey,
-      commandAgent: createCommandAgent(settings.claudeToken),
+      claudeCode: createClaudeCode(),
       desktop,
       wakeWordEnabled: settings.wakeWord,
       computer: computerRunner

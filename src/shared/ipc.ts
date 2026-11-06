@@ -58,6 +58,7 @@ export const IPC = {
   computerUpdate: "bee:computer:update",
   computerAnswer: "bee:computer:answer",
   computerAccess: "bee:computer:access",
+  claudeCode: "bee:claude-code:status",
   classifyFollowUp: "bee:command:classify-follow-up",
   conversationEnded: "bee:command:conversation-ended",
 };
@@ -76,8 +77,6 @@ export const secretStorageSchema = z.enum(["os", "weak", "memory"]);
 
 export const settingsViewSchema = z.object({
   gatewayKeySource: z.enum(["saved", "env", "none"]),
-  // The Claude token for "Bee, …" requests (core/claude-agent.ts): saved in Settings, from BEE_CLAUDE_CODE_OAUTH_TOKEN, or none.
-  claudeTokenSource: z.enum(["saved", "env", "none"]),
   // Personalised link suggestions: the effective toggle, and whether an enabled vmem connector (Connectors tab) exists.
   personalisedLinks: z.boolean(),
   vmemConnected: z.boolean(),
@@ -121,7 +120,6 @@ export type SettingsView = z.infer<typeof settingsViewSchema>;
 // Secrets: omitted = unchanged, "" = clear.
 export const settingsUpdateSchema = z.object({
   gatewayApiKey: z.string().max(500).optional(),
-  claudeToken: z.string().max(500).optional(),
   meetingMode: z.boolean().optional(),
   interfaceScale: interfaceScaleSchema.optional(),
   motionPreference: motionPreferenceSchema.optional(),
@@ -281,6 +279,14 @@ export const computerAccessSchema = z.object({
   screenRecording: accessStateSchema,
 });
 export type ComputerAccessView = z.infer<typeof computerAccessSchema>;
+
+// The user's Claude Code, which "Bee, …" requests run on (core/claude-code.ts): its state, version, and what to do when not ready.
+export const claudeCodeViewSchema = z.object({
+  state: z.enum(["ready", "missing", "outdated", "signed-out"]),
+  version: z.string().max(40).nullable(),
+  message: z.string().max(300).nullable(),
+});
+export type ClaudeCodeView = z.infer<typeof claudeCodeViewSchema>;
 
 // Lines the renderer keeps for the end-of-meeting summary (store.ts); the pipeline still gets only the last 8.
 export const SESSION_TRANSCRIPT_MAX = 200;

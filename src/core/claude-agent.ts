@@ -5,23 +5,23 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprot
 import { asSchema, type AssistantModelMessage, type ModelMessage, type ToolSet } from "ai";
 import { historyAsText } from "./bee-history";
 import { debugLog, msSince } from "./debug-log";
+import { CLAUDE_CODE_SIGNED_OUT } from "./claude-code";
 import { noProgress } from "./loop-guard";
 
 // Bee's "Bee, …" requests (direct answers in luna.ts, computer use in computer-use.ts) run on the Claude Agent SDK, on the user's own
-// Claude account: the token from `claude setup-token`, saved in Settings (main/settings.ts claudeToken). Meeting tips, summaries,
-// speech-to-text and Jev stay on the AI Gateway (gateway.ts): they are latency-bound, and the SDK starts a Claude Code process per run.
+// Claude Code install and its login (main/claude-code.ts finds it and checks it). Bee ships no Claude Code and keeps no token.
+// Meeting tips, summaries, speech-to-text and Jev stay on the AI Gateway (gateway.ts): they are latency-bound, and the SDK starts a
+// Claude Code process per run.
 //
 // Bee's own tools (computer, desktop, memory, files, MCP connectors) go to the SDK as one in-process MCP server, "bee". Their own
 // checks (confirm before a send or delete, the blocked-app list, the run's Stop and clock) live inside each tool's execute, so they
-// apply here unchanged. Claude Code's own tools are all off, except WebSearch when the request asks for web_search. No settings,
-// CLAUDE.md, skills or session files are read or written: the run is only Bee's system prompt, its request and its tools.
+// apply here unchanged. Claude Code's own tools are all off, except WebSearch when the request asks for web_search. No settings
+// files, CLAUDE.md, skills or session files are read or written: the run is only Bee's system prompt, its request and its tools.
 
 /** A request's model. "plan" thinks first (adaptive, medium effort); "fast" is the fast pass for a simple task, thinking off. */
 export type AgentTier = "plan" | "fast";
 
 export const AGENT_MODEL: Record<AgentTier, string> = { plan: "claude-sonnet-5-5", fast: "claude-haiku-5-5" };
-
-export const NO_CLAUDE_TOKEN = "No Claude token. Add one in Settings.";
 
 /** What happens during a run, in order. Tool names are Bee's own (open_app, web_search), never the SDK's mcp__bee__… names. */
 export type AgentEvent =
@@ -142,18 +142,18 @@ function blockText(content: unknown): string {
   return content.map((part) => (part && typeof part === "object" && "text" in part && typeof part.text === "string" ? part.text : "")).join("\n");
 }
 
-/** Env for the Claude Code process: none of this machine's own Claude or Anthropic settings, only the user's token. */
-function agentEnv(token: string, configDir: string): Record<string, string> {
+/** Env for the Claude Code process: Bee's own, so the install finds its login (config folder, keychain, or an env token) as it would. */
+function agentEnv(): Record<string, string> {
   const env: Record<string, string> = {};
-  for (const [key, value] of Object.entries(process.env)) if (value !== undefined && !/^(CLAUDE|ANTHROPIC)/.test(key)) env[key] = value;
-  return { ...env, CLAUDE_CODE_OAUTH_TOKEN: token, CLAUDE_CONFIG_DIR: configDir, CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1" };
+  for (const [key, value] of Object.entries(process.env)) if (value !== undefined) env[key] = value;
+  return { ...env, CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1" };
 }
 
-/**
- * The production agent. `configDir` is Bee's own Claude Code folder (in the app's user data), so the user's own Claude Code setup
- * is never read or changed. `executable` is the packaged Claude Code binary; absent, the SDK finds its own in node_modules.
- */
-export function claudeAgent(options: { token: string; configDir: string; executable?: string }): CommandAgent {
+/** A failure that means the install is not signed in, as Claude Code words it. */
+const SIGNED_OUT = /not logged in|please run \/login|invalid api key|oauth token (?:has )?expired|authentication/i;
+
+/** The production agent, on the user's Claude Code at `executable` (main/claude-code.ts). */
+export function claudeAgent(options: { executable: string }): CommandAgent {
   return async (request) => {
     const started = performance.now();
     const controller = new AbortController();
@@ -176,8 +176,8 @@ export function claudeAgent(options: { token: string; configDir: string; executa
       settingSources: [],
       persistSession: false,
       abortController: controller,
-      env: agentEnv(options.token, options.configDir),
-      ...(options.executable ? { pathToClaudeCodeExecutable: options.executable } : {}),
+      env: agentEnv(),
+      pathToClaudeCodeExecutable: options.executable,
       stderr: (data) => debugLog.debug("ai", "agent-stderr", { data: data.slice(0, 2000) }),
     };
     // Bee's history, merged by the API message id (the SDK sends one block per assistant message).
@@ -257,7 +257,7 @@ export function claudeAgent(options: { token: string; configDir: string; executa
     }
     debugLog.info("ai", "agent-done", { tier: request.tier, ms: msSince(started), finish, looped, costUsd, tools: steps.length });
     if (request.signal.aborted) throw request.signal.reason instanceof Error ? request.signal.reason : new Error("aborted");
-    if (failure !== null && !looped) throw new Error(failure);
+    if (failure !== null && !looped) throw new Error(SIGNED_OUT.test(failure) ? CLAUDE_CODE_SIGNED_OUT : failure);
     return { text: turnText.trim() ? turnText : lastText(messages), messages, finish, looped, sources, costUsd };
   };
 }

@@ -99,7 +99,7 @@ describe("runDirectCommand: no AI for a plain open", () => {
   it("asks the AI for anything else, and says when there is no key", async () => {
     const { actions, calls } = fakeActions();
     const result = await run({ command: "what's 15% of 18000?", snippets, gateway: null, actions });
-    expect(result.guideError).toBe("No Claude token. Add one in Settings.");
+    expect(result.guideError).toBe("Install Claude Code and sign in to talk to Bee.");
     expect(calls).toEqual([]);
   });
 });

@@ -33,8 +33,6 @@ const fileSchema = z.object({
   // Animations: system, on or off. Anything else reads as on.
   motionPreference: z.unknown().optional().transform(clampMotionPreference),
   gatewayApiKey: z.string().optional(),
-  // The user's own Claude token (`claude setup-token`) for "Bee, …" requests (core/claude-agent.ts).
-  claudeToken: z.string().optional(),
   // Where the overlay was last left. Main only; a bad value reads as unset.
   overlayPosition: z.object({ x: z.number().finite(), y: z.number().finite(), displayId: z.number() }).optional().catch(undefined),
   // Personalised link suggestions. The toggle is stored only once the user sets it; until then it follows whether an enabled vmem connector exists.
@@ -75,7 +73,7 @@ const mcpSecretsSchema = z.record(
 );
 type McpSecrets = z.infer<typeof mcpSecretsSchema>;
 type SettingsFile = z.infer<typeof fileSchema>;
-type SecretName = "gatewayApiKey" | "claudeToken";
+type SecretName = "gatewayApiKey";
 
 export type SettingsStore = ReturnType<typeof createSettingsStore>;
 
@@ -115,8 +113,6 @@ export function createSettingsStore(args: {
   /** The local debug log folder, shown in Settings like notesDir. */
   logsDir: string;
   envGatewayKey: string | undefined;
-  /** BEE_CLAUDE_CODE_OAUTH_TOKEN, for development and the E2E tests. A saved token takes precedence. */
-  envClaudeToken?: string | undefined;
 }) {
   const path = join(args.userDataDir, "settings.json");
   const memorySecrets = new Map<SecretName, string>();
@@ -417,11 +413,6 @@ export function createSettingsStore(args: {
     return getSecret(read(), "gatewayApiKey") ?? (args.envGatewayKey?.trim() || undefined);
   }
 
-  /** The user's Claude token for "Bee, …" requests: the saved one, else the env one. Main only. */
-  function claudeToken(): string | undefined {
-    return getSecret(read(), "claudeToken") ?? (args.envClaudeToken?.trim() || undefined);
-  }
-
   /** The key saved in Settings, never the env key. Only for an explicit reveal or copy. Main only. */
   function savedGatewayApiKey(): string | undefined {
     return getSecret(read(), "gatewayApiKey");
@@ -474,7 +465,6 @@ export function createSettingsStore(args: {
       vmemConnected: hasVmemConnector(file),
       sendSessionsToVmem: sendSessionsToVmem(file),
       gatewayKeySource: saved ? "saved" : args.envGatewayKey?.trim() ? "env" : "none",
-      claudeTokenSource: getSecret(file, "claudeToken") ? "saved" : args.envClaudeToken?.trim() ? "env" : "none",
       meetingMode: file.meetingMode,
       interfaceScale: file.interfaceScale,
       motionPreference: file.motionPreference,
@@ -529,7 +519,6 @@ export function createSettingsStore(args: {
   function save(update: SettingsUpdate): SettingsView {
     let file = read();
     if (update.gatewayApiKey !== undefined) file = setSecret(file, "gatewayApiKey", update.gatewayApiKey);
-    if (update.claudeToken !== undefined) file = setSecret(file, "claudeToken", update.claudeToken);
     if (update.meetingMode !== undefined) file = { ...file, meetingMode: update.meetingMode };
     if (update.interfaceScale !== undefined) file = { ...file, interfaceScale: clampInterfaceScale(update.interfaceScale) };
     if (update.motionPreference !== undefined) file = { ...file, motionPreference: clampMotionPreference(update.motionPreference) };
@@ -581,5 +570,5 @@ export function createSettingsStore(args: {
     write({ ...read(), overlayPosition: position });
   }
 
-  return { view, save, meetingContext, readMeetingWindow, teamsAudioFallback, wakeWord, askBeforeSending, verboseLogging, overlayPosition, saveOverlayPosition, gatewayApiKey, savedGatewayApiKey, claudeToken, linkSettings, vmemConfig, transcriptSettings, fsRoots, knownNames, learnNames, mcpList, mcpSave, mcpRemove, mcpSignOut, mcpSetEnabled, mcpRecordTools, mcpConfigs, mcpSignedOut, mcpConfig, mcpOAuthStorage };
+  return { view, save, meetingContext, readMeetingWindow, teamsAudioFallback, wakeWord, askBeforeSending, verboseLogging, overlayPosition, saveOverlayPosition, gatewayApiKey, savedGatewayApiKey, linkSettings, vmemConfig, transcriptSettings, fsRoots, knownNames, learnNames, mcpList, mcpSave, mcpRemove, mcpSignOut, mcpSetEnabled, mcpRecordTools, mcpConfigs, mcpSignedOut, mcpConfig, mcpOAuthStorage };
 }

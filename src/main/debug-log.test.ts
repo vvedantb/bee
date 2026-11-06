@@ -269,7 +269,6 @@ describe("debugLogFileName", () => {
 describe("settingsChange", () => {
   const view: SettingsView = {
     gatewayKeySource: "none",
-    claudeTokenSource: "none",
     personalisedLinks: false,
     vmemConnected: false,
     sendSessionsToVmem: false,

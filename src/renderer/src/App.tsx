@@ -415,12 +415,6 @@ const KEY_SOURCE_LABEL: Record<SettingsView["gatewayKeySource"], string> = {
   none: "No key set.",
 };
 
-const CLAUDE_TOKEN_LABEL: Record<SettingsView["claudeTokenSource"], string> = {
-  saved: "Saved token in use.",
-  env: "Using BEE_CLAUDE_CODE_OAUTH_TOKEN from env.",
-  none: "No token set. \u201cBee, \u2026\u201d requests need one: run claude setup-token and paste it here.",
-};
-
 function updateLabel(update: UpdateState): string {
   if (update.status === "checking") return "Checking for updates…";
   if (update.status === "downloading") return "Downloading update…";
@@ -465,6 +459,30 @@ function UpdateSection({ update }: { update: UpdateState }) {
   );
 }
 
+// Settings → "Bee, …" requests: they run on the user's own Claude Code and its login (main/claude-code.ts). Says what to do when it
+// is missing, too old or signed out.
+function ClaudeCodeSection({ claudeCode }: { claudeCode: BeeState["claudeCode"] }) {
+  useEffect(() => {
+    void actions.refreshClaudeCode();
+  }, []);
+  if (!claudeCode) return null;
+  const ready = claudeCode.state === "ready";
+  return (
+    <div className="flex flex-col gap-1">
+      <p className={ready ? "muted" : "error"} role="status">
+        {ready ? `Claude Code ${claudeCode.version ?? ""} is signed in. “Bee, …” requests use your Claude account.` : claudeCode.message}
+      </p>
+      {ready ? null : (
+        <div className="row actions">
+          <Button type="button" variant="secondary" size="sm" onClick={() => void actions.refreshClaudeCode(true)}>
+            Check again
+          </Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // Settings → computer use: on a Mac, Accessibility for Bee. Computer use never needs Screen Recording.
 function ComputerAccessSection({ access }: { access: BeeState["computerAccess"] }) {
   useEffect(() => {
@@ -504,10 +522,8 @@ function SettingsTab({ state, settings }: { state: BeeState; settings: SettingsV
     event.preventDefault();
     const form = event.currentTarget;
     const gatewayApiKey = formString(form, "gatewayApiKey");
-    const claudeToken = formString(form, "claudeToken");
     const saved = await actions.saveSettings({
       gatewayApiKey: gatewayApiKey || undefined,
-      claudeToken: claudeToken || undefined,
       fsRoots: formString(form, "fsRoots").split(/\r?\n/),
       knownNames: formString(form, "knownNames").split(/\r?\n/),
     });
@@ -526,13 +542,6 @@ function SettingsTab({ state, settings }: { state: BeeState; settings: SettingsV
           status={KEY_SOURCE_LABEL[settings.gatewayKeySource]}
           reveal={window.bee.revealGatewayKey}
           copy={window.bee.copyGatewayKey}
-        />
-        <SecretField
-          name="claudeToken"
-          label="Claude token (your Claude account, for \u201cBee, \u2026\u201d requests)"
-          placeholder="sk-ant-oat01-\u2026"
-          saved={settings.claudeTokenSource === "saved"}
-          status={CLAUDE_TOKEN_LABEL[settings.claudeTokenSource]}
         />
         <label>
           Extra folders the AI may read (one absolute path per line)
@@ -562,11 +571,6 @@ function SettingsTab({ state, settings }: { state: BeeState; settings: SettingsV
           {settings.gatewayKeySource === "saved" ? (
             <Button type="button" variant="link" size="sm" onClick={() => void actions.saveSettings({ gatewayApiKey: "" })}>
               Remove saved key
-            </Button>
-          ) : null}
-          {settings.claudeTokenSource === "saved" ? (
-            <Button type="button" variant="link" size="sm" onClick={() => void actions.saveSettings({ claudeToken: "" })}>
-              Remove saved token
             </Button>
           ) : null}
         </div>
@@ -606,6 +610,7 @@ function SettingsTab({ state, settings }: { state: BeeState; settings: SettingsV
         checked={settings.wakeWordEnabled}
         onCheckedChange={(wakeWordEnabled) => void actions.saveSettings({ wakeWordEnabled })}
       />
+      <ClaudeCodeSection claudeCode={state.claudeCode} />
       <SettingRow
         id="ask-before-sending"
         label="Ask before sending or deleting"
