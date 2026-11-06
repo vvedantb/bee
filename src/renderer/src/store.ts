@@ -1503,7 +1503,9 @@ export const actions = {
       return true;
     } catch (error) {
       debugLog.warn("settings", "save-failed", { keys: Object.keys(update), error: errorData(error) });
-      set({ error: error instanceof Error ? error.message : "Could not save settings" });
+      // Electron prefixes a handler's error with "Error invoking remote method …".
+      const message = error instanceof Error ? error.message.replace(/^Error invoking remote method '[^']*': (Error: )?/, "") : "";
+      set({ error: message || "Could not save settings" });
       return false;
     }
   },

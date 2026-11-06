@@ -73,6 +73,8 @@ const SETTINGS: SettingsView = {
   wakeWordEnabled: true,
   askBeforeSendingEnabled: true,
   verboseLogging: true,
+  toggleShortcut: "CommandOrControl+Shift+Space",
+  toggleShortcutActive: true,
 };
 
 const VIEW: TeamsView = {

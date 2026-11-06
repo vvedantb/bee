@@ -1,3 +1,4 @@
+import { DEFAULT_TOGGLE_SHORTCUT, acceleratorSchema } from "../core/shortcut";
 import { safeStorage } from "electron";
 import { randomUUID } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
@@ -59,6 +60,8 @@ const fileSchema = z.object({
   askBeforeSendingEnabled: z.boolean().default(true).catch(true),
   // Verbose debug logs (main/debug-log.ts), on this computer only. On until switched off, for now; off keeps warnings and errors.
   verboseLogging: z.boolean().default(true).catch(true),
+  // The show/hide shortcut. A bad value reads as the default.
+  toggleShortcut: acceleratorSchema.default(DEFAULT_TOGGLE_SHORTCUT).catch(DEFAULT_TOGGLE_SHORTCUT),
   // Non-secret MCP settings. A bad entry drops the list, not the whole file.
   mcpServers: z.array(mcpServerSchema).catch([]).default([]),
   // One safeStorage ciphertext (base64) for every server's secrets, as JSON keyed by server id.
@@ -138,6 +141,7 @@ export function createSettingsStore(args: {
       wakeWordEnabled: true,
       askBeforeSendingEnabled: true,
       verboseLogging: true,
+      toggleShortcut: DEFAULT_TOGGLE_SHORTCUT,
       mcpServers: [],
     };
   }
@@ -478,6 +482,9 @@ export function createSettingsStore(args: {
       wakeWordEnabled: file.wakeWordEnabled,
       askBeforeSendingEnabled: file.askBeforeSendingEnabled,
       verboseLogging: file.verboseLogging,
+      toggleShortcut: file.toggleShortcut,
+      // Main fills in whether it holds the shortcut (main/index.ts).
+      toggleShortcutActive: true,
     };
   }
 
@@ -529,6 +536,7 @@ export function createSettingsStore(args: {
     if (update.wakeWordEnabled !== undefined) file = { ...file, wakeWordEnabled: update.wakeWordEnabled };
     if (update.askBeforeSendingEnabled !== undefined) file = { ...file, askBeforeSendingEnabled: update.askBeforeSendingEnabled };
     if (update.verboseLogging !== undefined) file = { ...file, verboseLogging: update.verboseLogging };
+    if (update.toggleShortcut !== undefined) file = { ...file, toggleShortcut: update.toggleShortcut };
     if (update.knownNames !== undefined) file = { ...file, knownNames: normalizeNames(update.knownNames) };
     write(file);
     return view();

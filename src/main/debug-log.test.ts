@@ -288,6 +288,8 @@ describe("settingsChange", () => {
     wakeWordEnabled: true,
     askBeforeSendingEnabled: true,
     verboseLogging: true,
+    toggleShortcut: "CommandOrControl+Shift+Space",
+    toggleShortcutActive: true,
   };
 
   it("lists the keys sent and what changed, with non-secret values", () => {

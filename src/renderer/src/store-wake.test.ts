@@ -70,6 +70,8 @@ const SETTINGS: SettingsView = {
   wakeWordEnabled: true,
   askBeforeSendingEnabled: true,
   verboseLogging: true,
+  toggleShortcut: "CommandOrControl+Shift+Space",
+  toggleShortcutActive: true,
 };
 
 // In a sync, so a shared phrase would reach window.bee.teams.publish.

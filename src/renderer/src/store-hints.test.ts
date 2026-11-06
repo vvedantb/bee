@@ -45,6 +45,8 @@ const SETTINGS: SettingsView = {
   wakeWordEnabled: true,
   askBeforeSendingEnabled: true,
   verboseLogging: true,
+  toggleShortcut: "CommandOrControl+Shift+Space",
+  toggleShortcutActive: true,
 };
 
 async function loadStore(settings: Partial<SettingsView> = {}) {

@@ -724,3 +724,13 @@ describe("settings savedGatewayApiKey", () => {
     expect(store.savedGatewayApiKey()).toBeUndefined();
   });
 });
+
+describe("settings: the show/hide shortcut", () => {
+  it("defaults to Cmd/Ctrl+Shift+Space, saves a new one, and reads a bad value as the default", () => {
+    expect(create().view().toggleShortcut).toBe("CommandOrControl+Shift+Space");
+    expect(create().save({ toggleShortcut: "Alt+B" }).toggleShortcut).toBe("Alt+B");
+    expect(create().view().toggleShortcut).toBe("Alt+B");
+    writeFileSync(join(dir, "settings.json"), JSON.stringify({ toggleShortcut: "B" }));
+    expect(create().view().toggleShortcut).toBe("CommandOrControl+Shift+Space");
+  });
+});
