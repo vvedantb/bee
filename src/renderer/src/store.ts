@@ -334,7 +334,7 @@ let meetingTicking = false;
 let islandActivityAt = 0;
 let islandTimer: ReturnType<typeof setTimeout> | undefined;
 // Mic hints: one detector for the app, so a hint's cooldown outlasts a mic toggle. Fed by each mic frame and phrase outcome.
-const hintDetector = createHintDetector({ enabled: false });
+const hintDetector = createHintDetector({ enabled: true });
 let hintShownAt = 0;
 const EMPTY_RESULT = { tips: [], guideError: null };
 const STOPPED_RESULT: PipelineResult = {
@@ -476,11 +476,9 @@ async function hideHint(): Promise<void> {
   await applyWindowSize();
 }
 
-/** Feeds one mic frame to the hint detector while the setting is on. Numbers only: the frame itself goes no further. */
+/** Feeds one mic frame to the hint detector. Numbers only: the frame itself goes no further. */
 function hintFrame(level: number, frame: Float32Array): void {
-  const enabled = state.settings?.hintsEnabled === true;
-  hintDetector.setEnabled(enabled);
-  syncHint(enabled ? hintDetector.push({ now: Date.now(), level, peak: framePeak(frame), micOn: true }) : null);
+  syncHint(hintDetector.push({ now: Date.now(), level, peak: framePeak(frame), micOn: true }));
 }
 
 /**
@@ -948,17 +946,16 @@ export function beeConversation(): BeeExchange[] {
  */
 function takeWakeLine(text: string): boolean {
   const now = Date.now();
-  const enabled = state.settings?.wakeWordEnabled ?? true;
   const armed = now < wakeArmedUntil;
-  const conversationOpen = enabled && now < conversationUntil && commandRun === null;
+  const conversationOpen = now < conversationUntil && commandRun === null;
   const othersSpoke = lastOtherSpeakerAt > lastExchangeAt;
   const recentlyClosed =
-    enabled && commandRun === null && !conversationOpen && conversationClosedAt > 0 && now - conversationClosedAt < REOPEN_WINDOW_MS;
-  const route = routeLine({ text, source: "mic", enabled, armed, conversationOpen, lastBee, participants: participantNames(), othersSpoke, recentlyClosed });
+    commandRun === null && !conversationOpen && conversationClosedAt > 0 && now - conversationClosedAt < REOPEN_WINDOW_MS;
+  const route = routeLine({ text, source: "mic", enabled: true, armed, conversationOpen, lastBee, participants: participantNames(), othersSpoke, recentlyClosed });
   wakeArmedUntil = route.kind === "wake" ? now + WAKE_FOLLOW_MS : 0;
   // The local debug log keeps the words that woke Bee, and the meeting lines that nearly did (a likely miss or false trigger).
   if (route.kind !== "meeting" || NEAR_WAKE.test(text) || conversationOpen || recentlyClosed) {
-    debugLog.info("wake", route.kind === "meeting" ? "near-miss" : route.kind, { text, route, enabled, armed, conversationOpen, othersSpoke, recentlyClosed });
+    debugLog.info("wake", route.kind === "meeting" ? "near-miss" : route.kind, { text, route, armed, conversationOpen, othersSpoke, recentlyClosed });
   }
   if (route.kind === "meeting") {
     // A reply to someone else, or a name from the meeting: the user has turned back to the meeting.
@@ -1231,7 +1228,7 @@ async function meetingTick(): Promise<void> {
     const quiet = state.dismissed && !state.busy && lines > 0 && Date.now() - lastLineAt >= DISMISS_FINALIZE_MS;
     if (lines === 0) {
       if (over) sessionMeetingId = null;
-    } else if ((over || quiet) && state.settings?.meetingContextEnabled && state.settings.meetingMemoryEnabled) {
+    } else if ((over || quiet) && state.settings?.meetingContextEnabled) {
       void actions.endMeeting({ auto: true });
     }
   } catch {

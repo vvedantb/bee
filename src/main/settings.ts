@@ -42,22 +42,12 @@ const fileSchema = z.object({
   sendSessionsToVmem: z.boolean().optional().catch(undefined),
   // Names Bee should know (core/known-names.ts): typed in Settings or learned from corrections and the screen. A bad value reads as none.
   knownNames: z.array(z.string()).default([]).catch([]),
-  // Meeting context: all on until the user switches them off.
+  // Meeting context: both on until the user switches them off.
   meetingContextEnabled: z.boolean().default(true).catch(true),
   meetingCalendarEnabled: z.boolean().default(true).catch(true),
-  meetingMemoryEnabled: z.boolean().default(true).catch(true),
   // Teams audio fallback (core/teams-audio.ts). Off until switched on: it sends the words of
   // people without Bee to speech-to-text. When on, it hears the Teams app alone, only when someone may not have Bee.
   teamsAudioFallbackEnabled: z.boolean().default(false).catch(false),
-  // Mic hints in the island (renderer/src/hints.ts). On until switched off.
-  hintsEnabled: z.boolean().default(true).catch(true),
-  // "Bee" wake word (core/wake-word.ts): own mic phrases that start with "Bee…" go to the AI as a direct request. On until switched off.
-  wakeWordEnabled: z.boolean().default(true).catch(true),
-  // "Ask before sending or deleting" (core/computer-gate.ts): computer use waits for a Confirm tap before it sends, deletes, buys
-  // or submits; ordinary clicks do not ask. On until switched off; a bad stored value reads as on, the safe side.
-  askBeforeSendingEnabled: z.boolean().default(true).catch(true),
-  // Verbose debug logs (main/debug-log.ts), on this computer only. On until switched off, for now; off keeps warnings and errors.
-  verboseLogging: z.boolean().default(true).catch(true),
   // The show/hide shortcut. A bad value reads as the default.
   toggleShortcut: acceleratorSchema.default(DEFAULT_TOGGLE_SHORTCUT).catch(DEFAULT_TOGGLE_SHORTCUT),
   // Non-secret MCP settings. A bad entry drops the list, not the whole file.
@@ -132,12 +122,7 @@ export function createSettingsStore(args: {
       knownNames: [],
       meetingContextEnabled: true,
       meetingCalendarEnabled: true,
-      meetingMemoryEnabled: true,
       teamsAudioFallbackEnabled: false,
-      hintsEnabled: true,
-      wakeWordEnabled: true,
-      askBeforeSendingEnabled: true,
-      verboseLogging: true,
       toggleShortcut: DEFAULT_TOGGLE_SHORTCUT,
       mcpServers: [],
     };
@@ -472,42 +457,22 @@ export function createSettingsStore(args: {
       knownNames: normalizeNames(file.knownNames),
       meetingContextEnabled: file.meetingContextEnabled,
       meetingCalendarEnabled: file.meetingCalendarEnabled,
-      meetingMemoryEnabled: file.meetingMemoryEnabled,
       teamsAudioFallbackEnabled: file.teamsAudioFallbackEnabled,
-      hintsEnabled: file.hintsEnabled,
-      wakeWordEnabled: file.wakeWordEnabled,
-      askBeforeSendingEnabled: file.askBeforeSendingEnabled,
-      verboseLogging: file.verboseLogging,
       toggleShortcut: file.toggleShortcut,
       // Main fills in whether it holds the shortcut (main/index.ts).
       toggleShortcutActive: true,
     };
   }
 
-  /** The three meeting-context switches, read on each tick so Settings changes apply without a restart. Main only. */
-  function meetingContext(): { enabled: boolean; calendar: boolean; memory: boolean } {
+  /** The two meeting-context switches, read on each tick so Settings changes apply without a restart. Main only. */
+  function meetingContext(): { enabled: boolean; calendar: boolean } {
     const file = read();
-    return { enabled: file.meetingContextEnabled, calendar: file.meetingCalendarEnabled, memory: file.meetingMemoryEnabled };
+    return { enabled: file.meetingContextEnabled, calendar: file.meetingCalendarEnabled };
   }
 
   /** The Teams audio fallback switch, read on each status poll so Settings changes apply at once. Main only. */
   function teamsAudioFallback(): boolean {
     return read().teamsAudioFallbackEnabled;
-  }
-
-  /** The wake word switch, read on each direct request so main refuses one with it off. Main only. */
-  function wakeWord(): boolean {
-    return read().wakeWordEnabled;
-  }
-
-  /** "Ask before sending or deleting", read before each action computer use takes, so a change applies mid-task. Main only. */
-  function askBeforeSending(): boolean {
-    return read().askBeforeSendingEnabled;
-  }
-
-  /** The verbose debug log switch, for the logger at start-up. Saving it updates the logger at once (index.ts). Main only. */
-  function verboseLogging(): boolean {
-    return read().verboseLogging;
   }
 
   function save(update: SettingsUpdate): SettingsView {
@@ -520,12 +485,7 @@ export function createSettingsStore(args: {
     if (update.sendSessionsToVmem !== undefined) file = { ...file, sendSessionsToVmem: update.sendSessionsToVmem };
     if (update.meetingContextEnabled !== undefined) file = { ...file, meetingContextEnabled: update.meetingContextEnabled };
     if (update.meetingCalendarEnabled !== undefined) file = { ...file, meetingCalendarEnabled: update.meetingCalendarEnabled };
-    if (update.meetingMemoryEnabled !== undefined) file = { ...file, meetingMemoryEnabled: update.meetingMemoryEnabled };
     if (update.teamsAudioFallbackEnabled !== undefined) file = { ...file, teamsAudioFallbackEnabled: update.teamsAudioFallbackEnabled };
-    if (update.hintsEnabled !== undefined) file = { ...file, hintsEnabled: update.hintsEnabled };
-    if (update.wakeWordEnabled !== undefined) file = { ...file, wakeWordEnabled: update.wakeWordEnabled };
-    if (update.askBeforeSendingEnabled !== undefined) file = { ...file, askBeforeSendingEnabled: update.askBeforeSendingEnabled };
-    if (update.verboseLogging !== undefined) file = { ...file, verboseLogging: update.verboseLogging };
     if (update.toggleShortcut !== undefined) file = { ...file, toggleShortcut: update.toggleShortcut };
     if (update.knownNames !== undefined) file = { ...file, knownNames: normalizeNames(update.knownNames) };
     write(file);
@@ -554,5 +514,5 @@ export function createSettingsStore(args: {
     write({ ...read(), overlayPosition: position });
   }
 
-  return { view, save, meetingContext, teamsAudioFallback, wakeWord, askBeforeSending, verboseLogging, overlayPosition, saveOverlayPosition, gatewayApiKey, savedGatewayApiKey, linkSettings, vmemConfig, transcriptSettings, knownNames, learnNames, mcpList, mcpSave, mcpRemove, mcpSignOut, mcpSetEnabled, mcpRecordTools, mcpConfigs, mcpSignedOut, mcpConfig, mcpOAuthStorage };
+  return { view, save, meetingContext, teamsAudioFallback, overlayPosition, saveOverlayPosition, gatewayApiKey, savedGatewayApiKey, linkSettings, vmemConfig, transcriptSettings, knownNames, learnNames, mcpList, mcpSave, mcpRemove, mcpSignOut, mcpSetEnabled, mcpRecordTools, mcpConfigs, mcpSignedOut, mcpConfig, mcpOAuthStorage };
 }

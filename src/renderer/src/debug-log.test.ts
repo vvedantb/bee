@@ -15,9 +15,9 @@ afterEach(() => {
   setDebugSink(null);
 });
 
-function sink(verbose = true) {
+function sink() {
   const batches: DebugLogBatch[] = [];
-  const created = createRendererDebugSink({ send: (batch) => batches.push(batch), verbose: () => verbose, now: () => 1_700_000_000_000 });
+  const created = createRendererDebugSink({ send: (batch) => batches.push(batch), now: () => 1_700_000_000_000 });
   return { batches, created };
 }
 
@@ -53,17 +53,11 @@ describe("createRendererDebugSink", () => {
     expect(events[1]).toMatchObject({ ts: 1_700_000_000_000, category: "bad-category-", event: "weird-name" });
   });
 
-  it("with verbose off wants only warnings and errors", () => {
-    const { created } = sink(false);
-    expect(["debug", "info", "warn", "error"].map((level) => created.wants(level as "info"))).toEqual([false, false, true, true]);
-  });
-
   it("drops a batch quietly when main is gone", () => {
     const created = createRendererDebugSink({
       send: () => {
         throw new Error("Object has been destroyed");
       },
-      verbose: () => true,
     });
     created.write({ level: "error", category: "renderer", event: "error" });
     expect(() => created.flush()).not.toThrow();
@@ -137,24 +131,5 @@ describe("logStateChanges", () => {
     created.flush();
     expect(batches.flatMap((batch) => batch.events).map((event) => event.data)).toEqual([{ mic: { on: true, error: null } }, { busy: true, tools: ["web_search"] }]);
     expect(uiSnapshot(state)).not.toHaveProperty("level");
-  });
-
-  it("logs nothing while verbose logging is off", () => {
-    const { batches, created } = sink(false);
-    setDebugSink(created);
-    let state = base;
-    let listener = () => undefined as void;
-    logStateChanges(
-      (next) => {
-        listener = next;
-        return () => undefined;
-      },
-      () => state,
-    );
-    state = { ...state, busy: true };
-    listener();
-    created.flush();
-    expect(batches).toEqual([]);
-    expect(debugLog.wants("debug")).toBe(false);
   });
 });

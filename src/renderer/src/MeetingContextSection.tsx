@@ -8,7 +8,7 @@ import { teamsAudioMessage, teamsAudioNeedsScreenRecording, type TeamsAudioView 
 // Settings → Meeting context. Presentational: it takes the saved switches and callbacks, so the screenshot page can render it
 // without the store or Electron.
 
-export type MeetingContextSettings = Pick<SettingsView, "meetingContextEnabled" | "meetingCalendarEnabled" | "meetingMemoryEnabled"> &
+export type MeetingContextSettings = Pick<SettingsView, "meetingContextEnabled" | "meetingCalendarEnabled"> &
   Partial<Pick<SettingsView, "teamsAudioFallbackEnabled">>;
 
 function clearMessage(count: number): string {
@@ -96,14 +96,6 @@ export function MeetingContextSection({
         checked={settings.meetingCalendarEnabled}
         disabled={!on}
         onCheckedChange={(meetingCalendarEnabled) => onChange({ meetingCalendarEnabled })}
-      />
-      <SettingRow
-        id="meeting-memory"
-        label="Save meeting notes to local memory"
-        description="Last 40 meetings, stored on this device."
-        checked={settings.meetingMemoryEnabled}
-        disabled={!on}
-        onCheckedChange={(meetingMemoryEnabled) => onChange({ meetingMemoryEnabled })}
       />
       <div className="row actions">
         <Button type="button" variant="secondary" size="sm" disabled={step === "busy"} onClick={() => void clear()}>

@@ -24,7 +24,7 @@ function setup(options: { calendar?: CalendarReadResult; memory?: ReturnType<typ
   const clock = { now: T0 };
   const inCall = { value: true };
   const titles: { rows: WindowTitleRow[] } = { rows: [{ image: "ms-teams.exe", title: "Weekly Sync | Microsoft Teams" }] };
-  const settings: MeetingContextSettings = { enabled: true, calendar: true, memory: true };
+  const settings: MeetingContextSettings = { enabled: true, calendar: true };
   const readToday = vi.fn<CalendarReader["readToday"]>(async () => options.calendar ?? { ok: true, events: [weekly] });
   const readTitles = vi.fn(async () => titles.rows);
   const searchNotes = vi.fn(async (query: string) => {
@@ -212,12 +212,9 @@ describe("remembering a meeting", () => {
     expect(t.memory.list()[0]).toMatchObject({ summary: "", decisions: [], actionItems: [] });
   });
 
-  it("saves nothing with memory off, the feature off, an unknown id, or no meeting name", async () => {
+  it("saves nothing with the feature off, an unknown id, or no meeting name", async () => {
     const t = setup();
     await t.run(15);
-    t.settings.memory = false;
-    expect(t.context.remember({ meetingId: 1, summaryMarkdown: markdown, usedLlm: true, tips: [] })).toBe(false);
-    t.settings.memory = true;
     expect(t.context.remember({ meetingId: 99, summaryMarkdown: markdown, usedLlm: true, tips: [] })).toBe(false);
     t.settings.enabled = false;
     expect(t.context.remember({ summaryMarkdown: markdown, usedLlm: true, tips: [] })).toBe(false);
@@ -246,20 +243,6 @@ describe("remembering a meeting", () => {
     expect((await t.context.tick()).card).toEqual([]);
   });
 
-  it("does not recall saved meetings while meeting memory is off", async () => {
-    const t = setup();
-    t.memory.add(record(1));
-    t.settings.memory = false;
-    const view = await t.run(15);
-    expect(view.card).toEqual([]);
-    expect(t.context.brief()).not.toContain("Ship SSO in Q4");
-    t.settings.memory = true;
-    expect((await t.context.tick()).card.length).toBeGreaterThan(0);
-    expect(t.context.brief()).toContain("Ship SSO in Q4");
-    t.settings.memory = false;
-    await t.context.tick();
-    expect(t.context.brief()).not.toContain("Ship SSO in Q4");
-  });
 });
 
 describe("calendar re-read on a title change", () => {

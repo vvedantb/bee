@@ -11,7 +11,7 @@ import { modelAgent } from "../../test/helpers/model-agent";
 import type { CommandAgent } from "../core/claude-agent";
 import type { ClaudeCode } from "./claude-code";
 
-// Main's direct request handler (bee:command:run): it checks sign-in and the wake word setting itself, runs desktop actions
+// Main's direct request handler (bee:command:run): it checks sign-in itself, runs desktop actions
 // through the runners it was given, and never needs a key for a plain "open". Electron, sign-in and the notes folder are stubbed.
 
 const electron = vi.hoisted(() => ({ handlers: new Map<string, (event: unknown, payload?: unknown) => unknown>() }));
@@ -42,7 +42,7 @@ const readyClaudeCode = (agent: () => CommandAgent): ClaudeCode => ({
   close: () => undefined,
 });
 
-function setup(options: { enabled?: boolean } = {}) {
+function setup() {
   electron.handlers.clear();
   const opened: string[] = [];
   const desktop: DesktopActions = {
@@ -53,7 +53,6 @@ function setup(options: { enabled?: boolean } = {}) {
     focusWindow: async ({ app }) => ({ ok: true, message: `Focused ${app}` }),
     openUrl: async (url) => ({ ok: true, message: `Opened ${url}` }),
   };
-  const state = { enabled: options.enabled ?? true };
   registerMeetingIpc({
     notesDir: "/notes",
     mcpConfigs: () => [],
@@ -62,11 +61,10 @@ function setup(options: { enabled?: boolean } = {}) {
     meeting: { brief: () => "" } as unknown as MeetingContext,
     gatewayApiKey: () => undefined,
     desktop,
-    wakeWordEnabled: () => state.enabled,
   });
   const handler = electron.handlers.get(IPC.runCommand);
   if (!handler) throw new Error("no runCommand handler");
-  return { run: (payload: unknown) => handler(event, payload), opened, state };
+  return { run: (payload: unknown) => handler(event, payload), opened };
 }
 
 describe("main: direct request handler", () => {
@@ -80,12 +78,9 @@ describe("main: direct request handler", () => {
     expect(opened).toEqual(["Teams"]);
   });
 
-  it("refuses without sign-in, with the setting off, or with a bad payload", async () => {
-    const { run, opened, state } = setup();
+  it("refuses without sign-in or with a bad payload", async () => {
+    const { run, opened } = setup();
     await expect(run({ command: "open Teams", sessionToken: "nope" })).rejects.toThrow(/Sign in/);
-    state.enabled = false;
-    await expect(run({ command: "open Teams", sessionToken: "signed-in" })).rejects.toThrow(/off in Settings/);
-    state.enabled = true;
     await expect(run({ command: "", sessionToken: "signed-in" })).rejects.toThrow();
     expect(opened).toEqual([]);
   });
@@ -132,7 +127,7 @@ describe("main: computer use for a direct request", () => {
     return () => ({ languageModel: () => model }) as unknown as BeeGateway;
   };
 
-  function setupComputer(options: { turns: Turn[]; askFirst?: boolean; computer?: boolean }) {
+  function setupComputer(options: { turns: Turn[]; computer?: boolean }) {
     electron.handlers.clear();
     const gateway = gatewayFor(options.turns);
     const commands: string[] = [];
@@ -154,14 +149,12 @@ describe("main: computer use for a direct request", () => {
       gateway,
       claudeCode: readyClaudeCode(() => modelAgent(gateway().languageModel("plan"))),
       desktop: { openApp: async (name) => ({ ok: true, message: `Opened ${name}` }), focusWindow: async ({ app }) => ({ ok: true, message: `Focused ${app}` }), openUrl: async (url) => ({ ok: true, message: url }) },
-      wakeWordEnabled: () => true,
       computer:
         options.computer === false
           ? undefined
           : {
               platform: "mac",
               run,
-              askFirst: () => options.askFirst ?? true,
               cleanup: () => {
                 cleaned += 1;
               },
@@ -217,13 +210,6 @@ describe("main: computer use for a direct request", () => {
     expect(ipc.commands).not.toContain("click");
   });
 
-  it("runs on its own with the setting off", async () => {
-    const ipc = setupComputer({ turns: SEND_TURNS, askFirst: false });
-    expect((await ipc.start("send Sam a message in Discord")).tips).toEqual(["Sent the message."]);
-    expect(ipc.updates().some((update) => update.type === "confirm")).toBe(false);
-    expect(ipc.commands).toContain("click");
-  });
-
   it("stops at once on Stop, while waiting for a Confirm too", async () => {
     const ipc = setupComputer({ turns: SEND_TURNS });
     const running = ipc.start("send Sam a message in Discord");
@@ -263,8 +249,7 @@ describe("main: Bee's history and the follow-up check", () => {
       gateway: () => ({ languageModel: () => model }) as unknown as BeeGateway,
       claudeCode: readyClaudeCode(() => modelAgent(model)),
       desktop: { openApp: async (name) => ({ ok: true, message: `Opened ${name}` }), focusWindow: async ({ app }) => ({ ok: true, message: `Focused ${app}` }), openUrl: async (url) => ({ ok: true, message: url }) },
-      wakeWordEnabled: () => true,
-      computer: { platform: "windows", run: async () => ({ ok: true, data: {} }), askFirst: () => false, cleanup: () => undefined },
+      computer: { platform: "windows", run: async () => ({ ok: true, data: {} }), cleanup: () => undefined },
       ...(options.history ? { history: options.history } : {}),
       knownNames: () => ["Zuzanna Szczepaniak-Moody"],
       learnNames: (names) => options.learned?.push(names),

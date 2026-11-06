@@ -33,9 +33,6 @@ export type DebugLogWriter = DebugSink & {
   readonly sessionId: string;
   /** Queues one event, whatever its level (wants() is the caller's filter). ts: when it happened, ms since the epoch. */
   write: (event: DebugEvent & { ts?: number; src?: DebugSource }) => void;
-  /** Settings → Verbose debug logs. Off keeps warnings and errors only. Applies at once. */
-  setVerbose: (verbose: boolean) => void;
-  verbose: () => boolean;
   /** The file being written, or null before the first write. */
   file: () => string | null;
   /** Writes everything queued so far. */
@@ -78,7 +75,6 @@ export function debugLogFileName(when: Date, sessionId: string, attempt = 1): st
 export function createDebugLog(options: {
   dir: string;
   sessionId: string;
-  verbose?: boolean;
   maxFileBytes?: number;
   maxLineBytes?: number;
   flushMs?: number;
@@ -94,7 +90,6 @@ export function createDebugLog(options: {
   const maxLineBytes = options.maxLineBytes ?? DEBUG_LOG_MAX_LINE_BYTES;
   const flushMs = options.flushMs ?? DEBUG_LOG_FLUSH_MS;
   const now = options.now ?? (() => new Date());
-  let verbose = options.verbose ?? true;
   let seq = 0;
   let queue: Queued[] = [];
   let queuedBytes = 0;
@@ -156,7 +151,7 @@ export function createDebugLog(options: {
 
   const headerLine = (previous: string | null): string => {
     const text = serialize(
-      line({ level: "info", category: "log", event: "file-opened", data: { part, previous, maxFileBytes, verbose, ...(options.header?.() ?? {}) } }),
+      line({ level: "info", category: "log", event: "file-opened", data: { part, previous, maxFileBytes, ...(options.header?.() ?? {}) } }),
     );
     return `${text}\n`;
   };
@@ -302,7 +297,8 @@ export function createDebugLog(options: {
   return {
     dir,
     sessionId,
-    wants: (level) => !closed && (verbose || level === "warn" || level === "error"),
+    // Every level: the log is always detailed (no setting).
+    wants: () => !closed,
     write: (event) => {
       if (closed) return;
       try {
@@ -315,10 +311,6 @@ export function createDebugLog(options: {
       if (queuedBytes >= FLUSH_BYTES && Date.now() >= retryAt) void flush();
       else schedule();
     },
-    setVerbose: (next) => {
-      verbose = next;
-    },
-    verbose: () => verbose,
     file: () => path,
     flush,
     flushSync,

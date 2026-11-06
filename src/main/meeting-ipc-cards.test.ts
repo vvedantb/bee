@@ -28,7 +28,6 @@ const briefing = dueBriefing({
   now: Date.parse("2026-11-06T13:59:00Z"),
   shown: new Set(),
   records: [],
-  memoryOn: false,
 });
 
 const meeting: MeetingContext = {

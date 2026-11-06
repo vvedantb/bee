@@ -38,12 +38,7 @@ const SETTINGS: SettingsView = {
   knownNames: [],
   meetingContextEnabled: false,
   meetingCalendarEnabled: false,
-  meetingMemoryEnabled: false,
   teamsAudioFallbackEnabled: false,
-  hintsEnabled: true,
-  wakeWordEnabled: true,
-  askBeforeSendingEnabled: true,
-  verboseLogging: true,
   toggleShortcut: "CommandOrControl+Shift+Space",
   toggleShortcutActive: true,
 };
@@ -156,22 +151,6 @@ describe("store: mic hints", () => {
       await frames(1200, HISS);
     }
     expect(state().hint).toEqual({ id: "noisy", text: HINT_TEXT.noisy });
-  });
-
-  it("shows nothing with the setting off, and hides the hint on screen when it is switched off", async () => {
-    const off = await loadStore({ hintsEnabled: false });
-    await off.frames(NO_INPUT_MS + 500, 0);
-    await off.frames(6000, QUIET);
-    expect(off.state().hint).toBeNull();
-    await off.store.actions.toggleMic();
-
-    vi.resetModules();
-    const on = await loadStore();
-    await on.frames(5500, QUIET);
-    expect(on.state().hint?.id).toBe("quiet");
-    await on.store.actions.saveSettings({ hintsEnabled: false });
-    await on.frames(500, QUIET);
-    expect(on.state().hint).toBeNull();
   });
 
   it("logs hint ids and seconds on screen only", async () => {

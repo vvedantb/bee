@@ -32,7 +32,7 @@ export function createBriefingWatcher(deps: {
     try {
       const result = await deps.calendar.readToday(new Date(now()));
       if (!result.ok) return;
-      const due = dueBriefing({ events: result.events, now: now(), shown, records: settings.memory ? deps.records() : [], memoryOn: settings.memory });
+      const due = dueBriefing({ events: result.events, now: now(), shown, records: deps.records() });
       if (!due) return;
       shown.add(due.key);
       briefings.set(due.key, due);

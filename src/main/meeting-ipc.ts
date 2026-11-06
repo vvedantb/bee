@@ -80,13 +80,11 @@ export function registerMeetingIpc(args: { notesDir: string;
   gateway?: (apiKey: string) => BeeGateway;
   /** Desktop tools for a direct request ("Bee, open Teams", main/desktop-actions.ts). Without them the AI only answers. */
   desktop?: DesktopActions;
-  /** The wake word setting: a direct request is refused while it is off. Defaults to on. */
-  wakeWordEnabled?: () => boolean;
   /**
    * Computer use for a direct request (core/computer-use.ts): its own agent-desktop runner, never the meeting window reader's,
    * and the "Ask before sending or deleting" setting. Absent: Bee cannot operate apps here (Linux, or no agent-desktop).
    */
-  computer?: { platform: ComputerPlatform; run: ComputerRun; askFirst: () => boolean; cleanup: () => void };
+  computer?: { platform: ComputerPlatform; run: ComputerRun; cleanup: () => void };
   /** Finished sessions to vmem (main/vmem-transcript-queue.ts). It checks the setting and the connector itself. */
   transcripts?: VmemTranscripts;
   /** Bee's history of direct requests on disk (main/bee-history-store.ts). Absent: each request starts with none. */
@@ -173,7 +171,8 @@ export function registerMeetingIpc(args: { notesDir: string;
       platform: computer.platform,
       run: computer.run,
       ...(skills ? { skills } : {}),
-      askFirst: computer.askFirst,
+      // Always: Bee asks before it sends, deletes, buys or submits (no setting).
+      askFirst: () => true,
       onStep: (label) => {
         debugLog.info("computer", "step-line", { runId, label });
         if (runId !== undefined) send({ runId, type: "step", label: label.slice(0, COMPUTER_LINE_MAX) });
@@ -331,10 +330,6 @@ export function registerMeetingIpc(args: { notesDir: string;
     const request = commandRequestSchema.parse(payload);
     lastSender = event.sender;
     assertSignedIn(request.sessionToken);
-    if (args.wakeWordEnabled && !args.wakeWordEnabled()) {
-      debugLog.warn("ai", "command-refused", { runId: request.runId, command: request.command, reason: "wake word off" });
-      throw new Error("Talking to Bee by name is off in Settings.");
-    }
     const apiKey = args.gatewayApiKey();
     const { controller, done } = track(request.runId);
     const windowContext = args.meetingWindow?.context() ?? null;
@@ -402,12 +397,12 @@ export function registerMeetingIpc(args: { notesDir: string;
   });
 
   // The conversation window's one small call (core/follow-up.ts): is an unclear own mic phrase for Bee or the meeting? Null
-  // without a key, with the wake word off, or on any failure, so the phrase stays a meeting line.
+  // without a key, or on any failure, so the phrase stays a meeting line.
   ipcMain.handle(IPC.classifyFollowUp, async (_event, payload): Promise<FollowUpResult> => {
     const request = followUpRequestSchema.parse(payload);
     assertSignedIn(request.sessionToken);
     const apiKey = args.gatewayApiKey();
-    if (!apiKey || (args.wakeWordEnabled && !args.wakeWordEnabled())) return null;
+    if (!apiKey) return null;
     return classifyFollowUp({ model: createGateway(apiKey).languageModel(GUIDE_MODEL), lastBee: request.lastBee, lines: request.lines, phrase: request.phrase, othersQuiet: request.othersQuiet });
   });
 

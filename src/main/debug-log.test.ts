@@ -86,14 +86,6 @@ describe("createDebugLog", () => {
     expect(events()[0]?.data).toEqual({ sessionToken: "[redacted]", gatewayApiKey: "[redacted]", error: "Bearer [redacted]", text: "Ship on Friday" });
   });
 
-  it("with verbose off wants only warnings and errors, and a change applies at once", () => {
-    const log = createDebugLog({ dir, sessionId: SESSION, verbose: false });
-    expect(["debug", "info", "warn", "error"].map((level) => log.wants(level as "info"))).toEqual([false, false, true, true]);
-    log.setVerbose(true);
-    expect(log.wants("debug")).toBe(true);
-    expect(log.verbose()).toBe(true);
-  });
-
   it("keeps an oversized event's names and a short preview", async () => {
     const log = createDebugLog({ dir, sessionId: SESSION, maxLineBytes: 2000 });
     log.write({ level: "info", category: "ai", event: "luna-request", data: { context: "note ".repeat(2000) } });
@@ -281,21 +273,16 @@ describe("settingsChange", () => {
     knownNames: [],
     meetingContextEnabled: true,
     meetingCalendarEnabled: true,
-    meetingMemoryEnabled: true,
     teamsAudioFallbackEnabled: false,
-    hintsEnabled: true,
-    wakeWordEnabled: true,
-    askBeforeSendingEnabled: true,
-    verboseLogging: true,
     toggleShortcut: "CommandOrControl+Shift+Space",
     toggleShortcutActive: true,
   };
 
   it("lists the keys sent and what changed, with non-secret values", () => {
-    const after = { ...view, verboseLogging: false, interfaceScale: 1.25, knownNames: ["Zuzanna"] };
-    expect(settingsChange({ verboseLogging: false, interfaceScale: 1.25, knownNames: ["Zuzanna"], meetingMode: false }, view, after)).toEqual({
-      keys: ["verboseLogging", "interfaceScale", "knownNames", "meetingMode"],
-      changed: { verboseLogging: false, interfaceScale: 1.25, knownNames: ["Zuzanna"] },
+    const after = { ...view, personalisedLinks: true, interfaceScale: 1.25, knownNames: ["Zuzanna"] };
+    expect(settingsChange({ personalisedLinks: true, interfaceScale: 1.25, knownNames: ["Zuzanna"], meetingMode: false }, view, after)).toEqual({
+      keys: ["personalisedLinks", "interfaceScale", "knownNames", "meetingMode"],
+      changed: { personalisedLinks: true, interfaceScale: 1.25, knownNames: ["Zuzanna"] },
     });
   });
 

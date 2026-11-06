@@ -1,5 +1,5 @@
 // First, so the local debug log is listening before anything else runs.
-import { readVerboseFrom } from "./debug-log-boot";
+import "./debug-log-boot";
 import { ClerkProvider } from "@clerk/electron/react";
 import { SonnerToaster } from "@vvedantb/ui";
 import { StrictMode } from "react";
@@ -10,8 +10,7 @@ import { logStateChanges } from "./debug-log";
 import { actions, getBeeState, subscribe } from "./store";
 import "./styles.css";
 
-readVerboseFrom(() => getBeeState().settings?.verboseLogging ?? true);
-// Island and panel state changes for the debug log (debug level, so only with verbose logs on).
+// Island and panel state changes for the debug log.
 logStateChanges(subscribe, getBeeState);
 
 // Focus went to another app: the user clicked outside Bee, so an answer open in full folds back to the pill.
