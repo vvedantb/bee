@@ -459,6 +459,30 @@ function UpdateSection({ update }: { update: UpdateState }) {
   );
 }
 
+// Settings → "Bee, …" requests: they run on the user's own Claude Code and its login (main/claude-code.ts). Says what to do when it
+// is missing, too old or signed out.
+function ClaudeCodeSection({ claudeCode }: { claudeCode: BeeState["claudeCode"] }) {
+  useEffect(() => {
+    void actions.refreshClaudeCode();
+  }, []);
+  if (!claudeCode) return null;
+  const ready = claudeCode.state === "ready";
+  return (
+    <div className="flex flex-col gap-1">
+      <p className={ready ? "muted" : "error"} role="status">
+        {ready ? `Claude Code ${claudeCode.version ?? ""} is signed in. “Bee, …” requests use your Claude account.` : claudeCode.message}
+      </p>
+      {ready ? null : (
+        <div className="row actions">
+          <Button type="button" variant="secondary" size="sm" onClick={() => void actions.refreshClaudeCode(true)}>
+            Check again
+          </Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // Settings → computer use: on a Mac, Accessibility for Bee. Computer use never needs Screen Recording.
 function ComputerAccessSection({ access }: { access: BeeState["computerAccess"] }) {
   useEffect(() => {
@@ -586,6 +610,7 @@ function SettingsTab({ state, settings }: { state: BeeState; settings: SettingsV
         checked={settings.wakeWordEnabled}
         onCheckedChange={(wakeWordEnabled) => void actions.saveSettings({ wakeWordEnabled })}
       />
+      <ClaudeCodeSection claudeCode={state.claudeCode} />
       <SettingRow
         id="ask-before-sending"
         label="Ask before sending or deleting"

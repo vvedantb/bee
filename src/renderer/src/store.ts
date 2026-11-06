@@ -14,6 +14,7 @@ import {
   CONVERSATION_EXCHANGES_MAX,
   SESSION_TRANSCRIPT_MAX,
   clampTip,
+  type ClaudeCodeView,
   type ComputerAccessView,
   type ComputerUpdate,
   type McpSave,
@@ -136,6 +137,8 @@ export type BeeState = {
   // Computer use in progress (null when none), and what macOS allows it, for Settings (null until asked).
   computer: ComputerView | null;
   computerAccess: ComputerAccessView | null;
+  // The user's Claude Code, which "Bee, …" requests run on, for Settings (null until asked).
+  claudeCode: ClaudeCodeView | null;
   // The conversation window after a request to Bee (core/wake-word.ts CONVERSATION_WINDOW_MS): a follow-up needs no "Bee". The
   // pill says Bee is listening. State only, never words.
   conversationOpen: boolean;
@@ -208,6 +211,7 @@ let state: BeeState = {
   teamsAudio: { status: null, listening: false, failed: false, failure: null },
   computer: null,
   computerAccess: null,
+  claudeCode: null,
   conversationOpen: false,
 };
 const listeners = new Set<() => void>();
@@ -1732,6 +1736,15 @@ export const actions = {
       set({ computerAccess: await window.bee.computer.access() });
     } catch {
       set({ computerAccess: { supported: false, platform: "other", accessibility: "unknown", screenRecording: "unknown" } });
+    }
+  },
+
+  /** Settings: the user's Claude Code for "Bee, …" requests. `fresh` checks again now (Check again). Unknown on failure: missing. */
+  async refreshClaudeCode(fresh = false): Promise<void> {
+    try {
+      set({ claudeCode: await window.bee.claudeCode(fresh) });
+    } catch {
+      set({ claudeCode: { state: "missing", version: null, message: "Bee could not check Claude Code." } });
     }
   },
 

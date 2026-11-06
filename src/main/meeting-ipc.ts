@@ -8,6 +8,9 @@ import { debugLog, errorData, msSince } from "../core/debug-log";
 import type { DesktopActions } from "../core/desktop-actions";
 import { historySummariser } from "../core/bee-history";
 import type { BeeMemory } from "../core/bee-memory";
+import { CLAUDE_CODE_MISSING, claudeCodeMessage } from "../core/claude-code";
+import type { ClaudeCode } from "./claude-code";
+import type { CommandAgent } from "../core/claude-agent";
 import { runDirectCommand, type ComputerHost } from "../core/direct-command";
 import { classifyFollowUp } from "../core/follow-up";
 import { loadMcpTools, type McpPool, type McpServerConfig } from "../core/mcp";
@@ -31,6 +34,7 @@ import {
   pipelineCancelSchema,
   pipelineRequestSchema,
   transcribeRequestSchema,
+  type ClaudeCodeView,
   type ComputerAccessView,
   type ComputerUpdate,
   type FollowUpResult,
@@ -59,6 +63,8 @@ export function registerMeetingIpc(args: { notesDir: string; fsRoots: () => stri
   /** Experimental meeting window reader: the call's name and people (retrieval boost and brief) and its Settings status. */
   meetingWindow?: { read: () => Promise<unknown>; context: () => MeetingWindowContext | null; status: () => MeetingWindowStatus };
   gatewayApiKey: () => string | undefined;
+  /** The user's Claude Code (main/claude-code.ts), which "Bee, …" requests run on. Absent: only quick opens work. */
+  claudeCode?: ClaudeCode;
   /** Builds the Gateway models from the key. Defaults to the real Gateway; the E2E harness records or replays them. */
   gateway?: (apiKey: string) => BeeGateway;
   /** Desktop tools for a direct request ("Bee, open Teams", main/desktop-actions.ts). Without them the AI only answers. */
@@ -89,6 +95,12 @@ export function registerMeetingIpc(args: { notesDir: string; fsRoots: () => stri
   let computerRuns = 0;
   // agent-desktop's guides, read once over the computer-use runner and kept for the app's session.
   const skills = args.computer ? computerSkills(args.computer.run) : undefined;
+  /** The agent for a "Bee, …" request on the user's Claude Code, or what the user must do first. */
+  const commandAgent = async (): Promise<{ agent: CommandAgent | null; noAgent?: string }> => {
+    if (!args.claudeCode) return { agent: null };
+    const found = await args.claudeCode.agent();
+    return "agent" in found ? { agent: found.agent } : { agent: null, noAgent: found.error };
+  };
 
   /** Main's side of one request's computer use: step lines and Confirm prompts go to the window that asked. */
   const computerHost = (computer: NonNullable<typeof args.computer>, sender: { isDestroyed: () => boolean; send: (channel: string, payload: unknown) => void }, runId: string | number | undefined): ComputerHost => {
@@ -297,8 +309,8 @@ export function registerMeetingIpc(args: { notesDir: string; fsRoots: () => stri
         memory: args.memory ?? null,
         meetingBrief,
         meetingTerms: meetingTerms(windowContext) || undefined,
-        searchLocation: searchLocation({ timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone, locale: app.getSystemLocale() }),
         snippets: loadSnippets(args.notesDir),
+        ...(await commandAgent()),
         gateway: apiKey ? createGateway(apiKey) : null,
         notesDir: args.notesDir,
         extraRoots: args.fsRoots(),
@@ -355,6 +367,13 @@ export function registerMeetingIpc(args: { notesDir: string; fsRoots: () => stri
     const open = pending !== undefined && pending.runId === String(answer.runId);
     debugLog.info("computer", "answer", { ...answer, open });
     if (open) pending.resolve(answer.confirmed);
+  });
+
+  // Settings: the user's Claude Code, and what to do when "Bee, …" requests cannot run on it yet.
+  ipcMain.handle(IPC.claudeCode, async (_event, payload): Promise<ClaudeCodeView> => {
+    if (!args.claudeCode) return { state: "missing", version: null, message: CLAUDE_CODE_MISSING };
+    const status = await args.claudeCode.status(z.boolean().catch(false).parse(payload));
+    return { state: status.state, version: "version" in status ? status.version : null, message: claudeCodeMessage(status) };
   });
 
   // Settings: may computer use run here, and has macOS allowed Bee Accessibility and Screen Recording. Fails open as unknown.

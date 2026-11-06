@@ -2,7 +2,6 @@ import type { ModelMessage } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import { describe, expect, it } from "vitest";
 import {
-  CACHE_BREAKPOINTS_MAX,
   COMPACT_AT_TOKENS,
   KEEP_RECENT_TOKENS,
   SUMMARY_INPUT_MAX_CHARS,
@@ -10,14 +9,11 @@ import {
   SUMMARY_HEADER,
   addExchange,
   assistantMessage,
-  cacheAtEnd,
-  cacheBreakpoints,
   chunkLines,
   cleanForHistory,
   commandFallbackReply,
   compactMessages,
   compactSplit,
-  compactingStep,
   estimateTokens,
   historyAsText,
   historySummariser,
@@ -194,13 +190,6 @@ describe("compaction near the window", () => {
     expect(SUMMARY_INPUT_MAX_CHARS / 4).toBeLessThan(GUIDE_CONTEXT_TOKENS);
     expect(SUMMARY_INPUT_MAX_CHARS / 4).toBeGreaterThan(COMPACT_AT_TOKENS - KEEP_RECENT_TOKENS);
   });
-
-  it("compacts in prepareStep only when needed", async () => {
-    const step = compactingStep({ maxTokens: 3000, keepTokens: 1500, summarise: async () => "summary" });
-    expect(await step({ messages: toolTurn(1) })).toBeUndefined();
-    const result = await step({ messages: Array.from({ length: 6 }, (_, index) => big(index + 1)).flat() });
-    expect(JSON.stringify(result?.messages[0])).toContain("summary");
-  });
 });
 
 describe("the summary call", () => {
@@ -260,16 +249,6 @@ describe("the conversation for vmem", () => {
     expect(kept?.request).toBe("open Vercel usage");
     expect(kept?.reply.length).toBe(2000);
     expect(kept).not.toHaveProperty("actions");
-  });
-});
-
-describe("cache breakpoints", () => {
-  it("puts one cache breakpoint on the end of the history, and counts breakpoints", () => {
-    const messages = cacheAtEnd(toolTurn(1), CACHE);
-    expect(messages.at(-1)).toEqual({ role: "assistant", content: [{ type: "text", text: "- Eva has 1 users.", providerOptions: CACHE }] });
-    expect(cacheBreakpoints({ instructions: { providerOptions: CACHE }, messages })).toBe(2);
-    expect(cacheAtEnd([], CACHE)).toEqual([]);
-    expect(CACHE_BREAKPOINTS_MAX).toBe(4);
   });
 });
 

@@ -18,6 +18,7 @@ import { createMeetingMemoryStore } from "../core/meeting-memory";
 import { searchMcpNotes } from "../core/meeting-search";
 import { createVmemSearch } from "../core/vmem-history";
 import { createBeeHistoryStore } from "./bee-history-store";
+import { createClaudeCode } from "./claude-code";
 import { registerBeeMemoryIpc } from "./bee-memory-ipc";
 import { createBeeMemoryStore } from "./bee-memory-store";
 import { createDebugLog, settingsChange, type DebugLogWriter } from "./debug-log";
@@ -451,6 +452,7 @@ if (clerk.isPrimaryInstance) {
       meeting,
       meetingWindow,
       gatewayApiKey: settings.gatewayApiKey,
+      claudeCode: createClaudeCode(),
       desktop,
       wakeWordEnabled: settings.wakeWord,
       computer: computerRunner
