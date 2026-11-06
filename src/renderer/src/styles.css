@@ -539,8 +539,16 @@ body {
 .island-scroll {
   max-height: calc(100vh - 8px - var(--notch-height) - 20px);
   overflow-y: auto;
+  /* Never sideways: a long address or word wraps instead (island-content). */
+  overflow-x: hidden;
   overscroll-behavior: contain;
   padding: 0 14px 0 18px;
+}
+
+/* Long unbroken text (a URL, a file path, a token) breaks onto the next line rather than widening the island. */
+.island-content {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .island-tips {
