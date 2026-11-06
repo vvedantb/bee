@@ -450,7 +450,7 @@ describe("runDirectCommand: the command model, adaptive thinking and caching", (
 
   it("runs computer use on COMMAND_MODEL with adaptive thinking and the cache markers kept", async () => {
     const model = new MockLanguageModelV4({
-      doGenerate: async () => ({ content: [{ type: "text", text: "Sent the message." }], finishReason: { unified: "stop", raw: undefined }, usage, warnings: [] }),
+      doGenerate: async () => ({ content: [{ type: "text", text: "Opened the chat with Sam." }], finishReason: { unified: "stop", raw: undefined }, usage, warnings: [] }),
     });
     const { gateway, ids } = idGateway(model);
     const computer: ComputerHost = {
@@ -459,13 +459,24 @@ describe("runDirectCommand: the command model, adaptive thinking and caching", (
       askFirst: () => false,
       confirm: async () => true,
     };
-    const result = await runDirectCommand({ command: "send Sam a message in Discord", snippets, gateway, actions: fakeActions().actions, computer });
-    expect(result.tips).toEqual(["Sent the message."]);
+    const result = await runDirectCommand({ command: "open Discord, send Sam a message, then close the tab", snippets, gateway, actions: fakeActions().actions, computer });
+    expect(result.tips).toEqual(["Opened the chat with Sam."]);
     expect(ids).toEqual([COMMAND_MODEL]);
     const call = model.doGenerateCalls[0];
     expect(call?.providerOptions).toMatchObject({ gateway: { order: ["anthropic"] }, ...THINKING });
     expect(call?.maxOutputTokens).toBeGreaterThanOrEqual(12_000);
     expect(JSON.stringify(call?.prompt)).toContain("cacheControl");
+  });
+
+  it("thinks at low effort for a short task on screen (one target, no later step), still on COMMAND_MODEL", async () => {
+    const model = new MockLanguageModelV4({
+      doGenerate: async () => ({ content: [{ type: "text", text: "Opened the chat with Sam." }], finishReason: { unified: "stop", raw: undefined }, usage, warnings: [] }),
+    });
+    const { gateway, ids } = idGateway(model);
+    const computer: ComputerHost = { platform: "windows", run: async () => ({ ok: true, data: {} }), askFirst: () => false, confirm: async () => true };
+    await runDirectCommand({ command: "send Sam a message in Discord", snippets, gateway, actions: fakeActions().actions, computer });
+    expect(ids).toEqual([COMMAND_MODEL]);
+    expect(model.doGenerateCalls[0]?.providerOptions).toMatchObject({ gateway: { order: ["anthropic"] }, anthropic: { thinking: { type: "adaptive" }, effort: "low" } });
   });
 
   it("keeps meeting tips on thinking off, with the smaller output budget", async () => {
@@ -557,13 +568,52 @@ describe("runDirectCommand: Jev routing, the fast pass and Bee's memory", () => 
 
   it("falls back to the word rules when Jev is slow, fails or names an open it cannot resolve", async () => {
     for (const jev of [() => new Promise(() => undefined), () => Promise.reject(new Error("down")), async () => choice("open_app")]) {
-      const { gateway } = gatewayWith({ jev, command: [{ text: "Sent the message." }] });
+      const { gateway } = gatewayWith({ jev, command: [{ text: "Opened the chat with Sam." }] });
       const { computer, commands } = host();
       const started = performance.now();
       const result = await runDirectCommand({ command: "send Sam a message in Discord", snippets, gateway, actions: fakeActions().actions, computer });
-      expect(result.tips).toEqual(["Sent the message."]);
+      expect(result.tips).toEqual(["Opened the chat with Sam."]);
       expect(performance.now() - started).toBeLessThan(2000);
     }
+  });
+
+  it("skips Jev for one clear action on screen: the word rules already decide (no route wait)", async () => {
+    const { gateway, jevCalls } = gatewayWith({ jev: async () => choice("direct_answer"), guide: [{ text: "Clicked Inbox." }] });
+    const result = await runDirectCommand({ command: "click Inbox in Discord", snippets, gateway, actions: fakeActions().actions, computer: host().computer });
+    expect(result.tips).toEqual(["Clicked Inbox."]);
+    expect(jevCalls).toEqual([]);
+    expect(result.timingsMs.route).toBeGreaterThanOrEqual(0);
+  });
+
+  it("loads connectors beside Jev, not after it, and closes them when the loop takes the request", async () => {
+    // Jev answers only once the connectors started loading: run one after the other, Jev would time out and the word rules
+    // would send this request to the loop.
+    let answer: (value: unknown) => void = () => undefined;
+    const jevAnswer = new Promise((resolve) => (answer = resolve));
+    const closed: string[] = [];
+    const loadMcpTools = async () => {
+      answer(choice("direct_answer"));
+      return { tools: {}, close: async () => void closed.push("answer"), errors: [], servers: [] };
+    };
+    const { gateway } = gatewayWith({ jev: () => jevAnswer, stream: [text("- Bee would say hi.\n")] });
+    const { computer, commands } = host();
+    const result = await runDirectCommand({ command: "tell Sam hello means what in French", snippets, gateway, actions: fakeActions().actions, computer, loadMcpTools });
+    expect(result.tips).toEqual(["Bee would say hi."]);
+    expect(commands).toEqual([]);
+    await vi.waitFor(() => expect(closed).toEqual(["answer"]));
+
+    const loop = gatewayWith({ jev: async () => choice("computer_use"), command: [{ text: "Muted the call." }] });
+    const loopClosed: string[] = [];
+    const toLoop = await runDirectCommand({
+      command: "I need the Teams call muted",
+      snippets,
+      gateway: loop.gateway,
+      actions: fakeActions().actions,
+      computer: host().computer,
+      loadMcpTools: async () => ({ tools: {}, close: async () => void loopClosed.push("loop"), errors: [], servers: [] }),
+    });
+    expect(toLoop.tips).toEqual(["Muted the call."]);
+    await vi.waitFor(() => expect(loopClosed).toEqual(["loop"]));
   });
 
   it("never asks Jev for a quick open", async () => {
@@ -598,7 +648,8 @@ describe("runDirectCommand: Jev routing, the fast pass and Bee's memory", () => 
     expect(result.tips).toEqual(["Opened the inbox."]);
     expect(commands).toEqual(["snapshot", "click"]);
     const planned = models[COMMAND_MODEL]?.doGenerateCalls[0];
-    expect(planned?.providerOptions).toMatchObject({ anthropic: { thinking: { type: "adaptive" }, effort: "medium" } });
+    // One target, no later step: the planning model thinks at low effort.
+    expect(planned?.providerOptions).toMatchObject({ anthropic: { thinking: { type: "adaptive" }, effort: "low" } });
     // The planning model sees the fast pass's snapshot and its refs, but never the ESCALATE line.
     const prompt = JSON.stringify(planned?.prompt);
     expect(prompt).toContain("@s1:e3");

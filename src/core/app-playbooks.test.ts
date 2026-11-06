@@ -29,11 +29,30 @@ describe("playbookBlock", () => {
     expect(playbookBlock("click Send", "mac")).toBe("");
   });
 
-  it("keeps every hint short, with one for each OS", () => {
+  it("keeps every hint short, with the right modifier for its OS", () => {
     for (const book of APP_PLAYBOOKS) {
-      expect(book.hints.mac.length, book.app).toBeLessThanOrEqual(200);
-      expect(book.hints.windows.length, book.app).toBeLessThanOrEqual(200);
-      expect(book.hints.mac).not.toMatch(/\bctrl\+/);
+      const hints = Object.entries(book.hints);
+      expect(hints.length, book.app).toBeGreaterThan(0);
+      for (const [os, hint] of hints) expect(hint?.length ?? 0, `${book.app} ${os}`).toBeLessThanOrEqual(200);
+      if (book.hints.mac) expect(book.hints.mac).not.toMatch(/\bctrl\+/);
+      if (book.hints.windows) expect(book.hints.windows).not.toMatch(/\bcmd\+/);
+      if (book.hints.linux) expect(book.hints.linux).not.toMatch(/\bcmd\+/);
     }
+  });
+
+  it("gives Linux hints for Chrome, Firefox, LibreOffice and file managers, with list_apps names", () => {
+    expect(playbookBlock("open Chrome and close the tab", "linux")).toContain("Google Chrome: list_apps names it google-chrome or chromium. ctrl+l");
+    expect(playbookBlock("type a note in LibreOffice Writer", "linux")).toContain("LibreOffice: open_app libreoffice");
+    expect(playbookBlock("rename the report in Thunar", "linux")).toContain("File manager: ctrl+l goes to the location bar");
+    expect(playbookBlock("open a tab in firefox", "linux")).toContain("Firefox: list_apps names it firefox.");
+  });
+
+  it("makes up no Linux way into Teams or Outlook, and no Windows or Mac one for Linux file managers", () => {
+    expect(playbookBlock("message Sam in Teams", "linux")).toBe("");
+    expect(playbookBlock("email Sam from Outlook", "linux")).toBe("");
+    expect(playbookBlock("rename it in Thunar", "mac")).toBe("");
+    expect(playbookBlock("rename it in Thunar", "windows")).toBe("");
+    // An app with no hint here never takes a place from one that has one.
+    expect(playbooksFor("teams outlook slack chrome firefox", "linux").map((book) => book.app)).toEqual(["Slack", "Google Chrome", "Firefox"]);
   });
 });

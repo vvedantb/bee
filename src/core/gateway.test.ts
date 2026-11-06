@@ -71,6 +71,12 @@ describe("commandProviderOptions", () => {
     }
   });
 
+  it("thinks at low effort only when asked (a short computer-use task), never higher than medium", () => {
+    expect(commandProviderOptions("default", { web: false, effort: "low" }).anthropic).toEqual({ thinking: { type: "adaptive" }, effort: "low" });
+    expect(commandProviderOptions("default", { web: false, effort: "medium" }).anthropic).toEqual({ thinking: { type: "adaptive" }, effort: "medium" });
+    expect(commandProviderOptions("default", { web: false }).gateway).toEqual(guideProviderOptions("default", { web: false }).gateway);
+  });
+
   it("leaves the cache marker to the messages, and tips still think nothing", () => {
     expect(commandProviderOptions("default", { web: true }).anthropic).not.toHaveProperty("cacheControl");
     expect(guideProviderOptions("default", { web: true }).anthropic).toEqual({ thinking: { type: "disabled" } });

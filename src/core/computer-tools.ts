@@ -3,12 +3,14 @@ import { z } from "zod";
 import {
   HEADED_FLAG, REF_PATTERN, STDIN_FLAG, identityUnproven, parseApps, parseWindows, type AgentDesktopFailure, type AgentDesktopResult, type ComputerRun, type ComputerUseCommand,
 } from "./agent-desktop-envelope";
+import { isColdStart, listedTries, runningAppsLine, waitForListed } from "./app-discovery";
+import { NOT_SENT_MARK } from "./claim-guard";
 import { awaitAnswer, CONFIRM_TIMEOUT_MS, type ComputerPlatform, type IrreversibleKind, type RunControl } from "./computer-control";
 import {
   EFFECTS, LABEL_MAX, WINDOW_ROLES, confirmDetail, confirmQuestion, focusAfterClick, insideOf, irreversibleKind, isNavField, isTextEntry, keepsFocus, keysLabel, needsConfirm, shellElement,
   shortName, type Effect, type Element, type GateAction, type TreeContext,
 } from "./computer-gate";
-import { APP_NAME_MAX, WINDOW_TITLE_MAX, appKey, isBlockedApp, type DesktopActionResult, type DesktopActions } from "./desktop-actions";
+import { APP_NAME_MAX, WINDOW_TITLE_MAX, appKey, isBlockedApp, isSlowStart, listedAppName, type DesktopActionResult, type DesktopActions } from "./desktop-actions";
 import { debugLog, errorData, msSince } from "./debug-log";
 import type { LunaToolActivity } from "./luna";
 
@@ -41,6 +43,15 @@ export type ComputerToolDeps = {
   onStep?: (label: string) => void;
   onActivity?: (activity: LunaToolActivity) => void;
   confirmTimeoutMs?: number;
+  /**
+   * An action finished that the confirm gate (core/computer-gate.ts, which reads the tree, not just the AI's effect) counts as a
+   * send, delete, purchase or form submit: the proof the run's last line may claim it by (core/claim-guard.ts).
+   */
+  onEffect?: (kind: IrreversibleKind) => void;
+  /** The clock, for how long ago this run opened an app (core/app-discovery.ts). Tests pass a fake. */
+  now?: () => number;
+  /** The pause between looks for a starting app. Tests pass one that returns at once. */
+  sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
 };
 
 /** The step line while a Confirm waits for the user. */
@@ -67,8 +78,11 @@ const SHELL_MESSAGE = "Error: Bee does not type into terminals or consoles.";
 
 // Overlays snapshot and find may read instead of the window, as each OS has them (agent-desktop status supported_surfaces).
 // Since agent-desktop 1.1 a kind the OS does not have is INVALID_ARGS, so the AI is never offered one. Windows reads an open
-// menu as menu and a Chromium modal (Teams, Edge) as sheet, and has no menubar.
-const SURFACES = { mac: ["menu", "menubar", "sheet", "popover", "alert"], windows: ["menu", "sheet"] } as const satisfies Record<ComputerPlatform, readonly string[]>;
+// menu as menu and a Chromium modal (Teams, Edge) as sheet, and has no menubar. Linux (AT-SPI) reads menu, sheet and alert.
+const SURFACES = { mac: ["menu", "menubar", "sheet", "popover", "alert"], windows: ["menu", "sheet"], linux: ["menu", "sheet", "alert"] } as const satisfies Record<
+  ComputerPlatform,
+  readonly string[]
+>;
 // Text in a snapshot line, and the whole snapshot, so a dense app cannot flood the context.
 const NODE_TEXT = 80;
 // What the confirm gate keeps about where each ref sits: containers above it, neighbours each side, a description or value.
@@ -107,6 +121,8 @@ const LOOK_AGAIN = new Set(["INTERNAL", "TIMEOUT", "APP_UNRESPONSIVE"]);
 const LOOK_AGAIN_KIND = /renderer|activation|incomplete|settle/;
 // get and is take no budget of their own: Bee's kill timer only.
 const READ_MS = 15_000;
+// The one read Bee makes itself after a send, of the message box it was typed in: short, as the send is already done.
+const SENT_CHECK_MS = 3000;
 const ACT_MS = 12_000;
 const WAIT_MAX_MS = 15_000;
 
@@ -116,6 +132,26 @@ const WAIT_MAX_MS = 15_000;
  */
 export const CANNOT_CONTROL = "stop and say Bee cannot control this app";
 const KEEPS_FAILING = `If it keeps failing, ${CANNOT_CONTROL}.`;
+// A document app's page (LibreOffice Writer's canvas) often has no editable field in the tree, though its window takes keys.
+const KEYBOARD_NOTE = "To type into a document whose page shows no editable field (LibreOffice Writer), call type_text with app and no ref: Bee types into that window with the keyboard.";
+
+/** The most characters the keyboard fallback types: one key press each. */
+export const KEYBOARD_TYPE_MAX = 200;
+// Characters the keyboard fallback can press, by agent-desktop key name. Letters, digits, space and a few marks with the same key
+// on every common layout; anything else is refused before a key is pressed.
+const KEY_NAMES: Record<string, string> = { " ": "space", ",": "comma", ".": "period", "/": "slash", "-": "minus" };
+
+/** The key presses that type this text, one per character, or null when a character has no key here (a line break, "?", "é"). */
+export function keyPresses(text: string): string[] | null {
+  const keys: string[] = [];
+  for (const char of text) {
+    if (/^[a-z0-9]$/.test(char)) keys.push(char);
+    else if (/^[A-Z]$/.test(char)) keys.push(`shift+${char.toLowerCase()}`);
+    else if (KEY_NAMES[char]) keys.push(KEY_NAMES[char]);
+    else return null;
+  }
+  return keys;
+}
 
 const HINTS: Record<string, string> = {
   STALE_REF: "the screen changed. Take a new snapshot and use its refs.",
@@ -516,6 +552,19 @@ const actSchema = z.discriminatedUnion("do", [
 ]);
 type ActInput = z.infer<typeof actSchema>;
 
+// What a send, delete, purchase or form submit that came back done lets the AI say, so its last line neither undersells it
+// ("could not confirm it was sent") nor costs another turn to look again just to check.
+const WENT_THROUGH: Record<IrreversibleKind, string> = {
+  send: "This send went through: say it was sent.",
+  delete: "This delete went through: say it was deleted.",
+  buy: "This purchase went through: say the order was placed.",
+  submit: "This form went through: say it was submitted.",
+};
+const SENT_LEFT = "Checked: the message box is empty now.";
+// After a key press, what changed is not in the result: the AI looks. Not after a send that went through (WENT_THROUGH says it).
+const LOOK_HINT = "Check the result with a snapshot.";
+const SENT_STILL = `Checked: the message box still holds the text, ${NOT_SENT_MARK}. Look before you say it was.`;
+
 /** An action's output that says it was done: "Done…", after any note on which app name Bee used. */
 export function actionDone(output: string): boolean {
   return /^(?:Using [^\n]{1,120}? for [^\n]{1,120}?\. )?Done\b/.test(output);
@@ -579,9 +628,15 @@ const appWords = (name: string) =>
 /**
  * The running app (as list-apps names it) the AI means: the same name, the same but for case, the same words (Chrome is
  * chrome.exe, Google Chrome is chrome.exe), or the only one whose words contain them or sit in them (Teams is ms-teams.exe).
- * Null when none, or several, match: agent-desktop wants the exact process identity on Windows.
+ * Then, for an app Bee knows, a name it is listed under (google-chrome for Chrome) or its suite's process (soffice for
+ * LibreOffice Writer: core/desktop-actions.ts listedAppName). Null when none, or several, match: agent-desktop wants the exact
+ * process identity on Windows.
  */
 export function matchApp(name: string, running: readonly string[]): string | null {
+  return matchAppWords(name, running) ?? listedAppName(name, running);
+}
+
+function matchAppWords(name: string, running: readonly string[]): string | null {
   const apps = [...new Set(running)];
   if (apps.includes(name)) return name;
   const only = (list: string[]) => (list.length === 1 ? (list[0] ?? null) : null);
@@ -606,6 +661,11 @@ const UNREADABLE = `Error: Bee could not read that snapshot. Take a skeleton sna
 // What a whole-window read says when Bee's second read did not fix it. Bee has already waited for the app by then, so the AI
 // tries the tree another way, then stops: there is no other way in.
 const THIN_NOTE = `Few elements came back, though Bee gave the app time to load. Try find by role (textfield, button) or name, or a skeleton snapshot then root. If those show nothing usable either, ${CANNOT_CONTROL}.`;
+// A document app, whose page may take keys with no editable field in the tree: LibreOffice runs as soffice.
+const DOCUMENT_APP = /\b(?:soffice|libreoffice|writer)\b/i;
+/** The thin-read note, with the keyboard fallback for a document app: a page with no field is not an app Bee cannot control. */
+const thinNote = (app: string | null) =>
+  app && DOCUMENT_APP.test(app) ? THIN_NOTE.replace(`If those show nothing usable either,`, `${KEYBOARD_NOTE} If those show nothing usable either,`) : THIN_NOTE;
 const SHALLOW_NOTE = `The controls sit deeper than this read: snapshot one region marked inside with root, or use find by role or name. If those show no usable controls, ${CANNOT_CONTROL}.`;
 const UNPROVEN_NOTE = `Bee could not read the whole window in time, so some refs may be refused (AMBIGUOUS_TARGET). If one is, snapshot again or use find. If they keep being refused, ${CANNOT_CONTROL}.`;
 
@@ -619,6 +679,8 @@ export function computerTools(deps: ComputerToolDeps) {
   // Window ids this run has shown the AI (never one of an app Bee does not use).
   const windows = new Set<string>();
   let lastField: Element | null = null;
+  // Text Bee wrote into each field this run (by ref), so a send can be checked against the box it was typed in. Never logged.
+  const written = new Map<string, string>();
   // The app the run last read or acted in, for the Confirm prompt's detail.
   let currentApp: string | null = null;
   const surfaceSchema = z.enum(SURFACES[deps.platform]);
@@ -626,6 +688,9 @@ export function computerTools(deps: ComputerToolDeps) {
   // Running apps as list-apps last named them, and the names the AI gave that matched one (Teams: ms-teams.exe).
   let running: string[] | null = null;
   const matched = new Map<string, string>();
+  // When this run opened each app (by appKey), so a read that misses it moments later waits for it rather than fail.
+  const opened = new Map<string, number>();
+  const now = deps.now ?? Date.now;
   // Roles this run's reads showed, for find; and where each snapshot id read (app, window), to read it again for a refused ref.
   const roles = new Set<string>();
   const scopes = new Map<string, Scope>();
@@ -696,8 +761,8 @@ export function computerTools(deps: ComputerToolDeps) {
   };
 
   // On a Mac each ref carries its element's own address, so a snapshot that could not prove its refs still acts. On Windows
-  // its refs are refused (identity_not_unique) until a read with more time proves them.
-  const unproven = (data: unknown) => deps.platform === "windows" && identityUnproven(data);
+  // and Linux (no element address there either) its refs are refused (identity_not_unique) until a read with more time proves them.
+  const unproven = (data: unknown) => deps.platform !== "mac" && identityUnproven(data);
 
   /** Why a whole-window snapshot should be read once more: few refs, cut off by depth (not a skeleton), or refs not proven. */
   const settleWindow = (skeleton: boolean) => (data: unknown): string | null =>
@@ -710,17 +775,38 @@ export function computerTools(deps: ComputerToolDeps) {
   };
 
   /**
+   * After a send came back done: the message box it was typed in, read once. left: it no longer holds the text; still: it does,
+   * so the send may not have happened; null: Bee cannot tell (no box it wrote in this run, or the read failed). field: the box,
+   * as the gate saw it before the action ran.
+   */
+  const checkSent = async (field: Element | null | undefined): Promise<"left" | "still" | null> => {
+    if (!field || !isTextEntry(field) || isNavField(field) || control.reason()) return null;
+    const ref = refOf(field);
+    const text = ref ? (written.get(ref) ?? "").trim() : "";
+    if (!ref || !text) return null;
+    const read = await exec("get", [ref, "--property=value"], SENT_CHECK_MS);
+    const value = read.ok && isRecord(read.data) && typeof read.data.value === "string" ? read.data.value : null;
+    if (value === null) return null;
+    return value.includes(text) ? "still" : "left";
+  };
+
+  /**
    * One action inside a step: shows its line, asks first when the gate says so, then does the work. Never throws. A decline
-   * stops the run.
+   * stops the run. A send, delete, purchase or submit that came back done is proof for the last line (onEffect), and its output
+   * says what the AI may claim. A send is checked once against the message box it was typed in: when the box still holds the
+   * text, it is no proof, and the output says to look first.
    */
   const runAction = async (name: string, label: string, work: () => Promise<string>, gate?: () => GateAction): Promise<string> => {
     const started = performance.now();
     debugLog.info("computer", "step", { n: control.steps(), tool: name, label, app: currentApp });
     deps.onStep?.(clip(label, 60));
     deps.onActivity?.({ tool: name, phase: "start" });
+    // What the gate counts this action as, read before it runs (a key press can move focus): proof for the last line once it is done.
+    const before = gate ? gate() : null;
+    const committed = before ? irreversibleKind(before) : null;
     try {
-      if (gate && deps.askFirst()) {
-        const action = gate();
+      if (gate && before && deps.askFirst()) {
+        const action = before;
         const kind = needsConfirm(action, deps.askFirst());
         if (kind) {
           deps.onStep?.(CONFIRM_LABEL);
@@ -739,7 +825,13 @@ export function computerTools(deps: ComputerToolDeps) {
       if (control.reason()) return STOPPED;
       const output = await work();
       debugLog.debug("computer", "step-done", { n: control.steps(), tool: name, ms: msSince(started), output });
-      return output;
+      if (!committed || !actionDone(output)) return output;
+      const check = committed === "send" ? await checkSent(before?.command === "type" ? before.target : before?.lastField) : null;
+      if (check) debugLog.info("computer", "send-check", { tool: name, check });
+      if (check === "still") return `${output} ${SENT_STILL}`;
+      deps.onEffect?.(committed);
+      // No "check with a snapshot" hint after a commit that went through: that look would cost a turn and show nothing new.
+      return `${output.replace(` ${LOOK_HINT}`, "")} ${check === "left" ? `${SENT_LEFT} ` : ""}${WENT_THROUGH[committed]}`;
     } catch (error) {
       debugLog.warn("computer", "step-failed", { n: control.steps(), tool: name, ms: msSince(started), reason: control.reason(), error: error instanceof Error ? error.message : String(error) });
       return control.reason() ? STOPPED : "Error: that step failed. Look again before trying something else.";
@@ -795,11 +887,22 @@ export function computerTools(deps: ComputerToolDeps) {
     let app = known && !offLimitsApp(known) ? known : name;
     let result = await work(app);
     if (!result.ok && result.code === "APP_NOT_FOUND" && !control.reason()) {
-      const listed = await exec("list-apps", [], READ_MS);
-      if (listed.ok) running = parseApps(listed.data).map((item) => item.name);
-      const found = running ? matchApp(name, running) : null;
-      if (found && found !== app && !offLimitsApp(found) && !control.reason()) {
-        debugLog.info("computer", "app-matched", { asked: name, app: found });
+      const listedMatch = async () => {
+        const listed = await exec("list-apps", [], READ_MS);
+        if (listed.ok) running = parseApps(listed.data).map((item) => item.name);
+        return running ? matchApp(name, running) : null;
+      };
+      // Warm: one look. Cold (this run opened it moments ago): a few looks with a pause, under a cap, before it counts as missing;
+      // a few more for an app that is slow to start (LibreOffice). The name read may differ from the one opened ("Chrome"
+      // opened, "google-chrome" read; "LibreOffice Writer" opened, soffice read): match it like list-apps names.
+      const openedAs = opened.has(appKey(name)) ? appKey(name) : matchAppWords(appKey(name), [...opened.keys()]);
+      const cold = isColdStart(openedAs === null ? undefined : opened.get(openedAs), now());
+      if (cold) deps.onStep?.(`Waiting for ${shortName(name, 30)} to start…`);
+      const looks = { list: listedMatch, tries: listedTries(isSlowStart(name)), signal: control.signal, ...(deps.sleep ? { sleep: deps.sleep } : {}) };
+      const { found, tries } = cold ? await waitForListed(looks) : { found: await listedMatch(), tries: 1 };
+      if (cold) debugLog.info("computer", "cold-app-wait", { asked: name, found, tries });
+      if (found && (found !== app || cold) && !offLimitsApp(found) && !control.reason()) {
+        if (found !== app) debugLog.info("computer", "app-matched", { asked: name, app: found });
         app = found;
         result = await work(app);
       }
@@ -882,6 +985,7 @@ export function computerTools(deps: ComputerToolDeps) {
       }
     }
     if (result.ok && ["type", "set-value", "clear", "focus"].includes(command)) lastField = refs.get(ref) ?? lastField;
+    if (result.ok && (command === "type" || command === "set-value" || command === "clear")) written.set(ref, command === "clear" ? "" : (stdin ?? ""));
     if (result.ok && command === "click") lastField = focusAfterClick(lastField, refs.get(ref));
     return `${done(result)}${note}`;
   };
@@ -902,6 +1006,48 @@ export function computerTools(deps: ComputerToolDeps) {
       badRef(ref) ??
       onRef("type", ref, [...(physical ? [HEADED_FLAG] : []), STDIN_FLAG], ACT_MS + Math.min(40_000, text.length * 40), cleanText(text), (to) => gateFor("type", to, { effect, text })())(),
     gate: gateFor("type", ref, { effect, text }),
+  });
+  /**
+   * type_text with an app and no ref: the keyboard fallback for a focused document whose page has no editable field in the tree
+   * (LibreOffice Writer). agent-desktop's type needs a ref, so Bee brings the window forward, then presses one key per character
+   * with physical delivery in that app (press --headed --app focuses its window first). Every character is checked before any key
+   * is pressed. Stops at the first key that fails and says how much was typed; only a whole run comes back Done.
+   */
+  const keyboardTypeAction = ({ app, window_id, text, effect }: { app: string; window_id?: string | undefined; text: string; effect: Effect }): Action => ({
+    name: "type_text",
+    label: `Typing in ${shortName(app, 30)}…`,
+    work: async () => {
+      const invalid = badApp(app) ?? badWindow(window_id);
+      if (invalid) return invalid;
+      if (offLimitsApp(app)) return OFF_LIMITS_MESSAGE;
+      if (shellElement(lastField)) return SHELL_MESSAGE;
+      if ([...text].length > KEYBOARD_TYPE_MAX) return `Error: the keyboard types at most ${KEYBOARD_TYPE_MAX} characters at a time. Nothing was typed.`;
+      const keys = keyPresses(text);
+      if (!keys) return "Error: the keyboard can type only letters, digits, spaces, commas, full stops, slashes and hyphens. Press other keys, such as return, with press_key. Nothing was typed.";
+      const focused = await deps.desktop.focusWindow({ app }, control.signal);
+      // On Wayland Bee cannot bring a window forward; the headed press still asks agent-desktop to focus it, and refuses if it cannot.
+      const note = focused.ok ? "" : `Bee could not bring ${shortName(app, 30)} to the front first (${focused.message}). `;
+      const press = (name: string | undefined, key: string) => exec("press", [key, ...scope({ app: name, window_id }), HEADED_FLAG], ACT_MS);
+      const first = await withApp(app, (name) => press(name, keys[0]!));
+      currentApp = first.app ?? currentApp;
+      lastField = null;
+      let typed = first.result.ok ? 1 : 0;
+      let failed = first.result.ok ? null : first.result;
+      for (const key of keys.slice(1)) {
+        if (failed || control.reason()) break;
+        const result = await press(first.app, key);
+        if (result.ok) typed += 1;
+        else failed = result;
+      }
+      debugLog.info("computer", "keyboard-type", { chars: keys.length, typed, ok: typed === keys.length });
+      if (typed === keys.length) {
+        // "Done" first (after any app-name note), so actionDone and the claim guard read it as done.
+        return `${first.note}Done: typed ${keys.length} characters into ${shortName(first.app ?? app, 30)} with the keyboard. ${note}No field shows the text yet: check with find by text, or a snapshot.`;
+      }
+      const why = failed ? errorLine(failed) : STOPPED;
+      return `${first.note}${note}${why} Bee typed ${typed} of ${keys.length} characters with the keyboard before it stopped. Look before you type again.`;
+    },
+    gate: () => ({ command: "type", target: null, lastField, effect, text }),
   });
   const setValueAction = ({ ref, value, effect }: { ref: string; value: string; effect: Effect }): Action =>
     value === ""
@@ -957,7 +1103,7 @@ export function computerTools(deps: ComputerToolDeps) {
         else if (!control.reason()) result = await press(app);
       }
       if (!keepsFocus(keys)) lastField = null;
-      return `${note}${result.ok ? `${formatDone(result.data)} Check the result with a snapshot.` : errorLine(result)}`;
+      return `${note}${result.ok ? `${formatDone(result.data)} ${LOOK_HINT}` : errorLine(result)}`;
     },
     gate: () => ({
       command: "press",
@@ -1068,7 +1214,7 @@ export function computerTools(deps: ComputerToolDeps) {
           if (!shown.ok) return shown.text;
           const notes = whole
             ? [
-                thinTree(result.data) ? THIN_NOTE : !skeleton && shallowTree(result.data) ? SHALLOW_NOTE : null,
+                thinTree(result.data) ? thinNote(currentApp) : !skeleton && shallowTree(result.data) ? SHALLOW_NOTE : null,
                 unproven(result.data) ? UNPROVEN_NOTE : null,
               ].filter((line) => line !== null)
             : [];
@@ -1178,9 +1324,22 @@ export function computerTools(deps: ComputerToolDeps) {
     }),
 
     type_text: tool({
-      description: "Type text into the text field with this ref, as keystrokes. A line break presses Return, which sends in most chat apps.",
-      inputSchema: z.object({ ref: refSchema, text: z.string().min(1).max(4000), effect: effectSchema, physical: physicalSchema }),
-      execute: (input) => run(typeAction(input)),
+      description: `Type text into the text field with this ref, as keystrokes. A line break presses Return, which sends in most chat apps. For a document whose page shows no editable field (LibreOffice Writer), give app and no ref: Bee brings that window forward and types with the keyboard (letters, digits, spaces, commas, full stops, slashes and hyphens; at most ${KEYBOARD_TYPE_MAX} characters).`,
+      inputSchema: z
+        .object({
+          ref: refSchema.optional().describe("The text field to type in. Leave it out only for the keyboard fallback, with app."),
+          app: appSchema.optional().describe("With no ref: the app whose window to type into with the keyboard."),
+          window_id: windowSchema.optional(),
+          text: z.string().min(1).max(4000),
+          effect: effectSchema,
+          physical: physicalSchema,
+        })
+        .refine((input) => input.ref !== undefined || input.app !== undefined, { message: "Give ref, or app for the keyboard fallback." }),
+      execute: ({ ref, app, window_id, text, effect, physical }) => {
+        if (ref) return run(typeAction({ ref, text, effect, physical }));
+        if (app) return run(keyboardTypeAction({ app, window_id, text, effect }));
+        return Promise.resolve("Error: give ref (a text field), or app to type into its window with the keyboard.");
+      },
     }),
 
     set_value: tool({
@@ -1248,9 +1407,27 @@ export function computerTools(deps: ComputerToolDeps) {
       execute: ({ name }) =>
         step("open_app", `Opening ${shortName(name, 30)}…`, async () => {
           if (offLimitsApp(name)) return OFF_LIMITS_MESSAGE;
-          const result = await deps.desktop.openApp(name);
-          if (result.ok) [currentApp, lastField] = [name, null];
-          return desktopLine(result);
+          const result = await deps.desktop.openApp(name, control.signal);
+          if (result.ok) {
+            [currentApp, lastField] = [name, null];
+            opened.set(appKey(name), now());
+            return desktopLine(result);
+          }
+          // Not opened by that name. It may run under another one (google-chrome, ms-teams.exe): list once and use the exact
+          // listed name, rather than leave the AI to guess, retry and time out.
+          if (control.reason()) return desktopLine(result);
+          const listed = await exec("list-apps", [], READ_MS);
+          if (!listed.ok) return `${desktopLine(result)} ${errorLine(listed, true)}`;
+          running = parseApps(listed.data).map((item) => item.name);
+          const found = matchApp(cleanApp(name) ?? name, running);
+          if (found && !offLimitsApp(found)) {
+            debugLog.info("computer", "open-matched-running", { asked: name, app: found });
+            matched.set(cleanApp(name) ?? name, found);
+            [currentApp, lastField] = [found, null];
+            opened.set(appKey(name), now());
+            return `Done: ${found} is already running. Use the app name ${found}; bring it forward with focus_window if needed.`;
+          }
+          return `${desktopLine(result)} ${runningAppsLine(running.filter((app) => !offLimitsApp(app)))} If one of these is the app, use that exact name. Never say the app was opened.`;
         }),
     }),
 
@@ -1260,7 +1437,7 @@ export function computerTools(deps: ComputerToolDeps) {
       execute: ({ app, title }) =>
         step("focus_window", `Switching to ${shortName(app, 30)}…`, async () => {
           if (offLimitsApp(app)) return OFF_LIMITS_MESSAGE;
-          const result = await deps.desktop.focusWindow({ app, ...(title ? { title } : {}) });
+          const result = await deps.desktop.focusWindow({ app, ...(title ? { title } : {}) }, control.signal);
           if (result.ok) [currentApp, lastField] = [app, null];
           return desktopLine(result);
         }),

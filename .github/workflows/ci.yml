@@ -39,6 +39,52 @@ jobs:
           $version = & $helper --version
           if ($LASTEXITCODE -ne 0 -or "$version" -ne "teams-audio-helper protocol=1") { throw "Packaged Teams audio helper --version failed: $version" }
 
+  # Linux: typecheck and unit tests, then the unpacked app (unsigned). The smoke run starts the packaged app under Xvfb with no
+  # D-Bus session, so no AT-SPI accessibility bus, and a throwaway profile; it must load every module and exit cleanly. No Teams,
+  # no Gateway calls.
+  linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npx electron-vite build
+      - name: Package Linux (unpacked, unsigned)
+        run: npx electron-builder --linux dir --x64 --publish never
+      - name: Check packaged agent-desktop
+        run: |
+          helper=release/linux-unpacked/resources/agent-desktop/agent-desktop
+          test -x "$helper" || { echo "agent-desktop not packaged: $helper"; exit 1; }
+          test -f release/linux-unpacked/resources/agent-desktop/LICENSE || { echo "agent-desktop LICENSE not packaged"; exit 1; }
+          cmp "$helper" node_modules/agent-desktop/bin/agent-desktop-linux-x64 || { echo "Packaged agent-desktop differs from the npm binary"; exit 1; }
+      - name: Install Xvfb
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends xvfb
+      - name: Smoke test packaged app (no accessibility bus)
+        run: |
+          profile="$(mktemp -d)"
+          # --no-sandbox: the runner cannot make chrome-sandbox setuid root. The app exits at BEE_SMOKE_EXIT before any window.
+          status=0
+          env -u DBUS_SESSION_BUS_ADDRESS ELECTRON_ENABLE_LOGGING=1 BEE_SMOKE_EXIT=1 \
+            timeout 60 xvfb-run -a release/linux-unpacked/bee --no-sandbox --user-data-dir="$profile" > smoke.log 2>&1 || status=$?
+          cat smoke.log
+          if [ "$status" -ne 0 ]; then echo "Smoke run exited with $status"; exit 1; fi
+          if grep -q "Cannot find module" smoke.log; then echo "Missing module"; exit 1; fi
+          grep -q BEE_SMOKE_OK smoke.log
+          # The profile went to the folder given.
+          test -n "$(ls -A "$profile")" || { echo "Nothing written to the test profile"; exit 1; }
+      # Information only: what the packaged agent-desktop reports with no bus (Bee expects accessibility denied and fails soft).
+      - name: Probe agent-desktop without a bus
+        continue-on-error: true
+        run: |
+          state="$(mktemp -d)"
+          env -u DBUS_SESSION_BUS_ADDRESS AGENT_DESKTOP_HOME="$state" timeout 20 release/linux-unpacked/resources/agent-desktop/agent-desktop status || true
+
   macos:
     runs-on: macos-latest
     steps:

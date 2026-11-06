@@ -2,15 +2,17 @@ import type { ComputerPlatform } from "./computer-control";
 
 // Short per-app hints for computer use: the quickest way in for the apps people ask Bee to drive most. Only the apps a request
 // names (or a follow-up's earlier turns name) go to the AI, so the prompt stays small. Keys are written for each OS; press_key takes
-// them as written. Hints, not rules: when the tree shows another way, the AI may use it. Pure: no Electron, no fs.
+// them as written. Hints, not rules: when the tree shows another way, the AI may use it. An app has a hint only on the OSes where
+// the way in is known: Linux has none for Teams or Outlook (no desktop app Bee has measured there), so none is made up.
+// Pure: no Electron, no fs.
 
 export type AppPlaybook = {
   /** The app as the AI should name it in its tools. */
   app: string;
   /** Words in a request that mean this app. Matched as whole words, any case. */
   names: readonly string[];
-  /** One or two short lines per OS. */
-  hints: Record<ComputerPlatform, string>;
+  /** One or two short lines per OS. An OS left out gets no hint for this app. */
+  hints: Partial<Record<ComputerPlatform, string>>;
 };
 
 export const APP_PLAYBOOKS: readonly AppPlaybook[] = [
@@ -28,6 +30,7 @@ export const APP_PLAYBOOKS: readonly AppPlaybook[] = [
     hints: {
       windows: "ctrl+k opens Jump to: press it, set_value the channel or person, then press return to open it.",
       mac: "cmd+k opens Jump to: press it, set_value the channel or person, then press return to open it.",
+      linux: "ctrl+k opens Jump to: press it, set_value the channel or person, then press return to open it. list_apps names it slack.",
     },
   },
   {
@@ -36,6 +39,7 @@ export const APP_PLAYBOOKS: readonly AppPlaybook[] = [
     hints: {
       windows: "ctrl+k opens the quick switcher: press it, set_value the server, channel or friend, then press return.",
       mac: "cmd+k opens the quick switcher: press it, set_value the server, channel or friend, then press return.",
+      linux: "ctrl+k opens the quick switcher: press it, set_value the server, channel or friend, then press return.",
     },
   },
   {
@@ -48,10 +52,12 @@ export const APP_PLAYBOOKS: readonly AppPlaybook[] = [
   },
   {
     app: "Google Chrome",
-    names: ["chrome", "google chrome"],
+    names: ["chrome", "google chrome", "chromium"],
     hints: {
       windows: "ctrl+l selects the address bar, ctrl+t opens a new tab, ctrl+w closes the current tab. To open a page, open_url is faster.",
       mac: "cmd+l selects the address bar, cmd+t opens a new tab, cmd+w closes the current tab. To open a page, open_url is faster.",
+      linux:
+        "list_apps names it google-chrome or chromium. ctrl+l selects the address bar, ctrl+t opens a new tab, ctrl+w closes the tab. A page shows controls only with accessibility on.",
     },
   },
   {
@@ -62,6 +68,32 @@ export const APP_PLAYBOOKS: readonly AppPlaybook[] = [
       mac: "cmd+l selects the address bar, cmd+t opens a new tab, cmd+w closes the current tab. To open a page, open_url is faster.",
     },
   },
+  {
+    app: "Firefox",
+    names: ["firefox", "mozilla firefox"],
+    hints: {
+      windows: "ctrl+l selects the address bar, ctrl+t opens a new tab, ctrl+w closes the current tab. To open a page, open_url is faster.",
+      mac: "cmd+l selects the address bar, cmd+t opens a new tab, cmd+w closes the current tab. To open a page, open_url is faster.",
+      linux: "list_apps names it firefox. ctrl+l selects the address bar, ctrl+t opens a new tab, ctrl+w closes the tab. To open a page, open_url is faster.",
+    },
+  },
+  {
+    app: "LibreOffice",
+    names: ["libreoffice", "libre office", "libreoffice writer", "libreoffice calc"],
+    hints: {
+      windows: "ctrl+n starts a new document. Fill the body or a cell with set_value where it takes it, else type_text. Saving changes nothing outside the file.",
+      mac: "cmd+n starts a new document. Fill the body or a cell with set_value where it takes it, else type_text. Saving changes nothing outside the file.",
+      linux:
+        "open_app libreoffice (or libreoffice-writer, libreoffice-calc). ctrl+n starts a new document. Fill the body or a cell with set_value where it takes it, else type_text.",
+    },
+  },
+  {
+    app: "File manager",
+    names: ["thunar", "nautilus", "file manager"],
+    hints: {
+      linux: "ctrl+l goes to the location bar: set_value a folder path, then press return. F2 renames the selected item. Delete moves it to the bin: that is a delete.",
+    },
+  },
 ];
 
 // The most named in one request: a long request naming many apps still gets a short block.
@@ -70,17 +102,20 @@ const PLAYBOOKS_MAX = 3;
 const escape = (word: string) => word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const MATCHERS = APP_PLAYBOOKS.map((book) => ({ book, pattern: new RegExp(`\\b(?:${book.names.map(escape).join("|")})\\b`, "i") }));
 
-/** The playbooks for the apps a text names, in the order of APP_PLAYBOOKS, at most PLAYBOOKS_MAX. */
-export function playbooksFor(text: string): AppPlaybook[] {
+/**
+ * The playbooks for the apps a text names, in the order of APP_PLAYBOOKS, at most PLAYBOOKS_MAX. With a platform, only those
+ * with a hint for it.
+ */
+export function playbooksFor(text: string, platform?: ComputerPlatform): AppPlaybook[] {
   const clean = text.replace(/\s+/g, " ");
-  return MATCHERS.filter(({ pattern }) => pattern.test(clean))
+  return MATCHERS.filter(({ book, pattern }) => (platform === undefined || book.hints[platform] !== undefined) && pattern.test(clean))
     .map(({ book }) => book)
     .slice(0, PLAYBOOKS_MAX);
 }
 
-/** The hints block for the prompt, for the apps the text names. "" when it names none. */
+/** The hints block for the prompt, for the apps the text names that have a hint on this OS. "" when there are none. */
 export function playbookBlock(text: string, platform: ComputerPlatform): string {
-  const books = playbooksFor(text);
+  const books = playbooksFor(text, platform);
   if (books.length === 0) return "";
-  return ["Quick ways in for the apps in this request (hints; when the screen shows otherwise, follow the screen):", ...books.map((book) => `- ${book.app}: ${book.hints[platform]}`)].join("\n");
+  return ["Quick ways in for the apps in this request (hints; when the screen shows otherwise, follow the screen):", ...books.map((book) => `- ${book.app}: ${book.hints[platform] ?? ""}`)].join("\n");
 }

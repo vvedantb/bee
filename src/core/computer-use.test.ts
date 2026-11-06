@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentDesktopResult, ComputerRun } from "./agent-desktop-envelope";
 import { createRunControl, type RunControl } from "./computer-control";
 import { CANNOT_CONTROL, computerTools } from "./computer-tools";
-import { COMPUTER_SYSTEM, FAST_MAX_TURNS, computerAccess, computerSkills, endedWhere, finalLine, runComputerUse, simpleComputerTask, trimSkill, wantsComputerUse } from "./computer-use";
+import { COMPUTER_SYSTEM, FAST_MAX_TURNS, computerAccess, computerSkills, endedWhere, finalLine, runComputerUse, shortComputerTask, simpleComputerTask, trimSkill, wantsComputerUse } from "./computer-use";
 import type { DesktopActions } from "./desktop-actions";
 
 // The computer-use loop with a mock model and a fake agent-desktop: no network, no OS. Each model call is one turn.
@@ -85,7 +85,8 @@ describe("runComputerUse", () => {
       ],
     });
     expect(await result).toMatchObject({ line: "Sent the message to Sam.", stopped: false, steps: 5, error: false });
-    expect(commands).toEqual(["snapshot", "set-value", "click", "snapshot"]);
+    // After the send, Bee reads the message box it typed in once (get), inside the same step.
+    expect(commands).toEqual(["snapshot", "set-value", "click", "get", "snapshot"]);
   });
 
   it("stops at a step limit when a test sets one", async () => {
@@ -240,7 +241,9 @@ describe("runComputerUse: snapshots and refs only", () => {
     const tools = computerTools({ run, desktop, control, platform: "windows", askFirst: () => false, confirm: async () => true });
     const result = await runComputerUse({ model, command: "send Sam running late in Teams", tools, control, platform: "windows", maxSteps: 30 });
     expect(result).toMatchObject({ line: "Sent the message in Teams.", stopped: false, steps: 4, error: false, endedWhere: "Microsoft Teams, Chat" });
-    expect(commands.map(([command]) => command)).toEqual(["find", "set-value", "find", "click"]);
+    expect(commands.map(([command]) => command)).toEqual(["find", "set-value", "find", "click", "get"]);
+    // The check after the send reads the box Bee typed in, by its ref: never the text.
+    expect(commands[4]).toEqual(["get", "@s5:e1", "--property=value"]);
     // The text goes on stdin (--stdin), never in argv.
     expect(commands[1]).toEqual(["set-value", "@s5:e1", "--stdin"]);
     expect(commands.flat().join(" ")).not.toContain("Running late");
@@ -468,6 +471,15 @@ describe("simpleComputerTask", () => {
     }
   });
 
+  it("reads 'message box' and 'email field' as places, so typing there takes the fast model (Linux e2e: type took about 30 s)", () => {
+    for (const command of ["type hi in the message box in Chrome", "type hi in the fixture message box", "type sam@example.com in the email field"]) {
+      expect(simpleComputerTask(command), command).toBe(true);
+    }
+    for (const command of ["type a message to Sam", "message Sam", "type an email to Sam", "send hi from the message box"]) {
+      expect(simpleComputerTask(command), command).toBe(false);
+    }
+  });
+
   it("leaves sends, deletes, buys, two steps, long requests and questions to the planning model", () => {
     for (const command of [
       "click Send",
@@ -480,6 +492,26 @@ describe("simpleComputerTask", () => {
       "open Teams",
     ]) {
       expect(simpleComputerTask(command), command).toBe(false);
+    }
+  });
+});
+
+describe("shortComputerTask", () => {
+  it("is one target with no later step: the planning model thinks at low effort there", () => {
+    for (const command of ["send hi from the fixture message box", "delete Fixture item A", "send Sam a message in Discord", "click Send", "submit the sign-up form"]) {
+      expect(shortComputerTask(command), command).toBe(true);
+    }
+  });
+
+  it("keeps medium effort for several steps, long requests, questions and opens", () => {
+    for (const command of [
+      "open Discord, send Sam a message, then close the Discord tab in Chrome",
+      "type hello and press return",
+      "send the long weekly status update to everyone in the team channel with the figures from yesterday",
+      "what did Sam say?",
+      "open Teams",
+    ]) {
+      expect(shortComputerTask(command), command).toBe(false);
     }
   });
 });
@@ -534,5 +566,114 @@ describe("runComputerUse: batching, playbooks, memory and the fast pass", () => 
     control.stop("user");
     expect(await runComputerUse({ model: failing, command: "click Inbox", tools, control, platform: "mac", fast: true })).toMatchObject({ stopped: true, line: "Stopped." });
     expect((await runComputerUse({ model: failing, command: "click Inbox", tools, control, platform: "mac", fast: true })).escalate).toBeUndefined();
+  });
+});
+
+// Chained desktop tasks in a Chrome-like browser and a local fixture page (test/fixtures/chrome-form.html). No Teams.
+describe("routing: chained Chrome tasks", () => {
+  it("sends chained tasks to the loop, and keeps a plain open or a question off it", () => {
+    for (const command of [
+      "open Chrome, go to the fixture form and type hi in the message box",
+      "open the fixture page in Chrome then click Send",
+      "type hi in the fixture form and press return",
+      "fill in the fixture form, then submit it",
+      "close the fixture tab in Chrome",
+    ]) {
+      expect(wantsComputerUse(command), command).toBe(true);
+    }
+    for (const command of ["open Chrome", "what does the fixture form say?", "open file:///tmp/chrome-form.html"]) expect(wantsComputerUse(command), command).toBe(false);
+  });
+
+  it("gives only one-step, non-committing Chrome tasks to the fast pass", () => {
+    for (const command of ["click Help", "press escape", "tick Remember me"]) expect(simpleComputerTask(command), command).toBe(true);
+    for (const command of ["click Send", "type hi in the message box and press return", "open Chrome, then click Help", "submit the fixture form", "delete the draft"]) {
+      expect(simpleComputerTask(command), command).toBe(false);
+    }
+  });
+});
+
+describe("grounding rules in the prompts", () => {
+  it("tells the loop never to claim a send, a count or an empty calendar without this task's proof", async () => {
+    const { LUNA_DIRECT_SYSTEM } = await import("./luna");
+    expect(COMPUTER_SYSTEM).toContain("Never say a message was sent, delivered or posted, or that something was deleted, bought or submitted, unless an action in this task with that effect came back Done");
+    expect(COMPUTER_SYSTEM).toContain("Typing into a box is not sending");
+    expect(COMPUTER_SYSTEM).toContain("never say there are no meetings because the calendar did not open");
+    expect(COMPUTER_SYSTEM).toContain("Never pick one yourself");
+    expect(COMPUTER_SYSTEM).toContain("When open_app fails, its result lists the running apps");
+    expect(LUNA_DIRECT_SYSTEM).toContain("Never state a count, a list of people or users, rows, records, messages or calendar entries unless a tool result");
+    expect(LUNA_DIRECT_SYSTEM).toContain("never answer before it returns");
+    expect(LUNA_DIRECT_SYSTEM).toContain("Never draw a conclusion from the failure");
+    expect(LUNA_DIRECT_SYSTEM).toContain("ask which one; never pick one yourself");
+    for (const prompt of [COMPUTER_SYSTEM, LUNA_DIRECT_SYSTEM]) expect(prompt).not.toMatch(/claude|sonnet|haiku|anthropic/i);
+  });
+});
+
+describe("finalLine: the model's own notes", () => {
+  it("drops notes with or without the space, and labelled plans or thoughts", () => {
+    expect(finalLine("~Plan: look again\nOpened the fixture form.")).toBe("Opened the fixture form.");
+    expect(finalLine("(internal note) the tab may be stale\nClicked Help.")).toBe("Clicked Help.");
+    expect(finalLine("[thinking] check the value\nTyped hi in the box; not sent yet.")).toBe("Typed hi in the box; not sent yet.");
+    expect(finalLine("Note to self: verify\nPlan: none\nClosed the tab.")).toBe("Closed the tab.");
+  });
+
+  it("keeps a plain Note for the user, and a tilde before a number", () => {
+    expect(finalLine("Note: the form needs a name first.")).toBe("Note: the form needs a name first.");
+    expect(finalLine("~15 rows match in the fixture table.")).toBe("~15 rows match in the fixture table.");
+  });
+});
+
+describe("loop guard with open_app recovery", () => {
+  it("still stops a run that keeps trying to open an app that is not there", async () => {
+    const control = createRunControl();
+    const commands: string[] = [];
+    const run: ComputerRun = async (command) => {
+      commands.push(command);
+      return command === "list-apps" ? { ok: true, data: { apps: [{ name: "thunar", pid: 1 }] } } : { ok: true, data: {} };
+    };
+    const failing: DesktopActions = { ...desktop, openApp: async (name) => ({ ok: false, message: `Could not find ${name}` }) };
+    const tools = computerTools({ run, desktop: failing, control, platform: "linux", askFirst: () => true, confirm: async () => true });
+    const { model, calls } = turnsModel([{ tool: "open_app", input: { name: "Fixture Viewer" } }]);
+    const result = await runComputerUse({ model, command: "open Fixture Viewer and click Help", tools, control, platform: "linux" });
+    expect(result).toMatchObject({ stopped: true, line: "Stopped: Bee kept repeating the same step." });
+    expect(calls()).toBe(3);
+    // Each failed open listed the running apps once, so the AI had an exact name to use.
+    expect(commands).toEqual(["list-apps", "list-apps", "list-apps"]);
+  });
+
+  it("recovers when the failed open names a running app, and goes on", async () => {
+    const control = createRunControl();
+    const run: ComputerRun = async (command) =>
+      command === "list-apps"
+        ? { ok: true, data: { apps: [{ name: "google-chrome", pid: 1 }] } }
+        : command === "snapshot"
+          ? { ok: true, data: { app: "google-chrome", tree: { role: "window", children: [{ role: "button", name: "Help", ref_id: "@s2:e1" }, { role: "textfield", name: "Message", ref_id: "@s2:e2" }, { role: "button", name: "Save draft", ref_id: "@s2:e3" }, { role: "link", name: "Docs", ref_id: "@s2:e4" }] } } }
+          : { ok: true, data: {} };
+    const failing: DesktopActions = { ...desktop, openApp: async (name) => ({ ok: false, message: `Could not find ${name}` }) };
+    const tools = computerTools({ run, desktop: failing, control, platform: "linux", askFirst: () => true, confirm: async () => true });
+    const { model } = turnsModel([{ tool: "open_app", input: { name: "Chrome" } }, { tool: "snapshot", input: { app: "google-chrome" } }, { tool: "click", input: { ref: "@s2:e1", effect: "none" } }, { text: "Opened Help in Chrome." }]);
+    const result = await runComputerUse({ model, command: "open Chrome and click Help", tools, control, platform: "linux" });
+    expect(result).toMatchObject({ stopped: false, line: "Opened Help in Chrome." });
+  });
+});
+
+describe("Linux computer use (smoke)", () => {
+  it("sends the Linux line and only Linux surfaces", async () => {
+    const control = createRunControl({ maxSteps: 3 });
+    const systems: string[] = [];
+    const model = new MockLanguageModelV4({
+      doGenerate: async (options) => {
+        systems.push(JSON.stringify(options.prompt));
+        return { content: [{ type: "text", text: "Clicked Help." }], finishReason: { unified: "stop", raw: undefined }, usage, warnings: [] };
+      },
+    });
+    const tools = computerTools({ run: async () => ({ ok: true, data: {} }), desktop, control, platform: "linux", askFirst: () => true, confirm: async () => true });
+    const result = await runComputerUse({ model, command: "click Help in Chrome", tools, control, platform: "linux", maxSteps: 3 });
+    expect(result.line).toBe("Clicked Help.");
+    expect(systems[0]).toContain("This is Linux, read through AT-SPI.");
+    expect(systems[0]).toContain("list_apps names it google-chrome or chromium");
+    expect(systems[0]).not.toContain("This is a Mac.");
+    const surface = (tools.snapshot.inputSchema as unknown as { safeParse: (value: unknown) => { success: boolean } }).safeParse;
+    expect(surface({ app: "google-chrome", surface: "alert" }).success).toBe(true);
+    expect(surface({ app: "google-chrome", surface: "menubar" }).success).toBe(false);
   });
 });

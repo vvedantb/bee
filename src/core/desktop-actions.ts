@@ -1,31 +1,58 @@
 import { safeExternalUrl } from "./url-safety";
 
 // Desktop actions for a direct request ("Bee, open Teams"): which app a name means, what is refused, and which requests need
-// no AI at all. Pure: main/desktop-actions.ts runs them. Bee only opens or brings forward apps and opens web pages. It never
-// clicks, types, sends, closes or changes anything in another app.
+// no AI at all. Pure: main/desktop-actions.ts runs them on macOS, Windows and Linux. Bee only opens or brings forward apps and
+// opens web pages. It never clicks, types, sends, closes or changes anything in another app.
 
 /** What a desktop action did, as the short line the island shows, with no end stop ("Opened Teams", "Could not find Figma"). */
 export type DesktopActionResult = { ok: boolean; message: string };
 
-/** The runners behind Bee's desktop tools. Main implements them (main/desktop-actions.ts); tests pass fakes. */
+/**
+ * The runners behind Bee's desktop tools. Main implements them (main/desktop-actions.ts); tests pass fakes. The signal is the
+ * request's (Stop, a newer request): an app that is slow to start is not waited for once it aborts.
+ */
 export type DesktopActions = {
-  openApp: (name: string) => Promise<DesktopActionResult>;
-  focusWindow: (target: { app: string; title?: string }) => Promise<DesktopActionResult>;
+  openApp: (name: string, signal?: AbortSignal) => Promise<DesktopActionResult>;
+  focusWindow: (target: { app: string; title?: string }, signal?: AbortSignal) => Promise<DesktopActionResult>;
   openUrl: (url: string) => Promise<DesktopActionResult>;
 };
 
 export const APP_NAME_MAX = 60;
 export const WINDOW_TITLE_MAX = 120;
 
-/** How each OS finds an app: macOS by display name (open -a); Windows by a fixed URI, a Start menu shortcut or a system exe. */
+/**
+ * How each OS finds an app: macOS by display name (open -a); Windows by a fixed URI, a Start menu shortcut or a system exe; Linux
+ * by desktop-entry names through agent-desktop launch (core/app-discovery.ts linuxLaunchNames), tried in order.
+ */
 export type AppTarget = {
   label: string;
   mac: string | null;
   win: { uri?: string; startMenu: string[]; exe?: string } | null;
+  linux: string[];
   known: boolean;
 };
 
-type KnownApp = Omit<AppTarget, "known" | "win"> & { aliases: string[]; win: { uri?: string; startMenu?: string[]; exe?: string } | null };
+type KnownApp = Omit<AppTarget, "known" | "win" | "linux"> & {
+  aliases: string[];
+  win: { uri?: string; startMenu?: string[]; exe?: string } | null;
+  /** Desktop-entry names on Linux, most common first. Absent: only the name as said is tried. */
+  linux?: string[];
+  /**
+   * Other names agent-desktop list-apps may show for this app alone: a process name (chrome), a Flatpak or desktop id
+   * (com.google.Chrome). Matched as the app itself, never launched.
+   */
+  listed?: string[];
+  /**
+   * A process the app shares with the rest of its suite (soffice runs LibreOffice Writer and Calc). It shows the suite is
+   * running, so a read can use it, but never that this app's window is open: it never stops Bee opening the app.
+   */
+  shared?: string[];
+  /** Slow to show on a first start (an office suite): Bee looks for it a few more times before it calls it missing. */
+  slowStart?: true;
+};
+
+// The processes every LibreOffice app runs in, as list-apps may show them.
+const LIBREOFFICE_PROCESSES = ["soffice", "soffice.bin", "libreoffice", "LibreOffice"];
 
 // Apps people ask for by a short name. A name not listed here is still tried as given (Start menu or open -a). Windows URIs
 // and exes are fixed here, never taken from the model.
@@ -36,23 +63,62 @@ const KNOWN_APPS: readonly KnownApp[] = [
   { label: "Excel", aliases: ["excel", "microsoft excel"], mac: "Microsoft Excel", win: { startMenu: ["Excel"] } },
   { label: "PowerPoint", aliases: ["powerpoint", "power point", "microsoft powerpoint"], mac: "Microsoft PowerPoint", win: { startMenu: ["PowerPoint"] } },
   { label: "OneNote", aliases: ["onenote", "one note", "microsoft onenote"], mac: "Microsoft OneNote", win: { startMenu: ["OneNote"] } },
-  { label: "Slack", aliases: ["slack"], mac: "Slack", win: { startMenu: ["Slack"] } },
-  { label: "Zoom", aliases: ["zoom", "zoom workplace"], mac: "zoom.us", win: { startMenu: ["Zoom Workplace", "Zoom"] } },
-  { label: "Chrome", aliases: ["chrome", "google chrome"], mac: "Google Chrome", win: { startMenu: ["Google Chrome"] } },
-  { label: "Edge", aliases: ["edge", "microsoft edge"], mac: "Microsoft Edge", win: { startMenu: ["Microsoft Edge"] } },
-  { label: "Firefox", aliases: ["firefox", "mozilla firefox"], mac: "Firefox", win: { startMenu: ["Firefox", "Mozilla Firefox"] } },
+  { label: "Slack", aliases: ["slack"], mac: "Slack", win: { startMenu: ["Slack"] }, linux: ["slack"] },
+  { label: "Zoom", aliases: ["zoom", "zoom workplace"], mac: "zoom.us", win: { startMenu: ["Zoom Workplace", "Zoom"] }, linux: ["zoom"] },
+  {
+    label: "Chrome",
+    aliases: ["chrome", "google chrome"],
+    mac: "Google Chrome",
+    win: { startMenu: ["Google Chrome"] },
+    linux: ["google-chrome", "google-chrome-stable", "chromium", "chromium-browser"],
+    listed: ["google-chrome-beta", "google-chrome-unstable", "chromium-freeworld", "com.google.Chrome", "org.chromium.Chromium", "Google Chrome for Testing"],
+  },
+  { label: "Edge", aliases: ["edge", "microsoft edge"], mac: "Microsoft Edge", win: { startMenu: ["Microsoft Edge"] }, linux: ["microsoft-edge", "microsoft-edge-stable"], listed: ["msedge", "microsoft-edge-beta", "microsoft-edge-dev", "com.microsoft.Edge"] },
+  { label: "Firefox", aliases: ["firefox", "mozilla firefox"], mac: "Firefox", win: { startMenu: ["Firefox", "Mozilla Firefox"] }, linux: ["firefox", "firefox-esr"], listed: ["firefox-bin", "org.mozilla.firefox"] },
   { label: "Safari", aliases: ["safari"], mac: "Safari", win: null },
-  { label: "Spotify", aliases: ["spotify"], mac: "Spotify", win: { uri: "spotify:", startMenu: ["Spotify"] } },
+  { label: "Spotify", aliases: ["spotify"], mac: "Spotify", win: { uri: "spotify:", startMenu: ["Spotify"] }, linux: ["spotify"] },
   { label: "Notion", aliases: ["notion"], mac: "Notion", win: { startMenu: ["Notion"] } },
-  { label: "VS Code", aliases: ["vs code", "vscode", "visual studio code"], mac: "Visual Studio Code", win: { startMenu: ["Visual Studio Code"] } },
+  { label: "VS Code", aliases: ["vs code", "vscode", "visual studio code"], mac: "Visual Studio Code", win: { startMenu: ["Visual Studio Code"] }, linux: ["code"] },
   { label: "Finder", aliases: ["finder"], mac: "Finder", win: null },
   { label: "File Explorer", aliases: ["file explorer", "explorer", "windows explorer"], mac: null, win: { startMenu: ["File Explorer"], exe: "explorer.exe" } },
   // Not plain "notes": that may mean the user's own notes, so the AI decides.
   { label: "Notes", aliases: ["apple notes"], mac: "Notes", win: null },
   { label: "Notepad", aliases: ["notepad"], mac: null, win: { exe: "notepad.exe" } },
-  { label: "Calculator", aliases: ["calculator", "calc"], mac: "Calculator", win: { uri: "calculator:" } },
-  { label: "Calendar", aliases: ["calendar", "apple calendar"], mac: "Calendar", win: null },
-  { label: "Mail", aliases: ["mail", "apple mail"], mac: "Mail", win: null },
+  { label: "Calculator", aliases: ["calculator", "calc"], mac: "Calculator", win: { uri: "calculator:" }, linux: ["gnome-calculator", "org.gnome.Calculator", "galculator", "kcalc"] },
+  { label: "Calendar", aliases: ["calendar", "apple calendar"], mac: "Calendar", win: null, linux: ["gnome-calendar", "org.gnome.Calendar"] },
+  { label: "Mail", aliases: ["mail", "apple mail"], mac: "Mail", win: null, linux: ["thunderbird", "evolution"] },
+  // One soffice process runs every LibreOffice app, and its windows say which one ("Untitled 1 - LibreOffice Writer").
+  {
+    label: "LibreOffice",
+    aliases: ["libreoffice", "libre office"],
+    mac: "LibreOffice",
+    win: { startMenu: ["LibreOffice"] },
+    linux: ["libreoffice", "libreoffice-startcenter"],
+    listed: ["soffice", "soffice.bin", "LibreOffice Start Center", "org.libreoffice.LibreOffice"],
+    slowStart: true,
+  },
+  {
+    label: "LibreOffice Writer",
+    aliases: ["libreoffice writer", "libre office writer"],
+    mac: "LibreOffice",
+    win: { startMenu: ["LibreOffice Writer"] },
+    linux: ["libreoffice-writer"],
+    listed: ["lowriter", "org.libreoffice.LibreOffice.writer"],
+    shared: LIBREOFFICE_PROCESSES,
+    slowStart: true,
+  },
+  {
+    label: "LibreOffice Calc",
+    aliases: ["libreoffice calc", "libre office calc"],
+    mac: "LibreOffice",
+    win: { startMenu: ["LibreOffice Calc"] },
+    linux: ["libreoffice-calc"],
+    listed: ["localc", "org.libreoffice.LibreOffice.calc"],
+    shared: LIBREOFFICE_PROCESSES,
+    slowStart: true,
+  },
+  // Linux file managers. Not plain "files": that may mean the user's own files, so the AI decides.
+  { label: "File manager", aliases: ["file manager", "thunar", "nautilus"], mac: null, win: null, linux: ["thunar", "nautilus", "org.gnome.Nautilus", "nemo", "dolphin", "pcmanfm"] },
 ];
 
 // Shells, script hosts and system tools Bee never opens, whatever the request: one more step and they run anything.
@@ -81,7 +147,7 @@ export function appKey(name: string): string {
     .trim()
     .replace(/^the /, "")
     .replace(/ (?:app|application|desktop app|window)$/, "")
-    .replace(/\.(?:app|exe)$/, "")
+    .replace(/\.(?:app|exe|desktop)$/, "")
     .trim();
 }
 
@@ -111,6 +177,11 @@ function knownApp(name: string): KnownApp | null {
   return KNOWN_APPS.find((app) => app.aliases.includes(key)) ?? null;
 }
 
+/** A name Bee knows as an app ("Chrome", "teams"): never taken for a person's name (core/direct-command.ts). */
+export function isKnownApp(name: string): boolean {
+  return knownApp(name) !== null;
+}
+
 /**
  * Where to find the app a request names, or why not: not a plain name, or a shell or script tool. A name Bee does not know is
  * used as given, on macOS by display name and on Windows by Start menu shortcut name.
@@ -120,26 +191,78 @@ export function resolveApp(raw: string): { ok: true; app: AppTarget } | { ok: fa
   if (!name) return { ok: false, message: "That is not an app name Bee can open" };
   if (BLOCKED_APPS.has(appKey(name))) return { ok: false, message: BLOCKED_APP_MESSAGE };
   const known = knownApp(name);
-  if (known) return { ok: true, app: { label: known.label, mac: known.mac, win: known.win && { ...known.win, startMenu: known.win.startMenu ?? [] }, known: true } };
-  return { ok: true, app: { label: name, mac: name, win: { startMenu: [name] }, known: false } };
+  if (known) return { ok: true, app: { label: known.label, mac: known.mac, win: known.win && { ...known.win, startMenu: known.win.startMenu ?? [] }, linux: known.linux ?? [], known: true } };
+  return { ok: true, app: { label: name, mac: name, win: { startMenu: [name] }, linux: [], known: false } };
 }
 
-/** The names a running app may be listed under (agent-desktop list-apps), as appKey values. */
-export function appNames(app: AppTarget): string[] {
-  const known = KNOWN_APPS.find((item) => item.label === app.label && app.known);
-  const names = [app.label, app.mac ?? "", ...(app.win?.startMenu ?? []), ...(app.win?.exe ? [app.win.exe] : []), ...(known?.aliases ?? [])];
-  return [...new Set(names.map(appKey).filter((name) => name.length > 0))];
+const knownTarget = (app: AppTarget): KnownApp | undefined => (app.known ? KNOWN_APPS.find((item) => item.label === app.label) : undefined);
+
+/**
+ * The names a running app may be listed under (agent-desktop list-apps), as appKey values: its own names, and with shared, the
+ * processes it shares with its suite (soffice for LibreOffice Writer).
+ */
+export function appNames(app: AppTarget, options: { shared?: boolean } = {}): string[] {
+  const known = knownTarget(app);
+  const names = [
+    app.label,
+    app.mac ?? "",
+    ...(app.win?.startMenu ?? []),
+    ...(app.win?.exe ? [app.win.exe] : []),
+    ...(app.linux ?? []),
+    ...(known?.aliases ?? []),
+    ...(known?.listed ?? []),
+  ];
+  // A suite's process is never one of the app's own names, even where the app goes by it on a Mac (Writer is in LibreOffice.app).
+  const shared = (known?.shared ?? []).map(appKey);
+  const own = names.map(appKey).filter((name) => name.length > 0 && !shared.includes(name));
+  return [...new Set(options.shared ? [...own, ...shared] : own)];
+}
+
+/** A listed row: its name, and a desktop or bundle id when agent-desktop gives one ("google-chrome.desktop"). */
+type Listed = { name: string; bundleId?: string | null };
+
+// A window title's app part after the document: "Untitled 1 - LibreOffice Writer", "Fixture - Google Chrome".
+const TITLE_SEPARATOR = /\s[-–—|]\s/u;
+
+/**
+ * The running app that matches, from list-apps rows. Best first: its name or desktop id is one of the app's own names; it starts
+ * with one ("Microsoft Teams (work or school)"); it ends with one after a dash, as a window title does ("Untitled 1 - LibreOffice
+ * Writer"). With shared, last of all a process the app shares with its suite (soffice for Writer): that one says the suite runs,
+ * not that this app's window is open, so opening an app never uses it. Null when none does.
+ */
+export function matchRunningApp<T extends Listed>(app: AppTarget, running: readonly T[], options: { shared?: boolean } = {}): T | null {
+  const names = new Set(appNames(app));
+  const long = [...names].filter((name) => name.length >= 3);
+  // Each row's keys, worked out once: its name, its desktop id, and a window title's last part.
+  const rows = running.map((item) => {
+    const key = appKey(item.name);
+    const parts = key.split(TITLE_SEPARATOR);
+    return { item, key, keys: item.bundleId ? [key, appKey(item.bundleId)] : [key], title: parts.length > 1 ? (parts.at(-1) ?? "") : null };
+  });
+  const exact = rows.find((row) => row.keys.some((key) => names.has(key)));
+  if (exact) return exact.item;
+  const prefixed = rows.find((row) => long.some((name) => row.key.startsWith(`${name} `)));
+  if (prefixed) return prefixed.item;
+  const titled = rows.find((row) => row.title !== null && row.title.length >= 3 && names.has(row.title));
+  if (titled || !options.shared) return titled?.item ?? null;
+  const shared = appNames(app, { shared: true }).filter((name) => !names.has(name));
+  return rows.find((row) => row.keys.some((key) => shared.includes(key)))?.item ?? null;
 }
 
 /**
- * The running app that matches, from list-apps names: an exact name first, then one that starts with a known name ("Microsoft
- * Teams (work or school)"). Null when none does.
+ * The listed name to use for an app the AI named, when list-apps shows it under another name: "LibreOffice Writer" → soffice,
+ * "Chrome" → google-chrome. Its suite's process counts (a read reaches the app's window through it). Null for an app Bee does
+ * not know by that name, or none listed.
  */
-export function matchRunningApp<T extends { name: string }>(app: AppTarget, running: readonly T[]): T | null {
-  const names = appNames(app);
-  const exact = running.find((item) => names.includes(appKey(item.name)));
-  if (exact) return exact;
-  return running.find((item) => names.some((name) => name.length >= 3 && appKey(item.name).startsWith(`${name} `))) ?? null;
+export function listedAppName(name: string, running: readonly string[]): string | null {
+  const resolved = resolveApp(name);
+  if (!resolved.ok || !resolved.app.known) return null;
+  return matchRunningApp(resolved.app, running.map((item) => ({ name: item })), { shared: true })?.name ?? null;
+}
+
+/** An app that can take a while to show on a first start (an office suite): Bee waits a little longer for it. */
+export function isSlowStart(name: string): boolean {
+  return knownApp(name)?.slowStart === true;
 }
 
 /** A clean window title, or null: one line, no control characters, not too long. */

@@ -4,16 +4,18 @@ import type { PipelineResult } from "../shared/ipc";
 import type { ComputerRun } from "./agent-desktop-envelope";
 import { assistantMessage, cleanForHistory, commandFallbackReply, historySummariser, userMessage, type Summarise } from "./bee-history";
 import { memorySummary, memoryTools, type BeeMemory } from "./bee-memory";
+import { answerEvidence, guardLine, replaceLastText, runEvidence, upgradeLine, withoutToolNames, type ClaimKind } from "./claim-guard";
+import { clarifyingQuestion } from "./clarify";
 import { routeWithJev, type JevRoute } from "./command-route-jev";
 import { createRunControl, stopLine, type ComputerPlatform, type RunControl } from "./computer-control";
 import { computerTools, type ConfirmRequest } from "./computer-tools";
-import { computerAccess, runComputerUse, simpleComputerTask, wantsComputerUse, type ComputerSkills, type ComputerUseResult } from "./computer-use";
-import { debugLog, errorData } from "./debug-log";
+import { computerAccess, runComputerUse, shortComputerTask, simpleComputerTask, wantsComputerUse, type ComputerSkills, type ComputerUseResult } from "./computer-use";
+import { debugLog, errorData, msSince } from "./debug-log";
 import { COMMAND_MODEL, GUIDE_MODEL, JEV_MODEL, NO_GATEWAY_KEY, type BeeGateway } from "./gateway";
 import type { McpTools } from "./mcp";
-import { routeCommand, type DesktopActionResult, type DesktopActions } from "./desktop-actions";
+import { isKnownApp, routeCommand, type DesktopActionResult, type DesktopActions } from "./desktop-actions";
 import { desktopTools } from "./desktop-tools";
-import { screenNames, spelledName } from "./known-names";
+import { correctedName, nameAmbiguities, recentChoice, screenNames, spelledName, type ResolvedName } from "./known-names";
 import { guideWithLuna, noteCitation, type LunaToolActivity, type TipFields } from "./luna";
 import type { Snippet } from "./notes";
 import { loadMcp } from "./pipeline";
@@ -43,6 +45,46 @@ const MCP_ERROR_CHARS = 300;
 const PARTIAL_MAX = 5;
 
 const FAST_TOOL = { "open-app": "open_app", "focus-app": "focus_window", "open-url": "open_url" } as const;
+// A request that does something to or for a person: sending, messaging, calling, inviting, deleting, or finding or opening their
+// chat ("open chris's chat", "find krzys", "chat with Chris"). A name in it must be the right person. Any case: speech-to-text may
+// write "send chris a message". An app ("open Chrome") never asks: nameAmbiguities skips app words, and runDirectCommand known apps.
+const REACHES_PERSON =
+  /\b(?:send|message|dm|text|e-?mail|mail|reply|respond|post|tell|ping|call|ring|phone|invite|share|forward|delete|remove|add|open|find|show|search|look\s+up|chat|talk|with|to|cc)\b|['’]s\s+(?:chat|dm|messages?|thread|conversation|inbox)\b/i;
+// How many of the user's latest requests count as recent, for a person they meant (core/known-names.ts recentChoice).
+const RECENT_TURNS = 3;
+// Tool timings kept for one request's timing log.
+const TOOL_TIMES_MAX = 40;
+// Accessibility that agent-desktop reported granted, by computer-use runner: not asked again for this long (each ask is an
+// agent-desktop process on the path to the first step). A permission refusal during a run forgets it at once.
+const ACCESS_TTL_MS = 5 * 60_000;
+const accessGranted = new WeakMap<ComputerRun, number>();
+
+/**
+ * Text from the user's last RECENT_TURNS requests, oldest first: their words, the AI's text and its tool inputs (a name typed in a
+ * search box). Never tool results: a contact list or a chat list names everyone.
+ */
+export function recentTexts(history: readonly ModelMessage[], turns = RECENT_TURNS): string[] {
+  let start = history.length;
+  let users = 0;
+  for (let index = history.length - 1; index >= 0 && users < turns; index -= 1) {
+    if (history[index]?.role !== "user") continue;
+    users += 1;
+    start = index;
+  }
+  const texts: string[] = [];
+  for (const message of history.slice(start)) {
+    if (message.role !== "user" && message.role !== "assistant") continue;
+    if (typeof message.content === "string") {
+      texts.push(message.content);
+      continue;
+    }
+    for (const part of message.content) {
+      if (part.type === "text") texts.push(part.text);
+      else if (part.type === "tool-call") texts.push(JSON.stringify(part.input));
+    }
+  }
+  return texts;
+}
 
 /** Action lines then reply lines, without repeats (the reply may say "Opened Teams." again). */
 function joinLines(actions: readonly string[], reply: TipFields): TipFields {
@@ -92,7 +134,10 @@ const lineResult = (line: string, patch: Partial<PipelineResult["timingsMs"]> = 
   timingsMs: timings(patch),
 });
 
-/** The computer-use loop for one request, ending with one line for the island. On a Mac without Accessibility, no loop runs. */
+/**
+ * The computer-use loop for one request, ending with one line for the island. On a Mac without Accessibility, or Linux without
+ * the AT-SPI bus (agent-desktop reports accessibility denied there), no loop runs: the line says why.
+ */
 async function runComputerCommand(args: {
   command: string;
   transcript?: string[];
@@ -104,6 +149,8 @@ async function runComputerCommand(args: {
   onActivity?: (activity: LunaToolActivity) => void;
   summarise?: Summarise;
   knownNames?: readonly string[];
+  /** Names in the request Bee settled from the user's recent requests (core/known-names.ts recentChoice). */
+  resolvedNames?: readonly ResolvedName[];
   /** The run's messages for Bee's history (core/bee-history.ts), without the request. */
   onMessages?: (messages: ModelMessage[]) => void;
   /** Bee's memory: its summary goes with the request, and the AI may read and change it. */
@@ -120,9 +167,13 @@ async function runComputerCommand(args: {
   host.onStep?.("Starting…");
   try {
     debugLog.info("computer", "run-start", { platform: host.platform, maxSteps: maxSteps ?? null, maxMs: host.maxMs ?? null, askFirst: host.askFirst(), command: args.command });
-    if (host.platform === "mac") {
+    const granted = accessGranted.get(host.run);
+    if ((host.platform === "mac" || host.platform === "linux") && granted !== undefined && performance.now() - granted < ACCESS_TTL_MS) {
+      debugLog.info("computer", "access", { accessibility: "granted", cached: true });
+    } else if (host.platform === "mac" || host.platform === "linux") {
       const access = await computerAccess(host.run, control.signal);
       debugLog.info("computer", "access", access);
+      if (access.accessibility === "granted") accessGranted.set(host.run, performance.now());
       if (control.reason()) {
         const line = stopLine(control.reason() ?? "user", { platform: host.platform });
         args.onMessages?.([assistantMessage(line)]);
@@ -135,6 +186,8 @@ async function runComputerCommand(args: {
         return lineResult(line);
       }
     }
+    // Sends, deletes, purchases and submits the confirm gate counted as done: proof for the last line (core/claim-guard.ts).
+    const committed = new Set<ClaimKind>();
     const tools = {
       ...computerTools({
         run: host.run,
@@ -145,6 +198,7 @@ async function runComputerCommand(args: {
         confirm: host.confirm,
         onStep: host.onStep,
         onActivity: args.onActivity,
+        onEffect: (kind) => committed.add(kind),
       }),
       // Memory changes nothing on screen, so its calls take no step of the run's budget.
       ...(args.memory ? memoryTools(args.memory) : {}),
@@ -156,6 +210,7 @@ async function runComputerCommand(args: {
       history: args.history,
       summarise: args.summarise,
       ...(args.knownNames?.length ? { knownNames: args.knownNames } : {}),
+      ...(args.resolvedNames?.length ? { resolvedNames: args.resolvedNames } : {}),
       ...(remembered ? { memory: remembered } : {}),
       tools,
       control,
@@ -170,40 +225,80 @@ async function runComputerCommand(args: {
     if (quick && !quick.escalate) outcome = quick;
     else {
       if (quick) console.debug(`perf computer fast escalate steps=${quick.steps}`);
-      const planned = await runComputerUse({ ...base, model: args.gateway.languageModel(COMMAND_MODEL), ...(quick?.messages.length ? { steps: quick.messages } : {}) });
+      // A short task (one target, no later step) thinks at low effort: each step is a plain look or act.
+      const effort = shortComputerTask(args.command) ? "low" : "medium";
+      const planned = await runComputerUse({ ...base, model: args.gateway.languageModel(COMMAND_MODEL), effort, ...(quick?.messages.length ? { steps: quick.messages } : {}) });
       outcome = quick ? { ...planned, messages: [...quick.messages, ...planned.messages] } : planned;
     }
+    if (control.reason() === "permission") accessGranted.delete(host.run);
     const guide = performance.now() - started;
+    // The model's first reply: the fast pass's when it ran first.
+    const firstStep = quick?.firstStepMs ?? outcome.firstStepMs ?? null;
+    // A line that claims a send, delete, purchase or submit this run never proved, or an empty calendar no read showed, becomes a
+    // cautious one. A stop or an error already has its own line.
+    if (!outcome.stopped && !outcome.error) {
+      const evidence = runEvidence(outcome.messages, committed);
+      const checked = guardLine(outcome.line, evidence);
+      // The other way round: a line that doubts a send, delete, purchase or submit the gate counted as done (and the message box
+      // check did not contradict) says it plainly. "Bee could not confirm the send went through" after a confirmed Send → Sent.
+      const upgraded = checked.rewritten ? null : upgradeLine(outcome.line, committed, evidence.typed);
+      if (checked.rewritten) {
+        debugLog.warn("computer", "claim-rewritten", { line: outcome.line, shown: checked.line, reason: checked.reason, proven: [...committed] });
+        // The history keeps the line the user saw in place of the claim, so no later turn reads the claim as Bee's own.
+        outcome = { ...outcome, line: checked.line, claimRewritten: true, messages: replaceLastText(outcome.messages, checked.line) };
+      } else if (upgraded?.upgraded) {
+        debugLog.info("computer", "claim-upgraded", { line: outcome.line, shown: upgraded.line, kind: upgraded.kind, proven: [...committed] });
+        outcome = { ...outcome, line: upgraded.line, messages: replaceLastText(outcome.messages, upgraded.line) };
+      }
+    }
+    // Never a tool name, a ref or an agent-desktop code in what the user reads ("…never appeared after open_app").
+    const plain = withoutToolNames(outcome.line);
+    if (plain !== outcome.line) {
+      debugLog.info("computer", "line-plain", { line: outcome.line, shown: plain });
+      const said = outcome.messages.length > 0 && !outcome.stopped && !outcome.error;
+      outcome = { ...outcome, line: plain, ...(said ? { messages: replaceLastText(outcome.messages, plain) } : {}) };
+    }
     debugLog.info("computer", "run-end", { ...outcome, reason: control.reason(), declined: control.declined(), ms: Math.round(guide) });
     // What the AI did, tool calls and results included, then the line the island shows when it differs (a stop).
     const said = outcome.messages.length > 0 && !outcome.stopped && !outcome.error ? outcome.messages : [...outcome.messages, assistantMessage(outcome.line)];
     args.onMessages?.(said);
     const where = outcome.endedWhere ? { endedWhere: outcome.endedWhere } : {};
-    if (outcome.error) return { ...lineResult(outcome.line, { guide, lunaTotal: guide }), tips: [], tipSources: [], guideError: outcome.line, ...where };
-    return { ...lineResult(outcome.line, { guide, lunaTotal: guide }), ...where };
+    const times = { guide, lunaTotal: guide, lunaFirstToken: firstStep };
+    if (outcome.error) return { ...lineResult(outcome.line, times), tips: [], tipSources: [], guideError: outcome.line, ...where };
+    return { ...lineResult(outcome.line, times), ...where };
   } finally {
     control.dispose();
   }
 }
 
+/** The path a request took and what chose it: the word rules, Jev's answer (null for none in time), or Jev not asked. */
+type PathChoice = { loop: boolean; words: boolean; jev: JevRoute | null | "skipped"; ms: number };
+
 /**
  * Whether a request (after no quick open matched) goes to the computer-use loop. Jev decides when it answers in time and is sure
  * (computer_use or direct_answer); otherwise, and for any other route it gives, the word rules do (wantsComputerUse). A request
- * Jev calls an open, focus or page was not one routeCommand could name, so the word rules take that too.
+ * Jev calls an open, focus or page was not one routeCommand could name, so the word rules take that too. One clear action on
+ * screen ("click Inbox", "press escape": simpleComputerTask) is the loop by the word rules alone: Jev is not asked, which saves
+ * its wait (up to ROUTE_TIMEOUT_MS) on the quickest requests.
  */
-async function wantsLoop(command: string, gateway: BeeGateway, signal?: AbortSignal): Promise<boolean> {
+async function wantsLoop(command: string, gateway: BeeGateway, signal?: AbortSignal): Promise<PathChoice> {
+  const started = performance.now();
   const words = wantsComputerUse(command);
   // Test and replay gateways may have no evaluation model: the word rules alone, then.
-  if (typeof gateway.evaluationModel !== "function") return words;
+  if (typeof gateway.evaluationModel !== "function" || simpleComputerTask(command)) {
+    const choice: PathChoice = { loop: words, words, jev: "skipped", ms: msSince(started) };
+    debugLog.info("ai", "command-path", choice);
+    return choice;
+  }
   let route: JevRoute | null = null;
   try {
     route = await routeWithJev({ model: gateway.evaluationModel(JEV_MODEL), command, ...(signal ? { signal } : {}) });
   } catch (error) {
     debugLog.info("ai", "jev-route-failed", { error: errorData(error) });
   }
-  const loop = route === "computer_use" ? true : route === "direct_answer" ? false : words;
-  debugLog.info("ai", "command-path", { jev: route, words, loop });
-  return loop;
+  const choice: PathChoice = { loop: route === "computer_use" ? true : route === "direct_answer" ? false : words, words, jev: route, ms: msSince(started) };
+  debugLog.info("ai", "command-path", choice);
+  return choice;
 }
 
 export async function runDirectCommand(args: {
@@ -246,8 +341,10 @@ export async function runDirectCommand(args: {
     recorded = true;
     const turn = cleanForHistory([userMessage(command), ...messages]);
     args.onTurn?.(turn);
-    // Names to keep: a spelling the user just gave, and chat names in the tool results and the AI's reply.
-    const learned = [...(spelledName(command) ? [spelledName(command) as string] : []), ...screenNames(JSON.stringify(turn.slice(1)).replace(/\\"/g, '"'))];
+    // Names to keep: a spelling or a correction the user just gave ("I meant Krzysztof"), and chat names in the tool results and
+    // the AI's reply. A correction teaches the spelling only: Bee never stores that one name means another.
+    const said = [spelledName(command), correctedName(command)].filter((name): name is string => name !== null);
+    const learned = [...said, ...screenNames(JSON.stringify(turn.slice(1)).replace(/\\"/g, '"'))];
     if (learned.length > 0) {
       debugLog.info("ai", "names-learned", { names: learned });
       args.onLearnNames?.(learned);
@@ -257,18 +354,47 @@ export async function runDirectCommand(args: {
   const gateway = args.gateway;
   const summarise: Summarise | undefined = gateway ? (messages, signal) => historySummariser(gateway.languageModel(GUIDE_MODEL))(messages, signal) : undefined;
   debugLog.info("ai", "command-route", { command, route, history: history.length, computer: Boolean(args.computer), desktop: Boolean(args.actions), wantsComputer: wantsComputerUse(command) });
+  // Timing for the local debug log (command-timing): the path choice, the model's first reply, each tool, the whole request.
+  // Speech-to-text runs before this, in its own call (stt result).
+  const commandStarted = performance.now();
+  const toolTimes: { tool: string; ms: number }[] = [];
+  const toolStarts = new Map<string, number[]>();
+  const onActivity = (activity: LunaToolActivity) => {
+    if (activity.phase === "start") toolStarts.set(activity.tool, [...(toolStarts.get(activity.tool) ?? []), performance.now()]);
+    else {
+      const at = toolStarts.get(activity.tool)?.shift();
+      if (at !== undefined && toolTimes.length < TOOL_TIMES_MAX) toolTimes.push({ tool: activity.tool, ms: msSince(at) });
+    }
+    args.onActivity?.(activity);
+  };
+  let path: PathChoice | null = null;
+  const finish = (kind: string, result: PipelineResult): PipelineResult => {
+    const total = msSince(commandStarted);
+    const timingsMs = { ...result.timingsMs, ...(path ? { route: path.ms } : {}), total };
+    debugLog.info("ai", "command-timing", {
+      path: kind,
+      totalMs: total,
+      routeMs: path?.ms ?? null,
+      jev: path?.jev ?? null,
+      firstTokenMs: result.timingsMs.lunaFirstToken === null ? null : Math.round(result.timingsMs.lunaFirstToken),
+      guideMs: Math.round(result.timingsMs.guide),
+      mcpMs: Math.round(result.timingsMs.mcp),
+      tools: toolTimes,
+    });
+    return { ...result, timingsMs };
+  };
   if (route.kind !== "ai" && args.actions) {
     const tool = FAST_TOOL[route.kind];
     const actions = args.actions;
-    args.onActivity?.({ tool, phase: "start" });
+    onActivity({ tool, phase: "start" });
     let result: DesktopActionResult;
     try {
-      result = await (route.kind === "open-url" ? actions.openUrl(route.url) : route.kind === "open-app" ? actions.openApp(route.name) : actions.focusWindow({ app: route.name }));
+      result = await (route.kind === "open-url" ? actions.openUrl(route.url) : route.kind === "open-app" ? actions.openApp(route.name, args.signal) : actions.focusWindow({ app: route.name }, args.signal));
     } catch (error) {
       debugLog.warn("desktop", "action-failed", { route, error: errorData(error) });
       result = { ok: false, message: "That desktop action failed" };
     } finally {
-      args.onActivity?.({ tool, phase: "end" });
+      onActivity({ tool, phase: "end" });
     }
     debugLog.info("desktop", "fast-action", { route, result });
     // The quick action as a real tool call and result, like the AI's own, so the next request sees what was done.
@@ -280,19 +406,56 @@ export async function runDirectCommand(args: {
       assistantMessage(result.message),
     ]);
     console.debug(`perf command fast ${route.kind} ok=${result.ok ? 1 : 0}`);
-    return { notes: [], rankSource: "fallback", rankError: null, tips: [result.message], tipSources: [null], sources: [], guideError: null, actions: [result.message], timingsMs: timings() };
+    return finish("fast", { notes: [], rankSource: "fallback", rankError: null, tips: [result.message], tipSources: [null], sources: [], guideError: null, actions: [result.message], timingsMs: timings() });
   }
+
+  // A message, a send, a call or a chat for a name that could be more than one person the user has taught Bee ("Kris": Chris Lee
+  // or Krzysztof Nowak) asks which one first, before any AI call or action: never a silent pick. The answer is a follow-up. When
+  // the user's last few requests were about one of them, that one is meant, and the AI is told so (nothing is stored).
+  const ambiguous = nameAmbiguities(command, args.knownNames ?? []).filter((item) => !isKnownApp(item.heard));
+  const recent = ambiguous.length > 0 ? recentTexts(history) : [];
+  // A name spelled like one known person never gets here ("Krzys": Krzysztof Nowak; "Chris": Chris Lee): nameMatches drops
+  // sound-alike rivals of a spelling match. Only a genuine tie ("Kris", "Sara") goes to recent text, then to a question.
+  const resolvedNames: ResolvedName[] = ambiguous.flatMap((item) => {
+    const name = recentChoice(item, recent);
+    return name ? [{ heard: item.heard, name }] : [];
+  });
+  if (resolvedNames.length > 0) debugLog.info("ai", "name-recent", { command, resolved: resolvedNames });
+  const unclear = REACHES_PERSON.test(command) ? ambiguous.find((item) => !resolvedNames.some((done) => done.heard === item.heard)) : undefined;
+  if (unclear) {
+    // One question for everything missing (which person, which app, what to say), so the answer needs no second question. An
+    // app named in the user's recent requests or in Bee's memory counts as named.
+    const context = [...recent, ...(args.memory?.facts().map((fact) => fact.text) ?? [])];
+    const question = clarifyingQuestion({ command, ambiguity: unclear, context });
+    debugLog.info("ai", "name-ambiguous", { command, heard: unclear.heard, matches: unclear.matches, question });
+    record([assistantMessage(question)]);
+    return finish("which-name", lineResult(question));
+  }
+  const names = resolvedNames.length > 0 ? { resolvedNames } : {};
 
   // A task on screen goes straight to the loop: it needs no notes, connectors or web search.
   const computer = args.computer && args.actions && args.gateway ? { host: args.computer, actions: args.actions, gateway: args.gateway } : null;
   const memory = args.memory ?? null;
-  const loop = (fast = false) =>
+  const loop = async (fast = false) =>
     computer
-      ? runComputerCommand({ ...computer, command, transcript: args.transcript, history, signal: args.signal, onActivity: args.onActivity, summarise, knownNames: args.knownNames, onMessages: record, memory, fast })
+      ? finish(
+          "computer",
+          await runComputerCommand({ ...computer, command, transcript: args.transcript, history, signal: args.signal, onActivity, summarise, knownNames: args.knownNames, ...names, onMessages: record, memory, fast }),
+        )
       : Promise.reject(new Error("no computer use"));
-  if (computer && (await wantsLoop(command, computer.gateway, args.signal))) {
-    console.debug("perf command computer");
-    return loop(simpleComputerTask(command));
+  // While Jev picks the path, connectors load beside it (as in the meeting pipeline), so the answer path does not wait for them
+  // after Jev. The loop does not use them: they close at once.
+  let mcpStarted = performance.now();
+  let mcpLoad: Promise<McpTools | null> | null = null;
+  if (computer) {
+    const asksJev = typeof computer.gateway.evaluationModel === "function" && !simpleComputerTask(command);
+    if (asksJev) mcpLoad = loadMcp(args.loadMcpTools);
+    path = await wantsLoop(command, computer.gateway, args.signal);
+    if (path.loop) {
+      void mcpLoad?.then((loaded) => loaded?.close()).catch(() => undefined);
+      console.debug("perf command computer");
+      return loop(simpleComputerTask(command));
+    }
   }
 
   const t0 = performance.now();
@@ -303,11 +466,15 @@ export async function runDirectCommand(args: {
   const notes = candidates.map((note, index) => ({ ...note, jevScore: null, cite: index < GUIDE_NOTE_LIMIT ? noteCitation(index) : null }));
   if (!args.gateway) {
     record([assistantMessage(`Error: ${NO_GATEWAY_KEY}`)]);
-    return { notes, rankSource: "fallback", rankError: NO_GATEWAY_KEY, tips: [], tipSources: [], sources: [], guideError: NO_GATEWAY_KEY, timingsMs: timings({ retrieve: retrieveMs }) };
+    return finish("no-key", { notes, rankSource: "fallback", rankError: NO_GATEWAY_KEY, tips: [], tipSources: [], sources: [], guideError: NO_GATEWAY_KEY, timingsMs: timings({ retrieve: retrieveMs }) });
   }
 
-  const mcpStarted = performance.now();
-  const mcp = await loadMcp(args.loadMcpTools);
+  if (!mcpLoad) {
+    mcpStarted = performance.now();
+    mcpLoad = loadMcp(args.loadMcpTools);
+  }
+  const mcp = await mcpLoad;
+  // From the start of the load. When it ran beside Jev, the part Jev covered was no extra wait.
   const mcpMs = performance.now() - mcpStarted;
   // Action lines show as soon as each lands, ahead of the reply streaming in.
   const actionLines: string[] = [];
@@ -360,8 +527,9 @@ export async function runDirectCommand(args: {
     historyMessages: history,
     summarise,
     knownNames: args.knownNames,
+    ...names,
     ...(memory ? { memory: memorySummary(memory.facts()) } : {}),
-    onActivity: args.onActivity,
+    onActivity,
     onPartial: (partial) => {
       if (handOver.signal.aborted) return;
       streamed = partial;
@@ -381,13 +549,28 @@ export async function runDirectCommand(args: {
   // No reply and no action (NONE, or no text at all) never leaves the island blank: a short line or a question back instead.
   const silent = actionLines.length === 0 && guide.tips.length === 0 && !guide.loop && (guide.error === null || guide.empty === true);
   if (silent) debugLog.info("ai", "command-fallback", { command, empty: guide.empty ?? false });
-  const shown = silent ? { tips: [commandFallbackReply(command)], tipSources: [null] } : joinLines(actionLines, guide);
+  // An answer has no computer tools: a line that says something was sent or deleted needs proof of that kind, from this turn (a
+  // connector whose own name says it sends or deletes, and that succeeded) or an earlier turn that proved or showed it ("did you
+  // send it?"). An open_app, a list or a web search that succeeded proves nothing. "No meetings" needs a calendar read that
+  // succeeded when a calendar tool was tried (core/claim-guard.ts).
+  const evidence = answerEvidence(guide.messages ?? [], history);
+  const checkedTips = guide.tips.map((tip) => guardLine(tip, evidence));
+  const rewritten = checkedTips.filter((checked) => checked.rewritten);
+  if (rewritten.length > 0) debugLog.warn("ai", "claim-rewritten", { tips: guide.tips, shown: checkedTips.map((checked) => checked.line), reasons: rewritten.map((checked) => checked.reason) });
+  // A replaced line keeps no source label: the label belonged to the claim. No line names a tool, a ref or an agent-desktop
+  // code (core/claim-guard.ts withoutToolNames): plain words instead, its label kept.
+  const reply: TipFields = {
+    tips: checkedTips.map((checked) => withoutToolNames(checked.line)),
+    tipSources: guide.tipSources.map((source, index) => (checkedTips[index]?.rewritten ? null : source)),
+  };
+  const shown = silent ? { tips: [commandFallbackReply(command)], tipSources: [null] } : joinLines(actionLines, reply);
   // The AI's own messages, then what the island showed when the AI wrote nothing (a fallback, a stop or an error).
   const shownText = shown.tips.join("\n");
   const lastText = guide.messages?.at(-1)?.role === "assistant" && guide.tips.length > 0;
   const closing = lastText ? [] : [assistantMessage(guide.error && !silent ? `${shownText ? `${shownText}\n` : ""}Error: ${guide.error}` : shownText || "(no reply)")];
-  record([...(guide.messages ?? []), ...closing]);
-  return {
+  // A replaced claim leaves the history too: it keeps the lines the user saw.
+  record(rewritten.length > 0 ? replaceLastText(guide.messages ?? [], shownText) : [...(guide.messages ?? []), ...closing]);
+  return finish("answer", {
     notes,
     rankSource: "fallback",
     rankError: null,
@@ -399,5 +582,5 @@ export async function runDirectCommand(args: {
     guideNote: guide.skipped,
     mcpErrors: (mcp?.errors ?? []).slice(0, MCP_ERRORS_MAX).map(({ server, error }) => ({ server: server.slice(0, 200), error: error.slice(0, MCP_ERROR_CHARS) })),
     timingsMs: timings({ retrieve: retrieveMs, mcp: mcpMs, guide: guideMs, lunaFirstToken: guide.firstTokenMs, lunaTotal: guide.totalMs }),
-  };
+  });
 }

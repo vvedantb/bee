@@ -15,6 +15,7 @@ import {
   type DesktopActionCommand,
   type ReadOnlyCommand,
 } from "../core/agent-desktop-envelope";
+import type { ComputerPlatform } from "../core/computer-control";
 
 // Runs the agent-desktop CLI (npm agent-desktop, Apache-2.0). The experimental meeting window reader gets a runner for
 // read-only commands only (assertReadOnly). Bee's desktop tools for a direct request ("Bee, open Teams") get a separate runner
@@ -26,6 +27,17 @@ import {
 
 export type AgentDesktopBinary = { path: string; macHelper: string | null };
 
+/**
+ * The computer-use platform for this OS, or null where Bee has none. Linux counts: whether its accessibility bus answers is
+ * checked per run (core/direct-command.ts), not here.
+ */
+export function computerPlatformOf(platform: NodeJS.Platform): ComputerPlatform | null {
+  if (platform === "darwin") return "mac";
+  if (platform === "win32") return "windows";
+  if (platform === "linux") return "linux";
+  return null;
+}
+
 /** The platform file names inside node_modules/agent-desktop/bin. Null where Bee ships no binary. */
 export function platformBinaryNames(platform: NodeJS.Platform, arch: string): { binary: string; macHelper: string | null } | null {
   if (platform === "darwin" && (arch === "arm64" || arch === "x64")) return { binary: `agent-desktop-darwin-${arch}`, macHelper: `agent-desktop-macos-helper-darwin-${arch}` };
@@ -36,7 +48,7 @@ export function platformBinaryNames(platform: NodeJS.Platform, arch: string): { 
 
 /**
  * Where the binary is. Packaged: Resources/agent-desktop/agent-desktop[.exe] (and agent-desktop-macos-helper beside it), copied
- * there per platform by build.mac / build.win extraResources in package.json. Development: node_modules/agent-desktop/bin.
+ * there per platform by build.mac / build.win / build.linux extraResources in package.json. Development: node_modules/agent-desktop/bin.
  */
 export function resolveAgentDesktop(args: {
   packaged: boolean;
@@ -202,7 +214,7 @@ export function createAgentDesktopRunner(binary: AgentDesktopBinary, deps: Runne
 }
 
 /** A desktop action command for Bee's desktop tools only: launch, focus-window, list-apps or list-windows (assertDesktopAction). */
-export type AgentDesktopActionRun = (command: DesktopActionCommand, args: string[], options?: { timeoutMs?: number }) => Promise<AgentDesktopResult>;
+export type AgentDesktopActionRun = (command: DesktopActionCommand, args: string[], options?: { timeoutMs?: number; signal?: AbortSignal }) => Promise<AgentDesktopResult>;
 
 export type AgentDesktopActionRunner = { run: AgentDesktopActionRun; cleanup: () => void };
 

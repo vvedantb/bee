@@ -73,6 +73,15 @@ export type MeetingCard = { id: number; lines: string[] };
 export type ComputerConfirm = Extract<ComputerUpdate, { type: "confirm" }>;
 export type ComputerView = { runId: number; step: string; confirm: ComputerConfirm | null };
 
+/**
+ * How a request reached the wake path: "mic" is a phrase from the user's own microphone after speech-to-text (or the E2E mic,
+ * which injects text as a mic phrase); "typed-command" is Live → Talk to Bee (typed). Typed meeting lines (Manual test) never
+ * reach it.
+ */
+export type CommandVia = "mic" | "typed-command";
+/** What Talk to Bee (typed) did with a line: ran it on the wake path, or dropped it and why. */
+export type TypedCommandOutcome = "taken" | "no-wake" | "wake-off" | "empty";
+
 // App-wide state shared by the notch and the panel. Local form input stays in the DOM (uncontrolled forms).
 export type BeeState = {
   settings: SettingsView | null;
@@ -898,10 +907,13 @@ export function beeConversation(): BeeExchange[] {
  * A mic phrase that starts with the wake word ("Bee, open Teams") is a request to the AI, not a meeting line: it never joins
  * the session, the summary, meeting memory or the Teams sync. "Bee" alone arms the next phrase. In the conversation window, a
  * phrase without "Bee" that looks addressed to Bee is a follow-up; an unclear one may get one small AI check (followUpCheck).
- * Returns true when the phrase was taken. Console lines never carry the words; the local debug log does.
+ * Returns true when the phrase was taken. Console lines never carry the words; the local debug log does. via "typed-command" is
+ * Talk to Bee (typed): the user's own words on their own screen, so it routes as the mic does, but never becomes a meeting line.
  */
-function takeWakeLine(text: string): boolean {
+function takeWakeLine(text: string, via: CommandVia = "mic"): boolean {
   const now = Date.now();
+  // The phrase's speech-to-text time, for the request's timing log. A typed request has none.
+  const sttMs = via === "mic" && lastStt?.text === text.trim() ? lastStt.ms : null;
   const enabled = state.settings?.wakeWordEnabled ?? true;
   const armed = now < wakeArmedUntil;
   const conversationOpen = enabled && now < conversationUntil && commandRun === null;
@@ -912,7 +924,7 @@ function takeWakeLine(text: string): boolean {
   wakeArmedUntil = route.kind === "wake" ? now + WAKE_FOLLOW_MS : 0;
   // The local debug log keeps the words that woke Bee, and the meeting lines that nearly did (a likely miss or false trigger).
   if (route.kind !== "meeting" || NEAR_WAKE.test(text) || conversationOpen || recentlyClosed) {
-    debugLog.info("wake", route.kind === "meeting" ? "near-miss" : route.kind, { text, route, enabled, armed, conversationOpen, othersSpoke, recentlyClosed });
+    debugLog.info("wake", route.kind === "meeting" ? "near-miss" : route.kind, { text, via, route, enabled, armed, conversationOpen, othersSpoke, recentlyClosed });
   }
   if (route.kind === "meeting") {
     // A reply to someone else, or a name from the meeting: the user has turned back to the meeting.
@@ -924,14 +936,14 @@ function takeWakeLine(text: string): boolean {
     closeConversation("thanks");
     return true;
   }
-  if (route.kind === "unclear") return followUpCheck(text);
+  if (route.kind === "unclear") return followUpCheck(text, via, sttMs);
   // Only a tap answers a Confirm prompt. "Bee, yes, send it" leaves the prompt as it is, rather than cancelling the task.
   if (route.kind === "command" && state.computer?.confirm && isConfirmWords(route.command)) {
     debugLog.info("wake", "confirm-words-ignored", { command: route.command, confirm: state.computer.confirm.id });
     set({ computer: { ...state.computer, step: "Tap Confirm to go ahead…" } });
     return true;
   }
-  if (route.kind === "command") void runCommand(route.command);
+  if (route.kind === "command") void runCommand(route.command, { sttMs });
   // "Bee, stop" ends the request in flight, if any, and the conversation. Nothing else happens.
   if (route.kind === "stop") {
     stoppedRun = commandRun;
@@ -946,22 +958,26 @@ function takeWakeLine(text: string): boolean {
  * The phrase waits for it, then becomes a follow-up or a meeting line. Without the call (older preload) or on any failure it
  * is a meeting line at once. Only reached from the user's own mic.
  */
-function followUpCheck(text: string): boolean {
+function followUpCheck(text: string, via: CommandVia = "mic", sttMs: number | null = null): boolean {
   const classify = window.bee.classifyFollowUp;
   const bee = lastBee;
   if (typeof classify !== "function" || !bee) {
-    debugLog.info("wake", "follow-up-unchecked", { reason: bee ? "no classifier" : "no exchange" });
+    debugLog.info("wake", "follow-up-unchecked", { reason: bee ? "no classifier" : "no exchange", via });
     return false;
   }
   const lines = state.session.lines.slice(-3).map((line) => `${line.own ? "me" : "them"}: ${line.text}`);
   const othersQuiet = Date.now() - lastOtherSpeakerAt >= OTHERS_QUIET_MS;
   void (async () => {
+    const asked = performance.now();
     const verdict = await sessionToken()
       .then((token) => classify({ phrase: text.slice(0, 1000), lastBee: bee, lines, othersQuiet, sessionToken: token }))
       .catch(() => null);
+    const classifyMs = Math.round(performance.now() - asked);
     const forBee = isForBee(verdict) && conversationUntil > 0;
-    debugLog.info("wake", "follow-up-checked", { text, verdict, forBee, othersQuiet });
-    if (forBee) void runCommand(text);
+    debugLog.info("wake", "follow-up-checked", { text, via, verdict, forBee, othersQuiet, ms: classifyMs });
+    if (forBee) void runCommand(text, { sttMs, classifyMs });
+    // A typed command is never a meeting line: it is not the user speaking in the call.
+    else if (via === "typed-command") debugLog.info("wake", "typed-command-dropped", { text, reason: "follow-up for the meeting" });
     else addOwnLine(text, "mic");
   })();
   return true;
@@ -999,11 +1015,11 @@ async function stopCommand(): Promise<void> {
  * Bee's own history (bee-history.json), sent whole with the next requests; here it joins the conversation for vmem
  * (rememberExchange) and opens the conversation window.
  */
-async function runCommand(command: string): Promise<void> {
+async function runCommand(command: string, timing: { sttMs?: number | null; classifyMs?: number } = {}): Promise<void> {
   const previous = latestRun;
   const run = ++latestRun;
   const started = performance.now();
-  debugLog.info("ai", "command-start", { run, command, cancelled: previous > 0 ? previous : null });
+  debugLog.info("ai", "command-start", { run, command, cancelled: previous > 0 ? previous : null, sttMs: timing.sttMs ?? null });
   if (previous > 0) void window.bee.cancelPipeline({ runId: previous }).catch(() => undefined);
   clearTimeout(runTimer);
   runTimer = undefined;
@@ -1067,7 +1083,9 @@ async function runCommand(command: string): Promise<void> {
       runId: run,
       sessionToken: await sessionToken(),
     });
-    debugLog.info("ai", "command-result", { run, latest: latestRun, ms: Math.round(performance.now() - started), tips: reply.tips, sources: reply.sources, guideError: reply.guideError, actions: reply.actions ?? [], endedWhere: reply.endedWhere ?? null, timingsMs: reply.timingsMs });
+    // ms: the request as the island saw it, after speech-to-text (sttMs) and any follow-up check (classifyMs); main's own
+    // timings (route, first reply, total) are in timingsMs, and each tool in main's command-timing.
+    debugLog.info("ai", "command-result", { run, latest: latestRun, ms: Math.round(performance.now() - started), sttMs: timing.sttMs ?? null, classifyMs: timing.classifyMs ?? null, tips: reply.tips, sources: reply.sources, guideError: reply.guideError, actions: reply.actions ?? [], endedWhere: reply.endedWhere ?? null, timingsMs: reply.timingsMs });
     if (run !== latestRun) return;
     // Main already fills in a line for a silent reply; this guards an older main. An error shows as itself.
     const result = reply.tips.length === 0 && !reply.guideError ? { ...reply, tips: [commandFallbackReply(command)], tipSources: [null] } : reply;
@@ -1203,11 +1221,16 @@ async function sessionToken(): Promise<string> {
   return token;
 }
 
+/** The last mic phrase's text and speech-to-text time, so a request it starts logs its STT time with the rest (command-result). */
+let lastStt: { text: string; ms: number } | null = null;
+
 async function transcribePhrase(audio: Uint8Array<ArrayBuffer>): Promise<TranscribeResult> {
   const started = performance.now();
   try {
     const result = await window.bee.transcribe({ audio, sessionToken: await sessionToken() });
-    debugLog.info("stt", "mic-phrase", { bytes: audio.byteLength, ms: Math.round(performance.now() - started), text: result.text, error: result.error });
+    const ms = Math.round(performance.now() - started);
+    debugLog.info("stt", "mic-phrase", { bytes: audio.byteLength, ms, text: result.text, error: result.error });
+    lastStt = result.text ? { text: result.text.trim(), ms } : null;
     return result;
   } catch (error) {
     debugLog.warn("stt", "mic-phrase-failed", { bytes: audio.byteLength, ms: Math.round(performance.now() - started), error: errorData(error) });
@@ -1662,6 +1685,25 @@ export const actions = {
     if (source === "typed") debugLog.info("meeting", "typed-line", { text });
     if (source === "mic" && takeWakeLine(text)) return;
     addOwnLine(text, source);
+  },
+
+  /**
+   * Live → "Talk to Bee (typed)": a typed line through the same wake-word and request path as a mic phrase after speech-to-text
+   * (takeWakeLine → runCommand), so "Bee, open Chrome" works with no microphone. It tests routing and the request, never audio
+   * or speech-to-text. A line Bee does not take (no "Bee", or talking to Bee by name is off) is dropped: never a meeting line,
+   * never shared with the Teams sync.
+   */
+  typeCommand(line: string): TypedCommandOutcome {
+    const text = line.replace(/\s+/g, " ").trim();
+    if (!text) return "empty";
+    if (state.settings?.wakeWordEnabled === false) {
+      debugLog.info("wake", "typed-command-refused", { text, reason: "wake word off" });
+      return "wake-off";
+    }
+    debugLog.info("wake", "typed-command", { text });
+    if (takeWakeLine(text, "typed-command")) return "taken";
+    debugLog.info("wake", "typed-command-dropped", { text, reason: "no wake word" });
+    return "no-wake";
   },
 
   /**

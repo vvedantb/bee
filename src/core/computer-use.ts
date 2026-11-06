@@ -4,15 +4,16 @@ import { COMPUTER_SKILLS, parsePermission, type AccessState, type ComputerRun } 
 import { stopLine, type ComputerPlatform, type RunControl } from "./computer-control";
 import { debugLog, errorData, modelName, msSince, onceText, stepData } from "./debug-log";
 import { playbookBlock } from "./app-playbooks";
-import { ANTHROPIC_CACHE, commandProviderOptions, guideProviderOptions } from "./gateway";
-import { knownNamesBlock } from "./known-names";
+import { ANTHROPIC_CACHE, commandProviderOptions, guideProviderOptions, type CommandEffort } from "./gateway";
+import { knownNamesBlock, type ResolvedName } from "./known-names";
 import { stopOnNoProgress } from "./loop-guard";
 
 // Computer use for a direct request: "Bee, open Discord, send Sam a message, then close the Discord tab in Chrome". The AI runs
 // an observe → act → observe loop over the computer tools (core/computer-tools.ts) until the task is done or a control stops it
 // (core/computer-control.ts: time, Stop) or the loop guard sees no progress (core/loop-guard.ts). No step cap: agent-desktop snapshots and refs only. When an app's tree shows nothing usable,
 // the AI stops and says Bee cannot control that app. It ends with one line for the island. Only a request the user made by
-// name, on their own mic, starts one (core/wake-word.ts); never a meeting line, caption, Teams audio or a teammate.
+// name, on their own mic or typed into Live → Talk to Bee (typed) on their own screen, starts one (core/wake-word.ts); never a
+// meeting line, caption, Teams audio or a teammate.
 
 // Model turns per run when a test sets a step limit: a backstop above it, so the AI can still write its last line.
 const TURNS_ABOVE_STEPS = 2;
@@ -40,11 +41,12 @@ export const COMPUTER_SYSTEM = [
   "Refs look like @s8f3k2p9:e12 and come only from this task's snapshots and finds. After the screen changes, read again: root the same region, or take a new snapshot. Never make up a ref.",
   "Give snapshot and find an app name. When you know an element's role or name, find it first, for example role textfield, or role button and name Send. For a busy app (Slack, Teams, Discord, Chrome, Outlook), take a skeleton snapshot, then read one region with root.",
   "Bee already waits for a slow app and reads it again with more time. When a snapshot still shows few elements, try find by role or name, or a skeleton then root, before anything else.",
-  "The accessibility tree is the only way you can see or act. When find, a skeleton and root still show no usable control for the step (a canvas, an app that exposes no controls, a tree that stays empty), stop and say Bee cannot control that app. When the only control is one of identical twins, stop and say Bee cannot tell which one to use.",
+  "The accessibility tree is the only way you can see or act. When find, a skeleton and root still show no usable control for the step (a canvas, an app that exposes no controls, a tree that stays empty), stop and say Bee cannot control that app. One exception: to type into a document whose page shows no editable field (LibreOffice Writer's page), call type_text with the app and no ref; Bee types into that window with the keyboard. Then find the text to check it, and never say Bee cannot control the app only because the page has no editable field. When the only control is one of identical twins, stop and say Bee cannot tell which one to use.",
   "An error's Detail is agent-desktop's own reason: use it to choose the next step.",
-  "To open an app use open_app; to bring a window to the front use focus_window; to open a web page use open_url. Use list_apps for an app's exact name.",
+  "To open an app use open_app; to bring a window to the front use focus_window; to open a web page use open_url. Use list_apps for an app's exact name. When open_app fails, its result lists the running apps: use an exact name from it, or say Bee could not find the app. Never say an app opened unless open_app or focus_window came back Done.",
   "To press Return or another key in a field you just filled with set_value, call press_key with that field's ref; Bee focuses it first. For find, use roles as snapshots show them (textfield, button, link, treeitem, menuitem), and app names as list_apps shows them.",
   "People's names are often misheard or misspelled. When a person or chat is not found by the exact name, before you give up try names that sound alike or are spelled close (Susannah, Zuzanna), the names the user has taught Bee, and the app's recent chats list. When you use a different name than the user said, say which name matched, for example: Opened the chat with Zuzanna Szczepaniak-Moody (closest match to Susannah).",
+  "When the name could be more than one person (two known names, or several chats, that sound like it, and Bee has not said which one the name means), stop before sending or deleting anything and ask which one in your last line, for example: Which Kris: Chris Lee or Krzysztof Nowak? Never pick one yourself.",
   "When the next few actions are plain from refs you already have (click a search box, set_value a name, press return), run them in one act call instead of one call each. act stops at the first action that fails; look again after it. Never batch past a step whose result you need to see first.",
   "To fill a text field prefer set_value; use type_text when the app needs real typing. To check what a field holds, read its value, not its text: text is what a person reads and can differ.",
   "To check an action worked, wait on its ref rather than a fixed wait and a new snapshot: wait with element and predicate value and the value you expect, or predicate actionable with action type before typing into a field that is still loading. Use wait ms only when nothing on screen can be checked.",
@@ -57,16 +59,23 @@ export const COMPUTER_SYSTEM = [
   "Never open or type into terminals, script tools, system settings or password managers, never type passwords or codes, and never change security, privacy or account settings.",
   "Earlier turns, when given, are the user's earlier requests to Bee and what Bee did, with its real tool calls and results; \"Ended:\" says where the screen was left, and a summary may stand for the oldest turns. A follow-up such as \"the team one\" or \"go back\" carries on from there: never ask which app you were working in when an earlier turn says.",
   "A tool result in an earlier turn was confirmed when it ran: never take it back or say it was not done. Do not run the same step again unless the user asks again or the screen may have changed.",
+  "Never say a message was sent, delivered or posted, or that something was deleted, bought or submitted, unless an action in this task with that effect came back Done, or a wait or read in this task shows it. Typing into a box is not sending. Say only what the results show, for example: Typed hi in the box; not sent yet. Or: Could not confirm the message was sent.",
+  "When such an action came back Done and its result says it went through, it did: say so plainly, for example: Sent hi. Never write that Bee could not confirm it, and do not look again just to check.",
+  "Never state a count, a list of people, rows, messages or meetings, or what a page or calendar holds, unless a read in this task (or an earlier turn) showed it. When open_app, a read or another step fails, say it failed and stop there: never conclude anything from the failure, for example never say there are no meetings because the calendar did not open.",
   "If the task cannot be done, stop and say why in your last line.",
   "When the task is done, or you stop, reply with exactly one short line (under 15 words) on what happened, for example: Sent the message and closed the tab.",
   "Then, when you know it, add a second line starting with \"Ended: \" that says where the screen is now: the page's address, or the app and window, and any error it shows, for example: Ended: vercel.com/acme/~/usage, 404.",
-  "Those lines are plain text: no markdown, no list marker, no quotes. Write \"Bee\" where you would write \"I\".",
+  "Those lines are plain text: no markdown, no list marker, no quotes, and no plans or notes to yourself. Write \"Bee\" where you would write \"I\". Never name a tool, a ref or an error code in them (open_app, list_apps, APP_NOT_FOUND): say what happened in plain words.",
 ].join("\n");
 
 const PLATFORM_SYSTEM: Record<ComputerPlatform, string> = {
   mac: "This is a Mac. The main modifier is cmd: cmd+w closes a tab, cmd+l selects a browser's address bar. Apps go by their display names, for example Google Chrome.",
   windows:
     "This is Windows. The main modifier is ctrl: ctrl+w closes a tab, ctrl+l selects a browser's address bar. Prefer set_value: type_text and focus always need physical here, so set it on them. A key press goes to the app at the front: bring it forward with focus_window first. An open menu is surface menu, and a dialog inside Teams or Edge is surface sheet.",
+  // agent-desktop's Linux guide (skills get platform): AT-SPI, app names as list-apps prints them, focus-window on X11 only,
+  // Chromium's page tree only when the browser runs with accessibility on, and refs that act only when unique in their window.
+  linux:
+    "This is Linux, read through AT-SPI. The main modifier is ctrl: ctrl+w closes a tab, ctrl+l selects a browser's address bar. Apps go by the names list_apps shows, often lower case (google-chrome, firefox, thunar), and every LibreOffice app runs as soffice: check list_apps for the exact name. A LibreOffice Writer page often has no editable field: type into it with type_text, app soffice (or the name list_apps shows) and no ref. focus needs physical here. focus_window works only on X11; on Wayland Bee cannot bring a window to the front, but it reads and acts on an open app all the same, so carry on. A browser page's controls show only when the browser runs with accessibility on: when a page still shows no controls after find and a skeleton, say Bee cannot read that page. A ref acts only when it was unique in its window.",
 };
 
 // agent-desktop's own guides (skills get desktop, skills get platform), compiled into the binary so they match its version.
@@ -169,11 +178,15 @@ export function wantsComputerUse(command: string): boolean {
   return STARTS_WITH_VERB.test(text) || LATER_VERB.test(text);
 }
 
-// One quick action on one target: "click Inbox", "press escape", "type hello", "tick Remember me". Never a send, a delete or a
-// buy by name (not even "click Send"), and never two steps (LATER_VERB): those go to the planning model.
+// One quick action on one target: "click Inbox", "press escape", "type hello", "type hi in the message box". Never a send, a
+// delete or a buy by name (not even "click Send"), and never two steps (LATER_VERB): those go to the planning model. "message"
+// or "email" as the name of a box ("the message box", "the email field") is a place, not a send.
 const SIMPLE_VERB = /^(?:click|tap|press|hit|type|select|choose|pick|tick|untick|uncheck|toggle|scroll|mute|unmute|play|pause)\b/i;
-const NOT_SIMPLE = /\b(?:send|message|dm|e-?mail|reply|post|delete|remove|buy|pay|order|submit|purchase)\b/i;
+const FIELD_NOUN = String.raw`\s+(?:box|field|bar|input|area|text ?box|composer|address)\b`;
+const NOT_SIMPLE = new RegExp(String.raw`\b(?:send|dm|reply|post|delete|remove|buy|pay|order|submit|purchase)\b|\b(?:message|e-?mail)\b(?!${FIELD_NOUN})`, "i");
 const SIMPLE_WORDS_MAX = 10;
+// A short task on screen for the planning model (shortComputerTask): one target, no later step, at most this many words.
+const SHORT_WORDS_MAX = 14;
 
 /**
  * A computer-use request simple enough for the fast model (core/direct-command.ts): one action on one target, in a few words. The
@@ -185,6 +198,17 @@ export function simpleComputerTask(command: string): boolean {
   return text.split(" ").length <= SIMPLE_WORDS_MAX;
 }
 
+/**
+ * A computer-use request for the planning model that is still one short task: one target, no later step ("send hi from the
+ * message box", "delete Fixture item A"). Its steps are plain looks and acts, so the planning model thinks at low effort
+ * (core/gateway.ts CommandEffort): seconds a turn saved. The confirm gate and the claim check do not depend on it.
+ */
+export function shortComputerTask(command: string): boolean {
+  const text = command.replace(/\s+/g, " ").trim().replace(/^["'“‘]+|["'”’]+$/gu, "").replace(POLITE, "").trim();
+  if (!wantsComputerUse(text) || LATER_VERB.test(text)) return false;
+  return text.split(" ").length <= SHORT_WORDS_MAX;
+}
+
 /** What computer use may do here, from agent-desktop's own permissions report. Unknown when it cannot tell (fail open). */
 export type ComputerAccess = { accessibility: AccessState; screenRecording: AccessState };
 
@@ -194,13 +218,24 @@ export async function computerAccess(run: ComputerRun, signal?: AbortSignal): Pr
   return { accessibility: parsePermission(result.data, "accessibility"), screenRecording: parsePermission(result.data, "screen_recording") };
 }
 
+// The model's own notes, never shown: a "~" line (with or without the space), a bracketed tag ("(internal note)", "[thinking]",
+// "<thinking>") and a labelled plan or thought ("Note to self: …", "Plan: …", "Reasoning: …"). A plain "Note: …" is the user's,
+// and "~15 minutes" is no note.
+const NOTE_LINE =
+  /^(?:[-*•]\s+)?(?:~(?:\s|$|(?=\p{L}))|[([<]\s*\/?\s*(?:internal\s+)?(?:notes?|plan|thinking|thoughts?|reasoning|scratch(?:pad)?)\s*[)\]>]|(?:internal\s+notes?|notes?\s+to\s+self|plan|thinking|thoughts?|reasoning|scratch(?:pad)?|self[- ]check)\s*:)/iu;
+
+/** True for a line of the model's own notes, which Bee never shows. */
+export function isNoteLine(line: string): boolean {
+  return NOTE_LINE.test(line.trim());
+}
+
 /** The AI's last line as the island shows it: the first real line, without a list marker, quotes or Bee's own notes. */
 export function finalLine(text: string): string {
   const line =
     text
       .split(/\r?\n/)
       .map((item) => item.trim())
-      .find((item) => item.length > 0 && !item.startsWith("~ ") && item.toUpperCase() !== "NONE" && !ENDED.test(item)) ?? "";
+      .find((item) => item.length > 0 && !isNoteLine(item) && item.toUpperCase() !== "NONE" && !ENDED.test(item)) ?? "";
   const clean = line
     .replace(/^[-*•]\s+/, "")
     .replace(/^["'“‘]+|["'”’]+$/gu, "")
@@ -225,10 +260,14 @@ export type ComputerUseResult = {
   stopped: boolean;
   steps: number;
   error: boolean;
+  /** Ms from the start of this run to the end of the model's first step (its first reply), or null when none ended. */
+  firstStepMs?: number | null;
   endedWhere?: string;
   messages: ModelMessage[];
   /** The fast pass only: the task should go on with the planning model, after these messages. The control is left running. */
   escalate?: boolean;
+  /** The AI's line claimed something this run did not prove, so Bee showed a cautious line instead (core/claim-guard.ts). */
+  claimRewritten?: boolean;
 };
 
 /** A fast pass's steps for the planning model: they end on a tool result, or a short user line asks it to go on. */
@@ -275,6 +314,8 @@ export async function runComputerUse(args: {
   summarise?: Summarise;
   /** Names Bee should know (core/known-names.ts), sent with the request. */
   knownNames?: readonly string[];
+  /** Names in the request Bee settled from the user's recent requests (core/known-names.ts recentChoice). */
+  resolvedNames?: readonly ResolvedName[];
   /** agent-desktop's guides for this session (computerSkills). Absent or failing: the run goes on without them. */
   skills?: ComputerSkills;
   /** What Bee remembers about the user (core/bee-memory.ts memorySummary), sent with the request. */
@@ -286,6 +327,8 @@ export async function runComputerUse(args: {
   fast?: boolean;
   /** This request's steps so far, from a fast pass that handed over: sent after the request, so the AI carries on from them. */
   steps?: readonly ModelMessage[];
+  /** The planning model's thinking effort: low for a short task (shortComputerTask), else medium. Ignored by the fast pass. */
+  effort?: CommandEffort;
   now?: Date;
   onFinish?: (info: { usage: LanguageModelUsage; providerMetadata: ProviderMetadata | undefined }) => void;
 }): Promise<ComputerUseResult> {
@@ -294,18 +337,20 @@ export async function runComputerUse(args: {
   // True when the fast pass hands over: the control stays live for the planning model's run.
   let handOver = false;
   const lines = (args.transcript ?? []).slice(-TRANSCRIPT_LINES).map((line) => `- ${line.replace(/\s+/g, " ").trim()}`);
+  // When the model's first step (its first reply) ended: the computer path's "first token", for the timing log.
+  let firstStepMs: number | null = null;
   const ended = (line: string, error = false, where = "", messages: ModelMessage[] = []): ComputerUseResult => {
     const reason = control.reason();
     console.debug(`perf computer steps=${control.steps()} reason=${reason ?? (error ? "error" : "done")} ${Math.round(performance.now() - started)}ms`);
     const at = where ? { endedWhere: where } : {};
     return reason
-      ? { line: stopLine(reason, { maxSteps: args.maxSteps, declined: control.declined(), platform: args.platform }), stopped: true, steps: control.steps(), error: false, ...at, messages }
-      : { line, stopped: false, steps: control.steps(), error, ...at, messages };
+      ? { line: stopLine(reason, { maxSteps: args.maxSteps, declined: control.declined(), platform: args.platform }), stopped: true, steps: control.steps(), error: false, firstStepMs, ...at, messages }
+      : { line, stopped: false, steps: control.steps(), error, firstStepMs, ...at, messages };
   };
   try {
     const guides = args.skills ? await args.skills(control.signal).catch(() => "") : "";
     const system = `${COMPUTER_SYSTEM}\n${PLATFORM_SYSTEM[args.platform]}${guides ? `\n\n${SKILLS_INTRO}\n\n${guides}` : ""}`;
-    const names = knownNamesBlock(args.knownNames ?? []);
+    const names = knownNamesBlock(args.knownNames ?? [], args.command, args.resolvedNames);
     const history = args.history ?? [];
     const playbook = playbookBlock(`${recentRequests(history)}\n${args.command}`, args.platform);
     const content = [
@@ -317,7 +362,15 @@ export async function runComputerUse(args: {
       { type: "text" as const, text: `Today is ${today(args.now ?? new Date())}.\nThe user's request to Bee:\n- ${args.command.replace(/\s+/g, " ").trim()}` },
     ];
     // Local debug log only: the request, each model step with its tool calls and results, and the end.
-    debugLog.info("computer", "ai-request", { model: modelName(args.model), fast: args.fast ?? false, system: onceText(system), content: content.map((part) => part.text), history: history.length, tools: Object.keys(args.tools) });
+    debugLog.info("computer", "ai-request", {
+      model: modelName(args.model),
+      fast: args.fast ?? false,
+      effort: args.fast ? null : (args.effort ?? "medium"),
+      system: onceText(system),
+      content: content.map((part) => part.text),
+      history: history.length,
+      tools: Object.keys(args.tools),
+    });
     let looped = false;
     const noProgress = stopOnNoProgress(() => {
       looped = true;
@@ -329,7 +382,10 @@ export async function runComputerUse(args: {
       instructions: { role: "system", content: system, providerOptions: ANTHROPIC_CACHE },
       messages: [...cacheAtEnd(history, ANTHROPIC_CACHE), { role: "user", content }, ...carryOn(args.steps ?? [])],
       tools: args.tools,
-      onStepEnd: (step) => debugLog.info("computer", "ai-step", { ms: msSince(started), steps: control.steps(), ...stepData(step) }),
+      onStepEnd: (step) => {
+        firstStepMs ??= Math.round(performance.now() - started);
+        debugLog.info("computer", "ai-step", { ms: msSince(started), steps: control.steps(), ...stepData(step) });
+      },
       // No step cap: the AI stops itself, or the controls (Stop, time) or the loop guard stop it. A test may set a limit.
       stopWhen: args.fast
         ? [noProgress, isStepCount(FAST_MAX_TURNS)]
@@ -341,9 +397,9 @@ export async function runComputerUse(args: {
       abortSignal: control.signal,
       maxOutputTokens: args.fast ? FAST_MAX_OUTPUT_TOKENS : COMPUTER_MAX_OUTPUT_TOKENS,
       maxRetries: 1,
-      // User-facing: not flex. No web search here, so routing keeps fail-over. The planning model thinks adaptively at medium
-      // effort; the fast pass runs the fast model with thinking off (gateway.ts).
-      providerOptions: args.fast ? guideProviderOptions("default", { web: false }) : commandProviderOptions("default", { web: false }),
+      // User-facing: not flex. No web search here, so routing keeps fail-over. The planning model thinks adaptively, at medium
+      // effort or low for a short task; the fast pass runs the fast model with thinking off (gateway.ts).
+      providerOptions: args.fast ? guideProviderOptions("default", { web: false }) : commandProviderOptions("default", { web: false, ...(args.effort ? { effort: args.effort } : {}) }),
     });
     args.onFinish?.({ usage: result.totalUsage, providerMetadata: result.providerMetadata });
     debugLog.info("computer", "ai-response", { ms: msSince(started), finishReason: result.finishReason, text: result.text, usage: result.totalUsage, cost: result.providerMetadata?.gateway ?? null });
@@ -354,7 +410,7 @@ export async function runComputerUse(args: {
     if (args.fast && !control.reason() && (ESCALATE.test(result.text.trim()) || ESCALATE.test(line) || looped || (!line && result.finishReason === "tool-calls"))) {
       debugLog.info("computer", "fast-escalate", { steps: control.steps(), looped, finishReason: result.finishReason });
       handOver = true;
-      return { line: "", stopped: false, steps: control.steps(), error: false, messages: messages.filter((message) => message.role !== "assistant" || !isEscalateText(message)), escalate: true };
+      return { line: "", stopped: false, steps: control.steps(), error: false, firstStepMs, messages: messages.filter((message) => message.role !== "assistant" || !isEscalateText(message)), escalate: true };
     }
     if (looped) control.stop("loop");
     // Turns ran out with tools still being called: that is the step limit too.
@@ -365,7 +421,7 @@ export async function runComputerUse(args: {
     // The fast model failing is no reason to give up: the planning model takes the task.
     if (args.fast && !control.reason()) {
       handOver = true;
-      return { line: "", stopped: false, steps: control.steps(), error: false, messages: [], escalate: true };
+      return { line: "", stopped: false, steps: control.steps(), error: false, firstStepMs, messages: [], escalate: true };
     }
     return ended("The AI could not finish that.", true);
   } finally {

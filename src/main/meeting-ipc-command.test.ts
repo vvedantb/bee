@@ -107,14 +107,14 @@ describe("main: computer use for a direct request", () => {
     return () => ({ languageModel: () => model }) as unknown as BeeGateway;
   };
 
-  function setupComputer(options: { turns: Turn[]; askFirst?: boolean; computer?: boolean }) {
+  function setupComputer(options: { turns: Turn[]; askFirst?: boolean; computer?: boolean; platform?: "mac" | "windows" | "linux"; accessibility?: "granted" | "denied" }) {
     electron.handlers.clear();
     const commands: string[] = [];
     const sent: Array<{ channel: string; payload: unknown }> = [];
     let cleaned = 0;
     const run: ComputerRun = async (command) => {
       commands.push(command);
-      if (command === "permissions") return { ok: true, data: { accessibility: { state: "granted" }, screen_recording: { state: "denied" } } };
+      if (command === "permissions") return { ok: true, data: { accessibility: { state: options.accessibility ?? "granted" }, screen_recording: { state: "denied" } } };
       if (command === "skills") return { ok: true, data: { content: "# Guide\n\nAct on refs." } };
       return command === "snapshot" ? { ok: true, data: SNAPSHOT } : { ok: true, data: {} };
     };
@@ -133,7 +133,7 @@ describe("main: computer use for a direct request", () => {
         options.computer === false
           ? undefined
           : {
-              platform: "mac",
+              platform: options.platform ?? "mac",
               run,
               askFirst: () => options.askFirst ?? true,
               cleanup: () => {
@@ -153,6 +153,7 @@ describe("main: computer use for a direct request", () => {
       // Async like ipcMain.handle: a handler that throws rejects the renderer's call.
       answer: async (payload: unknown) => handler(IPC.computerAnswer)(event, payload),
       stop: async (payload: unknown) => handler(IPC.stopCommand)(event, payload),
+      cancel: async (payload: unknown) => handler(IPC.cancelPipeline)(event, payload),
       access: () => handler(IPC.computerAccess)(event) as Promise<unknown>,
       updates,
       commands,
@@ -208,6 +209,24 @@ describe("main: computer use for a direct request", () => {
     await expect(ipc.stop({ runId: { nope: 1 } })).rejects.toThrow();
   });
 
+  it("lets a newer request cancel the one in flight (the renderer cancels the older run id): nothing is sent", async () => {
+    const ipc = setupComputer({ turns: SEND_TURNS });
+    const older = ipc.start("send Sam a message in Discord", 7);
+    await vi.waitFor(() => expect(ipc.updates().some((update) => update.type === "confirm")).toBe(true));
+    // store.ts runCommand: a new request cancels the previous run id before it starts its own.
+    await ipc.cancel({ runId: 7 });
+    expect((await older).tips).toEqual(["Stopped."]);
+    expect(ipc.commands).not.toContain("click");
+  });
+
+  it("on Linux without the accessibility bus, says so in Settings and runs no loop", async () => {
+    const { LINUX_A11Y_LINE } = await import("../core/computer-control");
+    const linux = setupComputer({ turns: SEND_TURNS, platform: "linux", accessibility: "denied" });
+    expect(await linux.access()).toEqual({ supported: true, platform: "linux", accessibility: "denied", screenRecording: "denied" });
+    expect((await linux.start("send Sam a message in Discord")).tips).toEqual([LINUX_A11Y_LINE]);
+    expect(linux.commands.filter((command) => command !== "permissions")).toEqual([]);
+  });
+
   it("reports what computer use may do here, for Settings", async () => {
     expect(await setupComputer({ turns: [] }).access()).toEqual({ supported: true, platform: "mac", accessibility: "granted", screenRecording: "denied" });
     expect(await setupComputer({ turns: [], computer: false }).access()).toEqual({ supported: false, platform: "other", accessibility: "unknown", screenRecording: "unknown" });
@@ -218,7 +237,7 @@ describe("main: computer use for a direct request", () => {
 describe("main: Bee's history and the follow-up check", () => {
   const usage = { inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 }, outputTokens: { total: 1, text: 1, reasoning: undefined } };
 
-  function setupWithModel(reply: string, options: { key?: boolean; history?: BeeHistoryStore; learned?: string[][] } = {}) {
+  function setupWithModel(reply: string, options: { key?: boolean; history?: BeeHistoryStore; learned?: string[][]; names?: string[] } = {}) {
     electron.handlers.clear();
     const prompts: string[] = [];
     const model = new MockLanguageModelV4({
@@ -240,7 +259,7 @@ describe("main: Bee's history and the follow-up check", () => {
       wakeWordEnabled: () => true,
       computer: { platform: "windows", run: async () => ({ ok: true, data: {} }), askFirst: () => false, cleanup: () => undefined },
       ...(options.history ? { history: options.history } : {}),
-      knownNames: () => ["Zuzanna Szczepaniak-Moody"],
+      knownNames: () => options.names ?? ["Zuzanna Szczepaniak-Moody"],
       learnNames: (names) => options.learned?.push(names),
     });
     const handler = (channel: string) => {
@@ -278,6 +297,17 @@ describe("main: Bee's history and the follow-up check", () => {
     expect(prompts[0]).not.toContain("r6");
   });
 
+  it("asks which Kris, which app and what to say for a typed 'message Kris', from Settings names, before any AI call (Linux e2e)", async () => {
+    // Before: the AI took about 20 s to ask only which app and what to say. The renderer sends the request after "Bee,". Kris
+    // spells neither known name and sounds like both, so it is a genuine tie (Chris is Chris Lee, by spelling).
+    const { handler, prompts } = setupWithModel("Which app should Bee use to message Kris, and what should the message say?", { names: ["Chris Lee", "Krzysztof Nowak"] });
+    for (const command of ["message Kris", "message kris"]) {
+      const result = (await handler(IPC.runCommand)({ command, runId: 7, sessionToken: "signed-in" })) as { tips: string[] };
+      expect(result.tips, command).toEqual(["Which Kris (Chris Lee or Krzysztof Nowak), which app, and what should the message say?"]);
+    }
+    expect(prompts).toEqual([]);
+  });
+
   it("passes on names learned from a spelling correction", async () => {
     const learned: string[][] = [];
     const { handler } = setupWithModel("Done.", { learned });
@@ -290,5 +320,51 @@ describe("main: Bee's history and the follow-up check", () => {
     expect(await setupWithModel('{"addressed":"bee","confidence":0.9}').handler(IPC.classifyFollowUp)(request)).toEqual({ addressed: "bee", confidence: 0.9 });
     expect(await setupWithModel("{}", { key: false }).handler(IPC.classifyFollowUp)(request)).toBeNull();
     await expect(setupWithModel("{}").handler(IPC.classifyFollowUp)({ ...request, sessionToken: "nope" })).rejects.toThrow(/Sign in/);
+  });
+});
+
+describe("main: mic speech-to-text", () => {
+  beforeEach(() => {
+    vi.spyOn(console, "debug").mockImplementation(() => undefined);
+  });
+
+  /** The transcribe handler with a fake Gateway whose speech-to-text hears the given text, and the names Settings holds. */
+  function transcriber(heard: string, knownNames: string[]) {
+    electron.handlers.clear();
+    const options: unknown[] = [];
+    const transcription = {
+      specificationVersion: "v4",
+      provider: "gateway",
+      modelId: "xai/grok-stt",
+      doGenerate: async (call: { providerOptions?: unknown }) => {
+        options.push(call.providerOptions);
+        return { text: heard, segments: [], language: "en", durationInSeconds: 1, warnings: [], response: { timestamp: new Date(), modelId: "xai/grok-stt" } };
+      },
+    };
+    registerMeetingIpc({
+      notesDir: "/notes",
+      fsRoots: () => [],
+      mcpConfigs: () => [],
+      mcpSignedOut: () => [],
+      mcpPool: {} as never,
+      meeting: { brief: () => "" } as unknown as MeetingContext,
+      gatewayApiKey: () => "fixture-key",
+      gateway: () => ({ transcription: () => transcription }) as unknown as BeeGateway,
+      knownNames: () => knownNames,
+    });
+    const handler = electron.handlers.get(IPC.transcribe);
+    if (!handler) throw new Error("no transcribe handler");
+    return { transcribe: () => handler(event, { audio: new Uint8Array(64), sessionToken: "signed-in" }), options };
+  }
+
+  it("sends the known names as hints and puts a misheard name in its known spelling before the wake word is read", async () => {
+    const { transcribe, options } = transcriber("Bee, send Chris a message.", ["Krzysztof Nowak"]);
+    expect(await transcribe()).toEqual({ text: "Bee, send Krzysztof a message.", error: null });
+    expect(options[0]).toEqual({ xai: { keyterm: ["Krzysztof Nowak", "Krzysztof"] } });
+  });
+
+  it("leaves a name two known people share as heard, for Bee to ask which", async () => {
+    const { transcribe } = transcriber("Bee, send Chris a message.", ["Chris Lee", "Krzysztof Nowak"]);
+    expect(await transcribe()).toEqual({ text: "Bee, send Chris a message.", error: null });
   });
 });

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ACCESSIBILITY_LINE, ComputerStopped, awaitAnswer, createRunControl, stopLine } from "./computer-control";
+import { ACCESSIBILITY_LINE, ComputerStopped, LINUX_A11Y_LINE, awaitAnswer, createRunControl, stopLine } from "./computer-control";
 
 // Computer use's loop controls with fake timers: steps, the wall clock (paused while a Confirm waits), and stop.
 
@@ -108,6 +108,8 @@ describe("stopLine", () => {
     expect(stopLine("loop")).toBe("Stopped: Bee kept repeating the same step.");
     expect(stopLine("time")).toBe("Stopped: that took too long.");
     expect(stopLine("permission", { platform: "mac" })).toBe(ACCESSIBILITY_LINE);
+    expect(stopLine("permission", { platform: "linux" })).toBe(LINUX_A11Y_LINE);
+    expect(LINUX_A11Y_LINE).toContain("AT-SPI");
     expect(stopLine("permission", { platform: "windows" })).toMatch(/administrator/);
     expect(stopLine("declined", { declined: "send" })).toBe("Cancelled. Nothing was sent.");
     expect(stopLine("declined", { declined: "delete" })).toBe("Cancelled. Nothing was deleted.");
