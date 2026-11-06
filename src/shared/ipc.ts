@@ -59,6 +59,7 @@ export const IPC = {
   computerAnswer: "bee:computer:answer",
   computerAccess: "bee:computer:access",
   claudeCode: "bee:claude-code:status",
+  claudeCodeUpdate: "bee:claude-code:update",
   classifyFollowUp: "bee:command:classify-follow-up",
   conversationEnded: "bee:command:conversation-ended",
 };
@@ -287,6 +288,10 @@ export const claudeCodeViewSchema = z.object({
   message: z.string().max(300).nullable(),
 });
 export type ClaudeCodeView = z.infer<typeof claudeCodeViewSchema>;
+
+// After Settings → Update Claude Code: the state now, and why the update failed when it did.
+export const claudeCodeUpdateResultSchema = z.object({ view: claudeCodeViewSchema, error: z.string().max(300).nullable() });
+export type ClaudeCodeUpdateResult = z.infer<typeof claudeCodeUpdateResultSchema>;
 
 // Lines the renderer keeps for the end-of-meeting summary (store.ts); the pipeline still gets only the last 8.
 export const SESSION_TRANSCRIPT_MAX = 200;

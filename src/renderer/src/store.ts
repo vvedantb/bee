@@ -1,3 +1,4 @@
+import type { ClaudeCodeUpdate } from "./ClaudeCodeSection";
 import { getToken } from "@clerk/electron/react";
 import { useSyncExternalStore } from "react";
 import { echoesOwnLine } from "../../core/agent-desktop-meeting";
@@ -139,6 +140,8 @@ export type BeeState = {
   computerAccess: ComputerAccessView | null;
   // The user's Claude Code, which "Bee, …" requests run on, for Settings (null until asked).
   claudeCode: ClaudeCodeView | null;
+  // Settings → Update Claude Code: running, or why the last update failed.
+  claudeCodeUpdate: ClaudeCodeUpdate;
   // The conversation window after a request to Bee (core/wake-word.ts CONVERSATION_WINDOW_MS): a follow-up needs no "Bee". The
   // pill says Bee is listening. State only, never words.
   conversationOpen: boolean;
@@ -212,6 +215,7 @@ let state: BeeState = {
   computer: null,
   computerAccess: null,
   claudeCode: null,
+  claudeCodeUpdate: "idle",
   conversationOpen: false,
 };
 const listeners = new Set<() => void>();
@@ -1745,6 +1749,17 @@ export const actions = {
       set({ claudeCode: await window.bee.claudeCode(fresh) });
     } catch {
       set({ claudeCode: { state: "missing", version: null, message: "Bee could not check Claude Code." } });
+    }
+  },
+
+  /** Settings → Update Claude Code: runs `claude update` in main, then shows the new state. */
+  async updateClaudeCode(): Promise<void> {
+    set({ claudeCodeUpdate: "updating" });
+    try {
+      const result = await window.bee.updateClaudeCode();
+      set({ claudeCode: result.view, claudeCodeUpdate: result.error ? { error: result.error } : "idle" });
+    } catch {
+      set({ claudeCodeUpdate: { error: "Claude Code could not update." } });
     }
   },
 
