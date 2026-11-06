@@ -4,6 +4,17 @@ import { gatewayTier } from "./gateway";
 
 const STT_TIMEOUT_MS = 20_000;
 
+/** Bee's own words, which every model mishears ("Bee" comes back as "B"). The user's names come from Settings → Known names. */
+export const STT_TERMS = ["Bee", "Luna", "Jev", "vmem"] as const;
+// Words sent to the model at most. The Gateway took 200 without an error, but Mistral documents no limit, so stay small.
+const VOCABULARY_MAX = 100;
+
+/** The words the model should listen for: Bee's terms, then the user's known names, newest first, with no repeats (any case). */
+export function sttVocabulary(knownNames: readonly string[]): string[] {
+  const seen = new Set<string>();
+  return [...STT_TERMS, ...[...knownNames].reverse()].filter((word) => !seen.has(word.toLowerCase()) && seen.add(word.toLowerCase())).slice(0, VOCABULARY_MAX);
+}
+
 export type TranscribeOutcome = { text: string | null; error: string | null };
 
 /** One spoken phrase (WAV bytes) → text. Silence or noise with no words comes back as text null, error null. */
@@ -11,6 +22,8 @@ export async function transcribeSpeech(args: {
   model: TranscriptionModel;
   audio: Uint8Array;
   timeoutMs?: number;
+  /** Words to listen for (sttVocabulary). Sent as Mistral's contextBias: other providers ignore their own options. */
+  vocabulary?: readonly string[];
   /** Which capture the phrase came from, for the local debug log only. */
   source?: "mic" | "teams-audio";
 }): Promise<TranscribeOutcome> {
@@ -23,9 +36,8 @@ export async function transcribeSpeech(args: {
       audio: args.audio,
       maxRetries: 1,
       abortSignal: AbortSignal.timeout(args.timeoutMs ?? STT_TIMEOUT_MS),
-      // User-facing: not flex (see gateway.ts). No vocabulary hints (vmem, Eva, Evalucom…): the SDK and Gateway types give
-      // grok-stt no prompt or vocabulary option, and Bee sends no untyped ones.
-      providerOptions: gatewayTier("default"),
+      // User-facing: not flex (see gateway.ts). The Gateway passes the mistral options to Voxtral.
+      providerOptions: { ...gatewayTier("default"), ...(args.vocabulary?.length ? { mistral: { contextBias: [...args.vocabulary] } } : {}) },
     });
     console.debug(`perf stt ${Math.round(performance.now() - started)}ms`);
     const text = result.text.replace(/\s+/g, " ").trim();
