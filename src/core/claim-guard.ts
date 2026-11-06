@@ -50,6 +50,51 @@ export function claimsEmptyCalendar(line: string): boolean {
   return ABSENCE.test(line);
 }
 
+// Claims that Bee typed, entered or filled in text. Past tense and whole words, per clause, so "not typed yet" and "ready to type"
+// never count. "typed" and "filled in" always count; looser verbs (entered, wrote, put, pasted, inserted) only with quoted text
+// or a field after them ("Entered "London" in the search box"), so "entered the meeting" or "put it on your calendar" do not.
+const TYPED_STRONG = /\b(?:typed|re-?typed|filled (?:in|out)|filled)\b/i;
+const TYPED_LOOSE = /\b(?:entered|wrote|written|put|pasted|inserted)\b/i;
+const FIELD = /\b(?:field|box|form|input|search bar|address bar|message bar|composer|text area|editor)\b/i;
+// Someone else did the typing: "you typed", "the user entered". Only Bee's own claims are checked.
+const OTHER_TYPIST = /\b(?:you|user|they|he|she|someone|somebody)\s+(?:(?:had|have|has|already|just)\s+)*(?:typed|re-?typed|filled|entered|wrote|written|put|pasted|inserted)\b/i;
+// Quoted text in a line: "…" or “…”. Single quotes are left alone: they are apostrophes too.
+const QUOTED = /["“]([^"“”\n]{1,300})["”]/g;
+const QUOTE_MARK = "\u0000q\u0000";
+
+/**
+ * A line's claim that Bee typed something this turn, or null: claimed, and the quoted texts it says were typed (none when the
+ * line names no text: "Filled in the form."). Quoted text is masked first, so a quote that says "no" never reads as a denial.
+ */
+export function claimedTyping(line: string): { texts: string[] } | null {
+  const texts = [...line.matchAll(QUOTED)].map((match) => match[1] ?? "");
+  const masked = line.replace(QUOTED, QUOTE_MARK);
+  for (const clause of masked.split(CLAUSE)) {
+    const text = clause.trim();
+    if (!text || NEGATED.test(text.replaceAll(QUOTE_MARK, " ")) || OTHER_TYPIST.test(text)) continue;
+    if (TYPED_STRONG.test(text) || (TYPED_LOOSE.test(text) && (text.includes(QUOTE_MARK) || FIELD.test(text)))) return { texts };
+  }
+  return null;
+}
+
+const typedKey = (text: string) => text.toLowerCase().replace(/\s+/g, " ").replace(/[.!?,;:]+$/, "").trim();
+
+/**
+ * Whether this turn's typing proves a typing claim: something was typed, and each quoted text the line claims is part of what
+ * was typed ("hi Krzys" in a typed "hi Krzys, see you").
+ */
+function typingProven(claim: { texts: string[] }, typed: readonly string[]): boolean {
+  const done = typed.map(typedKey).filter((text) => text.length > 0);
+  if (done.length === 0) return false;
+  return claim.texts.every((text) => {
+    const key = typedKey(text);
+    return key.length === 0 || done.some((value) => value.includes(key));
+  });
+}
+
+/** The cautious line for a typing claim this turn's tools do not prove. */
+export const UNPROVEN_TYPING_LINE = "Bee could not confirm anything was typed.";
+
 /** What this run's tool calls and results prove. */
 export type RunEvidence = {
   /**
@@ -285,7 +330,7 @@ export function provenLine(kind: ClaimKind, typed: readonly string[] = []): stri
 /** The line for an empty-calendar claim with no successful read behind it. */
 export const UNSEEN_CALENDAR_LINE = "Bee could not read the calendar, so it cannot say whether you have meetings.";
 
-export type GuardedLine = { line: string; rewritten: boolean; reason: ClaimKind | "unseen-calendar" | null };
+export type GuardedLine = { line: string; rewritten: boolean; reason: ClaimKind | "unproven-typing" | "unseen-calendar" | null };
 
 /**
  * The line to show. A claimed send, delete, purchase or submit stays only when evidence.proven has that kind: never because some
@@ -293,7 +338,8 @@ export type GuardedLine = { line: string; rewritten: boolean; reason: ClaimKind 
  * turns proved or showed. A line that claims a proven kind and an unproven one keeps the proven one in plain words, then the
  * cautious line for the other: a proven send is never shown as unconfirmed. An empty-calendar claim after tools ran stays only
  * when a calendar read succeeded. With no calendar tool tried, any read that succeeded will do, as before: the answer may come
- * from the meeting brief.
+ * from the meeting brief. A claim that Bee typed, entered or filled in text stays only when a type_text or set_value for that text
+ * succeeded in THIS turn (evidence.typed): what the history says was typed never counts.
  */
 export function guardLine(line: string, evidence: RunEvidence): GuardedLine {
   const claims = claimedEffects(line);
@@ -302,6 +348,8 @@ export function guardLine(line: string, evidence: RunEvidence): GuardedLine {
     const kept = claims.filter((claim) => evidence.proven.has(claim)).map((claim) => provenLine(claim, evidence.typed));
     return { line: [...kept, unprovenLine(unproven, evidence.typed)].join(" "), rewritten: true, reason: unproven };
   }
+  const typing = claimedTyping(line);
+  if (typing && !typingProven(typing, evidence.typed)) return { line: UNPROVEN_TYPING_LINE, rewritten: true, reason: "unproven-typing" };
   if (claimsEmptyCalendar(line) && unseenCalendar(evidence)) return { line: UNSEEN_CALENDAR_LINE, rewritten: true, reason: "unseen-calendar" };
   return { line, rewritten: false, reason: null };
 }

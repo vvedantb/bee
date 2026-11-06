@@ -1,7 +1,7 @@
 import type { ModelMessage } from "ai";
 import { describe, expect, it } from "vitest";
 import {
-  UNSEEN_CALENDAR_LINE, answerEvidence, claimedEffect, claimedEffects, claimsEmptyCalendar, connectorEffect, doubtedEffect, guardLine, provenLine, runEvidence, unprovenLine, upgradeLine,
+  UNPROVEN_TYPING_LINE, UNSEEN_CALENDAR_LINE, answerEvidence, claimedTyping, claimedEffect, claimedEffects, claimsEmptyCalendar, connectorEffect, doubtedEffect, guardLine, provenLine, runEvidence, unprovenLine, upgradeLine,
   withoutToolNames,
 } from "./claim-guard";
 
@@ -135,7 +135,10 @@ describe("guardLine: false completion", () => {
 
   it("never touches an honest line", () => {
     const none = runEvidence([]);
-    for (const line of ["Typed hi in the box; not sent yet.", "Opened Chrome.", "Stopped.", "Cancelled. Nothing was sent."]) expect(guardLine(line, none).rewritten, line).toBe(false);
+    for (const line of ["Opened Chrome.", "Stopped.", "Cancelled. Nothing was sent.", "Not typed yet.", "Bee did not type anything.", "Ready to type it."]) expect(guardLine(line, none).rewritten, line).toBe(false);
+    // A typing claim stands once this run typed it.
+    const typed = runEvidence(call("type_text", { ref: "@s1:e2", text: "hi", effect: "none" }, "Done."));
+    expect(guardLine("Typed hi in the box; not sent yet.", typed).rewritten).toBe(false);
   });
 
   it("keeps a long draft out of the island line", () => {
@@ -224,6 +227,40 @@ describe("guardLine: unseen facts", () => {
     expect(guardLine("No meetings today.", connector)).toMatchObject({ rewritten: false });
     const connectorFailed = runEvidence([...call("gcal__list_events", { day: "today" }, "Error: not signed in"), ...call("web_search", { query: "x" }, "Results")]);
     expect(guardLine("No meetings today.", connectorFailed)).toMatchObject({ rewritten: true });
+  });
+});
+
+describe("guardLine: false typing claims (PR #80)", () => {
+  it("rewrites a claim that Bee typed text when nothing in this run typed it", () => {
+    // Scenario B: Bee said it had already typed text it never typed this turn.
+    const opened = runEvidence(call("open_app", { name: "Chrome" }, "Done: Opened Chrome."));
+    for (const line of ['I already typed "hi Krzys" into the box.', 'Typed "hi Krzys".', "Filled in the form.", 'Entered "London" in the search box.', 'I put "hi Krzys" in the message field.']) {
+      expect(guardLine(line, opened), line).toEqual({ line: UNPROVEN_TYPING_LINE, rewritten: true, reason: "unproven-typing" });
+      expect(guardLine(line, runEvidence([])), line).toMatchObject({ rewritten: true, reason: "unproven-typing" });
+    }
+    // A failed type_text proves nothing.
+    const failed = runEvidence(call("type_text", { ref: "@s1:e2", text: "hi Krzys", effect: "none" }, "Error: ELEMENT_NOT_FOUND"));
+    expect(guardLine('I already typed "hi Krzys" into the box.', failed)).toMatchObject({ rewritten: true, reason: "unproven-typing" });
+  });
+
+  it("keeps the claim after a successful type_text or set_value of that text in this run", () => {
+    const typed = runEvidence(call("type_text", { ref: "@s1:e2", text: "hi Krzys", effect: "none" }, "Done."));
+    expect(guardLine('I already typed "hi Krzys" into the box.', typed)).toEqual({ line: 'I already typed "hi Krzys" into the box.', rewritten: false, reason: null });
+    const set = runEvidence(call("set_value", { ref: "@s1:e2", value: "hi Krzys", effect: "none" }, "Done."));
+    expect(guardLine('Typed "hi Krzys"; not sent yet.', set).rewritten).toBe(false);
+    // Typing other text does not prove this text.
+    const other = runEvidence(call("set_value", { ref: "@s1:e2", value: "bye", effect: "none" }, "Done."));
+    expect(guardLine('I already typed "hi Krzys" into the box.', other)).toMatchObject({ rewritten: true, reason: "unproven-typing" });
+  });
+
+  it("never counts typing the history says happened", () => {
+    const earlier: ModelMessage[] = [...call("type_text", { ref: "@s1:e2", text: "hi Krzys", effect: "none" }, "Done."), said('Typed "hi Krzys".')];
+    expect(guardLine('I already typed "hi Krzys" into the box.', answerEvidence([], earlier))).toMatchObject({ rewritten: true, reason: "unproven-typing" });
+  });
+
+  it("reads only Bee's own positive typing claims", () => {
+    expect(claimedTyping('Typed "no thanks" in the box.')).toEqual({ texts: ["no thanks"] });
+    for (const line of ["You typed hello earlier.", "Not typed yet.", "Bee has not typed anything.", "Entered the meeting.", "Put it on your calendar."]) expect(claimedTyping(line), line).toBeNull();
   });
 });
 
