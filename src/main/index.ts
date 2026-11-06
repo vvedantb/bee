@@ -438,6 +438,9 @@ if (clerk.isPrimaryInstance) {
     const beeMemory = createBeeMemoryStore({ userDataDir });
     // Settings → Saved memory lists and clears this same store, so a clear reaches the next direct request at once.
     registerBeeMemoryIpc(beeMemory);
+    // "Bee, …" requests: one Claude Code session on the user's own install, resumed from Bee's own folder.
+    const claudeCode = createClaudeCode({ sessionDir: join(userDataDir, "claude-session") });
+    app.on("will-quit", () => claudeCode.close());
     registerMeetingIpc({
       transcripts,
       history: beeHistory,
@@ -452,7 +455,7 @@ if (clerk.isPrimaryInstance) {
       meeting,
       meetingWindow,
       gatewayApiKey: settings.gatewayApiKey,
-      claudeCode: createClaudeCode(),
+      claudeCode,
       desktop,
       wakeWordEnabled: settings.wakeWord,
       computer: computerRunner

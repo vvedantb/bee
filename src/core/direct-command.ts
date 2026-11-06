@@ -255,11 +255,22 @@ export async function runDirectCommand(args: {
   const route = routeCommand(command);
   const history = args.history ?? [];
   let recorded = false;
+  // Whether this request reached the agent. A turn that did not (a quick open, a stop before any AI step) goes to the agent's session
+  // as a note, so its next request knows it happened.
+  let agentUsed = false;
+  const sessionAgent = args.agent;
+  const agent: CommandAgent | null = sessionAgent
+    ? (request) => {
+        agentUsed = true;
+        return sessionAgent(request);
+      }
+    : null;
   const record = (messages: readonly ModelMessage[]) => {
     if (recorded) return;
     recorded = true;
     const turn = cleanForHistory([userMessage(command), ...messages]);
     args.onTurn?.(turn);
+    if (!agentUsed) sessionAgent?.note?.(turn);
     // Names to keep: a spelling the user just gave, and chat names in the tool results and the AI's reply.
     const learned = [...(spelledName(command) ? [spelledName(command) as string] : []), ...screenNames(JSON.stringify(turn.slice(1)).replace(/\\"/g, '"'))];
     if (learned.length > 0) {
@@ -298,7 +309,7 @@ export async function runDirectCommand(args: {
   }
 
   // A task on screen goes straight to the loop: it needs no notes, connectors or web search.
-  const computer = args.computer && args.actions && args.agent ? { host: args.computer, actions: args.actions, agent: args.agent } : null;
+  const computer = args.computer && args.actions && agent ? { host: args.computer, actions: args.actions, agent } : null;
   const memory = args.memory ?? null;
   const loop = (fast = false) =>
     computer
@@ -315,7 +326,7 @@ export async function runDirectCommand(args: {
   const retrieveMs = performance.now() - t0;
   const guideNotes = candidates.slice(0, GUIDE_NOTE_LIMIT);
   const notes = candidates.map((note, index) => ({ ...note, jevScore: null, cite: index < GUIDE_NOTE_LIMIT ? noteCitation(index) : null }));
-  if (!args.agent) {
+  if (!agent) {
     const reason = args.noAgent ?? CLAUDE_CODE_MISSING;
     record([assistantMessage(`Error: ${reason}`)]);
     return { notes, rankSource: "fallback", rankError: null, tips: [], tipSources: [], sources: [], guideError: reason, timingsMs: timings({ retrieve: retrieveMs }) };
@@ -368,7 +379,7 @@ export async function runDirectCommand(args: {
   const tools = desktop || memory ? { ...desktop, ...(memory ? memoryTools(memory) : {}) } : undefined;
   const started = performance.now();
   const guide = await answerCommand({
-    agent: args.agent,
+    agent,
     transcript: args.transcript ?? [],
     command,
     notes: guideNotes,

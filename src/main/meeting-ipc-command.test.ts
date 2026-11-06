@@ -39,6 +39,7 @@ const readyClaudeCode = (agent: () => CommandAgent): ClaudeCode => ({
   status: async () => ({ state: "ready", path: "/usr/local/bin/claude", version: "2.1.318" }),
   agent: async () => ({ agent: agent() }),
   update: async () => ({ status: { state: "ready", path: "/usr/local/bin/claude", version: "2.1.318" }, error: null }),
+  close: () => undefined,
 });
 
 function setup(options: { enabled?: boolean } = {}) {
@@ -102,6 +103,7 @@ describe("main: direct request handler", () => {
       status: async () => ({ state: "signed-out", path: "/usr/local/bin/claude", version: "2.1.318" }),
       agent: async () => ({ error: "Sign in to Claude Code to talk to Bee: run claude, then /login." }),
       update: async () => ({ status: { state: "signed-out", path: "/usr/local/bin/claude", version: "2.1.318" }, error: null }),
+      close: () => undefined,
     };
     registerMeetingIpc({ notesDir: "/notes", fsRoots: () => [], mcpConfigs: () => [], mcpSignedOut: () => [], mcpPool: {} as never, meeting: { brief: () => "" } as unknown as MeetingContext, gatewayApiKey: () => undefined, claudeCode: signedOut });
     const command = electron.handlers.get(IPC.runCommand);
