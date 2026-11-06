@@ -138,7 +138,7 @@ With the mic on, start a phrase with **"Bee"** (or "Hey Bee") and the rest is a 
 
 ### Speech-to-text
 
-Bee transcribes with **Voxtral Small** (`mistral/voxtral-small-transcribe-3`) through Vercel AI Gateway, using the same Gateway key as the AI and Jev. Each call lists the words to listen for: "Bee", Luna, Jev, vmem and the names in **Settings → Known names**. This fixes most misheard names.
+Bee transcribes with **Voxtral Small** (`mistral/voxtral-small-transcribe-3`) through Vercel AI Gateway, using the same Gateway key as the AI and Jev. Each call lists the words to listen for: "Bee", Jev, vmem and the names in **Settings → Known names**. This fixes most misheard names.
 
 1. The mic is captured with Web Audio. A simple level detector cuts the audio into phrases: speech, then 0.8 s of silence, up to 15 s per phrase. Blips under 0.3 s are dropped without a Gateway call. Bee never mixes system audio into the mic. The [Teams audio fallback](#teams-audio-fallback) is a separate stream of the Teams app alone.
 2. Each phrase is sent to the main process as a 16 kHz mono WAV. Main calls Voxtral (Gateway default tier) and returns the text.
