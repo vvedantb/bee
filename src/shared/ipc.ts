@@ -1,3 +1,4 @@
+import { acceleratorSchema } from "../core/shortcut";
 import { z } from "zod";
 import { DEBUG_LEVELS } from "../core/debug-log";
 import { INTERFACE_SCALES } from "../core/interface-scale";
@@ -116,6 +117,9 @@ export const settingsViewSchema = z.object({
   // Verbose debug logs (main/debug-log.ts): every event of a session, prompts and replies included, on this computer only. Off
   // keeps warnings and errors. On by default for now.
   verboseLogging: z.boolean(),
+  // The show/hide shortcut (core/shortcut.ts), and whether Bee holds it now (false: another app does, or it could not register).
+  toggleShortcut: z.string().max(100),
+  toggleShortcutActive: z.boolean(),
 });
 export type SettingsView = z.infer<typeof settingsViewSchema>;
 
@@ -139,6 +143,7 @@ export const settingsUpdateSchema = z.object({
   wakeWordEnabled: z.boolean().optional(),
   askBeforeSendingEnabled: z.boolean().optional(),
   verboseLogging: z.boolean().optional(),
+  toggleShortcut: acceleratorSchema.optional(),
 });
 export type SettingsUpdate = z.infer<typeof settingsUpdateSchema>;
 

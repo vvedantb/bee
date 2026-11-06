@@ -21,7 +21,7 @@ Download `Bee-x.y.z-arm64.dmg` (Apple Silicon) or `Bee-x.y.z.dmg` (Intel), or th
 - **Microphone.** macOS asks the first time Bee starts. If you decline, allow Bee under System Settings → Privacy & Security → Microphone.
 - **Screen Recording.** Only for **Settings → Hear Teams when not everyone has Bee** (off by default). macOS counts any app's sound as screen recording. Bee hears the Teams app alone and never records the screen or other apps. Bee never asks during a call: Settings shows **Open Screen Recording settings** when it needs access (see [Teams audio fallback](#teams-audio-fallback)). Without it, Bee uses your mic only.
 - **Menu bar.** Bee has no Dock icon. The tray icon is a menu bar extra: click it for Show / hide, Open notes folder, Open logs folder and Quit.
-- **Shortcut.** `Cmd+Shift+Space` shows or hides Bee (`Ctrl+Shift+Space` on Windows and Linux). If another app holds the shortcut, Bee logs a warning and carries on.
+- **Shortcut.** `Cmd+Shift+Space` shows or hides Bee (`Ctrl+Shift+Space` on Windows and Linux). Change it in **Settings → Show or hide Bee**: click Change and press the new keys. Bee saves a shortcut only if it can hold it, and Settings says when another app holds the current one.
 - **Notes folder.** `~/Library/Application Support/Bee/notes`.
 - **Debug logs.** `~/Library/Application Support/Bee/logs` (see [Debug logs](#debug-logs)).
 - **Teams detector.** Windows only. On macOS use **Live → Manual test → Simulate Teams meeting**, or try **Settings → Experimental: read meeting window**.

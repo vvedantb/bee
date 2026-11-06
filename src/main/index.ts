@@ -6,6 +6,7 @@ import { release } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { RENDERER_HOST, RENDERER_SCHEME, RENDERER_URL } from "../shared/clerk";
+import { shortcutLabel } from "../core/shortcut";
 import { displayMatching, placeInWorkArea, restoreOverlayBounds, scaleSize, type DisplayInfo } from "../core/interface-scale";
 import { IPC, TEAMS_AUDIO_LINE_MAX, settingsUpdateSchema, windowSizeSchema, type MeetingWindowCaptions, type TeamsAudioEnded, type TeamsAudioLines, type WindowSize } from "../shared/ipc";
 import { debugLog, errorData, msSince, setDebugSink, teeConsole } from "../core/debug-log";
@@ -58,7 +59,6 @@ const SIZES: Record<WindowSize, { width: number; height: number }> = {
 };
 const TOP_MARGIN = 8;
 const isMac = process.platform === "darwin";
-const TOGGLE_SHORTCUT = "CommandOrControl+Shift+Space";
 // System Settings → Privacy & Security → Accessibility, for the experimental meeting window reader and computer use.
 const MAC_ACCESSIBILITY_SETTINGS = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility";
 
@@ -179,12 +179,26 @@ function toggleWindow(): void {
   else win.show();
 }
 
-function registerToggleShortcut(): void {
+// The show/hide shortcut Bee holds now, or null when it holds none (another app has it, or it could not register).
+let toggleShortcut: string | null = null;
+
+/** Holds `accelerator` as the show/hide shortcut instead of the current one. False (and the old one kept) when it cannot. */
+function registerToggleShortcut(accelerator: string): boolean {
+  const old = toggleShortcut;
+  if (old === accelerator) return true;
+  if (old) globalShortcut.unregister(old);
+  let ok = false;
   try {
-    if (!globalShortcut.register(TOGGLE_SHORTCUT, toggleWindow)) console.warn(`Bee: could not register ${TOGGLE_SHORTCUT}`);
+    ok = globalShortcut.register(accelerator, toggleWindow);
   } catch (error) {
-    console.warn("Bee: global shortcut unavailable:", error);
+    debugLog.warn("window", "shortcut-failed", { accelerator, error: errorData(error) });
   }
+  if (ok) toggleShortcut = accelerator;
+  else {
+    console.warn(`Bee: could not register ${accelerator}`);
+    toggleShortcut = old && globalShortcut.register(old, toggleWindow) ? old : null;
+  }
+  return ok;
 }
 
 function createTray(notesDir: string, logsDir: string): void {
@@ -379,12 +393,23 @@ if (clerk.isPrimaryInstance) {
       await shell.openExternal(MAC_ACCESSIBILITY_SETTINGS);
     });
 
-    ipcMain.handle(IPC.getSettings, () => settings.view());
+    // The settings, with whether Bee holds the show/hide shortcut (only main knows).
+    const settingsView = () => {
+      const view = settings.view();
+      return { ...view, toggleShortcutActive: toggleShortcut === view.toggleShortcut };
+    };
+    ipcMain.handle(IPC.getSettings, () => settingsView());
 
     ipcMain.handle(IPC.saveSettings, (_event, payload) => {
       const update = settingsUpdateSchema.parse(payload);
-      const before = settings.view();
-      const view = settings.save(update);
+      const before = settingsView();
+      // A new shortcut is only saved when Bee can hold it.
+      if (update.toggleShortcut !== undefined && !registerToggleShortcut(update.toggleShortcut)) {
+        const label = shortcutLabel(update.toggleShortcut, isMac ? "mac" : "other");
+        throw new Error(`${label} is in use by another app or the system. Bee kept ${toggleShortcut ? shortcutLabel(toggleShortcut, isMac ? "mac" : "other") : "no shortcut"}.`);
+      }
+      settings.save(update);
+      const view = settingsView();
       // Applies at once. Always written, so a log that goes quiet says why.
       debug.setVerbose(view.verboseLogging);
       debug.write({ level: "info", category: "settings", event: "changed", data: settingsChange(update, before, view) });
@@ -522,7 +547,7 @@ if (clerk.isPrimaryInstance) {
 
     win = createWindow(settings.view().meetingMode, settings.view().interfaceScale);
     createTray(notesDir, logsDir);
-    registerToggleShortcut();
+    registerToggleShortcut(settings.view().toggleShortcut);
     // Last of the will-quit handlers, so what the others log is written too.
     app.on("will-quit", () => {
       debugLog.info("app", "will-quit");

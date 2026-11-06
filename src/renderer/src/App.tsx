@@ -29,6 +29,7 @@ import { PANEL_TABS } from "./panel-tabs";
 import { MicHint } from "./MicHint";
 import { SecretField } from "./SecretField";
 import { SettingRow } from "./SettingRow";
+import { ShortcutRow } from "./ShortcutRow";
 import { computerAccessMessage } from "./computer-access";
 import { INTERFACE_SCALES } from "../../core/interface-scale";
 import { DEFAULT_MOTION_PREFERENCE, MOTION_PREFERENCES, resolveReducedMotion, type MotionPreference } from "../../core/motion-preference";
@@ -560,6 +561,12 @@ function SettingsTab({ state, settings }: { state: BeeState; settings: SettingsV
           ) : null}
         </div>
       </form>
+      <ShortcutRow
+        shortcut={settings.toggleShortcut}
+        active={settings.toggleShortcutActive}
+        platform={navigator.userAgent.includes("Mac") ? "mac" : "other"}
+        onSave={(toggleShortcut) => void actions.saveSettings({ toggleShortcut })}
+      />
       <SettingRow
         id="personalised-links"
         label="Personalised link suggestions"
