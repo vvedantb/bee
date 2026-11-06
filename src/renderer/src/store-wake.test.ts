@@ -145,7 +145,7 @@ async function loadStore(
       },
       writeMeetingSummary: async (request: MeetingSummaryRequest) => {
         summaries.push(request);
-        return { path: "/notes/meeting.md", usedLlm: true, error: null };
+        return { path: "/notes/meeting.md", usedLlm: true, error: null, followUp: [] };
       },
       teams: {
         tick: async () => {

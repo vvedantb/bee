@@ -30,6 +30,8 @@ export const IPC = {
   lunaActivity: "bee:luna:activity",
   backgroundUpdate: "bee:background:update",
   stopBackground: "bee:background:stop",
+  briefing: "bee:briefing",
+  cardAction: "bee:card-action",
   lunaPartial: "bee:luna:partial",
   cancelPipeline: "bee:pipeline:cancel",
   mcpList: "bee:mcp:list",
@@ -320,6 +322,8 @@ export const meetingSummaryResultSchema = z.object({
   path: z.string(),
   usedLlm: z.boolean(),
   error: z.string().nullable(),
+  // The island's follow-up card (core/follow-through.ts): empty when the meeting has no action items.
+  followUp: z.array(z.string().max(200)).max(6),
 });
 export type MeetingSummaryResult = z.infer<typeof meetingSummaryResultSchema>;
 
@@ -468,6 +472,20 @@ export const pipelineResultSchema = z.object({
   }),
 });
 export type PipelineResult = z.infer<typeof pipelineResultSchema>;
+
+// The card a couple of minutes before a meeting (core/briefing.ts), pushed by main.
+export const briefingViewSchema = z.object({ key: z.string().max(400), lines: z.array(z.string().max(200)).max(6) });
+export type BriefingView = z.infer<typeof briefingViewSchema>;
+
+// A button on an island card: "Dig deeper" on a briefing, or a follow-up after a saved meeting. Each starts a background task.
+export const cardActionSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("brief"), key: z.string().max(400) }),
+  z.object({ kind: z.enum(["email", "tasks"]), path: z.string().max(4000) }),
+]);
+export type CardAction = z.infer<typeof cardActionSchema>;
+export const cardActionRequestSchema = z.object({ action: cardActionSchema, sessionToken: z.string().max(8000) });
+export const cardActionResultSchema = z.object({ ok: z.boolean(), message: z.string().max(400) });
+export type CardActionResult = z.infer<typeof cardActionResultSchema>;
 
 // A background task (core/background.ts) as main reports it: on start, on each tool, and when it ends with its result.
 export const backgroundJobSchema = z.object({

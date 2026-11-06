@@ -17,6 +17,8 @@ import {
   clampTip,
   type ClaudeCodeView,
   type BackgroundJobView,
+  type BriefingView,
+  type CardAction,
   type ComputerAccessView,
   type ComputerUpdate,
   type McpSave,
@@ -69,8 +71,11 @@ export type SummaryState = { saving: boolean; result: MeetingSummaryResult | nul
 // Test connection, per server id. Cleared when the server is edited or removed.
 export type McpTestState = { busy: boolean; result: McpTestResult | null };
 
-// The "Last time with these people…" card at meeting start: shown once per detected meeting (id), until the island closes.
-export type MeetingCard = { id: number; lines: string[] };
+// A card in the island, shown until the island closes: "Last time with these people…" at meeting start (once per detected
+// meeting), the briefing before a meeting (core/briefing.ts), or the follow-up after a saved one (core/follow-through.ts).
+// label: the pill's text while the card is alone. Each button starts a background task; a pressed one goes.
+export type CardButton = { label: string; action: CardAction };
+export type MeetingCard = { id: string; label: string; lines: string[]; buttons: CardButton[] };
 
 // Computer use in progress for a direct request ("Bee, send Sam a message in Discord"): the step as one short line for the
 // pill, and a Confirm prompt while one waits for the user's tap. Only the island's buttons answer it.
@@ -1218,9 +1223,7 @@ async function meetingTick(): Promise<void> {
     if (state.session.lines.length > 0 && sessionMeetingId === null && view.active) sessionMeetingId = view.id;
     if (view.active && view.id !== cardShownFor && view.card.length > 0) {
       cardShownFor = view.id;
-      set({ meetingCard: { id: view.id, lines: view.card }, dismissed: false, islandClosing: false });
-      touchIsland();
-      void applyWindowSize();
+      showCard({ id: `meeting-${view.id}`, label: "Last time", lines: view.card, buttons: [] });
     }
     const lines = state.session.lines.length;
     if (sessionMeetingId === null || state.summary.saving) return;
@@ -1258,6 +1261,13 @@ async function transcribePhrase(audio: Uint8Array<ArrayBuffer>): Promise<Transcr
 
 function setUpdate(patch: Partial<UpdateState>): void {
   set({ update: { ...state.update, ...patch } });
+}
+
+/** Opens the island on a card. A newer card replaces the one on screen. */
+function showCard(card: MeetingCard): void {
+  set({ meetingCard: card, dismissed: false, islandClosing: false });
+  touchIsland();
+  void applyWindowSize();
 }
 
 function setSummary(patch: Partial<SummaryState>): void {
@@ -1797,6 +1807,28 @@ export const actions = {
     if (job.status !== "running" && job.result) showBackgroundResult(job.result);
   },
 
+  /** A briefing from main, a couple of minutes before a meeting. */
+  briefing(view: BriefingView): void {
+    showCard({ id: `brief-${view.key}`, label: "Next meeting", lines: view.lines, buttons: [{ label: "Dig deeper", action: { kind: "brief", key: view.key } }] });
+  },
+
+  /** A card's button: starts its background task. The button goes, and the card says what happened. */
+  async pressCard(button: CardButton): Promise<void> {
+    const card = state.meetingCard;
+    if (!card) return;
+    let message: string;
+    try {
+      message = (await window.bee.cardAction(button.action, await sessionToken())).message;
+    } catch (error) {
+      message = error instanceof Error ? error.message : "Bee could not start that.";
+    }
+    // The card may have changed while main answered.
+    if (state.meetingCard?.id !== card.id) return;
+    set({ meetingCard: { ...card, lines: [...card.lines, message], buttons: card.buttons.filter((item) => item !== button) } });
+    touchIsland();
+    void applyWindowSize();
+  },
+
   stopBackground(id: string): void {
     void window.bee.stopBackground(id).catch(() => undefined);
   },
@@ -1881,6 +1913,17 @@ export const actions = {
         sessionToken: await sessionToken(),
       });
       setSummary({ saving: false, result });
+      if (result.followUp.length > 0) {
+        showCard({
+          id: `follow-${result.path}`,
+          label: "Follow up",
+          lines: result.followUp,
+          buttons: [
+            { label: "Draft follow-up email", action: { kind: "email", path: result.path } },
+            { label: "Create tasks", action: { kind: "tasks", path: result.path } },
+          ],
+        });
+      }
     } catch (error) {
       if (!options.auto) sessionMeetingId ??= meetingId;
       const now = state.session;

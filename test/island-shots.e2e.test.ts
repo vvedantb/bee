@@ -16,6 +16,8 @@ const SHOTS = [
   "thinking",
   "expanded",
   "meeting-card",
+  "briefing-card",
+  "follow-up-card",
   "long-tip-top",
   "long-tip-scrolled",
   "update-available",

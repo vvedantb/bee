@@ -1,5 +1,5 @@
 // Static island states for screenshots, styled by the real styles.css (no Clerk, no store). harness-main.ts loads this
-// page once per ?shot=collapsed|thinking|expanded|meeting-card|long-tip-top|long-tip-scrolled|update-available|
+// page once per ?shot=collapsed|thinking|expanded|meeting-card|briefing-card|follow-up-card|long-tip-top|long-tip-scrolled|update-available|
 // response-folded|response-full-text|fresh-utterance|hint-quiet|hint-no-input|hint-clipping|hint-noisy and captures it; the page
 // reports once it has rendered, with the notch's measured logo and button boxes. response-full-text clicks the folded answer, and
 // island.ts islandClick decides what opens. The hint shots show each mic hint (hints.ts) alone in the body, with the mic on.
@@ -10,6 +10,7 @@ import { Button } from "@vvedantb/ui";
 import { sourceChips, type LinkChip } from "../../src/core/link-suggest";
 import { isNewTurn } from "../../src/core/steering";
 import { AskBox } from "../../src/renderer/src/AskBox";
+import { IslandCard } from "../../src/renderer/src/IslandCard";
 import { BeeLogo } from "../../src/renderer/src/BeeLogo";
 import { Favicon } from "../../src/renderer/src/Favicon";
 import { HINT_TEXT, type HintId } from "../../src/renderer/src/hints";
@@ -17,7 +18,7 @@ import { displayTip, islandClick } from "../../src/renderer/src/island";
 import { NOTCH_LOGO_PX } from "../../src/renderer/src/logo";
 import { MicHint } from "../../src/renderer/src/MicHint";
 import { NOTCH_BUTTON, NOTCH_UPDATE_BUTTON } from "../../src/renderer/src/notch";
-import type { UpdateState } from "../../src/renderer/src/store";
+import type { MeetingCard, UpdateState } from "../../src/renderer/src/store";
 import { updateButton } from "../../src/renderer/src/update";
 import "../../src/renderer/src/styles.css";
 
@@ -87,11 +88,28 @@ function pill(status: string, busy: boolean, { update = false, folded = false, m
   </header>`;
 }
 
-// The meeting card at meeting start (store.ts meetingCard): two short muted lines above the first tip.
-const CARD = ["Last time in Weekly Sync (10 Oct)", "Open: Sam: send the renewal quote"];
+// The island's cards (store.ts MeetingCard), as App.tsx renders them: at meeting start, before a meeting, and after one.
+const CARDS: Record<"meeting" | "briefing" | "follow-up", MeetingCard> = {
+  meeting: { id: "meeting-1", label: "Last time", lines: ["Last time in Weekly Sync (10 Oct)", "Open: Sam: send the renewal quote"], buttons: [] },
+  briefing: {
+    id: "brief-1",
+    label: "Next meeting",
+    lines: ["In 2 min: Weekly Sync with Sam Lee, Priya Shah, Aoife Byrne and 2 others", "Last time in Weekly Sync (30 Oct)", "Open: Priya: send the pricing deck", "Open: Sam: book the venue"],
+    buttons: [{ label: "Dig deeper", action: { kind: "brief", key: "x" } }],
+  },
+  "follow-up": {
+    id: "follow-1",
+    label: "Follow up",
+    lines: ['Saved "Weekly Sync": 4 action items', "- Priya: send the pricing deck", "- Sam: book the venue", "- Me: draft the FAQ", "and 1 more in the summary"],
+    buttons: [
+      { label: "Draft follow-up email", action: { kind: "email", path: "x" } },
+      { label: "Create tasks", action: { kind: "tasks", path: "x" } },
+    ],
+  },
+};
 
-function card(): string {
-  return `<div class="island-card">${CARD.map((line) => `<p>${line}</p>`).join("")}</div>`;
+function card(which: keyof typeof CARDS): string {
+  return renderToStaticMarkup(createElement(IslandCard, { card: CARDS[which], onPress: () => undefined }));
 }
 
 // IslandBody in App.tsx: the dismiss button over the scroll area, whose first child holds the content.
@@ -148,7 +166,7 @@ const freshTurn = isNewTurn({ open: true, busy: false, spokenDuringRun: false })
 const freshTips = freshTurn ? [NEW_TIP] : [ANSWER, NEW_TIP];
 const freshUtterance = `<div class="island open thinking">${pill("Thinking…", true)}${islandBody(tipList(freshTips))}</div>`;
 
-const longTip = `<div class="island open">${pill("Tips", false)}${islandBody(`${card()}${tipList(LONG_TIPS)}`)}</div>`;
+const longTip = `<div class="island open">${pill("Tips", false)}${islandBody(`${card("meeting")}${tipList(LONG_TIPS)}`)}</div>`;
 
 // A mic hint alone in the body (App.tsx IslandBody with MicHint): the pill keeps its listening text, and the meter shows the
 // level that brought the hint (store.ts meter: RMS × 4).
@@ -160,7 +178,9 @@ const states: Record<string, string> = {
   collapsed: `<div class="island">${pill("Bee is ready", false)}</div>`,
   thinking: `<div class="island thinking">${pill("The AI is searching the web…", true)}</div>`,
   expanded: `<div class="island open">${pill("Tips", false)}${islandBody(tipsContent())}</div>`,
-  "meeting-card": `<div class="island open">${pill("Last time", false)}${islandBody(card())}</div>`,
+  "meeting-card": `<div class="island open">${pill(CARDS.meeting.label, false)}${islandBody(card("meeting"))}</div>`,
+  "briefing-card": `<div class="island open">${pill(CARDS.briefing.label, false)}${islandBody(card("briefing"))}</div>`,
+  "follow-up-card": `<div class="island open">${pill(CARDS["follow-up"].label, false)}${islandBody(card("follow-up"))}</div>`,
   "long-tip-top": longTip,
   "long-tip-scrolled": longTip,
   "update-available": `<div class="island">${pill("Bee is ready", false, { update: true })}</div>`,
