@@ -3,13 +3,10 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { Button, PillTabs, type ButtonProps } from "@vvedantb/ui";
+import { PANEL_TABS } from "../../src/renderer/src/panel-tabs";
 import type { BeeState } from "../../src/renderer/src/store";
 
-const TABS = [
-  { value: "live", label: "Live" },
-  { value: "connectors", label: "Connectors" },
-  { value: "settings", label: "Settings" },
-];
+const TABS = [...PANEL_TABS];
 
 /** A size sm Button, as the Connectors and Teams rows use. */
 export function smallButton(label: string, variant: ButtonProps["variant"]): string {

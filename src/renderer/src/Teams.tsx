@@ -399,7 +399,7 @@ function TeamDetails({ teams, busy }: { teams: TeamsView; busy: boolean }) {
   );
 }
 
-/** Settings: create or join the company team, share its invite, list members, leave. */
+/** The Teams tab: create or join the company team, share its invite, list members, leave. */
 export function TeamSection({ state }: { state: BeeState }) {
   const teams = state.teams;
   return (
