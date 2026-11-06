@@ -286,6 +286,21 @@ export function recentChoice(ambiguity: NameAmbiguity, recent: readonly string[]
   return null;
 }
 
+/**
+ * The one person of an ambiguity the heard word itself points to, before any recent text, or null. Only a literal match (the
+ * exact first name, or its literal start: Krzys for Krzysztof) wins, and only when every other match is merely a sound-alike
+ * (Krzys → Chris). With Chris Lee and Krzysztof Nowak known, "Krzys" is Krzysztof Nowak. A rival that is a sound-alike short
+ * form keeps it open: "Chris" is exact for Chris Lee, but STT writes Krzys as Chris (sound-short for Krzysztof), so Bee still asks.
+ * Two literal matches, or none ("Kris": sound for both), also keep it open.
+ */
+export function similarityChoice(ambiguity: NameAmbiguity, known: readonly string[]): string | null {
+  const found = nameMatches(ambiguity.heard, known).filter((match) => ambiguity.matches.includes(match.name));
+  const literal = found.filter((match) => match.how === "exact" || match.how === "short");
+  if (literal.length !== 1) return null;
+  const rivals = found.filter((match) => match !== literal[0]);
+  return rivals.every((match) => match.how === "sound") ? literal[0]!.name : null;
+}
+
 /** A name Bee settled from the user's recent requests: "Chris" in this request means Krzysztof Nowak. */
 export type ResolvedName = { heard: string; name: string };
 

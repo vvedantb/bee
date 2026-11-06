@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  KNOWN_NAMES_MAX, STT_TERMS_MAX, correctedName, knownNamesBlock, matchFirstName, mergeNames, nameAmbiguities, namesSoundingLike, normalizeNames, recentChoice, remapHeardNames,
+  KNOWN_NAMES_MAX, STT_TERMS_MAX, correctedName, knownNamesBlock, matchFirstName, mergeNames, nameAmbiguities, namesSoundingLike, normalizeNames, recentChoice, remapHeardNames, similarityChoice,
   screenNames, soundKey, soundsAlike, spelledName, sttTerms, whichNameQuestion,
 } from "./known-names";
 
@@ -163,6 +163,25 @@ describe("a person from recent requests", () => {
     const block = knownNamesBlock(KNOWN, "message Chris", [{ heard: "Chris", name: "Krzysztof Nowak" }]);
     expect(block).toContain('"Chris" in this request means Krzysztof Nowak');
     expect(block).not.toContain("never pick one yourself");
+  });
+});
+
+describe("similarity before recent requests (PR #80)", () => {
+  const known = ["Chris Lee", "Krzysztof Nowak"];
+
+  it("settles Krzys as Krzysztof Nowak: a literal short form beats a sound-alike, whatever recent text says", () => {
+    const [krzys] = nameAmbiguities("message Krzys", known);
+    expect(krzys).toEqual({ heard: "Krzys", matches: ["Chris Lee", "Krzysztof Nowak"] });
+    expect(similarityChoice(krzys!, known)).toBe("Krzysztof Nowak");
+    // recentChoice alone would have picked Chris Lee here; similarity is checked first (direct-command.ts).
+    expect(recentChoice(krzys!, ["Which Chris: Chris Lee or Krzysztof Nowak?", "Sent the deck to Chris Lee."])).toBe("Chris Lee");
+  });
+
+  it("leaves plain Chris, Kris and two literal matches to recent text or a question", () => {
+    // Chris: exact for Chris Lee, but STT writes Krzys as Chris (sound-short for Krzysztof), so it stays open.
+    expect(similarityChoice({ heard: "Chris", matches: known }, known)).toBeNull();
+    expect(similarityChoice({ heard: "Kris", matches: known }, known)).toBeNull();
+    expect(similarityChoice({ heard: "Sam", matches: ["Sam Lee", "Sam Hill"] }, ["Sam Lee", "Sam Hill"])).toBeNull();
   });
 });
 
