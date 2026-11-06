@@ -37,7 +37,7 @@ function fakeClaude(args: { version: string; next: string; loggedIn?: boolean })
 describe.skipIf(process.platform === "win32")("createClaudeCode", () => {
   it("finds an old Claude Code, updates it with claude update, and is ready after", async () => {
     const fake = fakeClaude({ version: "2.1.281", next: "2.1.320" });
-    const claude = createClaudeCode();
+    const claude = createClaudeCode({ sessionDir: join(fake.path, "..", "session") });
     expect(await claude.status(true)).toEqual({ state: "outdated", path: fake.path, version: "2.1.281" });
     expect(await claude.update()).toEqual({ status: { state: "ready", path: fake.path, version: "2.1.320" }, error: null });
     expect(fake.version()).toBe("2.1.320");
@@ -45,13 +45,13 @@ describe.skipIf(process.platform === "win32")("createClaudeCode", () => {
 
   it("says why when the update fails, and stays outdated", async () => {
     const fake = fakeClaude({ version: "2.1.281", next: "" });
-    const result = await createClaudeCode().update();
+    const result = await createClaudeCode({ sessionDir: join(fake.path, "..", "session") }).update();
     expect(result.status).toEqual({ state: "outdated", path: fake.path, version: "2.1.281" });
     expect(result.error).toBe("Claude Code could not update: Error: no permission to write");
   });
 
   it("reports a signed-out install", async () => {
     const fake = fakeClaude({ version: "2.1.318", next: "", loggedIn: false });
-    expect(await createClaudeCode().status(true)).toEqual({ state: "signed-out", path: fake.path, version: "2.1.318" });
+    expect(await createClaudeCode({ sessionDir: join(fake.path, "..", "session") }).status(true)).toEqual({ state: "signed-out", path: fake.path, version: "2.1.318" });
   });
 });

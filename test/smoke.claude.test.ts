@@ -1,7 +1,10 @@
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { ModelMessage } from "ai";
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import { inMemoryBeeMemory } from "../src/core/bee-memory";
-import { claudeAgent } from "../src/core/claude-agent";
+import type { CommandAgent } from "../src/core/claude-agent";
 import type { DesktopActions } from "../src/core/desktop-actions";
 import { runDirectCommand, type ComputerHost } from "../src/core/direct-command";
 import type { ComputerRun } from "../src/core/agent-desktop-envelope";
@@ -11,10 +14,19 @@ import { createClaudeCode } from "../src/main/claude-code";
 // Live smoke test for "Bee, …" requests on this machine's own Claude Code and its login: the real Agent SDK and Claude Code, Bee's real
 // prompts and tools, and fake desktop and computer-use runners (no OS). No Gateway key: Jev routing falls back to the word rules.
 
-const found = await createClaudeCode().status();
+// One session for the whole file, as in the app: later tests rely on what earlier ones said.
+const sessionDir = mkdtempSync(join(tmpdir(), "bee-claude-session-"));
+let claudeCode = createClaudeCode({ sessionDir });
+const found = await claudeCode.status();
 if (found.state !== "ready") throw new Error(`Claude Code is ${found.state}. Install it and sign in (claude, then /login), then run npm run test:claude again.`);
 console.log(`Claude Code ${found.version} at ${found.path}`);
-const agent = claudeAgent({ executable: found.path });
+async function sessionAgent(): Promise<CommandAgent> {
+  const got = await claudeCode.agent();
+  if ("error" in got) throw new Error(got.error);
+  return got.agent;
+}
+let agent = await sessionAgent();
+afterAll(() => claudeCode.close());
 const snippets = chunkNotes(SEED_NOTES);
 
 function fakeDesktop() {
@@ -90,13 +102,15 @@ describe("Claude Agent SDK: Bee, …", () => {
     expect(result.tips[0]).toBe("Opened Figma");
   });
 
-  it("writes to Bee's memory, and carries a follow-up from the history", async () => {
+  it("writes to Bee's memory, and carries a follow-up in the session with no history passed", async () => {
     const memory = inMemoryBeeMemory([]);
     const history: ModelMessage[] = [];
     const first = await runDirectCommand({ command: "remember that my manager is called Priya Shah", snippets, agent, gateway: null, actions: null, memory, onTurn: (turn) => history.push(...turn) });
     console.log(`memory tips=${JSON.stringify(first.tips)} facts=${JSON.stringify(memory.facts())}`);
     expect(memory.facts().map((fact) => fact.text).join(" ")).toMatch(/Priya/);
-    const second = await runDirectCommand({ command: "what was the name I just asked you to remember?", history, snippets, agent, gateway: null, actions: null });
+    expect(history.length).toBeGreaterThan(0);
+    // No history goes with it: the session holds the conversation.
+    const second = await runDirectCommand({ command: "what was the name I just asked you to remember?", snippets, agent, gateway: null, actions: null });
     console.log(`follow-up tips=${JSON.stringify(second.tips)}`);
     expect(second.tips.join(" ")).toMatch(/Priya/);
   });
@@ -124,7 +138,12 @@ describe("Claude Agent SDK: Bee, …", () => {
     expect(result.guideError).not.toBeNull();
   });
 
+  // Its own session: on a real Mac or Windows PC every request can read windows, while the tests above ran as a computer without them.
   it("reads the window at the front for 'what am I working on', and only reads", async () => {
+    const desktopCode = createClaudeCode({ sessionDir: mkdtempSync(join(tmpdir(), "bee-claude-desktop-")) });
+    const desktopAgent = await desktopCode.agent();
+    if ("error" in desktopAgent) throw new Error(desktopAgent.error);
+    const agent = desktopAgent.agent;
     const commands: string[] = [];
     const computer: ComputerHost = {
       platform: "mac",
@@ -145,5 +164,33 @@ describe("Claude Agent SDK: Bee, …", () => {
     process.stdout.write(`PROBE ${JSON.stringify({ commands, tips: r.tips, err: r.guideError })}\n`);
     expect(commands.some((c) => c.startsWith("snapshot") && c.includes("Cursor"))).toBe(true);
     expect(commands.every((c) => /^(list-windows|list-apps|snapshot|find|get|is)\b/.test(c))).toBe(true);
+    desktopCode.close();
+  });
+
+  it("knows about a quick open that never reached the AI", async () => {
+    const { actions, calls } = fakeDesktop();
+    const opened = await runDirectCommand({ command: "open Spotify", snippets, agent, gateway: null, actions });
+    expect(opened.tips).toEqual(["Opened Spotify"]);
+    expect(calls).toEqual(["openApp Spotify"]);
+    const started = performance.now();
+    const asked = await runDirectCommand({ command: "which app did you just open for me?", snippets, agent, gateway: null, actions: null });
+    console.log(`note ms=${Math.round(performance.now() - started)} tips=${JSON.stringify(asked.tips)}`);
+    expect(asked.tips.join(" ")).toMatch(/Spotify/);
+  });
+
+  it("carries on after Stop, and resumes the conversation after Bee restarts", async () => {
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(new Error("stopped")), 1500);
+    await runDirectCommand({ command: "write me a long, detailed essay on the history of the telescope", snippets, agent, gateway: null, actions: null, signal: controller.signal });
+    const after = await runDirectCommand({ command: "what is my manager called?", snippets, agent, gateway: null, actions: null });
+    expect(after.tips.join(" ")).toMatch(/Priya/);
+    // Bee quits and starts again: a new process, the same session folder.
+    claudeCode.close();
+    claudeCode = createClaudeCode({ sessionDir });
+    agent = await sessionAgent();
+    const started = performance.now();
+    const resumed = await runDirectCommand({ command: "and which app did I ask you to open earlier?", snippets, agent, gateway: null, actions: null });
+    console.log(`resume ms=${Math.round(performance.now() - started)} tips=${JSON.stringify(resumed.tips)}`);
+    expect(resumed.tips.join(" ")).toMatch(/Spotify/);
   });
 });

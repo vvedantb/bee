@@ -220,7 +220,7 @@ void app.whenReady().then(async () => {
     meeting,
     gatewayApiKey: mode === "replay" ? () => REPLAY_KEY : liveKey,
     gateway: mode && fixturesDir ? e2eGateway(mode, fixturesDir) : undefined,
-    claudeCode: createClaudeCode(),
+    claudeCode: createClaudeCode({ sessionDir: process.env.BEE_E2E_CLAUDE_SESSION_DIR || mkdtempSync(join(tmpdir(), "bee-claude-session-")) }),
   });
   // Short timings so the popup and the debounced leave happen within the test.
   registerTeamsIpc({ relayUrl: relayUrlFromEnv(process.env.BEE_RELAY_URL), detector: createStubDetector(), timing: { enterMs: 300, leaveMs: 1000 } });

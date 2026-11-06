@@ -1,14 +1,16 @@
 import { execFile } from "node:child_process";
-import { accessSync, constants, statSync } from "node:fs";
+import { accessSync, constants, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { claudeAgent, type CommandAgent } from "../core/claude-agent";
+import { join } from "node:path";
+import { claudeSession, type CommandAgent, type SessionStore } from "../core/claude-agent";
 import { MIN_CLAUDE_CODE, claudeCandidates, claudeCodeMessage, parseClaudeVersion, parseLoggedIn, versionAtLeast, type ClaudeCodeStatus } from "../core/claude-code";
 import { debugLog } from "../core/debug-log";
 
 // Main's side of "Bee, …" requests: find the user's own Claude Code (core/claude-code.ts), check its version and login, and build
 // the agent on it (core/claude-agent.ts). Bee ships no Claude Code and keeps no token: the install's own login is used, so a user who
 // signs in to Claude Code is signed in for Bee too. A ready result is kept for a few minutes; any other is checked again on the next
-// request, so installing, updating or signing in works without a restart.
+// request, so installing, updating or signing in works without a restart. Requests share one Claude Code session for as long as
+// Bee runs (core/claude-agent.ts claudeSession); its id is kept in `sessionDir`, so the next start resumes the conversation.
 
 const READY_FOR_MS = 5 * 60_000;
 const CHECK_MS = 10_000;
@@ -34,13 +36,40 @@ function executable(path: string): boolean {
 export type ClaudeCode = {
   /** Where the install stands now. `fresh` skips the cached ready result (Settings → Check again). */
   status: (fresh?: boolean) => Promise<ClaudeCodeStatus>;
-  /** The agent on the user's Claude Code, or what the user must do first. */
+  /** The session on the user's Claude Code, or what the user must do first. */
   agent: () => Promise<{ agent: CommandAgent } | { error: string }>;
+  /** Ends the session's Claude Code process (Bee quitting). The session id stays, so the next start resumes it. */
+  close: () => void;
   /** Runs `claude update` on the install found (native or package manager, as Claude Code decides), then checks again. */
   update: () => Promise<{ status: ClaudeCodeStatus; error: string | null }>;
 };
 
-export function createClaudeCode(): ClaudeCode {
+/** The session id in `dir`/session.json. A missing or bad file reads as none. */
+function sessionStore(dir: string): SessionStore {
+  const path = join(dir, "session.json");
+  return {
+    load: () => {
+      try {
+        const id: unknown = JSON.parse(readFileSync(path, "utf8")).id;
+        return typeof id === "string" && id ? id : null;
+      } catch {
+        return null;
+      }
+    },
+    save: (id) => {
+      try {
+        mkdirSync(dir, { recursive: true });
+        writeFileSync(path, JSON.stringify({ id }));
+      } catch (error) {
+        debugLog.warn("ai", "session-save-failed", { error: error instanceof Error ? error.message : String(error) });
+      }
+    },
+  };
+}
+
+/** `sessionDir`: Bee's own folder for the Claude Code session (its working folder, and the id to resume). */
+export function createClaudeCode(options: { sessionDir: string }): ClaudeCode {
+  let session: { path: string; agent: ReturnType<typeof claudeSession> } | null = null;
   let ready: { status: ClaudeCodeStatus; at: number } | null = null;
   async function check(): Promise<ClaudeCodeStatus> {
     const path = claudeCandidates({ platform: process.platform, home: homedir(), env: process.env }).find(executable);
@@ -73,7 +102,17 @@ export function createClaudeCode(): ClaudeCode {
     agent: async () => {
       const found = await status();
       if (found.state !== "ready") return { error: claudeCodeMessage(found) ?? "" };
-      return { agent: claudeAgent({ executable: found.path }) };
+      // One session per install: a new path (moved or reinstalled) starts its own process, resuming the same conversation.
+      if (session?.path !== found.path) {
+        session?.agent.close();
+        mkdirSync(options.sessionDir, { recursive: true });
+        session = { path: found.path, agent: claudeSession({ executable: found.path, cwd: options.sessionDir, store: sessionStore(options.sessionDir) }) };
+      }
+      return { agent: session.agent };
+    },
+    close: () => {
+      session?.agent.close();
+      session = null;
     },
   };
 }
