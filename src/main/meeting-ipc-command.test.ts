@@ -237,7 +237,7 @@ describe("main: computer use for a direct request", () => {
 describe("main: Bee's history and the follow-up check", () => {
   const usage = { inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 }, outputTokens: { total: 1, text: 1, reasoning: undefined } };
 
-  function setupWithModel(reply: string, options: { key?: boolean; history?: BeeHistoryStore; learned?: string[][] } = {}) {
+  function setupWithModel(reply: string, options: { key?: boolean; history?: BeeHistoryStore; learned?: string[][]; names?: string[] } = {}) {
     electron.handlers.clear();
     const prompts: string[] = [];
     const model = new MockLanguageModelV4({
@@ -259,7 +259,7 @@ describe("main: Bee's history and the follow-up check", () => {
       wakeWordEnabled: () => true,
       computer: { platform: "windows", run: async () => ({ ok: true, data: {} }), askFirst: () => false, cleanup: () => undefined },
       ...(options.history ? { history: options.history } : {}),
-      knownNames: () => ["Zuzanna Szczepaniak-Moody"],
+      knownNames: () => options.names ?? ["Zuzanna Szczepaniak-Moody"],
       learnNames: (names) => options.learned?.push(names),
     });
     const handler = (channel: string) => {
@@ -295,6 +295,16 @@ describe("main: Bee's history and the follow-up check", () => {
     const many = Array.from({ length: 7 }, (_, index) => ({ request: `r${index}`, reply: "", at: index }));
     await handler(IPC.runCommand)({ command: "close Slack", history: many, sessionToken: "signed-in" });
     expect(prompts[0]).not.toContain("r6");
+  });
+
+  it("asks which Chris, which app and what to say for a typed 'message Chris', from Settings names, before any AI call (Linux e2e)", async () => {
+    // Before: the AI took about 20 s to ask only which app and what to say. The renderer sends the request after "Bee,".
+    const { handler, prompts } = setupWithModel("Which app should Bee use to message Chris, and what should the message say?", { names: ["Chris Lee", "Krzysztof Nowak"] });
+    for (const command of ["message Chris", "message chris"]) {
+      const result = (await handler(IPC.runCommand)({ command, runId: 7, sessionToken: "signed-in" })) as { tips: string[] };
+      expect(result.tips, command).toEqual(["Which Chris (Chris Lee or Krzysztof Nowak), which app, and what should the message say?"]);
+    }
+    expect(prompts).toEqual([]);
   });
 
   it("passes on names learned from a spelling correction", async () => {

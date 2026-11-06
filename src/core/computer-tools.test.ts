@@ -1212,13 +1212,15 @@ describe("computerTools: act runs a short batch in one step", () => {
       ["set-value", "@s1abc:e1", STDIN_FLAG],
       ["focus", "@s1abc:e1"],
       ["press", "return", "--app=Discord"],
+      // Return sent the message: Bee reads the box it typed in once (this fake gives no value back).
+      ["get", "@s1abc:e1", "--property=value"],
     ]);
     expect(calls[2]?.stdin).toBe("hi Sam");
     expect(control.steps()).toBe(2);
     expect(output.split("\n")).toEqual([
       "1. click: Done (delivered_verified).",
       "2. set_value: Done (delivered_verified).",
-      "3. press_key: Done (delivered_verified). Check the result with a snapshot.",
+      "3. press_key: Done (delivered_verified). This send went through: say it was sent.",
     ]);
     expect(steps.slice(1)).toEqual(["Clicking Message @sam…", "Typing in Message @sam…", "Pressing Return…"]);
   });
@@ -1271,5 +1273,62 @@ describe("computerTools: act runs a short batch in one step", () => {
     expect(actionDone("Using ms-teams.exe for Teams. Done.")).toBe(true);
     expect(actionDone("Error ACTION_FAILED: it may still have happened.")).toBe(false);
     expect(actionDone("Bee could not focus that field, so pressed nothing.")).toBe(false);
+  });
+});
+
+describe("computerTools: after a send, delete, purchase or submit", () => {
+  // Discord's message box and Send button (SNAPSHOT), with the box reading back the given value after the send, or nothing.
+  function sending(value: string | null) {
+    const effects: string[] = [];
+    const fake = fakeRun((call) =>
+      call.command === "get" && value !== null ? { ok: true, data: { ref: call.args[0], property: "value", value } } : { ok: true, data: { disposition: { delivery: "delivered_verified" } } },
+    );
+    const tools = computerTools({ run: fake.run, desktop, control: createRunControl(), platform: "linux", askFirst: () => true, confirm: async () => true, onEffect: (kind) => effects.push(kind) });
+    const call = (name: keyof typeof tools, input: unknown) => (tools[name].execute as (input: unknown, options: unknown) => Promise<string>)(input, { toolCallId: `t-${name}`, messages: [] });
+    return { call, calls: fake.calls, effects };
+  }
+
+  it("checks the message box once after a confirmed Send, and says the send went through when it emptied", async () => {
+    const { call, calls, effects } = sending("");
+    await call("snapshot", { app: "Discord" });
+    await call("set_value", { ref: "@s1abc:e1", value: "hi Sam", effect: "none" });
+    expect(await call("click", { ref: "@s1abc:e2", effect: "send" })).toBe("Done (delivered_verified). Checked: the message box is empty now. This send went through: say it was sent.");
+    expect(effects).toEqual(["send"]);
+    expect(calls.slice(-1).map(({ command, args }) => [command, ...args])).toEqual([["get", "@s1abc:e1", "--property=value"]]);
+    // The typed text never goes in argv, the check included.
+    expect(calls.flatMap(({ args }) => args).join(" ")).not.toContain("hi Sam");
+  });
+
+  it("is no proof when the box still holds the text, and tells the AI to look first", async () => {
+    const { call, effects } = sending("hi Sam");
+    await call("snapshot", { app: "Discord" });
+    await call("set_value", { ref: "@s1abc:e1", value: "hi Sam", effect: "none" });
+    expect(await call("click", { ref: "@s1abc:e2", effect: "send" })).toBe(
+      "Done (delivered_verified). Checked: the message box still holds the text, so it may not have been sent. Look before you say it was.",
+    );
+    expect(effects).toEqual([]);
+  });
+
+  it("still counts the send when the box cannot be read back, and skips the check when Bee typed nothing there", async () => {
+    const unread = sending(null);
+    await unread.call("snapshot", { app: "Discord" });
+    await unread.call("set_value", { ref: "@s1abc:e1", value: "hi Sam", effect: "none" });
+    expect(await unread.call("click", { ref: "@s1abc:e2", effect: "send" })).toBe("Done (delivered_verified). This send went through: say it was sent.");
+    expect(unread.effects).toEqual(["send"]);
+    const untyped = sending("");
+    await untyped.call("snapshot", { app: "Discord" });
+    expect(await untyped.call("click", { ref: "@s1abc:e2", effect: "send" })).toBe("Done (delivered_verified). This send went through: say it was sent.");
+    expect(untyped.calls.map(({ command }) => command)).toEqual(["snapshot", "click"]);
+  });
+
+  it("says a delete went through, with no check, and a declined one does nothing", async () => {
+    const { call, effects, calls } = sending("");
+    await call("snapshot", { app: "Discord" });
+    expect(await call("click", { ref: "@s1abc:e3", effect: "delete" })).toBe("Done (delivered_verified). This delete went through: say it was deleted.");
+    expect(effects).toEqual(["delete"]);
+    expect(calls.map(({ command }) => command)).toEqual(["snapshot", "click"]);
+    const declined = setup({ confirm: async () => false });
+    await declined.call("snapshot", { app: "Discord" });
+    expect(await declined.call("click", { ref: "@s1abc:e3", effect: "delete" })).toBe(STOPPED);
   });
 });

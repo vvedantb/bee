@@ -4,6 +4,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { UNSEEN_CALENDAR_LINE } from "./claim-guard";
 import { LINUX_A11Y_LINE, type RunControl } from "./computer-control";
+import type { BeeMemory } from "./bee-memory";
+import { wakeCommand } from "./wake-word";
 import type { DesktopActions } from "./desktop-actions";
 import { runDirectCommand, type ComputerHost } from "./direct-command";
 import type { BeeGateway } from "./gateway";
@@ -87,7 +89,7 @@ function models(args: { stream?: Chunk[][]; turns?: Turn[] }) {
   return { gateway: { languageModel: () => model } as unknown as BeeGateway, calls: () => ({ streams, generates }) };
 }
 
-function host(options: { platform?: ComputerHost["platform"]; accessibility?: "granted" | "denied"; askFirst?: boolean; confirm?: boolean } = {}) {
+function host(options: { platform?: ComputerHost["platform"]; accessibility?: "granted" | "denied"; askFirst?: boolean; confirm?: boolean; boxAfterSend?: string } = {}) {
   const commands: string[] = [];
   const asked: string[] = [];
   let control: RunControl | null = null;
@@ -97,6 +99,8 @@ function host(options: { platform?: ComputerHost["platform"]; accessibility?: "g
       commands.push(command);
       if (command === "permissions") return { ok: true, data: { accessibility: { state: options.accessibility ?? "granted" }, screen_recording: { state: "not_required" } } };
       if (command === "snapshot") return { ok: true, data: FIXTURE };
+      // The message box read back after a send, when the test gives what it holds.
+      if (command === "get" && options.boxAfterSend !== undefined) return { ok: true, data: { property: "value", value: options.boxAfterSend } };
       return { ok: true, data: { disposition: { delivery: "delivered_verified" } } };
     },
     askFirst: () => options.askFirst ?? false,
@@ -169,6 +173,48 @@ describe("direct request: a send is claimed only with proof", () => {
     expect(asked).toEqual(["send"]);
     expect(result.tips).toEqual(["Cancelled. Nothing was sent."]);
     expect(commands).not.toContain("click");
+  });
+
+  it("says a confirmed send went through when the AI doubted it (Linux e2e: 'could not confirm the send went through')", async () => {
+    const { gateway } = models({ turns: [...TYPE_ONLY.slice(0, 2), { tool: "click", input: { ref: "@sfx1:e3", effect: "send" } }, { text: "Bee could not confirm the send went through." }] });
+    const { computer, asked, commands } = host({ askFirst: true, confirm: true, boxAfterSend: "" });
+    const turns: ModelMessage[][] = [];
+    const result = await runDirectCommand({ command: "send hi from the fixture message box", snippets, gateway, actions: desktop(), computer, onTurn: (turn) => turns.push(turn) });
+    expect(asked).toEqual(["send"]);
+    expect(commands).toEqual(["permissions", "snapshot", "set-value", "click", "get"]);
+    expect(result.tips).toEqual(['Sent "hi".']);
+    expect(lastText(turns[0] ?? [])).toBe('Sent "hi".');
+  });
+
+  it("keeps a confirmed send's own claim, typed then clicked", async () => {
+    const { gateway } = models({ turns: [...TYPE_ONLY.slice(0, 2), { tool: "click", input: { ref: "@sfx1:e3", effect: "send" } }, { text: "Sent hi." }] });
+    const result = await runDirectCommand({ command: "send hi from the fixture message box", snippets, gateway, actions: desktop(), computer: host({ askFirst: true, confirm: true, boxAfterSend: "" }).computer });
+    expect(result.tips).toEqual(["Sent hi."]);
+  });
+
+  it("never claims a send when the message box still holds the text after Send", async () => {
+    const { gateway } = models({ turns: [...TYPE_ONLY.slice(0, 2), { tool: "click", input: { ref: "@sfx1:e3", effect: "send" } }, { text: "Sent hi to Sam." }] });
+    const result = await runDirectCommand({ command: "send hi from the fixture message box", snippets, gateway, actions: desktop(), computer: host({ askFirst: true, confirm: true, boxAfterSend: "hi" }).computer });
+    expect(result.tips).toEqual(['Typed "hi"; Bee could not confirm it was sent.']);
+  });
+
+  it("asks agent-desktop for access once per few minutes, not before every request", async () => {
+    const { computer, commands } = host();
+    for (const command of ["click Help in the fixture page", "click Save draft in the fixture page"]) {
+      const { gateway } = models({ turns: [{ text: "Clicked it." }] });
+      await runDirectCommand({ command, snippets, gateway, actions: desktop(), computer });
+    }
+    expect(commands.filter((command) => command === "permissions")).toHaveLength(1);
+    // Denied is never kept: the next request asks again.
+    const denied = host({ accessibility: "denied" });
+    for (let index = 0; index < 2; index += 1) await runDirectCommand({ command: "click Help in the fixture page", snippets, gateway: models({}).gateway, actions: desktop(), computer: denied.computer });
+    expect(denied.commands.filter((command) => command === "permissions")).toHaveLength(2);
+  });
+
+  it("never shows a tool name in the last line (Linux e2e: open_app)", async () => {
+    const { gateway } = models({ turns: [{ tool: "open_app", input: { name: "LibreOffice Writer" } }, { text: "LibreOffice Writer never appeared after open_app." }] });
+    const result = await runDirectCommand({ command: "open LibreOffice Writer and type Zuzanna", snippets, gateway, actions: desktop(), computer: host().computer });
+    expect(result.tips).toEqual(["LibreOffice Writer never appeared after opening the app."]);
   });
 
   it("never rewrites an honest line that says nothing was sent", async () => {
@@ -260,11 +306,51 @@ describe("direct request: names that sound alike", () => {
     const { gateway, calls } = models({ turns: [{ tool: "snapshot", input: { app: "google-chrome" } }] });
     const { computer, commands } = host();
     const turns: ModelMessage[][] = [];
-    const result = await runDirectCommand({ command: "send Chris a message saying hi", snippets, gateway, actions: desktop(), computer, knownNames: KNOWN, onTurn: (turn) => turns.push(turn) });
+    const result = await runDirectCommand({ command: "send Chris a message on Teams saying hi", snippets, gateway, actions: desktop(), computer, knownNames: KNOWN, onTurn: (turn) => turns.push(turn) });
     expect(result.tips).toEqual(["Which Chris: Chris Lee or Krzysztof Nowak?"]);
     expect(calls()).toEqual({ streams: 0, generates: 0 });
     expect(commands).toEqual([]);
     expect(lastText(turns[0] ?? [])).toBe("Which Chris: Chris Lee or Krzysztof Nowak?");
+  });
+
+  it("asks which person, which app and what to say in one question, with no AI turn (Linux e2e: message Chris)", async () => {
+    // Before: "Which app should Bee use to message Chris, and what should the message say?" from a 20 s AI turn, and no
+    // question about which Chris. The typed path hands runDirectCommand the request after "Bee,".
+    const cases: [string, string][] = [
+      ["message Chris", "Which Chris (Chris Lee or Krzysztof Nowak), which app, and what should the message say?"],
+      ["message chris", "Which Chris (Chris Lee or Krzysztof Nowak), which app, and what should the message say?"],
+      ["Message Chris.", "Which Chris (Chris Lee or Krzysztof Nowak), which app, and what should the message say?"],
+      ["please message krzys", "Which Krzys (Chris Lee or Krzysztof Nowak), which app, and what should the message say?"],
+      ["send Chris a message saying hi", "Which Chris (Chris Lee or Krzysztof Nowak), and which app?"],
+      ["message Chris on Teams", "Which Chris (Chris Lee or Krzysztof Nowak), and what should the message say?"],
+      ["email chris", "Which Chris (Chris Lee or Krzysztof Nowak), and what should the message say?"],
+      ["call chris", "Which Chris (Chris Lee or Krzysztof Nowak), and which app?"],
+      ["open chris's chat", "Which Chris: Chris Lee or Krzysztof Nowak?"],
+    ];
+    // The typed line as the user wrote it reaches runDirectCommand as the request after the wake word.
+    expect(wakeCommand("Bee, message Chris")).toBe("message Chris");
+    expect(wakeCommand("Bee, message chris")).toBe("message chris");
+    for (const [command, question] of cases) {
+      const { gateway, calls } = models({ turns: [{ text: "Which app should Bee use to message Chris, and what should the message say?" }] });
+      const { computer, commands } = host();
+      const result = await runDirectCommand({ command, snippets, gateway, actions: desktop(), computer, knownNames: KNOWN });
+      expect(result.tips, command).toEqual([question]);
+      expect(calls(), command).toEqual({ streams: 0, generates: 0 });
+      expect(commands, command).toEqual([]);
+    }
+  });
+
+  it("leaves the app out of the question when a recent request or Bee's memory names one", async () => {
+    const history: ModelMessage[] = [
+      { role: "user", content: [{ type: "text", text: "open Teams" }] },
+      { role: "assistant", content: [{ type: "text", text: "Opened Teams" }] },
+    ];
+    const { gateway } = models({});
+    const fromHistory = await runDirectCommand({ command: "message Chris", snippets, gateway, actions: desktop(), computer: host().computer, knownNames: KNOWN, history });
+    expect(fromHistory.tips).toEqual(["Which Chris (Chris Lee or Krzysztof Nowak), and what should the message say?"]);
+    const memory = { facts: () => [{ text: "The user messages colleagues on Slack.", at: 1 }] } as unknown as BeeMemory;
+    const fromMemory = await runDirectCommand({ command: "message Chris saying hi", snippets, gateway, actions: desktop(), computer: host().computer, knownNames: KNOWN, memory });
+    expect(fromMemory.tips).toEqual(["Which Chris: Chris Lee or Krzysztof Nowak?"]);
   });
 
   it("goes ahead when the request names the person in full", async () => {
@@ -279,7 +365,7 @@ describe("direct request: names that sound alike", () => {
       const { gateway, calls } = models({ turns: [{ tool: "snapshot", input: { app: "google-chrome" } }] });
       const { computer, commands } = host();
       const result = await runDirectCommand({ command, snippets, gateway, actions: desktop(), computer, knownNames: KNOWN });
-      expect(result.tips[0], command).toMatch(/^Which (?:Chris|Krzys): Chris Lee or Krzysztof Nowak\?$/);
+      expect(result.tips[0], command).toMatch(/^Which (?:Chris|Krzys)(?:: | \()Chris Lee or Krzysztof Nowak(?:\?$|\), )/);
       expect(calls(), command).toEqual({ streams: 0, generates: 0 });
       expect(commands, command).toEqual([]);
     }
@@ -318,7 +404,7 @@ describe("direct request: names that sound alike", () => {
     ];
     const { gateway } = models({});
     const result = await runDirectCommand({ command: "send Chris a message", snippets, gateway, actions: desktop(), computer: host().computer, knownNames: KNOWN, history });
-    expect(result.tips).toEqual(["Which Chris: Chris Lee or Krzysztof Nowak?"]);
+    expect(result.tips).toEqual(["Which Chris (Chris Lee or Krzysztof Nowak), which app, and what should the message say?"]);
   });
 
   it("learns the spelling from an explicit correction, and nothing else", async () => {

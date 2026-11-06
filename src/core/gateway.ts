@@ -72,9 +72,22 @@ function anthropicRouting(tier: GatewayTier, options: { web: boolean }): Gateway
  */
 export const ANTHROPIC_COMMAND_THINKING = { anthropic: { thinking: { type: "adaptive" }, effort: "medium" } } as const;
 
-/** Like guideProviderOptions, with adaptive thinking at medium effort. Cache markers stay on the messages (ANTHROPIC_CACHE). */
-export function commandProviderOptions(tier: GatewayTier, options: { web: boolean }): { gateway: GatewayRouting } & typeof ANTHROPIC_COMMAND_THINKING {
-  return { gateway: anthropicRouting(tier, options), ...ANTHROPIC_COMMAND_THINKING };
+/**
+ * How hard a COMMAND_MODEL call thinks: medium by default; low for a short computer-use task (one target, no later step:
+ * core/computer-use.ts shortComputerTask), where each step is a plain look or act and thinking adds seconds a turn. Only these
+ * two: never high on the path to an answer.
+ */
+export type CommandEffort = "low" | "medium";
+
+/**
+ * Like guideProviderOptions, with adaptive thinking at medium effort, or low when asked. Cache markers stay on the messages
+ * (ANTHROPIC_CACHE).
+ */
+export function commandProviderOptions(
+  tier: GatewayTier,
+  options: { web: boolean; effort?: CommandEffort },
+): { gateway: GatewayRouting; anthropic: { thinking: { type: "adaptive" }; effort: CommandEffort } } {
+  return { gateway: anthropicRouting(tier, options), anthropic: { ...ANTHROPIC_COMMAND_THINKING.anthropic, effort: options.effort ?? "medium" } };
 }
 
 /**

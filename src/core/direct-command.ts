@@ -4,17 +4,18 @@ import type { PipelineResult } from "../shared/ipc";
 import type { ComputerRun } from "./agent-desktop-envelope";
 import { assistantMessage, cleanForHistory, commandFallbackReply, historySummariser, userMessage, type Summarise } from "./bee-history";
 import { memorySummary, memoryTools, type BeeMemory } from "./bee-memory";
-import { answerEvidence, guardLine, replaceLastText, runEvidence, type ClaimKind } from "./claim-guard";
+import { answerEvidence, guardLine, replaceLastText, runEvidence, upgradeLine, withoutToolNames, type ClaimKind } from "./claim-guard";
+import { clarifyingQuestion } from "./clarify";
 import { routeWithJev, type JevRoute } from "./command-route-jev";
 import { createRunControl, stopLine, type ComputerPlatform, type RunControl } from "./computer-control";
 import { computerTools, type ConfirmRequest } from "./computer-tools";
-import { computerAccess, runComputerUse, simpleComputerTask, wantsComputerUse, type ComputerSkills, type ComputerUseResult } from "./computer-use";
+import { computerAccess, runComputerUse, shortComputerTask, simpleComputerTask, wantsComputerUse, type ComputerSkills, type ComputerUseResult } from "./computer-use";
 import { debugLog, errorData, msSince } from "./debug-log";
 import { COMMAND_MODEL, GUIDE_MODEL, JEV_MODEL, NO_GATEWAY_KEY, type BeeGateway } from "./gateway";
 import type { McpTools } from "./mcp";
 import { isKnownApp, routeCommand, type DesktopActionResult, type DesktopActions } from "./desktop-actions";
 import { desktopTools } from "./desktop-tools";
-import { correctedName, nameAmbiguities, recentChoice, screenNames, spelledName, whichNameQuestion, type ResolvedName } from "./known-names";
+import { correctedName, nameAmbiguities, recentChoice, screenNames, spelledName, type ResolvedName } from "./known-names";
 import { guideWithLuna, noteCitation, type LunaToolActivity, type TipFields } from "./luna";
 import type { Snippet } from "./notes";
 import { loadMcp } from "./pipeline";
@@ -53,6 +54,10 @@ const REACHES_PERSON =
 const RECENT_TURNS = 3;
 // Tool timings kept for one request's timing log.
 const TOOL_TIMES_MAX = 40;
+// Accessibility that agent-desktop reported granted, by computer-use runner: not asked again for this long (each ask is an
+// agent-desktop process on the path to the first step). A permission refusal during a run forgets it at once.
+const ACCESS_TTL_MS = 5 * 60_000;
+const accessGranted = new WeakMap<ComputerRun, number>();
 
 /**
  * Text from the user's last RECENT_TURNS requests, oldest first: their words, the AI's text and its tool inputs (a name typed in a
@@ -162,9 +167,13 @@ async function runComputerCommand(args: {
   host.onStep?.("Starting…");
   try {
     debugLog.info("computer", "run-start", { platform: host.platform, maxSteps: maxSteps ?? null, maxMs: host.maxMs ?? null, askFirst: host.askFirst(), command: args.command });
-    if (host.platform === "mac" || host.platform === "linux") {
+    const granted = accessGranted.get(host.run);
+    if ((host.platform === "mac" || host.platform === "linux") && granted !== undefined && performance.now() - granted < ACCESS_TTL_MS) {
+      debugLog.info("computer", "access", { accessibility: "granted", cached: true });
+    } else if (host.platform === "mac" || host.platform === "linux") {
       const access = await computerAccess(host.run, control.signal);
       debugLog.info("computer", "access", access);
+      if (access.accessibility === "granted") accessGranted.set(host.run, performance.now());
       if (control.reason()) {
         const line = stopLine(control.reason() ?? "user", { platform: host.platform });
         args.onMessages?.([assistantMessage(line)]);
@@ -216,21 +225,38 @@ async function runComputerCommand(args: {
     if (quick && !quick.escalate) outcome = quick;
     else {
       if (quick) console.debug(`perf computer fast escalate steps=${quick.steps}`);
-      const planned = await runComputerUse({ ...base, model: args.gateway.languageModel(COMMAND_MODEL), ...(quick?.messages.length ? { steps: quick.messages } : {}) });
+      // A short task (one target, no later step) thinks at low effort: each step is a plain look or act.
+      const effort = shortComputerTask(args.command) ? "low" : "medium";
+      const planned = await runComputerUse({ ...base, model: args.gateway.languageModel(COMMAND_MODEL), effort, ...(quick?.messages.length ? { steps: quick.messages } : {}) });
       outcome = quick ? { ...planned, messages: [...quick.messages, ...planned.messages] } : planned;
     }
+    if (control.reason() === "permission") accessGranted.delete(host.run);
     const guide = performance.now() - started;
     // The model's first reply: the fast pass's when it ran first.
     const firstStep = quick?.firstStepMs ?? outcome.firstStepMs ?? null;
     // A line that claims a send, delete, purchase or submit this run never proved, or an empty calendar no read showed, becomes a
     // cautious one. A stop or an error already has its own line.
     if (!outcome.stopped && !outcome.error) {
-      const checked = guardLine(outcome.line, runEvidence(outcome.messages, committed));
+      const evidence = runEvidence(outcome.messages, committed);
+      const checked = guardLine(outcome.line, evidence);
+      // The other way round: a line that doubts a send, delete, purchase or submit the gate counted as done (and the message box
+      // check did not contradict) says it plainly. "Bee could not confirm the send went through" after a confirmed Send → Sent.
+      const upgraded = checked.rewritten ? null : upgradeLine(outcome.line, committed, evidence.typed);
       if (checked.rewritten) {
         debugLog.warn("computer", "claim-rewritten", { line: outcome.line, shown: checked.line, reason: checked.reason, proven: [...committed] });
         // The history keeps the line the user saw in place of the claim, so no later turn reads the claim as Bee's own.
         outcome = { ...outcome, line: checked.line, claimRewritten: true, messages: replaceLastText(outcome.messages, checked.line) };
+      } else if (upgraded?.upgraded) {
+        debugLog.info("computer", "claim-upgraded", { line: outcome.line, shown: upgraded.line, kind: upgraded.kind, proven: [...committed] });
+        outcome = { ...outcome, line: upgraded.line, messages: replaceLastText(outcome.messages, upgraded.line) };
       }
+    }
+    // Never a tool name, a ref or an agent-desktop code in what the user reads ("…never appeared after open_app").
+    const plain = withoutToolNames(outcome.line);
+    if (plain !== outcome.line) {
+      debugLog.info("computer", "line-plain", { line: outcome.line, shown: plain });
+      const said = outcome.messages.length > 0 && !outcome.stopped && !outcome.error;
+      outcome = { ...outcome, line: plain, ...(said ? { messages: replaceLastText(outcome.messages, plain) } : {}) };
     }
     debugLog.info("computer", "run-end", { ...outcome, reason: control.reason(), declined: control.declined(), ms: Math.round(guide) });
     // What the AI did, tool calls and results included, then the line the island shows when it differs (a stop).
@@ -395,8 +421,11 @@ export async function runDirectCommand(args: {
   if (resolvedNames.length > 0) debugLog.info("ai", "name-recent", { command, resolved: resolvedNames });
   const unclear = REACHES_PERSON.test(command) ? ambiguous.find((item) => !resolvedNames.some((done) => done.heard === item.heard)) : undefined;
   if (unclear) {
-    const question = whichNameQuestion(unclear);
-    debugLog.info("ai", "name-ambiguous", { command, heard: unclear.heard, matches: unclear.matches });
+    // One question for everything missing (which person, which app, what to say), so the answer needs no second question. An
+    // app named in the user's recent requests or in Bee's memory counts as named.
+    const context = [...recent, ...(args.memory?.facts().map((fact) => fact.text) ?? [])];
+    const question = clarifyingQuestion({ command, ambiguity: unclear, context });
+    debugLog.info("ai", "name-ambiguous", { command, heard: unclear.heard, matches: unclear.matches, question });
     record([assistantMessage(question)]);
     return finish("which-name", lineResult(question));
   }
@@ -526,8 +555,12 @@ export async function runDirectCommand(args: {
   const checkedTips = guide.tips.map((tip) => guardLine(tip, evidence));
   const rewritten = checkedTips.filter((checked) => checked.rewritten);
   if (rewritten.length > 0) debugLog.warn("ai", "claim-rewritten", { tips: guide.tips, shown: checkedTips.map((checked) => checked.line), reasons: rewritten.map((checked) => checked.reason) });
-  // A replaced line keeps no source label: the label belonged to the claim.
-  const reply: TipFields = { tips: checkedTips.map((checked) => checked.line), tipSources: guide.tipSources.map((source, index) => (checkedTips[index]?.rewritten ? null : source)) };
+  // A replaced line keeps no source label: the label belonged to the claim. No line names a tool, a ref or an agent-desktop
+  // code (core/claim-guard.ts withoutToolNames): plain words instead, its label kept.
+  const reply: TipFields = {
+    tips: checkedTips.map((checked) => withoutToolNames(checked.line)),
+    tipSources: guide.tipSources.map((source, index) => (checkedTips[index]?.rewritten ? null : source)),
+  };
   const shown = silent ? { tips: [commandFallbackReply(command)], tipSources: [null] } : joinLines(actionLines, reply);
   // The AI's own messages, then what the island showed when the AI wrote nothing (a fallback, a stop or an error).
   const shownText = shown.tips.join("\n");

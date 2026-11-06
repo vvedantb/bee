@@ -1,6 +1,9 @@
 import type { ModelMessage } from "ai";
 import { describe, expect, it } from "vitest";
-import { UNSEEN_CALENDAR_LINE, answerEvidence, claimedEffect, claimedEffects, claimsEmptyCalendar, connectorEffect, guardLine, runEvidence, unprovenLine } from "./claim-guard";
+import {
+  UNSEEN_CALENDAR_LINE, answerEvidence, claimedEffect, claimedEffects, claimsEmptyCalendar, connectorEffect, doubtedEffect, guardLine, provenLine, runEvidence, unprovenLine, upgradeLine,
+  withoutToolNames,
+} from "./claim-guard";
 
 // Synthetic runs only: tool calls and results shaped like computer-tools' own ("Done." / "Error …"), no real app or person.
 let seq = 0;
@@ -97,8 +100,37 @@ describe("guardLine: false completion", () => {
       ...call("press_key", { keys: "return", app: "Fixture", ref: "@s1:e2", effect: "send" }, "Done."),
     ]);
     expect(guardLine("Sent hi to Zuzanna.", sent)).toEqual({ line: "Sent hi to Zuzanna.", rewritten: false, reason: null });
-    // A proven send does not prove a delete in the same line.
-    expect(guardLine("Sent hi and deleted the draft.", sent)).toMatchObject({ rewritten: true, reason: "delete" });
+    // A proven send does not prove a delete in the same line, but it is never shown as unconfirmed either.
+    expect(guardLine("Sent hi and deleted the draft.", sent)).toEqual({ line: 'Sent "hi". Bee could not confirm anything was deleted.', rewritten: true, reason: "delete" });
+  });
+
+  it("counts a send the user confirmed, as computer-tools reports it, however the result line goes on", () => {
+    // The output after a confirmed Send: agent-desktop's delivery, then what Bee checked and what the AI may say.
+    const outputs = [
+      "Done (delivered_verified). This send went through: say it was sent.",
+      "Done (delivered_unverified). Checked: the message box is empty now. This send went through: say it was sent.",
+      "Using google-chrome for Chrome. Done. This send went through: say it was sent.",
+    ];
+    for (const output of outputs) {
+      const evidence = runEvidence([...call("set_value", { ref: "@s1:e1", value: "hi", effect: "none" }, "Done."), ...call("click", { ref: "@s1:e3", effect: "send" }, output)]);
+      expect(evidence.proven.has("send"), output).toBe(true);
+      expect(guardLine("Sent hi.", evidence), output).toEqual({ line: "Sent hi.", rewritten: false, reason: null });
+    }
+    // In a batch too: "2. click: Done (…). This send went through…".
+    const batch = runEvidence(
+      call(
+        "act",
+        { actions: [{ do: "set_value", ref: "@s1:e1", value: "hi", effect: "none" }, { do: "click", ref: "@s1:e3", effect: "send" }] },
+        "1. set_value: Done (delivered_verified).\n2. click: Done (delivered_verified). This send went through: say it was sent.",
+      ),
+    );
+    expect(batch.proven.has("send")).toBe(true);
+    expect(batch.typed).toEqual(["hi"]);
+    // A check that found the text still in the box leaves nothing for the claim to stand on: the gate did not count it either.
+    const still = "Done (delivered_verified). Checked: the message box still holds the text, so it may not have been sent. Look before you say it was.";
+    expect(runEvidence(call("click", { ref: "@s1:e3", effect: "send" }, still)).proven.has("send")).toBe(false);
+    expect(runEvidence(call("act", { actions: [{ do: "click", ref: "@s1:e3", effect: "send" }] }, `1. click: ${still}`)).proven.has("send")).toBe(false);
+    expect(guardLine("Sent hi.", runEvidence(call("click", { ref: "@s1:e3", effect: "send" }, still)))).toMatchObject({ rewritten: true, reason: "send" });
   });
 
   it("never touches an honest line", () => {
@@ -230,5 +262,66 @@ describe("earlier turns and the history", () => {
     expect(JSON.stringify(kept)).not.toContain("Sent hi to Sam.");
     expect(JSON.stringify(kept)).toContain("set_value");
     expect(replaceLastText([], "Stopped.")).toEqual([{ role: "assistant", content: [{ type: "text", text: "Stopped." }] }]);
+  });
+});
+
+describe("upgradeLine: a proven action is never undersold", () => {
+  const sent = new Set(["send"] as const);
+
+  it("says plainly what a confirmed send did when the AI doubted it (Linux e2e: 'could not confirm the send went through')", () => {
+    expect(upgradeLine("Bee could not confirm the send went through.", sent, ["hi"])).toEqual({ line: 'Sent "hi".', upgraded: true, kind: "send" });
+    expect(upgradeLine("Typed hi and clicked Send; Bee could not confirm it was sent.", sent, ["hi"])).toMatchObject({ line: 'Sent "hi".', upgraded: true });
+    expect(upgradeLine("Couldn't verify the message was delivered.", sent, ["x".repeat(80)])).toMatchObject({ line: "Sent the message.", upgraded: true });
+    expect(upgradeLine("Bee could not confirm it was deleted.", new Set(["delete"] as const))).toMatchObject({ line: "Deleted it.", upgraded: true });
+  });
+
+  it("leaves a line alone when the run proved nothing of that kind, or the line says it failed", () => {
+    expect(upgradeLine("Bee could not confirm the send went through.", new Set())).toEqual({ line: "Bee could not confirm the send went through.", upgraded: false, kind: null });
+    expect(upgradeLine("Bee could not confirm it was deleted.", sent)).toMatchObject({ upgraded: false });
+    for (const line of [
+      "Could not confirm the message was sent: the page shows an error.",
+      "Send failed; Bee could not confirm anything.",
+      "Cancelled. Nothing was sent.",
+      "The message box still holds the text, so Bee could not confirm it was sent.",
+      "Typed hi in the box; not sent yet.",
+      "Sent hi.",
+    ]) {
+      expect(upgradeLine(line, sent, ["hi"]).upgraded, line).toBe(false);
+    }
+  });
+
+  it("reads which action a cautious line doubts, and only one", () => {
+    expect(doubtedEffect("Bee could not confirm the send went through.")).toBe("send");
+    expect(doubtedEffect("Unable to verify the form submission.")).toBe("submit");
+    expect(doubtedEffect("Bee cannot tell whether the order was placed.")).toBe("buy");
+    expect(doubtedEffect("Could not confirm it was sent or deleted.")).toBeNull();
+    expect(doubtedEffect("Sent hi.")).toBeNull();
+    expect(provenLine("send", [])).toBe("Sent the message.");
+    expect(provenLine("submit")).toBe("Submitted the form.");
+  });
+});
+
+describe("withoutToolNames: no internals in what the user reads", () => {
+  it("puts Bee's tool names, connector tools, codes and refs in plain words (Linux e2e: open_app in the last line)", () => {
+    expect(withoutToolNames("LibreOffice Writer never appeared after open_app.")).toBe("LibreOffice Writer never appeared after opening the app.");
+    expect(withoutToolNames("open_app failed and list_apps shows no Writer.")).toBe("Opening the app failed and the list of open apps shows no Writer.");
+    expect(withoutToolNames("`focus_window` is refused on Wayland.")).toBe("Bringing the window forward is refused on Wayland.");
+    expect(withoutToolNames("Posted with slack__chat_post_message.")).toBe("Posted with the slack connector.");
+    expect(withoutToolNames("Writer gave APP_NOT_FOUND.")).toBe("Writer gave app not found.");
+    expect(withoutToolNames("Clicked @s8f3k2p9:e12.")).toBe("Clicked that element.");
+  });
+
+  it("leaves an ordinary line exactly as written", () => {
+    for (const line of [
+      "Opened Chrome",
+      "Sent hi.",
+      "iPhone backup is on.",
+      "Clicked Send; the snapshot shows the page.",
+      "Ended: file:///fixture/chrome-form.html",
+      "Set BEE_AI_GATEWAY_API_KEY before you start Bee.",
+      "Python's __init__ runs first.",
+    ]) {
+      expect(withoutToolNames(line), line).toBe(line);
+    }
   });
 });

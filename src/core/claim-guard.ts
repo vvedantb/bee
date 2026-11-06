@@ -140,6 +140,11 @@ function resultText(output: unknown): string {
 }
 
 const isDone = (text: string) => /^(?:Using [^\n]{1,120}? for [^\n]{1,120}?\. )?Done\b/.test(text.trim());
+/**
+ * What computer-tools adds to a send that came back Done when its check found the text still in the message box: the action ran,
+ * but nothing shows the message left. Such a result proves no send.
+ */
+export const NOT_SENT_MARK = "so it may not have been sent";
 const isError = (text: string, output: unknown) => /^\s*Error\b/.test(text) || (output as { type?: string } | undefined)?.type?.startsWith("error") === true;
 // A connector's own failure inside a result that came back as text: {"ok":false}, {"isError":true}, {"error":"…"}.
 const CONNECTOR_FAILED = /"(?:ok|success)"\s*:\s*false|"isError"\s*:\s*true|"error"\s*:\s*(?:"|\{)/;
@@ -192,13 +197,13 @@ export function runEvidence(messages: readonly ModelMessage[], gateKinds: Iterab
           const match = /^(\d+)\. \w+: (.*)$/.exec(line.trim());
           const item = match ? (input.actions[Number(match[1]) - 1] as Record<string, unknown> | undefined) : undefined;
           if (!item || !isDone(match?.[2] ?? "")) continue;
-          if (KINDS.has(String(item.effect))) evidence.proven.add(item.effect as ClaimKind);
+          if (KINDS.has(String(item.effect)) && !(match?.[2] ?? "").includes(NOT_SENT_MARK)) evidence.proven.add(item.effect as ClaimKind);
           if (TYPES.has(String(item.do))) evidence.typed.push(String(item.value ?? item.text ?? ""));
         }
         continue;
       }
       if (!isDone(text)) continue;
-      if (KINDS.has(String(input.effect))) evidence.proven.add(input.effect as ClaimKind);
+      if (KINDS.has(String(input.effect)) && !text.includes(NOT_SENT_MARK)) evidence.proven.add(input.effect as ClaimKind);
       if (TYPES.has(name)) evidence.typed.push(String(input.value ?? input.text ?? ""));
     }
   }
@@ -262,6 +267,21 @@ export function unprovenLine(kind: ClaimKind, typed: readonly string[] = []): st
   }
 }
 
+/** The plain line for an action this run proved: `Sent "hi".`, "Deleted it.". */
+export function provenLine(kind: ClaimKind, typed: readonly string[] = []): string {
+  const last = (typed.at(-1) ?? "").replace(/\s+/g, " ").trim();
+  switch (kind) {
+    case "send":
+      return last && last.length <= TYPED_SHOWN_MAX ? `Sent "${last}".` : "Sent the message.";
+    case "delete":
+      return "Deleted it.";
+    case "buy":
+      return "Placed the order.";
+    case "submit":
+      return "Submitted the form.";
+  }
+}
+
 /** The line for an empty-calendar claim with no successful read behind it. */
 export const UNSEEN_CALENDAR_LINE = "Bee could not read the calendar, so it cannot say whether you have meetings.";
 
@@ -270,15 +290,101 @@ export type GuardedLine = { line: string; rewritten: boolean; reason: ClaimKind 
 /**
  * The line to show. A claimed send, delete, purchase or submit stays only when evidence.proven has that kind: never because some
  * other tool succeeded (an open_app, a list, a web search). For an answer about earlier turns, answerEvidence adds what those
- * turns proved or showed. An empty-calendar claim after tools ran stays only when a calendar read succeeded. With no calendar
- * tool tried, any read that succeeded will do, as before: the answer may come from the meeting brief.
+ * turns proved or showed. A line that claims a proven kind and an unproven one keeps the proven one in plain words, then the
+ * cautious line for the other: a proven send is never shown as unconfirmed. An empty-calendar claim after tools ran stays only
+ * when a calendar read succeeded. With no calendar tool tried, any read that succeeded will do, as before: the answer may come
+ * from the meeting brief.
  */
 export function guardLine(line: string, evidence: RunEvidence): GuardedLine {
-  for (const claim of claimedEffects(line)) {
-    if (!evidence.proven.has(claim)) return { line: unprovenLine(claim, evidence.typed), rewritten: true, reason: claim };
+  const claims = claimedEffects(line);
+  const unproven = claims.find((claim) => !evidence.proven.has(claim));
+  if (unproven) {
+    const kept = claims.filter((claim) => evidence.proven.has(claim)).map((claim) => provenLine(claim, evidence.typed));
+    return { line: [...kept, unprovenLine(unproven, evidence.typed)].join(" "), rewritten: true, reason: unproven };
   }
   if (claimsEmptyCalendar(line) && unseenCalendar(evidence)) return { line: UNSEEN_CALENDAR_LINE, rewritten: true, reason: "unseen-calendar" };
   return { line, rewritten: false, reason: null };
+}
+
+// A line that doubts an action: "Bee could not confirm the send went through", "couldn't verify it was sent".
+const UNSURE = /\b(?:could not|couldn['’]t|cannot|can['’]t|unable to)\s+(?:confirm|verify|tell|check)\b/i;
+// Words that say the action failed, was refused or did not happen: such a line is never upgraded, whatever the run proved.
+const FAILED =
+  /\b(?:fail(?:ed|s|ure)?|error|declined|cancel(?:led|ed)?|stopped|refused|blocked|did not|didn['’]t|was not|wasn['’]t|has not|hasn['’]t|not (?:sent|deleted|bought|submitted|placed)|unsent|still (?:holds|has|shows|there|in))\b/i;
+const DOUBTED: readonly (readonly [ClaimKind, RegExp])[] = [
+  ["send", /\b(?:sent|send|sending|delivered|posted)\b/i],
+  ["delete", /\b(?:deleted|delete|deleting|deletion|removed)\b/i],
+  ["buy", /\b(?:purchased?|bought|order|payment|paid)\b/i],
+  ["submit", /\b(?:submitted|submit|submission)\b/i],
+];
+
+/**
+ * The one action a cautious line doubts ("Bee could not confirm the send went through." → send), or null: no doubt, a word
+ * that says it failed, or doubts about more than one kind.
+ */
+export function doubtedEffect(line: string): ClaimKind | null {
+  if (!UNSURE.test(line) || FAILED.test(line)) return null;
+  const kinds = DOUBTED.filter(([, pattern]) => pattern.test(line)).map(([kind]) => kind);
+  return kinds.length === 1 ? (kinds[0] ?? null) : null;
+}
+
+/**
+ * A line that undersells what the run proved: it doubts a send, delete, purchase or submit that the confirm gate counted as done
+ * (proven: the kinds core/computer-tools.ts reported through onEffect, never contradicted by its check of the message box). Then
+ * the plain claim (provenLine) instead. Any other line stays as written. Only for computer use, where proven comes from this run.
+ */
+export function upgradeLine(line: string, proven: ReadonlySet<ClaimKind>, typed: readonly string[] = []): { line: string; upgraded: boolean; kind: ClaimKind | null } {
+  const kind = doubtedEffect(line);
+  if (!kind || !proven.has(kind) || claimedEffects(line).length > 0) return { line, upgraded: false, kind: null };
+  return { line: provenLine(kind, typed), upgraded: true, kind };
+}
+
+// Bee's own tool names, and plain words for each, for a line the user reads. Single English words (click, find, read) stay.
+const TOOL_WORDS: Record<string, string> = {
+  open_app: "opening the app",
+  focus_window: "bringing the window forward",
+  open_url: "opening the page",
+  close_app: "closing the app",
+  list_apps: "the list of open apps",
+  list_windows: "the list of windows",
+  type_text: "typing",
+  set_value: "filling in the field",
+  press_key: "the key press",
+  select_option: "choosing the option",
+  set_state: "changing the setting",
+  use_computer: "working on screen",
+  memory_read: "Bee's memory",
+  memory_write: "Bee's memory",
+  web_search: "a web search",
+  list_dir: "the folder list",
+  search_files: "a file search",
+  read_file: "reading the file",
+  append_note: "the notes",
+};
+const TOOL_NAME = new RegExp(`\`?\\b(${Object.keys(TOOL_WORDS).join("|")})\\b\`?`, "g");
+// A connector tool as Bee names it (`{server}__{tool}`, core/mcp.ts): "slack__chat_post_message" → "the slack connector".
+const CONNECTOR_TOOL = /`?\b([a-z0-9][a-z0-9-]*)__[a-z0-9_]+\b`?/gi;
+// agent-desktop's own codes and Bee's runner codes, as computer use sees them ("APP_NOT_FOUND"), and a ref ("@s8f3k2p9:e12").
+// Only these: any other capitalised name with underscores (an environment variable in an answer) is the user's.
+const ERROR_CODE =
+  /\b(?:APP_NOT_FOUND|APP_UNRESPONSIVE|ACTION_FAILED|ACTION_NOT_SUPPORTED|AMBIGUOUS_TARGET|ELEMENT_NOT_FOUND|WINDOW_NOT_FOUND|SNAPSHOT_NOT_FOUND|STALE_REF|INVALID_ARGS|POLICY_DENIED|PERM_DENIED|PLATFORM_NOT_SUPPORTED|TIMEOUT_LOCAL|SPAWN_FAILED|BAD_OUTPUT)\b/g;
+const REF = /@s[a-z0-9]+:e\d+/gi;
+
+/**
+ * A line for the user without Bee's internals: tool names ("open_app"), connector tool names, agent-desktop codes and refs, in
+ * plain words instead ("…never appeared after opening the app"). Anything else stays as written.
+ */
+export function withoutToolNames(line: string): string {
+  const plain = line
+    .replace(TOOL_NAME, (_match, name: string) => TOOL_WORDS[name] ?? name)
+    .replace(CONNECTOR_TOOL, (_match, server: string) => `the ${server} connector`)
+    .replace(ERROR_CODE, (code) => code.toLowerCase().replace(/_/g, " "))
+    .replace(REF, "that element");
+  if (plain === line) return line;
+  // A line that began with a name now begins with plain words: "open_app failed" → "Opening the app failed".
+  const startsWithName = /^\s*`?(?:[a-z]+_[a-z_]+|[a-z0-9-]+__|[A-Z]+_[A-Z_]+\b|@s[a-z0-9]+:)/i.test(line);
+  const text = plain.replace(/[ \t]+/g, " ").trim();
+  return startsWithName && text.length > 0 ? text[0]!.toUpperCase() + text.slice(1) : text;
 }
 
 /** Tools ran, and none read the calendar: a calendar tool was tried and no calendar read succeeded, or nothing was read at all. */

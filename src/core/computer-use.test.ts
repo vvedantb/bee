@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentDesktopResult, ComputerRun } from "./agent-desktop-envelope";
 import { createRunControl, type RunControl } from "./computer-control";
 import { CANNOT_CONTROL, computerTools } from "./computer-tools";
-import { COMPUTER_SYSTEM, FAST_MAX_TURNS, computerAccess, computerSkills, endedWhere, finalLine, runComputerUse, simpleComputerTask, trimSkill, wantsComputerUse } from "./computer-use";
+import { COMPUTER_SYSTEM, FAST_MAX_TURNS, computerAccess, computerSkills, endedWhere, finalLine, runComputerUse, shortComputerTask, simpleComputerTask, trimSkill, wantsComputerUse } from "./computer-use";
 import type { DesktopActions } from "./desktop-actions";
 
 // The computer-use loop with a mock model and a fake agent-desktop: no network, no OS. Each model call is one turn.
@@ -85,7 +85,8 @@ describe("runComputerUse", () => {
       ],
     });
     expect(await result).toMatchObject({ line: "Sent the message to Sam.", stopped: false, steps: 5, error: false });
-    expect(commands).toEqual(["snapshot", "set-value", "click", "snapshot"]);
+    // After the send, Bee reads the message box it typed in once (get), inside the same step.
+    expect(commands).toEqual(["snapshot", "set-value", "click", "get", "snapshot"]);
   });
 
   it("stops at a step limit when a test sets one", async () => {
@@ -240,7 +241,9 @@ describe("runComputerUse: snapshots and refs only", () => {
     const tools = computerTools({ run, desktop, control, platform: "windows", askFirst: () => false, confirm: async () => true });
     const result = await runComputerUse({ model, command: "send Sam running late in Teams", tools, control, platform: "windows", maxSteps: 30 });
     expect(result).toMatchObject({ line: "Sent the message in Teams.", stopped: false, steps: 4, error: false, endedWhere: "Microsoft Teams, Chat" });
-    expect(commands.map(([command]) => command)).toEqual(["find", "set-value", "find", "click"]);
+    expect(commands.map(([command]) => command)).toEqual(["find", "set-value", "find", "click", "get"]);
+    // The check after the send reads the box Bee typed in, by its ref: never the text.
+    expect(commands[4]).toEqual(["get", "@s5:e1", "--property=value"]);
     // The text goes on stdin (--stdin), never in argv.
     expect(commands[1]).toEqual(["set-value", "@s5:e1", "--stdin"]);
     expect(commands.flat().join(" ")).not.toContain("Running late");
@@ -468,6 +471,15 @@ describe("simpleComputerTask", () => {
     }
   });
 
+  it("reads 'message box' and 'email field' as places, so typing there takes the fast model (Linux e2e: type took about 30 s)", () => {
+    for (const command of ["type hi in the message box in Chrome", "type hi in the fixture message box", "type sam@example.com in the email field"]) {
+      expect(simpleComputerTask(command), command).toBe(true);
+    }
+    for (const command of ["type a message to Sam", "message Sam", "type an email to Sam", "send hi from the message box"]) {
+      expect(simpleComputerTask(command), command).toBe(false);
+    }
+  });
+
   it("leaves sends, deletes, buys, two steps, long requests and questions to the planning model", () => {
     for (const command of [
       "click Send",
@@ -480,6 +492,26 @@ describe("simpleComputerTask", () => {
       "open Teams",
     ]) {
       expect(simpleComputerTask(command), command).toBe(false);
+    }
+  });
+});
+
+describe("shortComputerTask", () => {
+  it("is one target with no later step: the planning model thinks at low effort there", () => {
+    for (const command of ["send hi from the fixture message box", "delete Fixture item A", "send Sam a message in Discord", "click Send", "submit the sign-up form"]) {
+      expect(shortComputerTask(command), command).toBe(true);
+    }
+  });
+
+  it("keeps medium effort for several steps, long requests, questions and opens", () => {
+    for (const command of [
+      "open Discord, send Sam a message, then close the Discord tab in Chrome",
+      "type hello and press return",
+      "send the long weekly status update to everyone in the team channel with the figures from yesterday",
+      "what did Sam say?",
+      "open Teams",
+    ]) {
+      expect(shortComputerTask(command), command).toBe(false);
     }
   });
 });

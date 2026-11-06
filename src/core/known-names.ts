@@ -326,11 +326,14 @@ export function sttTerms(known: readonly string[]): string[] {
   return [...names, ...firsts].filter((term) => (seen.has(term.toLowerCase()) ? false : (seen.add(term.toLowerCase()), true))).slice(0, STT_TERMS_MAX);
 }
 
+/** The people a name could be, as a list to choose from: "Chris Lee or Krzysztof Nowak", "A, B or C". */
+export function nameChoices(options: readonly string[]): string {
+  return options.length <= 2 ? options.join(" or ") : `${options.slice(0, -1).join(", ")} or ${options.at(-1)}`;
+}
+
 /** The question Bee asks for the first ambiguous name: "Which Chris: Chris Lee or Krzysztof Nowak?" */
 export function whichNameQuestion(ambiguity: NameAmbiguity): string {
-  const options = ambiguity.matches;
-  const list = options.length <= 2 ? options.join(" or ") : `${options.slice(0, -1).join(", ")} or ${options.at(-1)}`;
-  return `Which ${ambiguity.heard}: ${list}?`;
+  return `Which ${ambiguity.heard}: ${nameChoices(ambiguity.matches)}?`;
 }
 
 /**

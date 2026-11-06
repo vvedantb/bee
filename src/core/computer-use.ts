@@ -4,7 +4,7 @@ import { COMPUTER_SKILLS, parsePermission, type AccessState, type ComputerRun } 
 import { stopLine, type ComputerPlatform, type RunControl } from "./computer-control";
 import { debugLog, errorData, modelName, msSince, onceText, stepData } from "./debug-log";
 import { playbookBlock } from "./app-playbooks";
-import { ANTHROPIC_CACHE, commandProviderOptions, guideProviderOptions } from "./gateway";
+import { ANTHROPIC_CACHE, commandProviderOptions, guideProviderOptions, type CommandEffort } from "./gateway";
 import { knownNamesBlock, type ResolvedName } from "./known-names";
 import { stopOnNoProgress } from "./loop-guard";
 
@@ -60,11 +60,12 @@ export const COMPUTER_SYSTEM = [
   "Earlier turns, when given, are the user's earlier requests to Bee and what Bee did, with its real tool calls and results; \"Ended:\" says where the screen was left, and a summary may stand for the oldest turns. A follow-up such as \"the team one\" or \"go back\" carries on from there: never ask which app you were working in when an earlier turn says.",
   "A tool result in an earlier turn was confirmed when it ran: never take it back or say it was not done. Do not run the same step again unless the user asks again or the screen may have changed.",
   "Never say a message was sent, delivered or posted, or that something was deleted, bought or submitted, unless an action in this task with that effect came back Done, or a wait or read in this task shows it. Typing into a box is not sending. Say only what the results show, for example: Typed hi in the box; not sent yet. Or: Could not confirm the message was sent.",
+  "When such an action came back Done and its result says it went through, it did: say so plainly, for example: Sent hi. Never write that Bee could not confirm it, and do not look again just to check.",
   "Never state a count, a list of people, rows, messages or meetings, or what a page or calendar holds, unless a read in this task (or an earlier turn) showed it. When open_app, a read or another step fails, say it failed and stop there: never conclude anything from the failure, for example never say there are no meetings because the calendar did not open.",
   "If the task cannot be done, stop and say why in your last line.",
   "When the task is done, or you stop, reply with exactly one short line (under 15 words) on what happened, for example: Sent the message and closed the tab.",
   "Then, when you know it, add a second line starting with \"Ended: \" that says where the screen is now: the page's address, or the app and window, and any error it shows, for example: Ended: vercel.com/acme/~/usage, 404.",
-  "Those lines are plain text: no markdown, no list marker, no quotes, and no plans or notes to yourself. Write \"Bee\" where you would write \"I\".",
+  "Those lines are plain text: no markdown, no list marker, no quotes, and no plans or notes to yourself. Write \"Bee\" where you would write \"I\". Never name a tool, a ref or an error code in them (open_app, list_apps, APP_NOT_FOUND): say what happened in plain words.",
 ].join("\n");
 
 const PLATFORM_SYSTEM: Record<ComputerPlatform, string> = {
@@ -74,7 +75,7 @@ const PLATFORM_SYSTEM: Record<ComputerPlatform, string> = {
   // agent-desktop's Linux guide (skills get platform): AT-SPI, app names as list-apps prints them, focus-window on X11 only,
   // Chromium's page tree only when the browser runs with accessibility on, and refs that act only when unique in their window.
   linux:
-    "This is Linux, read through AT-SPI. The main modifier is ctrl: ctrl+w closes a tab, ctrl+l selects a browser's address bar. Apps go by the names list_apps shows, often lower case (google-chrome, firefox, libreoffice, thunar): check list_apps for the exact name. focus needs physical here. focus_window works only on X11; on Wayland open_app brings an app forward. A browser page's controls show only when the browser runs with accessibility on: when a page still shows no controls after find and a skeleton, say Bee cannot read that page. A ref acts only when it was unique in its window.",
+    "This is Linux, read through AT-SPI. The main modifier is ctrl: ctrl+w closes a tab, ctrl+l selects a browser's address bar. Apps go by the names list_apps shows, often lower case (google-chrome, firefox, thunar), and every LibreOffice app runs as soffice: check list_apps for the exact name. focus needs physical here. focus_window works only on X11; on Wayland Bee cannot bring a window to the front, but it reads and acts on an open app all the same, so carry on. A browser page's controls show only when the browser runs with accessibility on: when a page still shows no controls after find and a skeleton, say Bee cannot read that page. A ref acts only when it was unique in its window.",
 };
 
 // agent-desktop's own guides (skills get desktop, skills get platform), compiled into the binary so they match its version.
@@ -177,11 +178,15 @@ export function wantsComputerUse(command: string): boolean {
   return STARTS_WITH_VERB.test(text) || LATER_VERB.test(text);
 }
 
-// One quick action on one target: "click Inbox", "press escape", "type hello", "tick Remember me". Never a send, a delete or a
-// buy by name (not even "click Send"), and never two steps (LATER_VERB): those go to the planning model.
+// One quick action on one target: "click Inbox", "press escape", "type hello", "type hi in the message box". Never a send, a
+// delete or a buy by name (not even "click Send"), and never two steps (LATER_VERB): those go to the planning model. "message"
+// or "email" as the name of a box ("the message box", "the email field") is a place, not a send.
 const SIMPLE_VERB = /^(?:click|tap|press|hit|type|select|choose|pick|tick|untick|uncheck|toggle|scroll|mute|unmute|play|pause)\b/i;
-const NOT_SIMPLE = /\b(?:send|message|dm|e-?mail|reply|post|delete|remove|buy|pay|order|submit|purchase)\b/i;
+const FIELD_NOUN = String.raw`\s+(?:box|field|bar|input|area|text ?box|composer|address)\b`;
+const NOT_SIMPLE = new RegExp(String.raw`\b(?:send|dm|reply|post|delete|remove|buy|pay|order|submit|purchase)\b|\b(?:message|e-?mail)\b(?!${FIELD_NOUN})`, "i");
 const SIMPLE_WORDS_MAX = 10;
+// A short task on screen for the planning model (shortComputerTask): one target, no later step, at most this many words.
+const SHORT_WORDS_MAX = 14;
 
 /**
  * A computer-use request simple enough for the fast model (core/direct-command.ts): one action on one target, in a few words. The
@@ -191,6 +196,17 @@ export function simpleComputerTask(command: string): boolean {
   const text = command.replace(/\s+/g, " ").trim().replace(/^["'“‘]+|["'”’]+$/gu, "").replace(POLITE, "").trim();
   if (!wantsComputerUse(text) || !SIMPLE_VERB.test(text) || LATER_VERB.test(text) || NOT_SIMPLE.test(text)) return false;
   return text.split(" ").length <= SIMPLE_WORDS_MAX;
+}
+
+/**
+ * A computer-use request for the planning model that is still one short task: one target, no later step ("send hi from the
+ * message box", "delete Fixture item A"). Its steps are plain looks and acts, so the planning model thinks at low effort
+ * (core/gateway.ts CommandEffort): seconds a turn saved. The confirm gate and the claim check do not depend on it.
+ */
+export function shortComputerTask(command: string): boolean {
+  const text = command.replace(/\s+/g, " ").trim().replace(/^["'“‘]+|["'”’]+$/gu, "").replace(POLITE, "").trim();
+  if (!wantsComputerUse(text) || LATER_VERB.test(text)) return false;
+  return text.split(" ").length <= SHORT_WORDS_MAX;
 }
 
 /** What computer use may do here, from agent-desktop's own permissions report. Unknown when it cannot tell (fail open). */
@@ -311,6 +327,8 @@ export async function runComputerUse(args: {
   fast?: boolean;
   /** This request's steps so far, from a fast pass that handed over: sent after the request, so the AI carries on from them. */
   steps?: readonly ModelMessage[];
+  /** The planning model's thinking effort: low for a short task (shortComputerTask), else medium. Ignored by the fast pass. */
+  effort?: CommandEffort;
   now?: Date;
   onFinish?: (info: { usage: LanguageModelUsage; providerMetadata: ProviderMetadata | undefined }) => void;
 }): Promise<ComputerUseResult> {
@@ -344,7 +362,15 @@ export async function runComputerUse(args: {
       { type: "text" as const, text: `Today is ${today(args.now ?? new Date())}.\nThe user's request to Bee:\n- ${args.command.replace(/\s+/g, " ").trim()}` },
     ];
     // Local debug log only: the request, each model step with its tool calls and results, and the end.
-    debugLog.info("computer", "ai-request", { model: modelName(args.model), fast: args.fast ?? false, system: onceText(system), content: content.map((part) => part.text), history: history.length, tools: Object.keys(args.tools) });
+    debugLog.info("computer", "ai-request", {
+      model: modelName(args.model),
+      fast: args.fast ?? false,
+      effort: args.fast ? null : (args.effort ?? "medium"),
+      system: onceText(system),
+      content: content.map((part) => part.text),
+      history: history.length,
+      tools: Object.keys(args.tools),
+    });
     let looped = false;
     const noProgress = stopOnNoProgress(() => {
       looped = true;
@@ -371,9 +397,9 @@ export async function runComputerUse(args: {
       abortSignal: control.signal,
       maxOutputTokens: args.fast ? FAST_MAX_OUTPUT_TOKENS : COMPUTER_MAX_OUTPUT_TOKENS,
       maxRetries: 1,
-      // User-facing: not flex. No web search here, so routing keeps fail-over. The planning model thinks adaptively at medium
-      // effort; the fast pass runs the fast model with thinking off (gateway.ts).
-      providerOptions: args.fast ? guideProviderOptions("default", { web: false }) : commandProviderOptions("default", { web: false }),
+      // User-facing: not flex. No web search here, so routing keeps fail-over. The planning model thinks adaptively, at medium
+      // effort or low for a short task; the fast pass runs the fast model with thinking off (gateway.ts).
+      providerOptions: args.fast ? guideProviderOptions("default", { web: false }) : commandProviderOptions("default", { web: false, ...(args.effort ? { effort: args.effort } : {}) }),
     });
     args.onFinish?.({ usage: result.totalUsage, providerMetadata: result.providerMetadata });
     debugLog.info("computer", "ai-response", { ms: msSince(started), finishReason: result.finishReason, text: result.text, usage: result.totalUsage, cost: result.providerMetadata?.gateway ?? null });

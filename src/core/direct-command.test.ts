@@ -459,13 +459,24 @@ describe("runDirectCommand: the command model, adaptive thinking and caching", (
       askFirst: () => false,
       confirm: async () => true,
     };
-    const result = await runDirectCommand({ command: "send Sam a message in Discord", snippets, gateway, actions: fakeActions().actions, computer });
+    const result = await runDirectCommand({ command: "open Discord, send Sam a message, then close the tab", snippets, gateway, actions: fakeActions().actions, computer });
     expect(result.tips).toEqual(["Opened the chat with Sam."]);
     expect(ids).toEqual([COMMAND_MODEL]);
     const call = model.doGenerateCalls[0];
     expect(call?.providerOptions).toMatchObject({ gateway: { order: ["anthropic"] }, ...THINKING });
     expect(call?.maxOutputTokens).toBeGreaterThanOrEqual(12_000);
     expect(JSON.stringify(call?.prompt)).toContain("cacheControl");
+  });
+
+  it("thinks at low effort for a short task on screen (one target, no later step), still on COMMAND_MODEL", async () => {
+    const model = new MockLanguageModelV4({
+      doGenerate: async () => ({ content: [{ type: "text", text: "Opened the chat with Sam." }], finishReason: { unified: "stop", raw: undefined }, usage, warnings: [] }),
+    });
+    const { gateway, ids } = idGateway(model);
+    const computer: ComputerHost = { platform: "windows", run: async () => ({ ok: true, data: {} }), askFirst: () => false, confirm: async () => true };
+    await runDirectCommand({ command: "send Sam a message in Discord", snippets, gateway, actions: fakeActions().actions, computer });
+    expect(ids).toEqual([COMMAND_MODEL]);
+    expect(model.doGenerateCalls[0]?.providerOptions).toMatchObject({ gateway: { order: ["anthropic"] }, anthropic: { thinking: { type: "adaptive" }, effort: "low" } });
   });
 
   it("keeps meeting tips on thinking off, with the smaller output budget", async () => {
@@ -637,7 +648,8 @@ describe("runDirectCommand: Jev routing, the fast pass and Bee's memory", () => 
     expect(result.tips).toEqual(["Opened the inbox."]);
     expect(commands).toEqual(["snapshot", "click"]);
     const planned = models[COMMAND_MODEL]?.doGenerateCalls[0];
-    expect(planned?.providerOptions).toMatchObject({ anthropic: { thinking: { type: "adaptive" }, effort: "medium" } });
+    // One target, no later step: the planning model thinks at low effort.
+    expect(planned?.providerOptions).toMatchObject({ anthropic: { thinking: { type: "adaptive" }, effort: "low" } });
     // The planning model sees the fast pass's snapshot and its refs, but never the ESCALATE line.
     const prompt = JSON.stringify(planned?.prompt);
     expect(prompt).toContain("@s1:e3");
