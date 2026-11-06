@@ -5,7 +5,7 @@ import { gatewayTier } from "./gateway";
 const STT_TIMEOUT_MS = 20_000;
 
 /** Bee's own words, which every model mishears ("Bee" comes back as "B"). The user's names come from Settings → Known names. */
-export const STT_TERMS = ["Bee", "Luna", "Jev", "vmem"] as const;
+export const STT_TERMS = ["Bee", "Jev", "vmem"] as const;
 // Words sent to the model at most. The Gateway took 200 without an error, but Mistral documents no limit, so stay small.
 const VOCABULARY_MAX = 100;
 
