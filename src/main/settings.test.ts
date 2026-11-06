@@ -500,26 +500,27 @@ describe("settings meeting context", () => {
   });
 });
 
-describe("settings read meeting window (experimental)", () => {
-  it("is off by default and in the view", () => {
-    const store = create();
-    expect(store.view().readMeetingWindowEnabled).toBe(false);
-    expect(store.readMeetingWindow()).toBe(false);
-  });
-
-  it("round-trips through settings.json and survives unrelated saves", () => {
-    const store = create();
-    expect(store.save({ readMeetingWindowEnabled: true }).readMeetingWindowEnabled).toBe(true);
-    expect(JSON.parse(readFileSync(join(dir, "settings.json"), "utf8")).readMeetingWindowEnabled).toBe(true);
-    store.save({ meetingMode: true });
+describe("settings read meeting window", () => {
+  it("is on by default and in the view, also for an old file that stored the experimental switch as off", () => {
+    expect(create().view().readMeetingWindowEnabled).toBe(true);
     expect(create().readMeetingWindow()).toBe(true);
-    store.save({ readMeetingWindowEnabled: false });
-    expect(create().readMeetingWindow()).toBe(false);
+    writeFileSync(join(dir, "settings.json"), JSON.stringify({ readMeetingWindowEnabled: false }));
+    expect(create().readMeetingWindow()).toBe(true);
   });
 
-  it("reads a bad stored value as off", () => {
-    writeFileSync(join(dir, "settings.json"), JSON.stringify({ readMeetingWindowEnabled: "yes" }));
+  it("keeps the user's choice through settings.json and unrelated saves", () => {
+    const store = create();
+    expect(store.save({ readMeetingWindowEnabled: false }).readMeetingWindowEnabled).toBe(false);
+    expect(JSON.parse(readFileSync(join(dir, "settings.json"), "utf8")).meetingWindowReader).toBe(false);
+    store.save({ meetingMode: true });
     expect(create().readMeetingWindow()).toBe(false);
+    store.save({ readMeetingWindowEnabled: true });
+    expect(create().readMeetingWindow()).toBe(true);
+  });
+
+  it("reads a bad stored value as on", () => {
+    writeFileSync(join(dir, "settings.json"), JSON.stringify({ meetingWindowReader: "yes" }));
+    expect(create().readMeetingWindow()).toBe(true);
   });
 
   it("rejects a non-boolean update at the IPC schema", async () => {

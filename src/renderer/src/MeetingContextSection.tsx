@@ -112,9 +112,9 @@ export function MeetingContextSection({
       {message ? <p className="muted">{message}</p> : null}
       <SettingRow
         id="read-meeting-window"
-        label="Experimental: read meeting window"
+        label="Read meeting window"
         description="Reads the Teams, Zoom or Google Meet window for its name, people and live captions. Never clicks or types."
-        checked={settings.readMeetingWindowEnabled ?? false}
+        checked={settings.readMeetingWindowEnabled ?? true}
         onCheckedChange={(readMeetingWindowEnabled) => onChange({ readMeetingWindowEnabled })}
       />
       {settings.readMeetingWindowEnabled && windowMessage ? (

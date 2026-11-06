@@ -46,9 +46,10 @@ const fileSchema = z.object({
   meetingContextEnabled: z.boolean().default(true).catch(true),
   meetingCalendarEnabled: z.boolean().default(true).catch(true),
   meetingMemoryEnabled: z.boolean().default(true).catch(true),
-  // Experimental: read Teams, Zoom and Google Meet windows with agent-desktop (main/meeting-window-reader.ts). Off until switched on.
-  readMeetingWindowEnabled: z.boolean().default(false).catch(false),
-  // Teams audio fallback (core/teams-audio.ts). Off until switched on, like readMeetingWindowEnabled: it sends the words of
+  // Read Teams, Zoom and Google Meet windows with agent-desktop (main/meeting-window-reader.ts). Stored only once the user sets it:
+  // unset is on. (The old readMeetingWindowEnabled key, written as off by default when the reader was experimental, is ignored.)
+  meetingWindowReader: z.boolean().optional().catch(undefined),
+  // Teams audio fallback (core/teams-audio.ts). Off until switched on: it sends the words of
   // people without Bee to speech-to-text. When on, it hears the Teams app alone, only when someone may not have Bee.
   teamsAudioFallbackEnabled: z.boolean().default(false).catch(false),
   // Mic hints in the island (renderer/src/hints.ts). On until switched off.
@@ -135,7 +136,6 @@ export function createSettingsStore(args: {
       meetingContextEnabled: true,
       meetingCalendarEnabled: true,
       meetingMemoryEnabled: true,
-      readMeetingWindowEnabled: false,
       teamsAudioFallbackEnabled: false,
       hintsEnabled: true,
       wakeWordEnabled: true,
@@ -476,7 +476,7 @@ export function createSettingsStore(args: {
       meetingContextEnabled: file.meetingContextEnabled,
       meetingCalendarEnabled: file.meetingCalendarEnabled,
       meetingMemoryEnabled: file.meetingMemoryEnabled,
-      readMeetingWindowEnabled: file.readMeetingWindowEnabled,
+      readMeetingWindowEnabled: file.meetingWindowReader ?? true,
       teamsAudioFallbackEnabled: file.teamsAudioFallbackEnabled,
       hintsEnabled: file.hintsEnabled,
       wakeWordEnabled: file.wakeWordEnabled,
@@ -494,9 +494,9 @@ export function createSettingsStore(args: {
     return { enabled: file.meetingContextEnabled, calendar: file.meetingCalendarEnabled, memory: file.meetingMemoryEnabled };
   }
 
-  /** The experimental meeting window reader switch, read on each poll so Settings changes apply at once. Main only. */
+  /** The meeting window reader switch (on unless the user turned it off), read on each poll so Settings changes apply at once. Main only. */
   function readMeetingWindow(): boolean {
-    return read().readMeetingWindowEnabled;
+    return read().meetingWindowReader ?? true;
   }
 
   /** The Teams audio fallback switch, read on each status poll so Settings changes apply at once. Main only. */
@@ -530,7 +530,7 @@ export function createSettingsStore(args: {
     if (update.meetingContextEnabled !== undefined) file = { ...file, meetingContextEnabled: update.meetingContextEnabled };
     if (update.meetingCalendarEnabled !== undefined) file = { ...file, meetingCalendarEnabled: update.meetingCalendarEnabled };
     if (update.meetingMemoryEnabled !== undefined) file = { ...file, meetingMemoryEnabled: update.meetingMemoryEnabled };
-    if (update.readMeetingWindowEnabled !== undefined) file = { ...file, readMeetingWindowEnabled: update.readMeetingWindowEnabled };
+    if (update.readMeetingWindowEnabled !== undefined) file = { ...file, meetingWindowReader: update.readMeetingWindowEnabled };
     if (update.teamsAudioFallbackEnabled !== undefined) file = { ...file, teamsAudioFallbackEnabled: update.teamsAudioFallbackEnabled };
     if (update.hintsEnabled !== undefined) file = { ...file, hintsEnabled: update.hintsEnabled };
     if (update.wakeWordEnabled !== undefined) file = { ...file, wakeWordEnabled: update.wakeWordEnabled };
