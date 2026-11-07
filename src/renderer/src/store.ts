@@ -334,7 +334,7 @@ let meetingTicking = false;
 let islandActivityAt = 0;
 let islandTimer: ReturnType<typeof setTimeout> | undefined;
 // Mic hints: one detector for the app, so a hint's cooldown outlasts a mic toggle. Fed by each mic frame and phrase outcome.
-const hintDetector = createHintDetector({ enabled: true });
+const hintDetector = createHintDetector();
 let hintShownAt = 0;
 const EMPTY_RESULT = { tips: [], guideError: null };
 const STOPPED_RESULT: PipelineResult = {
@@ -449,7 +449,7 @@ export function islandOpen(current: BeeState): boolean {
 }
 
 /**
- * Shows the detector's hint, or folds the one on screen once the detector drops it (timed out, speech heard, setting off). Logs
+ * Shows the detector's hint, or folds the one on screen once the detector drops it (timed out, speech heard). Logs
  * the hint's id and time on screen only, never levels or words.
  */
 function syncHint(hint: Hint | null): void {
@@ -951,7 +951,7 @@ function takeWakeLine(text: string): boolean {
   const othersSpoke = lastOtherSpeakerAt > lastExchangeAt;
   const recentlyClosed =
     commandRun === null && !conversationOpen && conversationClosedAt > 0 && now - conversationClosedAt < REOPEN_WINDOW_MS;
-  const route = routeLine({ text, source: "mic", enabled: true, armed, conversationOpen, lastBee, participants: participantNames(), othersSpoke, recentlyClosed });
+  const route = routeLine({ text, source: "mic", armed, conversationOpen, lastBee, participants: participantNames(), othersSpoke, recentlyClosed });
   wakeArmedUntil = route.kind === "wake" ? now + WAKE_FOLLOW_MS : 0;
   // The local debug log keeps the words that woke Bee, and the meeting lines that nearly did (a likely miss or false trigger).
   if (route.kind !== "meeting" || NEAR_WAKE.test(text) || conversationOpen || recentlyClosed) {

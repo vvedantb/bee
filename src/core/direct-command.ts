@@ -73,15 +73,13 @@ function joinLines(actions: readonly string[], reply: TipFields): TipFields {
 
 const timings = (patch: Partial<PipelineResult["timingsMs"]> = {}): PipelineResult["timingsMs"] => ({ retrieve: 0, rank: 0, guide: 0, mcp: 0, lunaFirstToken: null, lunaTotal: 0, ...patch });
 
-/** Main's side of computer use (main/meeting-ipc.ts): the runner, the setting, the island's Confirm and step line. */
+/** Main's side of computer use (main/meeting-ipc.ts): the runner, the island's Confirm and step line. */
 export type ComputerHost = {
   platform: ComputerPlatform;
   /** agent-desktop's computer-use runner (main/agent-desktop.ts). Never the meeting window reader's. */
   run: ComputerRun;
   /** agent-desktop's guides, loaded once for the session over run (core/computer-use.ts computerSkills). */
   skills?: ComputerSkills;
-  /** "Ask before sending or deleting", read per action. */
-  askFirst: () => boolean;
   /** Shows the Confirm prompt in the island; true for Confirm. */
   confirm: (request: ConfirmRequest, signal: AbortSignal) => Promise<boolean>;
   /** The island's step line ("Clicking Send…"). */
@@ -135,7 +133,7 @@ async function runComputerCommand(args: {
   // The first step line shows the island's Stop button at once, before the access check.
   host.onStep?.("Starting…");
   try {
-    debugLog.info("computer", "run-start", { platform: host.platform, maxSteps: maxSteps ?? null, maxMs: host.maxMs ?? null, askFirst: host.askFirst(), command: args.command });
+    debugLog.info("computer", "run-start", { platform: host.platform, maxSteps: maxSteps ?? null, maxMs: host.maxMs ?? null, command: args.command });
     if (host.platform === "mac") {
       const access = await computerAccess(host.run, control.signal);
       debugLog.info("computer", "access", access);
@@ -159,7 +157,6 @@ async function runComputerCommand(args: {
         desktop: args.actions,
         control,
         platform: host.platform,
-        askFirst: host.askFirst,
         confirm: host.confirm,
         onEffect: (kind) => committed.add(kind),
         onStep: host.onStep,
@@ -400,7 +397,7 @@ export async function runDirectCommand(args: {
   const readTools =
     computer && readControl
       ? pickTools(
-          computerTools({ run: computer.host.run, desktop: computer.actions, control: readControl, platform: computer.host.platform, askFirst: () => true, confirm: async () => false, onActivity: args.onActivity }),
+          computerTools({ run: computer.host.run, desktop: computer.actions, control: readControl, platform: computer.host.platform, confirm: async () => false, onActivity: args.onActivity }),
           READ_TOOLS,
         )
       : {};

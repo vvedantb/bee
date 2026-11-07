@@ -1,6 +1,6 @@
 import type { ComputerAccessView } from "../../shared/ipc";
 
-// Settings → computer use: the line under "Ask before sending or deleting". Pure, so tests can call it.
+// Settings → computer use: the Accessibility line. Pure, so tests can call it.
 
 export const ACCESS_UNSUPPORTED = "Bee uses apps for you on Windows and Mac only.";
 export const ACCESS_NEEDS_ACCESSIBILITY = "To use apps for you, Bee needs Accessibility: in System Settings → Privacy & Security → Accessibility, turn on Bee.";

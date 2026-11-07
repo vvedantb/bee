@@ -81,9 +81,8 @@ export type HintDetector = ReturnType<typeof createHintDetector>;
  * The hint state machine. push() takes each mic frame and phrase() each phrase's speech-to-text outcome; both return the hint to
  * show now, or null. `now` is the clock for dismiss() and current() (Date.now by default); samples carry their own time.
  */
-export function createHintDetector(options: { enabled: boolean; now?: () => number }) {
+export function createHintDetector(options: { now?: () => number } = {}) {
   const clock = options.now ?? Date.now;
-  let enabled = options.enabled;
   let shown: Hint | null = null;
   // When each hint last hid, and when any did.
   const hiddenAt = new Map<HintId, number>();
@@ -141,7 +140,6 @@ export function createHintDetector(options: { enabled: boolean; now?: () => numb
 
   return {
     push(sample: HintSample): Hint | null {
-      if (!enabled) return null;
       const { now, level } = sample;
       if (!sample.micOn) {
         stop(now);
@@ -174,7 +172,7 @@ export function createHintDetector(options: { enabled: boolean; now?: () => numb
 
     /** A phrase's speech-to-text is done: words came back, or none did. Failed calls are not reported. Counts only, never words. */
     phrase(outcome: { now: number; words: boolean }): Hint | null {
-      if (!enabled || !listening) return shown;
+      if (!listening) return shown;
       const { now } = outcome;
       if (outcome.words) {
         emptyPhrases = [];
@@ -199,12 +197,6 @@ export function createHintDetector(options: { enabled: boolean; now?: () => numb
     /** Mic off: hides any hint (its cooldown starts) and forgets what was heard. Cooldowns outlast it. */
     clear(): void {
       stop(clock());
-    },
-
-    /** The setting. Off hides any hint, as clear() does, and ignores frames and phrases until it is on again. */
-    setEnabled(next: boolean): void {
-      if (enabled && !next) stop(clock());
-      enabled = next;
     },
   };
 }

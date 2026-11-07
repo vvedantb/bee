@@ -184,7 +184,7 @@ export type LineRoute =
   | { kind: "meeting"; reason?: string };
 
 /**
- * Only the user's own mic phrases can wake Bee, and only with the setting on. Typed lines, captions, Teams audio and teammates'
+ * Only the user's own mic phrases can wake Bee. Typed lines, captions, Teams audio and teammates'
  * synced lines always go to the meeting, even when they start with "Bee", "Bee, stop" included: nobody else can start or stop
  * what Bee does on the computer. armed: the last mic phrase was "Bee" alone, so this one is the request. conversationOpen: a
  * request was answered moments ago (CONVERSATION_WINDOW_MS), so a phrase without "Bee" can still be for Bee. othersSpoke: someone
@@ -194,7 +194,6 @@ export type LineRoute =
 export function routeLine(args: {
   text: string;
   source: LineSource;
-  enabled: boolean;
   armed?: boolean;
   conversationOpen?: boolean;
   lastBee?: { request: string; reply: string } | null;
@@ -202,7 +201,7 @@ export function routeLine(args: {
   othersSpoke?: boolean;
   recentlyClosed?: boolean;
 }): LineRoute {
-  if (!args.enabled || args.source !== "mic") return { kind: "meeting" };
+  if (args.source !== "mic") return { kind: "meeting" };
   const command = wakeCommand(args.text);
   if (command === "") return { kind: "wake" };
   const text = args.text.trim();

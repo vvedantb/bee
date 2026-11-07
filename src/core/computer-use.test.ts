@@ -48,7 +48,7 @@ const desktop: DesktopActions = {
   openUrl: async (url) => ({ ok: true, message: `Opened ${url}` }),
 };
 
-function loop(args: { turns: Turn[]; run?: ComputerRun; control?: RunControl; maxSteps?: number; confirm?: () => Promise<boolean>; askFirst?: boolean }) {
+function loop(args: { turns: Turn[]; run?: ComputerRun; control?: RunControl; maxSteps?: number; confirm?: () => Promise<boolean> }) {
   const commands: string[] = [];
   const run: ComputerRun =
     args.run ??
@@ -59,7 +59,7 @@ function loop(args: { turns: Turn[]; run?: ComputerRun; control?: RunControl; ma
   const maxSteps = args.maxSteps ?? 30;
   const control = args.control ?? createRunControl({ maxSteps });
   const { model, calls } = turnsModel(args.turns);
-  const tools = computerTools({ run, desktop, control, platform: "mac", askFirst: () => args.askFirst ?? true, confirm: args.confirm ?? (async () => true) });
+  const tools = computerTools({ run, desktop, control, platform: "mac", confirm: args.confirm ?? (async () => true) });
   const result = runComputerUse({ agent: modelAgent(model, { stream: false }), command: "open Discord, send Sam a message, then close the Discord tab in Chrome", tools, control, platform: "mac", maxSteps });
   return { result, control, commands, modelCalls: calls };
 }
@@ -75,7 +75,6 @@ afterEach(() => {
 describe("runComputerUse", () => {
   it("observes, acts, observes, then ends with the AI's one line", async () => {
     const { result, commands } = loop({
-      askFirst: false,
       turns: [
         { tool: "open_app", input: { name: "Discord" } },
         { tool: "snapshot", input: { app: "Discord" } },
@@ -98,7 +97,7 @@ describe("runComputerUse", () => {
 
   it("has no step cap: it stops when the same call keeps giving the same result", async () => {
     const control = createRunControl();
-    const tools = computerTools({ run: async () => ({ ok: true, data: [{ name: "Discord" }] }), desktop: null as never, control, platform: "mac", askFirst: () => false, confirm: async () => true });
+    const tools = computerTools({ run: async () => ({ ok: true, data: [{ name: "Discord" }] }), desktop: null as never, control, platform: "mac", confirm: async () => true });
     let calls = 0;
     const model = new MockLanguageModelV4({
       doGenerate: async () => {
@@ -170,7 +169,7 @@ describe("runComputerUse", () => {
       },
     });
     const control = createRunControl();
-    const tools = computerTools({ run: async () => ({ ok: true, data: [] }), desktop, control, platform: "windows", askFirst: () => true, confirm: async () => true });
+    const tools = computerTools({ run: async () => ({ ok: true, data: [] }), desktop, control, platform: "windows", confirm: async () => true });
     expect(await runComputerUse({ agent: modelAgent(model, { stream: false }), command: "close Slack", tools, control, platform: "windows", maxSteps: 30 })).toMatchObject({ line: "The AI could not finish that.", stopped: false, steps: 0, error: true });
   });
 
@@ -238,7 +237,7 @@ describe("runComputerUse: snapshots and refs only", () => {
       { text: "Sent the message in Teams.\nEnded: Microsoft Teams, Chat" },
     ]);
     const control = createRunControl({ maxSteps: 30 });
-    const tools = computerTools({ run, desktop, control, platform: "windows", askFirst: () => false, confirm: async () => true });
+    const tools = computerTools({ run, desktop, control, platform: "windows", confirm: async () => true });
     const result = await runComputerUse({ agent: modelAgent(model, { stream: false }), command: "send Sam running late in Teams", tools, control, platform: "windows", maxSteps: 30 });
     expect(result).toMatchObject({ line: "Sent the message in Teams.", stopped: false, steps: 4, error: false, endedWhere: "Microsoft Teams, Chat" });
     expect(commands.map(([command]) => command)).toEqual(["find", "set-value", "find", "click"]);
@@ -267,7 +266,7 @@ describe("runComputerUse: snapshots and refs only", () => {
       { text: "Bee cannot control Microsoft Teams: it shows no controls.\nEnded: Microsoft Teams" },
     ]);
     const control = createRunControl({ maxSteps: 30 });
-    const tools = computerTools({ run, desktop, control, platform: "windows", askFirst: () => false, confirm: async () => true });
+    const tools = computerTools({ run, desktop, control, platform: "windows", confirm: async () => true });
     const result = await runComputerUse({ agent: modelAgent(model, { stream: false }), command: "send Sam running late in Teams", tools, control, platform: "windows", maxSteps: 30 });
     expect(result).toMatchObject({ line: "Bee cannot control Microsoft Teams: it shows no controls.", stopped: false, steps: 3, error: false, endedWhere: "Microsoft Teams" });
     // The tree only: each whole-window read ran twice (Bee waited for the app), and nothing was clicked or typed.
@@ -355,7 +354,7 @@ describe("agent-desktop's skills", () => {
       },
     });
     const { run } = skillsRun((name) => ({ ok: true, data: { content: name === "desktop" ? GUIDE : `## What differs on macOS\n\n${"m".repeat(9000)}` } }));
-    const tools = computerTools({ run, desktop, control: createRunControl(), platform: "mac", askFirst: () => false, confirm: async () => true });
+    const tools = computerTools({ run, desktop, control: createRunControl(), platform: "mac", confirm: async () => true });
     await runComputerUse({ agent: modelAgent(model, { stream: false }), command: "send Sam hi", tools, control: createRunControl(), platform: "mac", maxSteps: 5, skills: computerSkills(run) });
     const system = JSON.stringify((prompts[0] as ModelMessage[])[0]);
     expect(system).toContain("agent-desktop's own guides follow");
@@ -502,7 +501,7 @@ describe("runComputerUse: batching, playbooks, memory and the fast pass", () => 
         return { content: [{ type: "text", text: "Done." }], finishReason: { unified: "stop", raw: undefined }, usage, warnings: [] };
       },
     });
-    const tools = computerTools({ run: async () => ({ ok: true, data: {} }), desktop, control, platform: "windows", askFirst: () => false, confirm: async () => true });
+    const tools = computerTools({ run: async () => ({ ok: true, data: {} }), desktop, control, platform: "windows", confirm: async () => true });
     await runComputerUse({ agent: modelAgent(model, { stream: false }), command: "message Priya in Teams", tools, control, platform: "windows", memory: "What Bee remembers:\n- Priya in Teams is Priya Shah" });
     expect(prompts[0]).toContain("Microsoft Teams: ctrl+e goes to the search box");
     expect(prompts[0]).toContain("Priya in Teams is Priya Shah");
@@ -516,7 +515,7 @@ describe("runComputerUse: batching, playbooks, memory and the fast pass", () => 
     const reads = ["@s1:e1", "@s1:e2", "@s1:e3", "@s1:e4"].map((ref) => ({ tool: "read", input: { ref } }));
     const { model, calls } = turnsModel([{ tool: "snapshot", input: { app: "Discord" } }, ...reads, ...reads]);
     const run: ComputerRun = async (command) => (command === "snapshot" ? { ok: true, data: SNAPSHOT } : { ok: true, data: {} });
-    const tools = computerTools({ run, desktop, control, platform: "mac", askFirst: () => false, confirm: async () => true });
+    const tools = computerTools({ run, desktop, control, platform: "mac", confirm: async () => true });
     const result = await runComputerUse({ agent: modelAgent(model, { stream: false }), command: "click Inbox", tools, control, platform: "mac", fast: true });
     expect(result).toMatchObject({ escalate: true, stopped: false, error: false });
     expect(calls()).toBe(FAST_MAX_TURNS);
@@ -533,7 +532,7 @@ describe("runComputerUse: batching, playbooks, memory and the fast pass", () => 
       },
     });
     const control = createRunControl();
-    const tools = computerTools({ run: async () => ({ ok: true, data: {} }), desktop, control, platform: "mac", askFirst: () => false, confirm: async () => true });
+    const tools = computerTools({ run: async () => ({ ok: true, data: {} }), desktop, control, platform: "mac", confirm: async () => true });
     expect(await runComputerUse({ agent: modelAgent(failing, { stream: false }), command: "click Inbox", tools, control, platform: "mac", fast: true })).toMatchObject({ escalate: true, messages: [] });
     control.stop("user");
     expect(await runComputerUse({ agent: modelAgent(failing, { stream: false }), command: "click Inbox", tools, control, platform: "mac", fast: true })).toMatchObject({ stopped: true, line: "Stopped." });

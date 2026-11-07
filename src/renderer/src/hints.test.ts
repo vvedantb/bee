@@ -25,9 +25,9 @@ const NORMAL = 0.1;
 const LOUD = 0.4;
 const HISS = 0.0005;
 
-function rig(enabled = true) {
+function rig() {
   let now = 0;
-  const detector = createHintDetector({ enabled, now: () => now });
+  const detector = createHintDetector({ now: () => now });
   // Every hint id seen on screen, in order, each time it appears.
   const seen: HintId[] = [];
   let last: HintId | null = null;
@@ -285,29 +285,5 @@ describe("showing and hiding", () => {
     t.frames(3000, QUIET);
     t.wait(FRAME_GAP_MS + 1000);
     expect(t.frames(3000, QUIET)).toBeNull();
-  });
-});
-
-describe("setting off", () => {
-  it("never shows a hint while disabled", () => {
-    const t = rig(false);
-    t.frames(NO_INPUT_MS + 1000, 0);
-    t.frames(HINT_SUSTAIN_MS + 1000, QUIET);
-    t.frames(HINT_SUSTAIN_MS + 1000, LOUD);
-    for (let index = 0; index < NOISY_EMPTY_PHRASES; index += 1) t.phrase(false);
-    expect(t.seen).toEqual([]);
-    expect(t.detector.current()).toBeNull();
-  });
-
-  it("hides the hint on screen when switched off, and starts fresh when switched on", () => {
-    const t = rig();
-    t.frames(HINT_SUSTAIN_MS + 100, QUIET);
-    t.detector.setEnabled(false);
-    expect(t.detector.current()).toBeNull();
-    expect(t.frames(HINT_SUSTAIN_MS + 100, LOUD)).toBeNull();
-    t.detector.setEnabled(true);
-    t.wait(HINT_SPACING_MS);
-    expect(t.frames(HINT_SUSTAIN_MS - 500, LOUD)).toBeNull();
-    expect(t.frames(1000, LOUD)?.id).toBe("clipping");
   });
 });

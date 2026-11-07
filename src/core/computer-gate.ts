@@ -1,8 +1,7 @@
 import type { IrreversibleKind } from "./computer-control";
 
-// "Ask before sending or deleting" (Settings, on by default): which computer-use actions pause for the user's Confirm in the
-// island. Only an action that commits something asks: sending a message, email or post, deleting, buying or paying, and
-// submitting a form. Ordinary clicks do not: looking, navigating, switching tabs or views, opening menus and apps, typing a
+// Which computer-use actions pause for the user's Confirm in the island (always on, no setting). Only an action that commits
+// something asks: sending a message, email or post, deleting, buying or paying, and submitting a form. Ordinary clicks do not: looking, navigating, switching tabs or views, opening menus and apps, typing a
 // draft, and buttons such as Continue, Next or OK that commit nothing. A control asks when its own name, the labels around it,
 // a message box beside it, or a checkout or a dialog that names a commit says it commits; being somewhere in Slack, Gmail or
 // Amazon is not enough. The answer comes from the accessibility tree Bee read (core/computer-tools.ts formatSnapshot keeps
@@ -239,11 +238,6 @@ export function irreversibleKind(action: GateAction): IrreversibleKind | null {
     default:
       return null;
   }
-}
-
-/** With the setting on, the kind to confirm; with it off, never. */
-export function needsConfirm(action: GateAction, askFirst: boolean): IrreversibleKind | null {
-  return askFirst ? irreversibleKind(action) : null;
 }
 
 /** False when a press may move keyboard focus (Return, Tab, Escape, a shortcut), so where focus is becomes unknown. */

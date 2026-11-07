@@ -74,8 +74,7 @@ function LinkChips({ chips }: { chips: LinkChip[] }) {
   );
 }
 
-// Computer use waits for the user before it sends, deletes, buys or submits (Settings → Ask before sending or deleting). Only
-// these two buttons answer it.
+// Computer use always waits for the user before it sends, deletes, buys or submits. Only these two buttons answer it.
 function ConfirmPrompt({ confirm }: { confirm: ComputerConfirm }) {
   return (
     <div className="island-confirm" role="group" aria-label={confirm.question}>

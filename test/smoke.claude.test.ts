@@ -69,7 +69,6 @@ function fakeComputer(confirmAnswer: boolean) {
   const host: ComputerHost = {
     platform: "mac",
     run,
-    askFirst: () => true,
     confirm: async (request) => {
       confirms.push(JSON.stringify(request));
       return confirmAnswer;
@@ -158,7 +157,6 @@ describe("Claude Agent SDK: Bee, …", () => {
         ] } } };
         return { ok: true, data: {} };
       },
-      askFirst: () => true,
       confirm: async () => false,
     };
     const r = await runDirectCommand({ command: "can you see what I'm working on?", snippets: [], agent: agent, gateway: null, actions: { openApp: async () => ({ ok: true, message: "" }), focusWindow: async () => ({ ok: true, message: "" }), openUrl: async () => ({ ok: true, message: "" }) }, computer });
