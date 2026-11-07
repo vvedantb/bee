@@ -759,7 +759,12 @@ p {
   transform: rotate(90deg);
 }
 
-.known-names [data-state="open"] > textarea {
+/* forceMount keeps it in the form; closed, it is not shown. */
+.known-names-content[data-state="closed"] {
+  display: none;
+}
+
+.known-names-content > textarea {
   margin-top: 6px;
 }
 

@@ -2,7 +2,6 @@ import { ClerkFailed, Show, SignIn, UserButton, useAuth } from "@clerk/electron/
 import {
   IconAlertTriangle,
   IconChevronDown,
-  IconChevronRight,
   IconDownload,
   IconExternalLink,
   IconLoader2,
@@ -15,7 +14,7 @@ import {
   IconUsersGroup,
   IconX,
 } from "@tabler/icons-react";
-import { Badge, Button, Collapsible, CollapsibleContent, CollapsibleTrigger, Input, PillTabs, Textarea } from "@vvedantb/ui";
+import { Badge, Button, Input, PillTabs } from "@vvedantb/ui";
 import { useEffect, useState, type FormEvent } from "react";
 import { AskBox } from "./AskBox";
 import { IslandCard } from "./IslandCard";
@@ -31,7 +30,8 @@ import { NotchStatus } from "./NotchStatus";
 import { PANEL_TABS } from "./panel-tabs";
 import { MicHint } from "./MicHint";
 import { SecretField } from "./SecretField";
-import { InfoTip, SettingRow } from "./SettingRow";
+import { SettingRow } from "./SettingRow";
+import { KnownNamesField, PreferenceRows } from "./SettingsFields";
 import { ShortcutRow } from "./ShortcutRow";
 import { computerAccessMessage } from "./computer-access";
 import { INTERFACE_SCALES } from "../../core/interface-scale";
@@ -533,19 +533,7 @@ function SettingsTab({ state, settings }: { state: BeeState; settings: SettingsV
           reveal={window.bee.revealGatewayKey}
           copy={window.bee.copyGatewayKey}
         />
-        {/* Collapsed by default. forceMount keeps the textarea in the form while closed, so Save never clears the list. */}
-        <Collapsible className="known-names">
-          <div className="flex items-center gap-1.5">
-            <CollapsibleTrigger type="button" className="known-names-trigger">
-              <IconChevronRight size={14} stroke={1.75} className="chevron-icon" />
-              Names Bee should know ({settings.knownNames.length})
-            </CollapsibleTrigger>
-            <InfoTip text="One per line. Bee also adds names you spell out and chat names it reads on screen." />
-          </div>
-          <CollapsibleContent forceMount>
-            <Textarea name="knownNames" aria-label="Names Bee should know" rows={4} defaultValue={settings.knownNames.join("\n")} spellCheck={false} />
-          </CollapsibleContent>
-        </Collapsible>
+        <KnownNamesField names={settings.knownNames} />
         <p className="muted">
           Notes folder: <code>{settings.notesDir}</code>{" "}
           <Button type="button" variant="link" size="sm" className="h-auto p-0" onClick={() => void window.bee.openNotesFolder()}>
@@ -576,28 +564,7 @@ function SettingsTab({ state, settings }: { state: BeeState; settings: SettingsV
         platform={navigator.userAgent.includes("Mac") ? "mac" : "other"}
         onSave={(toggleShortcut) => void actions.saveSettings({ toggleShortcut })}
       />
-      <SettingRow
-        id="personalised-links"
-        label="Personalised link suggestions"
-        info="Sends the current line to Jev, and to vmem if connected."
-        checked={settings.personalisedLinks}
-        onCheckedChange={(personalisedLinks) => void actions.saveSettings({ personalisedLinks })}
-      />
-      <SettingRow
-        id="send-sessions-to-vmem"
-        label="Send finished sessions to vmem"
-        info="Finished meetings and conversations, so vmem can learn from them."
-        checked={settings.sendSessionsToVmem}
-        onCheckedChange={(sendSessionsToVmem) => void actions.saveSettings({ sendSessionsToVmem })}
-      />
-      <SettingRow
-        id="meeting-mode"
-        label="Meeting mode"
-        description="Hidden from screen sharing."
-        info="Also keeps Bee above full-screen apps."
-        checked={settings.meetingMode}
-        onCheckedChange={(meetingMode) => void actions.saveSettings({ meetingMode })}
-      />
+      <PreferenceRows settings={settings} onSave={(update) => void actions.saveSettings(update)} />
       <ClaudeCodeStatus state={state} />
       <ComputerAccessSection access={state.computerAccess} />
       <div className="flex flex-col gap-1">
