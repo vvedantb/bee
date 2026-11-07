@@ -77,35 +77,30 @@ describe("routeLine", () => {
   const sources: LineSource[] = ["typed", "caption", "teams-audio", "teammate"];
 
   it("sends an own mic phrase with the wake word to the AI as a command", () => {
-    expect(routeLine({ text: "Bee open Teams", source: "mic", enabled: true })).toEqual({ kind: "command", command: "open Teams" });
-    expect(routeLine({ text: "Hey Bee, what's 15% of 18000?", source: "mic", enabled: true })).toEqual({ kind: "command", command: "what's 15% of 18000?" });
+    expect(routeLine({ text: "Bee open Teams", source: "mic" })).toEqual({ kind: "command", command: "open Teams" });
+    expect(routeLine({ text: "Hey Bee, what's 15% of 18000?", source: "mic" })).toEqual({ kind: "command", command: "what's 15% of 18000?" });
   });
 
   it("keeps other mic phrases in the meeting", () => {
-    expect(routeLine({ text: "Let's pick up the Acme renewal.", source: "mic", enabled: true })).toEqual({ kind: "meeting" });
-    expect(routeLine({ text: "maybe later", source: "mic", enabled: true })).toEqual({ kind: "meeting" });
+    expect(routeLine({ text: "Let's pick up the Acme renewal.", source: "mic" })).toEqual({ kind: "meeting" });
+    expect(routeLine({ text: "maybe later", source: "mic" })).toEqual({ kind: "meeting" });
   });
 
   it("never wakes on typed lines, captions, Teams audio or teammates' lines", () => {
     for (const source of sources) {
-      expect(routeLine({ text: "Bee open Teams", source, enabled: true }), source).toEqual({ kind: "meeting" });
-      expect(routeLine({ text: "Bee.", source, enabled: true }), source).toEqual({ kind: "meeting" });
-      expect(routeLine({ text: "open Teams", source, enabled: true, armed: true }), source).toEqual({ kind: "meeting" });
+      expect(routeLine({ text: "Bee open Teams", source }), source).toEqual({ kind: "meeting" });
+      expect(routeLine({ text: "Bee.", source }), source).toEqual({ kind: "meeting" });
+      expect(routeLine({ text: "open Teams", source, armed: true }), source).toEqual({ kind: "meeting" });
     }
   });
 
-  it("does nothing with the setting off", () => {
-    expect(routeLine({ text: "Bee open Teams", source: "mic", enabled: false })).toEqual({ kind: "meeting" });
-    expect(routeLine({ text: "open Teams", source: "mic", enabled: false, armed: true })).toEqual({ kind: "meeting" });
-  });
-
   it("arms on Bee alone, and takes the next mic phrase as the request", () => {
-    expect(routeLine({ text: "Bee.", source: "mic", enabled: true })).toEqual({ kind: "wake" });
-    expect(routeLine({ text: "Open Teams.", source: "mic", enabled: true, armed: true })).toEqual({ kind: "command", command: "Open Teams." });
+    expect(routeLine({ text: "Bee.", source: "mic" })).toEqual({ kind: "wake" });
+    expect(routeLine({ text: "Open Teams.", source: "mic", armed: true })).toEqual({ kind: "command", command: "Open Teams." });
     // A second wake word in the follow-up is stripped like any other.
-    expect(routeLine({ text: "Bee, open Teams", source: "mic", enabled: true, armed: true })).toEqual({ kind: "command", command: "open Teams" });
+    expect(routeLine({ text: "Bee, open Teams", source: "mic", armed: true })).toEqual({ kind: "command", command: "open Teams" });
     // Filler is not a request.
-    expect(routeLine({ text: "um", source: "mic", enabled: true, armed: true })).toEqual({ kind: "meeting" });
+    expect(routeLine({ text: "um", source: "mic", armed: true })).toEqual({ kind: "meeting" });
   });
 });
 
@@ -132,37 +127,36 @@ describe("routeLine: who can start or stop computer use", () => {
   const OTHERS: LineSource[] = ["typed", "caption", "teams-audio", "teammate"];
 
   it("stops on \"Bee, stop\" from the user's own mic, also after Bee alone", () => {
-    for (const text of ["Bee, stop", "Bee stop.", "Hey Bee, cancel that", "B, stop!", "Be stop"]) expect(routeLine({ text, source: "mic", enabled: true }), text).toEqual({ kind: "stop" });
-    expect(routeLine({ text: "Stop.", source: "mic", enabled: true, armed: true })).toEqual({ kind: "stop" });
+    for (const text of ["Bee, stop", "Bee stop.", "Hey Bee, cancel that", "B, stop!", "Be stop"]) expect(routeLine({ text, source: "mic" }), text).toEqual({ kind: "stop" });
+    expect(routeLine({ text: "Stop.", source: "mic", armed: true })).toEqual({ kind: "stop" });
     // A plain "stop" in the meeting is just speech.
-    expect(routeLine({ text: "Stop.", source: "mic", enabled: true })).toEqual({ kind: "meeting" });
+    expect(routeLine({ text: "Stop.", source: "mic" })).toEqual({ kind: "meeting" });
   });
 
   it("starts a task on screen only from the user's own mic", () => {
     const task = "Bee, open Discord, send Sam a message, then close the Discord tab in Chrome";
-    expect(routeLine({ text: task, source: "mic", enabled: true })).toEqual({ kind: "command", command: "open Discord, send Sam a message, then close the Discord tab in Chrome" });
-    for (const source of OTHERS) expect(routeLine({ text: task, source, enabled: true }), source).toEqual({ kind: "meeting" });
+    expect(routeLine({ text: task, source: "mic" })).toEqual({ kind: "command", command: "open Discord, send Sam a message, then close the Discord tab in Chrome" });
+    for (const source of OTHERS) expect(routeLine({ text: task, source }), source).toEqual({ kind: "meeting" });
   });
 
   it("never lets typed lines, captions, Teams audio or teammates stop or confirm anything", () => {
     for (const source of OTHERS) {
       for (const text of ["Bee, stop", "Bee, cancel", "Bee, confirm", "Bee, yes, send it", "stop"]) {
-        expect(routeLine({ text, source, enabled: true }), `${source}: ${text}`).toEqual({ kind: "meeting" });
-        expect(routeLine({ text, source, enabled: true, armed: true }), `${source}: ${text}`).toEqual({ kind: "meeting" });
+        expect(routeLine({ text, source }), `${source}: ${text}`).toEqual({ kind: "meeting" });
+        expect(routeLine({ text, source, armed: true }), `${source}: ${text}`).toEqual({ kind: "meeting" });
       }
     }
   });
 
   it("has no spoken Confirm: \"Bee, confirm\" is a request, never an answer to a prompt", () => {
-    expect(routeLine({ text: "Bee, confirm", source: "mic", enabled: true })).toEqual({ kind: "command", command: "confirm" });
-    expect(routeLine({ text: "Bee, stop", source: "mic", enabled: false })).toEqual({ kind: "meeting" });
+    expect(routeLine({ text: "Bee, confirm", source: "mic" })).toEqual({ kind: "command", command: "confirm" });
   });
 });
 
 // Owner log (0.3.36): after "Okay, thanks." closed the window, "Open teams." and "I said open teams." went to the meeting.
 describe("routeLine: reopen just after the window closed", () => {
   const closed = (text: string, extra: Partial<Parameters<typeof routeLine>[0]> = {}) =>
-    routeLine({ text, source: "mic", enabled: true, recentlyClosed: true, ...extra });
+    routeLine({ text, source: "mic", recentlyClosed: true, ...extra });
 
   it("is under a minute", () => {
     expect(REOPEN_WINDOW_MS).toBeGreaterThanOrEqual(45_000);
@@ -204,10 +198,9 @@ describe("routeLine: reopen just after the window closed", () => {
   });
 
   it("needs the recent close, the user's mic and nobody else speaking", () => {
-    expect(routeLine({ text: "open Teams", source: "mic", enabled: true })).toEqual({ kind: "meeting" });
+    expect(routeLine({ text: "open Teams", source: "mic" })).toEqual({ kind: "meeting" });
     expect(closed("open Teams", { othersSpoke: true })).toEqual({ kind: "meeting" });
     expect(closed("open Teams", { source: "caption" })).toEqual({ kind: "meeting" });
-    expect(closed("open Teams", { enabled: false })).toEqual({ kind: "meeting" });
   });
 
   it("isReopenCommand is short and verb-first", () => {

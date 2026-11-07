@@ -250,7 +250,6 @@ describe("runDirectCommand: computer use", () => {
         if (command === "snapshot") return { ok: true, data: SNAPSHOT };
         return { ok: true, data: {} };
       },
-      askFirst: () => false,
       confirm: async () => true,
       onStep: (label) => steps.push(label),
       onControl: (value) => {
@@ -268,7 +267,8 @@ describe("runDirectCommand: computer use", () => {
     expect(streamCalls).toEqual([]);
     expect(generateCalls()).toBe(3);
     expect(commands).toEqual(["list-windows", "permissions", "snapshot", "click"]);
-    expect(steps).toEqual(["Starting…", "Looking at Discord…", "Clicking Send…"]);
+    // Send waits for the Confirm (answered yes) first.
+    expect(steps).toEqual(["Starting…", "Looking at Discord…", "Clicking Send…", "Waiting for you to confirm…", "Clicking Send…"]);
   });
 
   it("lets the answer path hand a task over with use_computer", async () => {
@@ -296,7 +296,6 @@ describe("runDirectCommand: computer use", () => {
         if (command === "snapshot") return { ok: true, data: SNAPSHOT };
         return { ok: true, data: {} };
       },
-      askFirst: () => true,
       confirm: async () => true,
     };
     const result = await run({ command: "can you see what I'm working on?", snippets, gateway, actions: fakeActions().actions, computer });
@@ -321,7 +320,7 @@ describe("runDirectCommand: computer use", () => {
     expect(await frontWindowLine(async () => ({ ok: false, code: "PERM_DENIED" }))).toBeNull();
     expect(await frontWindowLine(async () => { throw new Error("spawn failed"); })).toBeNull();
     const { gateway, streamCalls } = bothModel({ stream: [text("- It is the invoice export.\n")] });
-    const computer: ComputerHost = { platform: "mac", run: async (command) => (command === "list-windows" ? { ok: true, data: windows } : { ok: true, data: {} }), askFirst: () => true, confirm: async () => true };
+    const computer: ComputerHost = { platform: "mac", run: async (command) => (command === "list-windows" ? { ok: true, data: windows } : { ok: true, data: {} }), confirm: async () => true };
     await run({ command: "what is this file for?", snippets, gateway, actions: fakeActions().actions, computer });
     expect(streamCalls[0]?.prompt).toContain("The window at the front of the user's screen: Cursor");
   });
@@ -349,7 +348,7 @@ describe("runDirectCommand: computer use", () => {
 
   it("rewrites a send no tool proved, on screen and in an answer (a proven send stays: see the test above)", async () => {
     const unproven = bothModel({ turns: [{ text: "Sent the message." }] });
-    const result = await run({ command: "send Sam a message in Discord", snippets, gateway: unproven.gateway, actions: fakeActions().actions, computer: { platform: "mac", run: async () => ({ ok: true, data: {} }), askFirst: () => false, confirm: async () => true } });
+    const result = await run({ command: "send Sam a message in Discord", snippets, gateway: unproven.gateway, actions: fakeActions().actions, computer: { platform: "mac", run: async () => ({ ok: true, data: {} }), confirm: async () => true } });
     expect(result.tips).toEqual(["Bee could not confirm anything was sent."]);
     const answer = stepsModel([text("- Sent Priya the notes.\n")]);
     expect((await run({ command: "what did you do with the notes?", snippets, gateway: answer.gateway, actions: null })).tips).toEqual(["Bee could not confirm anything was sent."]);
@@ -481,7 +480,6 @@ describe("runDirectCommand: Bee's history and no blank replies", () => {
     const computer: ComputerHost = {
       platform: "windows",
       run: async () => ({ ok: true, data: {} }),
-      askFirst: () => false,
       confirm: async () => true,
     };
     const result = await run({ command: "click the team usage tab", history, snippets, gateway: { languageModel: () => model } as unknown as BeeGateway, actions: fakeActions().actions, computer });
@@ -510,7 +508,6 @@ describe("runDirectCommand: the agent tier", () => {
     const computer: ComputerHost = {
       platform: "windows",
       run: async () => ({ ok: true, data: {} }),
-      askFirst: () => false,
       confirm: async () => true,
     };
     const result = await runDirectCommand({ command: "send Sam a message in Discord", snippets, agent, gateway: null, actions: fakeActions().actions, computer });
@@ -582,7 +579,6 @@ describe("runDirectCommand: Jev routing, the fast pass and Bee's memory", () => 
         commands.push(command);
         return command === "snapshot" ? { ok: true, data: SNAP } : { ok: true, data: {} };
       },
-      askFirst: () => false,
       confirm: async () => true,
     };
     return { computer, commands };

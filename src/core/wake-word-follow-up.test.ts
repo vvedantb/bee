@@ -18,7 +18,7 @@ import {
 
 const lastBee = { request: "open Vercel usage", reply: "Opened https://vercel.com/acme/~/usage" };
 const open = (text: string, extra: Partial<Parameters<typeof routeLine>[0]> = {}) =>
-  routeLine({ text, source: "mic", enabled: true, conversationOpen: true, lastBee, ...extra });
+  routeLine({ text, source: "mic", conversationOpen: true, lastBee, ...extra });
 
 describe("routeLine: the conversation window", () => {
   it("keeps the window and the wake follow-up separate", () => {
@@ -49,7 +49,7 @@ describe("routeLine: the conversation window", () => {
 
   it("never takes a person named Eva, or connector talk without the window, for a connector", () => {
     expect(looksAddressedToBee("Eva said the budget is fine", lastBee)).not.toBe("connector");
-    expect(routeLine({ text: "search vmem", source: "mic", enabled: true, lastBee })).toEqual({ kind: "meeting" });
+    expect(routeLine({ text: "search vmem", source: "mic", lastBee })).toEqual({ kind: "meeting" });
   });
 
   it("takes a short answer when Bee's last reply asked a question", () => {
@@ -59,21 +59,17 @@ describe("routeLine: the conversation window", () => {
   });
 
   it("leaves the same phrases in the meeting once the window is closed", () => {
-    expect(routeLine({ text: "No, the team one", source: "mic", enabled: true, lastBee })).toEqual({ kind: "meeting" });
-    expect(routeLine({ text: "why did you do that", source: "mic", enabled: true, conversationOpen: false, lastBee })).toEqual({ kind: "meeting" });
+    expect(routeLine({ text: "No, the team one", source: "mic", lastBee })).toEqual({ kind: "meeting" });
+    expect(routeLine({ text: "why did you do that", source: "mic", conversationOpen: false, lastBee })).toEqual({ kind: "meeting" });
   });
 
   it("never routes other people's lines, even in the window", () => {
     const others: LineSource[] = ["typed", "caption", "teams-audio", "teammate"];
     for (const source of others) {
       for (const text of ["why did you open that page", "No, the team one", "thanks", "stop"]) {
-        expect(routeLine({ text, source, enabled: true, conversationOpen: true, lastBee }), `${source}: ${text}`).toEqual({ kind: "meeting" });
+        expect(routeLine({ text, source, conversationOpen: true, lastBee }), `${source}: ${text}`).toEqual({ kind: "meeting" });
       }
     }
-  });
-
-  it("does nothing with the setting off", () => {
-    expect(routeLine({ text: "why did you open that page", source: "mic", enabled: false, conversationOpen: true, lastBee })).toEqual({ kind: "meeting" });
   });
 
   it("closes on thanks, and stops on stop", () => {

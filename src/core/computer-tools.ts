@@ -5,7 +5,7 @@ import {
 } from "./agent-desktop-envelope";
 import { awaitAnswer, CONFIRM_TIMEOUT_MS, type ComputerPlatform, type IrreversibleKind, type RunControl } from "./computer-control";
 import {
-  EFFECTS, LABEL_MAX, WINDOW_ROLES, confirmDetail, confirmQuestion, focusAfterClick, insideOf, irreversibleKind, isNavField, isTextEntry, keepsFocus, keysLabel, needsConfirm, shellElement,
+  EFFECTS, LABEL_MAX, WINDOW_ROLES, confirmDetail, confirmQuestion, focusAfterClick, insideOf, irreversibleKind, isNavField, isTextEntry, keepsFocus, keysLabel, shellElement,
   shortName, type Effect, type Element, type GateAction, type TreeContext,
 } from "./computer-gate";
 import { APP_NAME_MAX, WINDOW_TITLE_MAX, appKey, isBlockedApp, type DesktopActionResult, type DesktopActions } from "./desktop-actions";
@@ -20,7 +20,7 @@ import type { LunaToolActivity } from "./luna";
 // forward and pages open through the desktop actions (core/desktop-actions.ts). Each call is one step of the run's budget
 // (core/computer-control.ts), act included: it runs a short list of actions on known refs (click, type, Return) in one step,
 // to save the AI a round trip per action, and stops at the first that fails. Sending, deleting, buying and submitting wait
-// for the user's Confirm first when the setting is on, inside a batch too (core/computer-gate.ts, which reads where each ref
+// for the user's Confirm first, always, inside a batch too (core/computer-gate.ts, which reads where each ref
 // sits in the tree, not just what the AI says). Terminals, script tools, system settings and Bee itself are never read or
 // typed into. The tree is the only way in: no screenshots and no clicks at a
 // point. When an app's tree stays empty or unusable once Bee has waited for it and the AI has tried find, a skeleton and root
@@ -33,8 +33,6 @@ export type ComputerToolDeps = {
   desktop: DesktopActions;
   control: RunControl;
   platform: ComputerPlatform;
-  /** "Ask before sending or deleting", read per action so the switch applies at once. */
-  askFirst: () => boolean;
   /** Shows the Confirm prompt in the island; resolves true for Confirm. signal aborts once the answer is settled. */
   confirm: (request: ConfirmRequest, signal: AbortSignal) => Promise<boolean>;
   /** The island's one short line for the step in progress ("Clicking Send…"). */
@@ -727,22 +725,19 @@ export function computerTools(deps: ComputerToolDeps) {
     const before = gate ? gate() : null;
     const committed = before ? irreversibleKind(before) : null;
     try {
-      if (before && deps.askFirst()) {
-        const action = before;
-        const kind = needsConfirm(action, deps.askFirst());
-        if (kind) {
-          deps.onStep?.(CONFIRM_LABEL);
-          const request: ConfirmRequest = { kind, question: confirmQuestion(kind), detail: confirmDetail(action, currentApp) };
-          debugLog.info("computer", "confirm-needed", { tool: name, kind, request, action });
-          const confirmed = await control.paused(() => awaitAnswer((signal) => deps.confirm(request, signal), control.signal, deps.confirmTimeoutMs ?? CONFIRM_TIMEOUT_MS));
-          debugLog.info("computer", "confirm-result", { tool: name, kind, confirmed, reason: control.reason() });
-          if (!confirmed) {
-            control.stop("declined", kind);
-            return STOPPED;
-          }
-          console.debug(`computer confirmed ${kind}`);
-          deps.onStep?.(clip(label, 60));
+      if (before && committed) {
+        const kind = committed;
+        deps.onStep?.(CONFIRM_LABEL);
+        const request: ConfirmRequest = { kind, question: confirmQuestion(kind), detail: confirmDetail(before, currentApp) };
+        debugLog.info("computer", "confirm-needed", { tool: name, kind, request, action: before });
+        const confirmed = await control.paused(() => awaitAnswer((signal) => deps.confirm(request, signal), control.signal, deps.confirmTimeoutMs ?? CONFIRM_TIMEOUT_MS));
+        debugLog.info("computer", "confirm-result", { tool: name, kind, confirmed, reason: control.reason() });
+        if (!confirmed) {
+          control.stop("declined", kind);
+          return STOPPED;
         }
+        console.debug(`computer confirmed ${kind}`);
+        deps.onStep?.(clip(label, 60));
       }
       if (control.reason()) return STOPPED;
       const output = await work();

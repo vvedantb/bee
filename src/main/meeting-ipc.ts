@@ -81,8 +81,8 @@ export function registerMeetingIpc(args: { notesDir: string;
   /** Desktop tools for a direct request ("Bee, open Teams", main/desktop-actions.ts). Without them the AI only answers. */
   desktop?: DesktopActions;
   /**
-   * Computer use for a direct request (core/computer-use.ts): its own agent-desktop runner, never the meeting window reader's,
-   * and the "Ask before sending or deleting" setting. Absent: Bee cannot operate apps here (Linux, or no agent-desktop).
+   * Computer use for a direct request (core/computer-use.ts): its own agent-desktop runner, never the meeting window reader's.
+   * Absent: Bee cannot operate apps here (Linux, or no agent-desktop).
    */
   computer?: { platform: ComputerPlatform; run: ComputerRun; cleanup: () => void };
   /** Finished sessions to vmem (main/vmem-transcript-queue.ts). It checks the setting and the connector itself. */
@@ -171,8 +171,6 @@ export function registerMeetingIpc(args: { notesDir: string;
       platform: computer.platform,
       run: computer.run,
       ...(skills ? { skills } : {}),
-      // Always: Bee asks before it sends, deletes, buys or submits (no setting).
-      askFirst: () => true,
       onStep: (label) => {
         debugLog.info("computer", "step-line", { runId, label });
         if (runId !== undefined) send({ runId, type: "step", label: label.slice(0, COMPUTER_LINE_MAX) });
@@ -324,8 +322,7 @@ export function registerMeetingIpc(args: { notesDir: string;
   });
 
   // A direct request ("Bee, open Teams", core/direct-command.ts): the reply and desktop action lines for the island. Never a
-  // meeting line. The renderer sends one only with the wake word setting on; main checks it again. The request never goes to the console
-  // (the local debug log keeps it).
+  // meeting line. The request never goes to the console (the local debug log keeps it).
   ipcMain.handle(IPC.runCommand, async (event, payload) => {
     const request = commandRequestSchema.parse(payload);
     lastSender = event.sender;

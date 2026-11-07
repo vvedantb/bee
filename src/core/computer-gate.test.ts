@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
-  confirmDetail, confirmQuestion, elementKind, focusAfterClick, irreversibleKind, isNavField, keepsFocus, keysLabel, needsConfirm, unlabelled,
+  confirmDetail, confirmQuestion, elementKind, focusAfterClick, irreversibleKind, isNavField, keepsFocus, keysLabel, unlabelled,
   type Element, type GateAction, type TreeContext,
 } from "./computer-gate";
 
-// "Ask before sending or deleting": which computer-use actions wait for a Confirm tap. Only sending, deleting, buying and
+// Which computer-use actions wait for a Confirm tap. Only sending, deleting, buying and
 // submitting do; ordinary clicks do not. The tree decides; the AI's effect can only add a Confirm.
 
 const button = (name: string) => ({ role: "button", name });
@@ -101,7 +101,6 @@ describe("irreversibleKind: from the tree, whatever the AI says", () => {
     ];
     for (const target of arrows) {
       expect(irreversibleKind({ command: "click", target, effect: "none" }), JSON.stringify(target)).toBe("send");
-      expect(needsConfirm({ command: "click", target, effect: "none" }, true), JSON.stringify(target)).toBe("send");
     }
     // A shop's basket or checkout asks before buying; a dialog that names a commit asks for that.
     expect(irreversibleKind({ command: "click", target: placed("", at("Google Chrome Amazon.co.uk Basket", [{ role: "group", name: "" }])), effect: "none" })).toBe("buy");
@@ -215,20 +214,6 @@ describe("where focus is", () => {
     expect(focusAfterClick(messageBox, button("Bold"))).toBe(messageBox);
     expect(focusAfterClick(null, messageBox)).toBe(messageBox);
     expect(focusAfterClick(button("Send"), button("Edit"))).toBeNull();
-  });
-});
-
-describe("needsConfirm", () => {
-  it("asks only with the setting on", () => {
-    const send = { command: "click", target: button("Send") };
-    expect(needsConfirm(send, true)).toBe("send");
-    expect(needsConfirm(send, false)).toBeNull();
-    expect(needsConfirm({ command: "click", target: button("Send"), effect: "send" }, false)).toBeNull();
-    expect(needsConfirm({ command: "click", target: button("Compose") }, true)).toBeNull();
-    // Setting off: no pause, whatever the tree says.
-    const arrow = placed("➤", at("Discord", [composer], [], messageBox));
-    expect(needsConfirm({ command: "click", target: arrow, effect: "none" }, false)).toBeNull();
-    expect(needsConfirm({ command: "press", keys: "return", lastField: messageBox }, false)).toBeNull();
   });
 });
 
