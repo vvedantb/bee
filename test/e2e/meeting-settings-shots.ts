@@ -18,15 +18,13 @@ const teamsAudio: TeamsAudioView = {
   failure: null,
 };
 
-function section(settings: { meetingContextEnabled: boolean; meetingCalendarEnabled: boolean; teamsAudioFallbackEnabled: boolean }): string {
+function section(settings: { teamsAudioFallbackEnabled: boolean }): string {
   return renderToStaticMarkup(createElement(MeetingContextSection, { settings, onChange: () => undefined, onClear: async () => 0, teamsAudio, onOpenScreenRecording: () => undefined }));
 }
 
 const shot = new URLSearchParams(location.search).get("shot") ?? "settings-meeting-context";
-const on = { meetingContextEnabled: true, meetingCalendarEnabled: true, teamsAudioFallbackEnabled: true };
 const states: Record<string, string> = {
-  "settings-meeting-context": panelPage("settings", section(on)),
-  "settings-meeting-context-off": panelPage("settings", section({ ...on, meetingContextEnabled: false })),
+  "settings-meeting-context": panelPage("settings", section({ teamsAudioFallbackEnabled: true })),
 };
 const html = states[shot];
 if (!html) throw new Error(`Unknown shot: ${shot}`);

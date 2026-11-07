@@ -22,7 +22,7 @@ export function memoryClearMessage(count: number): string {
 }
 
 export function MemoryFactList({ facts }: { facts: readonly MemoryFactView[] }) {
-  if (facts.length === 0) return <p className="muted">Nothing saved yet. Ask Bee to remember something and it shows here.</p>;
+  if (facts.length === 0) return <p className="muted">Nothing saved yet.</p>;
   return (
     <ul className="memory-facts" aria-label="Saved memory">
       {newestFirst(facts).map((fact, index) => (

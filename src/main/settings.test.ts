@@ -458,43 +458,12 @@ describe("settings overlayPosition", () => {
   });
 });
 
-describe("settings meeting context", () => {
-  it("defaults both switches to on", () => {
-    const store = create();
-    expect(store.view()).toMatchObject({ meetingContextEnabled: true, meetingCalendarEnabled: true });
-    expect(store.meetingContext()).toEqual({ enabled: true, calendar: true });
-  });
-
-  it("round-trips each switch through settings.json, leaving the other alone", () => {
-    const store = create();
-    expect(store.save({ meetingCalendarEnabled: false }).meetingCalendarEnabled).toBe(false);
-    expect(store.view()).toMatchObject({ meetingContextEnabled: true });
-    store.save({ meetingContextEnabled: false });
-    expect(JSON.parse(readFileSync(join(dir, "settings.json"), "utf8"))).toMatchObject({
-      meetingContextEnabled: false,
-      meetingCalendarEnabled: false,
-    });
-    expect(create().meetingContext()).toEqual({ enabled: false, calendar: false });
-    store.save({ meetingContextEnabled: true, meetingCalendarEnabled: true });
-    expect(create().meetingContext()).toEqual({ enabled: true, calendar: true });
-  });
-
-  it("keeps the switches when an unrelated setting is saved", () => {
-    const store = create();
-    store.save({ meetingCalendarEnabled: false });
-    store.save({ meetingMode: true });
-    expect(store.meetingContext().calendar).toBe(false);
-  });
-
-  it("reads a bad stored value as on", () => {
-    writeFileSync(join(dir, "settings.json"), JSON.stringify({ meetingContextEnabled: "no", meetingCalendarEnabled: 0 }));
-    expect(create().meetingContext()).toEqual({ enabled: true, calendar: true });
-  });
-
-  it("rejects a non-boolean update at the IPC schema", async () => {
-    const { settingsUpdateSchema } = await import("../shared/ipc");
-    expect(() => settingsUpdateSchema.parse({ meetingContextEnabled: "yes" })).toThrow();
-    expect(settingsUpdateSchema.parse({ meetingContextEnabled: false })).toEqual({ meetingContextEnabled: false });
+describe("settings: meeting context and the calendar are always on", () => {
+  it("has no switches, and ignores ones left in an old file", () => {
+    writeFileSync(join(dir, "settings.json"), JSON.stringify({ meetingContextEnabled: false, meetingCalendarEnabled: false }));
+    const view = create().view();
+    expect(view).not.toHaveProperty("meetingContextEnabled");
+    expect(view).not.toHaveProperty("meetingCalendarEnabled");
   });
 });
 

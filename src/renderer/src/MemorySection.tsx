@@ -3,6 +3,7 @@ import { Button, ConfirmDialog } from "@vvedantb/ui";
 import { useEffect, useState } from "react";
 import type { MemoryFactView } from "../../shared/ipc";
 import { MemoryFactList, memoryClearMessage } from "./MemoryFactList";
+import { InfoTip } from "./SettingRow";
 
 // Settings → Saved memory: what Bee remembers for direct requests (core/bee-memory.ts), not saved meeting notes (those are under
 // Meeting context). Presentational: it takes load and clear callbacks, so a test or screenshot page can render it without the
@@ -54,11 +55,9 @@ export function MemorySection({
 
   return (
     <section>
-      <h2>Saved memory</h2>
-      <p className="muted">
-        What Bee remembers about you across sessions, kept on this device only. Sent to the AI with each direct request. Separate from saved meeting
-        notes.
-      </p>
+      <h2 className="flex items-center gap-1.5">
+        Saved memory <InfoTip text="What Bee remembers about you, on this device. Sent to the AI with each request. Separate from meeting notes." />
+      </h2>
       {load.state === "loading" ? <p className="muted">Loading saved memory…</p> : null}
       {load.state === "error" ? (
         <div className="row actions">

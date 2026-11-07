@@ -42,9 +42,6 @@ const fileSchema = z.object({
   sendSessionsToVmem: z.boolean().optional().catch(undefined),
   // Names Bee should know (core/known-names.ts): typed in Settings or learned from corrections and the screen. A bad value reads as none.
   knownNames: z.array(z.string()).default([]).catch([]),
-  // Meeting context: both on until the user switches them off.
-  meetingContextEnabled: z.boolean().default(true).catch(true),
-  meetingCalendarEnabled: z.boolean().default(true).catch(true),
   // Teams audio fallback (core/teams-audio.ts). Off until switched on: it sends the words of
   // people without Bee to speech-to-text. When on, it hears the Teams app alone, only when someone may not have Bee.
   teamsAudioFallbackEnabled: z.boolean().default(false).catch(false),
@@ -120,8 +117,6 @@ export function createSettingsStore(args: {
       interfaceScale: 1,
       motionPreference: "on",
       knownNames: [],
-      meetingContextEnabled: true,
-      meetingCalendarEnabled: true,
       teamsAudioFallbackEnabled: false,
       toggleShortcut: DEFAULT_TOGGLE_SHORTCUT,
       mcpServers: [],
@@ -455,19 +450,11 @@ export function createSettingsStore(args: {
       notesDir: args.notesDir,
       logsDir: args.logsDir,
       knownNames: normalizeNames(file.knownNames),
-      meetingContextEnabled: file.meetingContextEnabled,
-      meetingCalendarEnabled: file.meetingCalendarEnabled,
       teamsAudioFallbackEnabled: file.teamsAudioFallbackEnabled,
       toggleShortcut: file.toggleShortcut,
       // Main fills in whether it holds the shortcut (main/index.ts).
       toggleShortcutActive: true,
     };
-  }
-
-  /** The two meeting-context switches, read on each tick so Settings changes apply without a restart. Main only. */
-  function meetingContext(): { enabled: boolean; calendar: boolean } {
-    const file = read();
-    return { enabled: file.meetingContextEnabled, calendar: file.meetingCalendarEnabled };
   }
 
   /** The Teams audio fallback switch, read on each status poll so Settings changes apply at once. Main only. */
@@ -483,8 +470,6 @@ export function createSettingsStore(args: {
     if (update.motionPreference !== undefined) file = { ...file, motionPreference: clampMotionPreference(update.motionPreference) };
     if (update.personalisedLinks !== undefined) file = { ...file, personalisedLinks: update.personalisedLinks };
     if (update.sendSessionsToVmem !== undefined) file = { ...file, sendSessionsToVmem: update.sendSessionsToVmem };
-    if (update.meetingContextEnabled !== undefined) file = { ...file, meetingContextEnabled: update.meetingContextEnabled };
-    if (update.meetingCalendarEnabled !== undefined) file = { ...file, meetingCalendarEnabled: update.meetingCalendarEnabled };
     if (update.teamsAudioFallbackEnabled !== undefined) file = { ...file, teamsAudioFallbackEnabled: update.teamsAudioFallbackEnabled };
     if (update.toggleShortcut !== undefined) file = { ...file, toggleShortcut: update.toggleShortcut };
     if (update.knownNames !== undefined) file = { ...file, knownNames: normalizeNames(update.knownNames) };
@@ -514,5 +499,5 @@ export function createSettingsStore(args: {
     write({ ...read(), overlayPosition: position });
   }
 
-  return { view, save, meetingContext, teamsAudioFallback, overlayPosition, saveOverlayPosition, gatewayApiKey, savedGatewayApiKey, linkSettings, vmemConfig, transcriptSettings, knownNames, learnNames, mcpList, mcpSave, mcpRemove, mcpSignOut, mcpSetEnabled, mcpRecordTools, mcpConfigs, mcpSignedOut, mcpConfig, mcpOAuthStorage };
+  return { view, save, teamsAudioFallback, overlayPosition, saveOverlayPosition, gatewayApiKey, savedGatewayApiKey, linkSettings, vmemConfig, transcriptSettings, knownNames, learnNames, mcpList, mcpSave, mcpRemove, mcpSignOut, mcpSetEnabled, mcpRecordTools, mcpConfigs, mcpSignedOut, mcpConfig, mcpOAuthStorage };
 }

@@ -31,7 +31,7 @@ const briefing = dueBriefing({
 });
 
 const meeting: MeetingContext = {
-  tick: async () => ({ enabled: true, active: false, id: 0, subject: null, source: "none", card: [] }),
+  tick: async () => ({ active: false, id: 0, subject: null, source: "none", card: [] }),
   brief: () => undefined,
   remember: () => false,
   clearMemory: () => 0,

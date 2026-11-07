@@ -101,10 +101,6 @@ export const settingsViewSchema = z.object({
   logsDir: z.string(),
   // Names Bee should know (core/known-names.ts): typed here or learned from spelling corrections and chat names on screen.
   knownNames: z.array(z.string()),
-  // Meeting context (core/meeting-context.ts). Both on by default. The calendar only matters while the master switch is on.
-  // Finished meetings are always saved to local memory while meeting context is on.
-  meetingContextEnabled: z.boolean(),
-  meetingCalendarEnabled: z.boolean(),
   // Teams audio fallback: with the mic on in a Teams call where someone may not have Bee, hear the Teams app alone (never all
   // system audio). Off by default; only platforms with a Teams-only capture path listen (core/teams-audio.ts).
   teamsAudioFallbackEnabled: z.boolean(),
@@ -124,8 +120,6 @@ export const settingsUpdateSchema = z.object({
   sendSessionsToVmem: z.boolean().optional(),
   // Names Bee should know; replaces the saved list (core/known-names.ts KNOWN_NAMES_MAX, NAME_MAX_CHARS).
   knownNames: z.array(z.string().max(200)).max(400).optional(),
-  meetingContextEnabled: z.boolean().optional(),
-  meetingCalendarEnabled: z.boolean().optional(),
   teamsAudioFallbackEnabled: z.boolean().optional(),
   toggleShortcut: acceleratorSchema.optional(),
 });
@@ -325,7 +319,6 @@ export type MeetingWindowStatus = z.infer<typeof meetingWindowStatusSchema>;
 // that goes to Luna; the renderer only sees the name and up to two island lines.
 export const meetingContextRequestSchema = z.object({ sessionToken: z.string().max(8000) });
 export const meetingContextViewSchema = z.object({
-  enabled: z.boolean(),
   // True while the debounced detection says the user is in a call.
   active: z.boolean(),
   // Increments with each new meeting. Kept after the call ends, so the renderer can finish saving it. 0: none yet.

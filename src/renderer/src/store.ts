@@ -1206,7 +1206,7 @@ async function teamsTick(): Promise<void> {
 
 /**
  * Asks main which meeting this is. A new meeting with something from before shows its card once. When the call ends (or a
- * different meeting begins), or Bee has been dismissed and quiet for a while, the session saves itself, if meeting memory is on.
+ * different meeting begins), or Bee has been dismissed and quiet for a while, the session saves itself.
  */
 async function meetingTick(): Promise<void> {
   if (meetingTicking) return;
@@ -1216,7 +1216,6 @@ async function meetingTick(): Promise<void> {
     if (!token) return;
     const view = await window.bee.meeting.context(token);
     set({ meeting: view });
-    if (!view.enabled) return;
     if (state.session.lines.length > 0 && sessionMeetingId === null && view.active) sessionMeetingId = view.id;
     if (view.active && view.id !== cardShownFor && view.card.length > 0) {
       cardShownFor = view.id;
@@ -1228,7 +1227,7 @@ async function meetingTick(): Promise<void> {
     const quiet = state.dismissed && !state.busy && lines > 0 && Date.now() - lastLineAt >= DISMISS_FINALIZE_MS;
     if (lines === 0) {
       if (over) sessionMeetingId = null;
-    } else if ((over || quiet) && state.settings?.meetingContextEnabled) {
+    } else if (over || quiet) {
       void actions.endMeeting({ auto: true });
     }
   } catch {

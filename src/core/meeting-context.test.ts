@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { record } from "../../test/helpers/meeting-records";
 import type { CalendarEvent, CalendarReadResult, CalendarReader } from "./calendar";
-import { createMeetingContext, type MeetingContextSettings } from "./meeting-context";
+import { createMeetingContext } from "./meeting-context";
 import { createMeetingMemoryStore, inMemoryFs } from "./meeting-memory";
 import type { WindowTitleRow } from "./teams-title";
 
@@ -24,7 +24,6 @@ function setup(options: { calendar?: CalendarReadResult; memory?: ReturnType<typ
   const clock = { now: T0 };
   const inCall = { value: true };
   const titles: { rows: WindowTitleRow[] } = { rows: [{ image: "ms-teams.exe", title: "Weekly Sync | Microsoft Teams" }] };
-  const settings: MeetingContextSettings = { enabled: true, calendar: true };
   const readToday = vi.fn<CalendarReader["readToday"]>(async () => options.calendar ?? { ok: true, events: [weekly] });
   const readTitles = vi.fn(async () => titles.rows);
   const searchNotes = vi.fn(async (query: string) => {
@@ -39,7 +38,6 @@ function setup(options: { calendar?: CalendarReadResult; memory?: ReturnType<typ
     calendar: { readToday },
     memory,
     searchNotes,
-    settings: () => settings,
     now: () => clock.now,
     pollTitlesWhenIdle: options.pollTitlesWhenIdle,
   });
@@ -53,7 +51,7 @@ function setup(options: { calendar?: CalendarReadResult; memory?: ReturnType<typ
     await flush();
     return view;
   }
-  return { context, clock, inCall, titles, settings, readToday, readTitles, searchNotes, memory, fs, run };
+  return { context, clock, inCall, titles, readToday, readTitles, searchNotes, memory, fs, run };
 }
 
 beforeEach(() => void vi.spyOn(console, "debug").mockImplementation(() => undefined));
@@ -64,7 +62,7 @@ describe("meeting context detection", () => {
     const t = setup();
     expect((await t.context.tick()).active).toBe(false);
     const view = await t.run(15);
-    expect(view).toMatchObject({ enabled: true, active: true, id: 1, subject: "Weekly Sync", source: "calendar" });
+    expect(view).toMatchObject({ active: true, id: 1, subject: "Weekly Sync", source: "calendar" });
     const brief = t.context.brief() ?? "";
     expect(brief).toContain("Attendees: Priya Nair, Sam Okafor");
     expect(brief).toContain("Agenda: Pipeline review and forecast");
@@ -97,23 +95,6 @@ describe("meeting context detection", () => {
     const t = setup({ calendar: { ok: false, disabled: true, reason: "security prompt timed out" } });
     await t.run(900);
     expect(t.readToday).toHaveBeenCalledTimes(1);
-  });
-
-  it("does not read the calendar when that switch is off", async () => {
-    const t = setup();
-    t.settings.calendar = false;
-    const view = await t.run(30);
-    expect(t.readToday).not.toHaveBeenCalled();
-    expect(view.source).toBe("title");
-  });
-
-  it("does nothing when the master switch is off", async () => {
-    const t = setup();
-    t.settings.enabled = false;
-    const view = await t.run(60);
-    expect(view).toEqual({ enabled: false, active: false, id: 0, subject: null, source: "none", card: [] });
-    expect(t.readTitles).not.toHaveBeenCalled();
-    expect(t.context.brief()).toBeUndefined();
   });
 
   it("ends the meeting after the leave delay and keeps its id", async () => {
@@ -212,12 +193,10 @@ describe("remembering a meeting", () => {
     expect(t.memory.list()[0]).toMatchObject({ summary: "", decisions: [], actionItems: [] });
   });
 
-  it("saves nothing with the feature off, an unknown id, or no meeting name", async () => {
+  it("saves nothing for an unknown id", async () => {
     const t = setup();
     await t.run(15);
     expect(t.context.remember({ meetingId: 99, summaryMarkdown: markdown, usedLlm: true, tips: [] })).toBe(false);
-    t.settings.enabled = false;
-    expect(t.context.remember({ summaryMarkdown: markdown, usedLlm: true, tips: [] })).toBe(false);
     expect(t.memory.list()).toEqual([]);
   });
 
@@ -261,24 +240,6 @@ describe("calendar re-read on a title change", () => {
     // And then not again while the title stays the same.
     await t.run(60);
     expect(t.readToday.mock.calls.length).toBe(reads + 1);
-  });
-});
-
-describe("calendar switch", () => {
-  it("forgets calendar events when the calendar is switched off mid-session", async () => {
-    const t = setup();
-    expect((await t.run(15)).source).toBe("calendar");
-    t.settings.calendar = false;
-    // A new call: matching must not use the events read earlier.
-    t.inCall.value = false;
-    t.titles.rows = [];
-    await t.run(30);
-    t.inCall.value = true;
-    t.titles.rows = [{ image: "ms-teams.exe", title: "Weekly Sync | Microsoft Teams" }];
-    const calls = t.readToday.mock.calls.length;
-    const view = await t.run(45);
-    expect(view).toMatchObject({ active: true, source: "title" });
-    expect(t.readToday.mock.calls.length).toBe(calls);
   });
 });
 

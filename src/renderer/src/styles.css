@@ -730,6 +730,44 @@ p {
   color: var(--muted);
 }
 
+/* Settings: an info icon beside a label or heading; its tooltip holds the details, so the visible copy stays short. */
+.info-tip {
+  display: inline-flex;
+  color: var(--muted);
+  cursor: help;
+  border-radius: 999px;
+}
+
+.info-tip:hover,
+.info-tip:focus-visible {
+  color: inherit;
+}
+
+/* Settings → "Names Bee should know": collapsed until opened. */
+.known-names-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+}
+
+.known-names-trigger .chevron-icon {
+  transition: transform 160ms var(--spring, ease);
+}
+
+.known-names-trigger[data-state="open"] .chevron-icon {
+  transform: rotate(90deg);
+}
+
+/* forceMount keeps it in the form; closed, it is not shown. */
+.known-names-content[data-state="closed"] {
+  display: none;
+}
+
+.known-names-content > textarea {
+  margin-top: 6px;
+}
+
 .error-text {
   color: var(--danger);
 }

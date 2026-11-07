@@ -12,8 +12,6 @@ import { currentTeamsTitle, isTeamsMeetingRow, type WindowTitleReader, type Wind
 // calendar (when readable) adds attendees and agenda; saved meetings and connected tools add history. Everything is read on
 // this device. The brief is built once per meeting and handed to Luna on every turn.
 
-export type MeetingContextSettings = { enabled: boolean; calendar: boolean };
-
 export type MeetingContextDeps = {
   /** The existing in-call reading (Teams holds the mic, or shows a call window). Cheap and cached by its owner. */
   inCall: () => Promise<boolean>;
@@ -22,7 +20,6 @@ export type MeetingContextDeps = {
   memory: MeetingMemoryStore;
   /** Related notes from connected tools for a query. Fails open to []. */
   searchNotes: (query: string) => Promise<string[]>;
-  settings: () => MeetingContextSettings;
   now?: () => number;
   /** Read window titles even when the in-call detector says no (macOS has no in-call detector). */
   pollTitlesWhenIdle?: boolean;
@@ -64,9 +61,9 @@ function localDate(ms: number): string {
 export type MeetingContext = {
   /** Steps detection (cheap when nothing changed) and returns what the renderer needs. */
   tick: () => Promise<MeetingContextView>;
-  /** The brief for the meeting in progress, for Luna. Undefined with no meeting, no name, or the feature off. */
+  /** The brief for the meeting in progress, for Luna. Undefined with no meeting or no name. */
   brief: () => string | undefined;
-  /** Saves a finished meeting to local memory. False when meeting context is off, or when the meeting has no name. */
+  /** Saves a finished meeting to local memory. False when the meeting has no name. */
   remember: (args: { meetingId?: number; summaryMarkdown: string; usedLlm: boolean; tips: readonly string[] }) => boolean;
   /** Deletes all saved meetings. Returns how many. */
   clearMemory: () => number;
@@ -109,11 +106,10 @@ export function createMeetingContext(deps: MeetingContextDeps): MeetingContext {
     }
   }
 
-  const view = (settings: MeetingContextSettings): MeetingContextView => {
+  const view = (): MeetingContextView => {
     const meeting = current;
     return {
-      enabled: settings.enabled,
-      active: settings.enabled && tracker.stable && meeting !== null && !meeting.ended,
+      active: tracker.stable && meeting !== null && !meeting.ended,
       id: meeting?.id ?? 0,
       subject: meeting?.identity?.subject ?? null,
       source: meeting?.identity?.source ?? "none",
@@ -160,7 +156,7 @@ export function createMeetingContext(deps: MeetingContextDeps): MeetingContext {
       .catch(() => [] as string[])
       .then((notes) => {
         // The meeting may have moved on while tools answered. Its brief still goes in the cache for a later return.
-        // Memory may have been cleared or switched off while tools answered: read it again.
+        // Memory may have been cleared while tools answered: read it again.
         const brief = buildBrief({ identity, past: pastFor(identity), notes });
         briefs.set(identity.key, { brief, notes });
         if (meeting.identity === identity) {
@@ -177,13 +173,7 @@ export function createMeetingContext(deps: MeetingContextDeps): MeetingContext {
     rows = await deps.titles.read().catch(() => []);
   }
 
-  async function readCalendar(now: number, enabled: boolean, name: string): Promise<void> {
-    if (!enabled) {
-      // Switched off: forget what was read, so matching falls back to the window title. Read afresh if switched on again.
-      events = [];
-      eventsAt = -Infinity;
-      return;
-    }
+  async function readCalendar(now: number, name: string): Promise<void> {
     const age = now - eventsAt;
     const changed = name !== titleName;
     if (age < (changed ? timing.calendarChangeMs : timing.calendarMs)) return;
@@ -203,12 +193,6 @@ export function createMeetingContext(deps: MeetingContextDeps): MeetingContext {
   }
 
   async function step(): Promise<MeetingContextView> {
-    const settings = deps.settings();
-    if (!settings.enabled) {
-      if (current) endCurrent();
-      tracker = IDLE_TRACKER;
-      return view(settings);
-    }
     const now = clock();
     const detected = await deps.inCall().catch(() => false);
     await readTitles(now, detected || deps.pollTitlesWhenIdle === true || tracker.raw);
@@ -221,21 +205,21 @@ export function createMeetingContext(deps: MeetingContextDeps): MeetingContext {
     tracker = stepTracker(tracker, raw, now, { enterMs: timing.enterMs, leaveMs: timing.leaveMs });
     if (!tracker.stable) {
       if (current && !current.ended) endCurrent();
-      return view(settings);
+      return view();
     }
     const title = currentTeamsTitle(rows, true);
-    await readCalendar(now, settings.calendar, title?.name ?? "");
+    await readCalendar(now, title?.name ?? "");
     const identity = matchMeeting({ title, events, now: new Date(now) });
 
     // A new stable detection is a new meeting, even with the same name.
     if (tracker.epoch !== trackerEpoch) {
       trackerEpoch = tracker.epoch;
       begin(identity);
-      return view(settings);
+      return view();
     }
     if (!current || current.ended) begin(identity);
     const meeting = current as ActiveMeeting;
-    if (!identity) return view(settings);
+    if (!identity) return view();
     if (!meeting.identity) {
       adopt(meeting, identity);
     } else if (meeting.identity.source === "title" && identity.source === "calendar") {
@@ -250,25 +234,24 @@ export function createMeetingContext(deps: MeetingContextDeps): MeetingContext {
     } else {
       pending = { key: identity.key, seen: 1 };
     }
-    return view(settings);
+    return view();
   }
 
   return {
     async tick() {
       // One step at a time: a slow Outlook or title read never stacks up behind the poll.
-      if (busy) return view(deps.settings());
+      if (busy) return view();
       busy = true;
       try {
         return await step();
       } catch {
-        return view(deps.settings());
+        return view();
       } finally {
         busy = false;
       }
     },
     brief() {
-      const settings = deps.settings();
-      return settings.enabled && current && !current.ended ? current.brief?.text : undefined;
+      return current && !current.ended ? current.brief?.text : undefined;
     },
     subject(meetingId) {
       return byId(meetingId)?.identity?.subject || undefined;
@@ -277,8 +260,6 @@ export function createMeetingContext(deps: MeetingContextDeps): MeetingContext {
       return byId(meetingId)?.identity?.attendees ?? [];
     },
     remember({ meetingId, summaryMarkdown, usedLlm, tips }) {
-      const settings = deps.settings();
-      if (!settings.enabled) return false;
       const meeting = byId(meetingId);
       const identity = meeting?.identity;
       if (!meeting || !identity?.subject) return false;

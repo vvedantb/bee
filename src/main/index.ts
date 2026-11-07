@@ -473,7 +473,6 @@ if (clerk.isPrimaryInstance) {
       calendar,
       memory: meetingMemory,
       searchNotes: (query) => searchMcpNotes({ configs: settings.mcpConfigs(), pool: mcpPool, query }),
-      settings: settings.meetingContext,
       // macOS has no in-call detector, so it reads Teams window names on its own schedule.
       pollTitlesWhenIdle: isMac,
     });
@@ -481,7 +480,6 @@ if (clerk.isPrimaryInstance) {
     const briefings = createBriefingWatcher({
       calendar,
       records: () => meetingMemory.list(),
-      settings: settings.meetingContext,
       send: (view) => {
         if (win && !win.isDestroyed()) win.webContents.send(IPC.briefing, view);
       },
