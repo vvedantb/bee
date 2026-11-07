@@ -271,8 +271,6 @@ describe("settingsChange", () => {
     notesDir: "/notes",
     logsDir: "/logs",
     knownNames: [],
-    meetingContextEnabled: true,
-    meetingCalendarEnabled: true,
     teamsAudioFallbackEnabled: false,
     toggleShortcut: "CommandOrControl+Shift+Space",
     toggleShortcutActive: true,

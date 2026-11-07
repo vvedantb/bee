@@ -11,11 +11,11 @@ export const TEAMS_AUDIO_LISTENING = "Listening to Teams audio for people withou
 
 const MIC_ONLY = "Bee uses your mic only.";
 const CARRIES_ON = "Bee carries on with your mic.";
-const MISSING = `The Teams audio helper is missing from this copy of Bee. Reinstall Bee to hear Teams. ${MIC_ONLY}`;
+const MISSING = `The Teams audio helper is missing. Reinstall Bee. ${MIC_ONLY}`;
 
 /** macOS counts any app's audio as Screen Recording. Bee's helper records the Teams app's sound only, never the screen. */
 export const TEAMS_AUDIO_SCREEN_RECORDING =
-  "Bee needs Screen Recording to hear Teams. macOS lists app audio there. Bee records only the Teams app's sound, never your screen or other apps. If it still does not work after you turn Bee on, quit and reopen Bee.";
+  "Turn on Screen Recording for Bee to hear Teams. Bee records Teams sound only, never your screen or other apps.";
 
 function unavailable(status: TeamsAudioStatus): string {
   const { platform, reason } = status;
@@ -53,5 +53,6 @@ export function teamsAudioMessage(audio: TeamsAudioView | undefined): string | n
   if (teamsAudioNeedsScreenRecording(audio)) return TEAMS_AUDIO_SCREEN_RECORDING;
   if (audio.failed) return failed(audio.status.platform, audio.failure);
   if (audio.plan === "covered") return "Everyone in this call has Bee, so Bee is not listening to Teams.";
-  return "Bee listens to Teams in a Teams call with your mic on, when someone may not have Bee.";
+  // Waiting for a call: the switch already says what it does.
+  return null;
 }

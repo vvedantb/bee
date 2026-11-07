@@ -1,13 +1,11 @@
 import { BRIEFING_TICK_MS, dueBriefing, type Briefing } from "../core/briefing";
 import type { CalendarReader } from "../core/calendar";
 import { debugLog, errorData } from "../core/debug-log";
-import type { MeetingContextSettings } from "../core/meeting-context";
 import type { MeetingRecord } from "../core/meeting-memory";
 import type { BriefingView } from "../shared/ipc";
 
 // Checks today's calendar every BRIEFING_TICK_MS and sends the island a briefing a couple of minutes before each meeting
-// (core/briefing.ts). Keeps the recent briefings so "Dig deeper" (main/meeting-ipc.ts) can find one by key. Off with meeting
-// context or the calendar setting.
+// (core/briefing.ts). Keeps the recent briefings so "Dig deeper" (main/meeting-ipc.ts) can find one by key.
 
 const KEPT = 10;
 
@@ -16,7 +14,6 @@ export type BriefingWatcher = { tick: () => Promise<void>; get: (key: string) =>
 export function createBriefingWatcher(deps: {
   calendar: CalendarReader;
   records: () => readonly MeetingRecord[];
-  settings: () => MeetingContextSettings;
   send: (view: BriefingView) => void;
   now?: () => number;
 }): BriefingWatcher {
@@ -26,8 +23,7 @@ export function createBriefingWatcher(deps: {
   let ticking = false;
 
   async function tick(): Promise<void> {
-    const settings = deps.settings();
-    if (ticking || !settings.enabled || !settings.calendar) return;
+    if (ticking) return;
     ticking = true;
     try {
       const result = await deps.calendar.readToday(new Date(now()));

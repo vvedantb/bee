@@ -12,13 +12,13 @@ const dir = process.env.BEE_E2E_SHOTS_DIR || mkdtempSync(join(tmpdir(), "bee-mee
 const PNG_MAGIC = "89504e470d0a1a0a";
 
 describe("meeting settings screenshots (Electron E2E)", () => {
-  it("writes the Meeting context section, on and master-off, as PNGs", async () => {
+  it("writes the Meeting context section as a PNG", async () => {
     const report = await runHarness({
       page: "meeting-settings-shots",
-      env: { BEE_E2E_SHOTS_DIR: dir, BEE_E2E_SHOTS: "settings-meeting-context,settings-meeting-context-off" },
+      env: { BEE_E2E_SHOTS_DIR: dir, BEE_E2E_SHOTS: "settings-meeting-context" },
       report: z.object({ ok: z.literal(true), files: z.array(z.string()) }),
     });
-    expect(report.files.map((file) => file.split("/").pop())).toEqual(["settings-meeting-context.png", "settings-meeting-context-off.png"]);
+    expect(report.files.map((file) => file.split("/").pop())).toEqual(["settings-meeting-context.png"]);
     for (const file of report.files) expect(readFileSync(file).subarray(0, 8).toString("hex")).toBe(PNG_MAGIC);
   });
 });

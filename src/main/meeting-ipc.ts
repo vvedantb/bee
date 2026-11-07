@@ -237,7 +237,7 @@ export function registerMeetingIpc(args: { notesDir: string;
   let lastContext = "";
 
   // The renderer polls this every few seconds. Main steps detection (title and calendar reads are throttled inside). The poll also
-  // keeps the meeting window reader going when meeting context is off; it never waits for it.
+  // keeps the meeting window reader going; it never waits for it.
   ipcMain.handle(IPC.meetingContext, async (_event, payload) => {
     const request = meetingContextRequestSchema.parse(payload);
     assertSignedIn(request.sessionToken);

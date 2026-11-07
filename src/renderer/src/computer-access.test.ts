@@ -7,7 +7,7 @@ describe("computerAccessMessage", () => {
   it("says what macOS still has to allow: Accessibility only, since computer use never takes a picture", () => {
     expect(computerAccessMessage({ ...mac, accessibility: "denied", screenRecording: "denied" })).toBe(ACCESS_NEEDS_ACCESSIBILITY);
     expect(computerAccessMessage({ ...mac, screenRecording: "denied" })).toBeNull();
-    expect(ACCESS_NEEDS_ACCESSIBILITY).toMatch(/Privacy & Security → Accessibility/);
+    expect(ACCESS_NEEDS_ACCESSIBILITY).toMatch(/Accessibility settings/);
   });
 
   it("says nothing when all is allowed, unknown, not needed (Windows) or not checked yet", () => {

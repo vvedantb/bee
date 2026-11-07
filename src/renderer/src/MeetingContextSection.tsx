@@ -2,14 +2,13 @@ import { IconTrash } from "@tabler/icons-react";
 import { Button } from "@vvedantb/ui";
 import { useState } from "react";
 import type { MeetingWindowStatus, SettingsUpdate, SettingsView } from "../../shared/ipc";
-import { SettingRow } from "./SettingRow";
+import { InfoTip, SettingRow } from "./SettingRow";
 import { teamsAudioMessage, teamsAudioNeedsScreenRecording, type TeamsAudioView } from "./teams-audio-message";
 
 // Settings → Meeting context. Presentational: it takes the saved switches and callbacks, so the screenshot page can render it
 // without the store or Electron.
 
-export type MeetingContextSettings = Pick<SettingsView, "meetingContextEnabled" | "meetingCalendarEnabled"> &
-  Partial<Pick<SettingsView, "teamsAudioFallbackEnabled">>;
+export type MeetingContextSettings = Partial<Pick<SettingsView, "teamsAudioFallbackEnabled">>;
 
 function clearMessage(count: number): string {
   return count === 0 ? "No saved meeting notes to clear." : `Cleared ${count} saved meeting ${count === 1 ? "note" : "notes"}.`;
@@ -23,13 +22,13 @@ export function meetingWindowMessage(status: MeetingWindowStatus | undefined): s
   // Quiet while it checks access or no call is open: the reader runs by itself, so only what needs the user, or a call it reads.
   if (status.state === "starting") return null;
   if (status.state === "needs-permission") {
-    return "Bee needs Accessibility access. In System Settings → Privacy & Security → Accessibility, turn on Bee. Bee checks again by itself.";
+    return "Turn on Bee in Accessibility settings to read meeting windows.";
   }
   if (status.state === "unavailable") return "Cannot read meeting windows on this device. Bee carries on without it.";
   if (!status.app) return null;
   const app = APP_NAME[status.app];
   if (status.captions) return `Reading ${app}, with live captions.`;
-  return status.app === "meet" ? `Reading ${app}.` : `Reading ${app}. Turn on live captions in ${app} to send what others say to the AI.`;
+  return status.app === "meet" ? `Reading ${app}.` : `Reading ${app}. Turn on live captions to hear others.`;
 }
 
 export function MeetingContextSection({
@@ -57,7 +56,6 @@ export function MeetingContextSection({
   // A second click confirms: the first only arms the button.
   const [step, setStep] = useState<"idle" | "confirm" | "busy">("idle");
   const [message, setMessage] = useState<string | null>(null);
-  const on = settings.meetingContextEnabled;
   const windowMessage = meetingWindowMessage(reader);
   const audioOn = settings.teamsAudioFallbackEnabled ?? false;
   const audioMessage = audioOn ? teamsAudioMessage(teamsAudio) : null;
@@ -80,23 +78,9 @@ export function MeetingContextSection({
 
   return (
     <section>
-      <h2>Meeting context</h2>
-      <p className="muted">Read on this device. Sent to the AI and your connectors.</p>
-      <SettingRow
-        id="meeting-context"
-        label="Know which meeting I am in"
-        description="Adds people, agenda and past decisions to tips."
-        checked={on}
-        onCheckedChange={(meetingContextEnabled) => onChange({ meetingContextEnabled })}
-      />
-      <SettingRow
-        id="meeting-calendar"
-        label="Read my calendar"
-        description="Classic Outlook on Windows, else your calendar tools in Claude Code. Shows a briefing 2 minutes before each meeting."
-        checked={settings.meetingCalendarEnabled}
-        disabled={!on}
-        onCheckedChange={(meetingCalendarEnabled) => onChange({ meetingCalendarEnabled })}
-      />
+      <h2 className="flex items-center gap-1.5">
+        Meeting context <InfoTip text="Who is in the meeting, its agenda and past decisions. Read on this device, then sent to the AI and your connectors." />
+      </h2>
       <div className="row actions">
         <Button type="button" variant="secondary" size="sm" disabled={step === "busy"} onClick={() => void clear()}>
           <IconTrash size={16} stroke={1.75} /> {step === "confirm" ? "Click again to clear" : "Clear saved meeting notes"}
@@ -118,7 +102,8 @@ export function MeetingContextSection({
       <SettingRow
         id="teams-audio-fallback"
         label="Hear Teams when not everyone has Bee"
-        description="With your mic on in a Teams call, Bee hears the Teams app only. Never all system audio."
+        description="Teams audio only."
+        info="With your mic on in a Teams call, Bee hears the Teams app only, never all system audio."
         checked={audioOn}
         onCheckedChange={(teamsAudioFallbackEnabled) => onChange({ teamsAudioFallbackEnabled })}
       />

@@ -21,7 +21,7 @@ describe("teamsAudioMessage", () => {
     expect(teamsAudioMessage(unsupported("windows", "os-too-old"))).toBe("Teams audio needs Windows 10 version 2004 or later. Bee uses your mic only.");
     expect(teamsAudioMessage(unsupported("mac", "os-too-old"))).toBe("Teams audio needs macOS 13 or later. Bee uses your mic only.");
     for (const platform of ["windows", "mac"] as const) {
-      expect(teamsAudioMessage(unsupported(platform, "helper-missing"))).toMatch(/^The Teams audio helper is missing from this copy of Bee\. Reinstall Bee/);
+      expect(teamsAudioMessage(unsupported(platform, "helper-missing"))).toMatch(/^The Teams audio helper is missing\. Reinstall Bee/);
       expect(teamsAudioMessage(unsupported(platform, "needs-app-audio"))).toMatch(/never records all system audio/);
     }
     for (const reason of ["unsupported-platform", "os-too-old", "helper-missing", "needs-app-audio"] as const) {
@@ -32,7 +32,8 @@ describe("teamsAudioMessage", () => {
   it("reports listening, a covered call and waiting", () => {
     expect(teamsAudioMessage(view({ listening: true }))).toBe(TEAMS_AUDIO_LISTENING);
     expect(teamsAudioMessage(view({ plan: "covered" }))).toBe("Everyone in this call has Bee, so Bee is not listening to Teams.");
-    expect(teamsAudioMessage(view({ plan: "waiting" }))).toMatch(/^Bee listens to Teams in a Teams call/);
+    // Waiting for a call says nothing: the switch already says what it does.
+    expect(teamsAudioMessage(view({ plan: "waiting" }))).toBeNull();
   });
 
   it("says why a capture failed in this call", () => {
@@ -70,6 +71,6 @@ describe("teamsAudioMessage", () => {
         view({ status: MAC, failed: true, failure }),
       ]),
     ];
-    for (const audio of all) expect(teamsAudioMessage(audio)).not.toMatch(/grok|claude|gpt|luna|jev|clerk|electron|screencapturekit|wasapi/i);
+    for (const audio of all) expect(teamsAudioMessage(audio) ?? "").not.toMatch(/grok|claude|gpt|luna|jev|clerk|electron|screencapturekit|wasapi/i);
   });
 });

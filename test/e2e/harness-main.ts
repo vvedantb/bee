@@ -196,14 +196,13 @@ void app.whenReady().then(async () => {
   }
   const notesDir = notesDirEnv || join(mkdtempSync(join(tmpdir(), "bee-e2e-")), "notes");
   ensureNotesDir(notesDir);
-  // Meeting context is switched off here: no window titles, no calendar, nothing saved.
+  // Meeting context sees nothing here: never in a call, no window titles, no calendar, memory only in RAM.
   const meeting = createMeetingContext({
     inCall: async () => false,
     titles: { read: async () => [] },
     calendar: unsupportedCalendarReader,
     memory: createMeetingMemoryStore({ path: "meeting-memory.json", fs: inMemoryFs() }),
     searchNotes: async () => [],
-    settings: () => ({ enabled: false, calendar: false, memory: false }),
   });
   const mcpFile = process.env.BEE_E2E_MCP_FILE;
   const mode = e2eModeSchema.optional().parse(process.env.BEE_E2E_MODE || undefined);

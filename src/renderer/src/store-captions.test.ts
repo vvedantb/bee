@@ -42,8 +42,6 @@ const SETTINGS: SettingsView = {
   notesDir: "/notes",
   logsDir: "/logs",
   knownNames: [],
-  meetingContextEnabled: true,
-  meetingCalendarEnabled: true,
   teamsAudioFallbackEnabled: true,
   toggleShortcut: "CommandOrControl+Shift+Space",
   toggleShortcutActive: true,

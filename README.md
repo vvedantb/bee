@@ -120,7 +120,7 @@ It fails open. The whole step has a 2 second limit. With the switch off or the G
 
 ### Before and after meetings
 
-- **Briefing.** Two minutes before a meeting with other people on it, the island shows who is on it, when you last met and what was left open (from saved meetings). **Dig deeper** starts a background task that searches your connected tools, read only. Bee reads today's calendar from classic Outlook on Windows; otherwise it asks your Claude Code once an hour, through your own calendar tools (MCP). With no calendar tool, it stops asking until the next day. Off with **Settings → Read my calendar**.
+- **Briefing.** Two minutes before a meeting with other people on it, the island shows who is on it, when you last met and what was left open (from saved meetings). **Dig deeper** starts a background task that searches your connected tools, read only. Bee reads today's calendar from classic Outlook on Windows; otherwise it asks your Claude Code once an hour, through your own calendar tools (MCP). With no calendar tool, it stops asking until the next day. Always on.
 - **Follow-up.** When a meeting's summary is saved (by hand, or by itself when the call ends), the island lists its action items with **Draft follow-up email** and **Create tasks**. Each is a background task on your Claude Code, which uses the email and task tools you have connected. Emails are saved as drafts, never sent.
 
 ### Talk to Bee
