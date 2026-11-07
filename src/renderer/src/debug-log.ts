@@ -24,8 +24,6 @@ export type RendererDebugSink = DebugSink & { flush: () => void; pending: () => 
 /** Queues events and sends them to main in batches, on a timer or when a batch is full. Time and sending are injected for tests. */
 export function createRendererDebugSink(args: {
   send: (batch: DebugLogBatch) => void;
-  /** Settings → Verbose debug logs. Off keeps warnings and errors. */
-  verbose: () => boolean;
   now?: () => number;
   flushMs?: number;
 }): RendererDebugSink {
@@ -48,7 +46,8 @@ export function createRendererDebugSink(args: {
   };
 
   return {
-    wants: (level: DebugLevel) => level === "warn" || level === "error" || args.verbose(),
+    // Every level: the log is always detailed (no setting).
+    wants: () => true,
     write: (event: DebugEvent) => {
       const data = event.data === undefined ? undefined : (redactDebugData(event.data) as DebugData);
       queue.push({
@@ -128,7 +127,7 @@ export function logStateChanges(subscribe: (listener: () => void) => () => void,
  * Installs the renderer's sink and its watchers: console output, uncaught errors and rejections, focus, visibility and size. The
  * queue goes to main when the page hides or unloads.
  */
-export function installRendererDebugLog(args: { send: (batch: DebugLogBatch) => void; verbose: () => boolean }): RendererDebugSink {
+export function installRendererDebugLog(args: { send: (batch: DebugLogBatch) => void }): RendererDebugSink {
   const sink = createRendererDebugSink(args);
   setDebugSink(sink);
   teeConsole(console);

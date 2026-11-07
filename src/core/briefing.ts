@@ -39,14 +39,13 @@ function namesLabel(names: readonly string[]): string {
 
 /**
  * The briefing to show now, or null. An event is due once it starts within BRIEFING_LEAD_MS and has not started yet. Events with
- * nobody else on them (focus time, reminders) and events already shown are skipped. Earlier meetings only while memory is on.
+ * nobody else on them (focus time, reminders) and events already shown are skipped.
  */
 export function dueBriefing(args: {
   events: readonly CalendarEvent[];
   now: number;
   shown: ReadonlySet<string>;
   records: readonly MeetingRecord[];
-  memoryOn: boolean;
 }): Briefing | null {
   const upcoming = args.events
     .map((event) => ({ event, startMs: Date.parse(event.start) }))
@@ -57,7 +56,7 @@ export function dueBriefing(args: {
     const attendees = [...event.required, ...event.optional].filter((name) => plainName(name).length > 0);
     if (args.shown.has(key) || attendees.length === 0) continue;
     const identity = { key: meetingKey({ subject: event.subject, organizer: event.organizer, recurring: event.recurring }), subject: event.subject, attendees };
-    const past = args.memoryOn ? pastMeetings({ records: args.records, identity }) : [];
+    const past = pastMeetings({ records: args.records, identity });
     const minutes = Math.max(1, Math.ceil((startMs - args.now) / 60_000));
     const open = [...new Set(past.flatMap(({ record }) => record.actionItems))].slice(0, OPEN_ITEMS);
     const lastTime = cardLines(past)[0];

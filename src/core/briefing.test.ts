@@ -30,7 +30,7 @@ const record: MeetingRecord = {
 
 describe("dueBriefing", () => {
   it("briefs a meeting starting within two minutes: who, last time, and what was left open", () => {
-    const briefing = dueBriefing({ events: [event()], now, shown: new Set(), records: [record], memoryOn: true });
+    const briefing = dueBriefing({ events: [event()], now, shown: new Set(), records: [record] });
     expect(briefing?.lines).toEqual([
       "In 2 min: Weekly sync with Sam Lee, Priya Shah, Aoife Byrne and 1 other",
       "Last time in Weekly sync (30 Oct)",
@@ -40,12 +40,12 @@ describe("dueBriefing", () => {
     expect(briefing?.key).toBe("Weekly sync@2026-11-06T14:00:00.000Z");
   });
 
-  it("says so when nothing was saved, and leaves earlier meetings out while memory is off", () => {
-    expect(dueBriefing({ events: [event()], now, shown: new Set(), records: [record], memoryOn: false })?.lines.slice(1)).toEqual(["Nothing saved from earlier meetings with them."]);
+  it("says so when nothing was saved from earlier meetings", () => {
+    expect(dueBriefing({ events: [event()], now, shown: new Set(), records: [] })?.lines.slice(1)).toEqual(["Nothing saved from earlier meetings with them."]);
   });
 
   it("skips meetings too far ahead, already started, already shown, or with nobody else on them", () => {
-    const base = { now, shown: new Set<string>(), records: [], memoryOn: true };
+    const base = { now, shown: new Set<string>(), records: [] };
     expect(dueBriefing({ ...base, events: [event({ start: new Date(now + BRIEFING_LEAD_MS + 1000).toISOString() })] })).toBeNull();
     expect(dueBriefing({ ...base, events: [event({ start: new Date(now - 1000).toISOString() })] })).toBeNull();
     expect(dueBriefing({ ...base, events: [event({ required: [], optional: [] })] })).toBeNull();
@@ -54,13 +54,13 @@ describe("dueBriefing", () => {
 
   it("picks the soonest due meeting", () => {
     const soon = event({ subject: "Standup", start: "2026-11-06T13:59:00.000Z" });
-    expect(dueBriefing({ events: [event(), soon], now, shown: new Set(), records: [], memoryOn: true })?.subject).toBe("Standup");
+    expect(dueBriefing({ events: [event(), soon], now, shown: new Set(), records: [] })?.subject).toBe("Standup");
   });
 });
 
 describe("briefingTask", () => {
   it("asks for read-only research about the meeting and its people", () => {
-    const briefing = dueBriefing({ events: [event()], now, shown: new Set(), records: [], memoryOn: true });
+    const briefing = dueBriefing({ events: [event()], now, shown: new Set(), records: [] });
     if (!briefing) throw new Error("expected a briefing");
     const { title, task } = briefingTask(briefing);
     expect(title).toBe("Prepare for Weekly sync");

@@ -101,24 +101,13 @@ export const settingsViewSchema = z.object({
   logsDir: z.string(),
   // Names Bee should know (core/known-names.ts): typed here or learned from spelling corrections and chat names on screen.
   knownNames: z.array(z.string()),
-  // Meeting context (core/meeting-context.ts). All on by default. Calendar and memory only matter while the master switch is on.
+  // Meeting context (core/meeting-context.ts). Both on by default. The calendar only matters while the master switch is on.
+  // Finished meetings are always saved to local memory while meeting context is on.
   meetingContextEnabled: z.boolean(),
   meetingCalendarEnabled: z.boolean(),
-  meetingMemoryEnabled: z.boolean(),
   // Teams audio fallback: with the mic on in a Teams call where someone may not have Bee, hear the Teams app alone (never all
   // system audio). Off by default; only platforms with a Teams-only capture path listen (core/teams-audio.ts).
   teamsAudioFallbackEnabled: z.boolean(),
-  // Mic hints (renderer/src/hints.ts): local suggestions when the mic is silent, quiet or too loud. On by default.
-  hintsEnabled: z.boolean(),
-  // "Bee" wake word (core/wake-word.ts): an own mic phrase that starts with "Bee…" is a direct request to the AI, not meeting
-  // conversation. On by default.
-  wakeWordEnabled: z.boolean(),
-  // "Ask before sending or deleting" (core/computer-gate.ts): computer use waits for a Confirm tap in the island before it
-  // sends, deletes, buys or submits a form. Ordinary clicks do not ask. On by default.
-  askBeforeSendingEnabled: z.boolean(),
-  // Verbose debug logs (main/debug-log.ts): every event of a session, prompts and replies included, on this computer only. Off
-  // keeps warnings and errors. On by default for now.
-  verboseLogging: z.boolean(),
   // The show/hide shortcut (core/shortcut.ts), and whether Bee holds it now (false: another app does, or it could not register).
   toggleShortcut: z.string().max(100),
   toggleShortcutActive: z.boolean(),
@@ -133,17 +122,11 @@ export const settingsUpdateSchema = z.object({
   motionPreference: motionPreferenceSchema.optional(),
   personalisedLinks: z.boolean().optional(),
   sendSessionsToVmem: z.boolean().optional(),
-  // Extra absolute folders Luna may read; replaces the saved list.
   // Names Bee should know; replaces the saved list (core/known-names.ts KNOWN_NAMES_MAX, NAME_MAX_CHARS).
   knownNames: z.array(z.string().max(200)).max(400).optional(),
   meetingContextEnabled: z.boolean().optional(),
   meetingCalendarEnabled: z.boolean().optional(),
-  meetingMemoryEnabled: z.boolean().optional(),
   teamsAudioFallbackEnabled: z.boolean().optional(),
-  hintsEnabled: z.boolean().optional(),
-  wakeWordEnabled: z.boolean().optional(),
-  askBeforeSendingEnabled: z.boolean().optional(),
-  verboseLogging: z.boolean().optional(),
   toggleShortcut: acceleratorSchema.optional(),
 });
 export type SettingsUpdate = z.infer<typeof settingsUpdateSchema>;

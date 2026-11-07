@@ -22,7 +22,7 @@ describe("createBriefingWatcher", () => {
   afterEach(() => stop());
 
   it("sends each meeting's briefing once and keeps it for Dig deeper", async () => {
-    const { watcher, sent } = setup({ enabled: true, calendar: true, memory: true });
+    const { watcher, sent } = setup({ enabled: true, calendar: true });
     stop = watcher.stop;
     await watcher.tick();
     await watcher.tick();
@@ -31,7 +31,7 @@ describe("createBriefingWatcher", () => {
   });
 
   it("stays quiet with meeting context or the calendar switched off", async () => {
-    for (const settings of [{ enabled: false, calendar: true, memory: true }, { enabled: true, calendar: false, memory: true }]) {
+    for (const settings of [{ enabled: false, calendar: true }, { enabled: true, calendar: false }]) {
       const { watcher, sent } = setup(settings);
       await watcher.tick();
       watcher.stop();

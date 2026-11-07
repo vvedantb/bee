@@ -63,12 +63,7 @@ const SETTINGS: SettingsView = {
   knownNames: [],
   meetingContextEnabled: false,
   meetingCalendarEnabled: false,
-  meetingMemoryEnabled: false,
   teamsAudioFallbackEnabled: true,
-  hintsEnabled: false,
-  wakeWordEnabled: true,
-  askBeforeSendingEnabled: true,
-  verboseLogging: true,
   toggleShortcut: "CommandOrControl+Shift+Space",
   toggleShortcutActive: true,
 };
@@ -264,14 +259,6 @@ describe("store: Bee wake word", () => {
       "Bee, what is on the agenda today?",
       "Hey Bee, summarise the budget numbers",
     ]);
-  });
-
-  it("leaves Bee lines in the meeting with the setting off", async () => {
-    const { say, pipeline, commands, published } = await loadStore({ settings: { wakeWordEnabled: false } });
-    await say("Bee open Teams");
-    expect(commands).toEqual([]);
-    expect(pipeline.at(-1)?.transcript).toEqual(["Bee open Teams"]);
-    expect(published).toEqual(["Bee open Teams"]);
   });
 
   it("takes the next phrase as the request after Bee alone", async () => {

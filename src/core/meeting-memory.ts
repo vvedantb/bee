@@ -2,12 +2,9 @@ import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:
 import { dirname } from "node:path";
 import { z } from "zod";
 
-// What Bee remembers about past meetings, on this device only (meeting-memory.json in the user data folder).
-// Bounded twice: the newest MEMORY_MAX_RECORDS meetings, and MEMORY_MAX_BYTES of JSON. The oldest go first.
+// What Bee remembers about past meetings, on this device only (meeting-memory.json in the user data folder). Every meeting is
+// kept until the user clears them; each record is bounded (boundRecord), so one meeting stays a few KB.
 // The store takes its file system as an argument, so tests run in memory.
-
-export const MEMORY_MAX_RECORDS = 40;
-export const MEMORY_MAX_BYTES = 256 * 1024;
 
 const LIST_MAX = 10;
 const ITEM_MAX = 240;
@@ -53,20 +50,9 @@ export function boundRecord(record: MeetingRecord): MeetingRecord {
   };
 }
 
-const sizeOf = (records: readonly MeetingRecord[]): number => new TextEncoder().encode(JSON.stringify({ version: 1, records })).length;
-
-/** Records (oldest first) with `record` added, then the oldest dropped until both caps hold. The newest always stays. */
-export function addRecord(
-  records: readonly MeetingRecord[],
-  record: MeetingRecord,
-  limits: { maxRecords?: number; maxBytes?: number } = {},
-): MeetingRecord[] {
-  const maxRecords = limits.maxRecords ?? MEMORY_MAX_RECORDS;
-  const maxBytes = limits.maxBytes ?? MEMORY_MAX_BYTES;
-  // The same meeting saved twice (an id seen before) replaces the earlier copy.
-  const kept = [...records.filter((item) => item.id !== record.id), boundRecord(record)];
-  while (kept.length > 1 && (kept.length > maxRecords || sizeOf(kept) > maxBytes)) kept.shift();
-  return kept;
+/** Records (oldest first) with `record` added at the end. The same meeting saved twice (an id seen before) replaces the earlier copy. */
+export function addRecord(records: readonly MeetingRecord[], record: MeetingRecord): MeetingRecord[] {
+  return [...records.filter((item) => item.id !== record.id), boundRecord(record)];
 }
 
 /** The records in a file's text. A corrupt file, or a record that does not fit the schema, is dropped, never thrown. */
@@ -130,15 +116,22 @@ export type MeetingMemoryStore = {
   clear: () => number;
 };
 
-export function createMeetingMemoryStore(args: { path: string; fs?: MemoryFs; limits?: { maxRecords?: number; maxBytes?: number } }): MeetingMemoryStore {
+export function createMeetingMemoryStore(args: { path: string; fs?: MemoryFs }): MeetingMemoryStore {
   const fs = args.fs ?? nodeMemoryFs;
-  const list = () => parseMemory(fs.read(args.path));
+  // Read once, then kept: this store is the file's only writer, and the briefing reads it often (main/briefing-watcher.ts).
+  let cached: MeetingRecord[] | null = null;
+  const list = () => (cached ??= parseMemory(fs.read(args.path)));
   return {
-    list,
-    add: (record) => fs.write(args.path, JSON.stringify({ version: 1, records: addRecord(list(), record, args.limits) })),
+    list: () => [...list()],
+    add: (record) => {
+      const records = addRecord(list(), record);
+      fs.write(args.path, JSON.stringify({ version: 1, records }));
+      cached = records;
+    },
     clear: () => {
       const count = list().length;
       fs.remove(args.path);
+      cached = [];
       return count;
     },
   };

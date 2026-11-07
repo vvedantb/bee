@@ -44,12 +44,7 @@ const SETTINGS: SettingsView = {
   knownNames: [],
   meetingContextEnabled: true,
   meetingCalendarEnabled: true,
-  meetingMemoryEnabled: true,
   teamsAudioFallbackEnabled: true,
-  hintsEnabled: false,
-  wakeWordEnabled: true,
-  askBeforeSendingEnabled: true,
-  verboseLogging: true,
   toggleShortcut: "CommandOrControl+Shift+Space",
   toggleShortcutActive: true,
 };

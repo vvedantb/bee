@@ -588,37 +588,8 @@ function SettingsTab({ state, settings }: { state: BeeState; settings: SettingsV
         checked={settings.meetingMode}
         onCheckedChange={(meetingMode) => void actions.saveSettings({ meetingMode })}
       />
-      <SettingRow
-        id="mic-hints"
-        label="Mic hints"
-        description="Suggest fixes when the mic is quiet, silent or too loud."
-        checked={settings.hintsEnabled}
-        onCheckedChange={(hintsEnabled) => void actions.saveSettings({ hintsEnabled })}
-      />
-      <SettingRow
-        id="wake-word"
-        label="Talk to Bee by saying 'Bee'"
-        description="When your mic hears “Bee…” first, the rest is a request to the AI, not the meeting. It can open apps and links, and use apps for you. Say “Bee, stop” to stop."
-        checked={settings.wakeWordEnabled}
-        onCheckedChange={(wakeWordEnabled) => void actions.saveSettings({ wakeWordEnabled })}
-      />
       <ClaudeCodeStatus state={state} />
-      <SettingRow
-        id="ask-before-sending"
-        label="Ask before sending or deleting"
-        description="Before the AI sends a message or email, deletes something, buys something, or submits a form, Bee asks you to confirm in the island. Ordinary clicks, such as opening apps, tabs and menus, do not ask."
-        checked={settings.askBeforeSendingEnabled}
-        onCheckedChange={(askBeforeSendingEnabled) => void actions.saveSettings({ askBeforeSendingEnabled })}
-      />
       <ComputerAccessSection access={state.computerAccess} />
-      <SettingRow
-        id="verbose-logging"
-        label="Verbose debug logs"
-        description="Keep a detailed log of each session on this computer, including what you ask the AI and its replies. Never uploaded. Off keeps warnings and errors only."
-        checked={settings.verboseLogging}
-        onCheckedChange={(verboseLogging) => void actions.saveSettings({ verboseLogging })}
-      />
-
       <div className="flex flex-col gap-1">
         Interface size
         <PillTabs

@@ -12,7 +12,7 @@ import { currentTeamsTitle, isTeamsMeetingRow, type WindowTitleReader, type Wind
 // calendar (when readable) adds attendees and agenda; saved meetings and connected tools add history. Everything is read on
 // this device. The brief is built once per meeting and handed to Luna on every turn.
 
-export type MeetingContextSettings = { enabled: boolean; calendar: boolean; memory: boolean };
+export type MeetingContextSettings = { enabled: boolean; calendar: boolean };
 
 export type MeetingContextDeps = {
   /** The existing in-call reading (Teams holds the mic, or shows a call window). Cheap and cached by its owner. */
@@ -43,7 +43,7 @@ type ActiveMeeting = {
   id: number;
   identity: MeetingIdentity | null;
   brief: MeetingBrief | null;
-  /** Notes from connected tools, kept so the brief can be rebuilt (memory cleared or switched off) without searching again. */
+  /** Notes from connected tools, kept so the brief can be rebuilt (memory cleared) without searching again. */
   notes: string[];
   ended: boolean;
 };
@@ -66,7 +66,7 @@ export type MeetingContext = {
   tick: () => Promise<MeetingContextView>;
   /** The brief for the meeting in progress, for Luna. Undefined with no meeting, no name, or the feature off. */
   brief: () => string | undefined;
-  /** Saves a finished meeting to local memory. False when off, or when the meeting has no name. */
+  /** Saves a finished meeting to local memory. False when meeting context is off, or when the meeting has no name. */
   remember: (args: { meetingId?: number; summaryMarkdown: string; usedLlm: boolean; tips: readonly string[] }) => boolean;
   /** Deletes all saved meetings. Returns how many. */
   clearMemory: () => number;
@@ -97,11 +97,8 @@ export function createMeetingContext(deps: MeetingContextDeps): MeetingContext {
   // Briefs by meeting key for this session: the same meeting again reuses its brief instead of searching again.
   const briefs = new Map<string, { brief: MeetingBrief; notes: string[] }>();
   let busy = false;
-  // The memory switch the briefs were built with. Switching it off rebuilds them without earlier meetings.
-  let briefMemory = deps.settings().memory;
-
-  /** Earlier meetings for a brief: none while meeting memory is off. */
-  const pastFor = (identity: MeetingIdentity) => (deps.settings().memory ? pastMeetings({ records: deps.memory.list(), identity }) : []);
+  /** Earlier meetings for a brief. */
+  const pastFor = (identity: MeetingIdentity) => pastMeetings({ records: deps.memory.list(), identity });
 
   /** Rebuilds the briefs of the current and recent meetings from memory as it is now, keeping their tool notes. */
   function rebuildBriefs(): void {
@@ -212,10 +209,6 @@ export function createMeetingContext(deps: MeetingContextDeps): MeetingContext {
       tracker = IDLE_TRACKER;
       return view(settings);
     }
-    if (settings.memory !== briefMemory) {
-      briefMemory = settings.memory;
-      rebuildBriefs();
-    }
     const now = clock();
     const detected = await deps.inCall().catch(() => false);
     await readTitles(now, detected || deps.pollTitlesWhenIdle === true || tracker.raw);
@@ -285,7 +278,7 @@ export function createMeetingContext(deps: MeetingContextDeps): MeetingContext {
     },
     remember({ meetingId, summaryMarkdown, usedLlm, tips }) {
       const settings = deps.settings();
-      if (!settings.enabled || !settings.memory) return false;
+      if (!settings.enabled) return false;
       const meeting = byId(meetingId);
       const identity = meeting?.identity;
       if (!meeting || !identity?.subject) return false;

@@ -136,10 +136,10 @@ With the mic on, start a phrase with **"Bee"** (or "Hey Bee") and the rest is a 
 - **Remembering on its own.** Bee saves lasting facts it learns (who owns what, your preferences) without being asked, and says so under the reply ("Remembered: …"). Review or clear them in Settings.
 - **Reading your screen.** Ask "Bee, can you see what I'm working on?", "what's on my screen?" or "summarise this page": Bee reads the window at the front (or the app you name) through its accessibility tree and answers from it. It only reads, never clicks or types, never reads Bee itself or the apps computer use avoids, and takes no picture. An app that exposes no text (a canvas) is one Bee says it cannot read. Windows and macOS only.
 - **Using apps for you.** For a task on screen, such as "Bee, open Discord, send Sam a message, then close the Discord tab in Chrome", the AI uses your apps step by step: it reads a window, clicks, types, presses keys, scrolls and closes tabs or apps, and checks each step. The pill shows the step ("Clicking Send…") and a **Stop** button; "Bee, stop" also stops it. It ends with one line, such as "Sent the message and closed the tab." It stops by itself after 3 minutes, or when it repeats the same step with the same result three times. It never reads or types into terminals (including one inside another app), script tools, system settings, password managers or Bee itself. It works only through the controls an app exposes to accessibility tools, never a picture of the screen. When an app shows none it can use (an app that draws its own controls, or one that never exposes them), Bee says it cannot control that app. Windows and macOS only.
-- **Ask before sending or deleting** (Settings, on by default). Before the AI sends a message or email, deletes something, buys something, or submits a form, the island asks you to **Confirm** or **Cancel**. Only a tap answers it, never speech. With it off, the AI goes ahead on its own.
+- **Ask before sending or deleting** (always on). Before the AI sends a message or email, deletes something, buys something, or submits a form, the island asks you to **Confirm** or **Cancel**. Only a tap answers it, never speech.
 - **Mac permissions.** Using apps needs Accessibility for Bee (System Settings → Privacy & Security → Accessibility). It never needs Screen Recording. Settings shows when Accessibility is missing, with a button for its pane. Windows needs no permission.
 - **What the AI sees.** While it uses an app, the AI gets the text of the windows Bee reads, never a picture. Bee does not log it.
-- Switch it off in **Settings → Talk to Bee by saying 'Bee'** (on by default).
+- Talking to Bee by name is always on.
 
 ### Speech-to-text
 
@@ -168,7 +168,7 @@ Bee keeps a detailed log of each session on your computer, so a session can be r
 - **Files.** JSON Lines, one event per line, one file per session (`bee-YYYY-MM-DD-HHmmss-<session>.jsonl`). A new file starts each day and when a file reaches 64 MB.
 - **Kept forever.** Bee never deletes, trims or overwrites a log file. Remove old files yourself if you need the space.
 - **Local only.** Logs are never uploaded. Keys, tokens and sign-in details are redacted before anything is written.
-- **Verbose debug logs** (Settings, on by default) logs everything: what Bee hears, what you ask the AI and its replies, and each step it takes on screen. Off keeps warnings and errors only.
+- **Detailed debug logs** (always on) log everything: what Bee hears, what you ask the AI and its replies, and each step it takes on screen.
 
 ## Teams mode
 

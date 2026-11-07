@@ -459,38 +459,36 @@ describe("settings overlayPosition", () => {
 });
 
 describe("settings meeting context", () => {
-  it("defaults all three switches to on", () => {
+  it("defaults both switches to on", () => {
     const store = create();
-    expect(store.view()).toMatchObject({ meetingContextEnabled: true, meetingCalendarEnabled: true, meetingMemoryEnabled: true });
-    expect(store.meetingContext()).toEqual({ enabled: true, calendar: true, memory: true });
+    expect(store.view()).toMatchObject({ meetingContextEnabled: true, meetingCalendarEnabled: true });
+    expect(store.meetingContext()).toEqual({ enabled: true, calendar: true });
   });
 
-  it("round-trips each switch through settings.json, leaving the others alone", () => {
+  it("round-trips each switch through settings.json, leaving the other alone", () => {
     const store = create();
     expect(store.save({ meetingCalendarEnabled: false }).meetingCalendarEnabled).toBe(false);
-    expect(store.view()).toMatchObject({ meetingContextEnabled: true, meetingMemoryEnabled: true });
-    store.save({ meetingMemoryEnabled: false });
+    expect(store.view()).toMatchObject({ meetingContextEnabled: true });
     store.save({ meetingContextEnabled: false });
     expect(JSON.parse(readFileSync(join(dir, "settings.json"), "utf8"))).toMatchObject({
       meetingContextEnabled: false,
       meetingCalendarEnabled: false,
-      meetingMemoryEnabled: false,
     });
-    expect(create().meetingContext()).toEqual({ enabled: false, calendar: false, memory: false });
-    store.save({ meetingContextEnabled: true, meetingCalendarEnabled: true, meetingMemoryEnabled: true });
-    expect(create().meetingContext()).toEqual({ enabled: true, calendar: true, memory: true });
+    expect(create().meetingContext()).toEqual({ enabled: false, calendar: false });
+    store.save({ meetingContextEnabled: true, meetingCalendarEnabled: true });
+    expect(create().meetingContext()).toEqual({ enabled: true, calendar: true });
   });
 
   it("keeps the switches when an unrelated setting is saved", () => {
     const store = create();
-    store.save({ meetingMemoryEnabled: false });
+    store.save({ meetingCalendarEnabled: false });
     store.save({ meetingMode: true });
-    expect(store.meetingContext().memory).toBe(false);
+    expect(store.meetingContext().calendar).toBe(false);
   });
 
   it("reads a bad stored value as on", () => {
     writeFileSync(join(dir, "settings.json"), JSON.stringify({ meetingContextEnabled: "no", meetingCalendarEnabled: 0 }));
-    expect(create().meetingContext()).toEqual({ enabled: true, calendar: true, memory: true });
+    expect(create().meetingContext()).toEqual({ enabled: true, calendar: true });
   });
 
   it("rejects a non-boolean update at the IPC schema", async () => {
@@ -541,141 +539,9 @@ describe("settings Teams audio fallback", () => {
   });
 });
 
-describe("settings mic hints", () => {
-  it("is on by default and in the view", () => {
-    expect(create().view().hintsEnabled).toBe(true);
-  });
-
-  it("round-trips through settings.json and survives unrelated saves", () => {
-    const store = create();
-    expect(store.save({ hintsEnabled: false }).hintsEnabled).toBe(false);
-    expect(JSON.parse(readFileSync(join(dir, "settings.json"), "utf8")).hintsEnabled).toBe(false);
-    store.save({ meetingMode: true });
-    expect(create().view().hintsEnabled).toBe(false);
-    store.save({ hintsEnabled: true });
-    expect(create().view().hintsEnabled).toBe(true);
-  });
-
-  it("stays on for an older settings file without it, and reads a bad stored value as on", () => {
-    writeFileSync(join(dir, "settings.json"), JSON.stringify({ meetingMode: true }));
-    expect(create().view()).toMatchObject({ meetingMode: true, hintsEnabled: true });
-    writeFileSync(join(dir, "settings.json"), JSON.stringify({ hintsEnabled: "no" }));
-    expect(create().view().hintsEnabled).toBe(true);
-  });
-
-  it("rejects a non-boolean update at the IPC schema", async () => {
-    const { settingsUpdateSchema } = await import("../shared/ipc");
-    expect(() => settingsUpdateSchema.parse({ hintsEnabled: "off" })).toThrow();
-    expect(settingsUpdateSchema.parse({ hintsEnabled: false })).toEqual({ hintsEnabled: false });
-  });
-});
-
-describe("settings wake word", () => {
-  it("is on by default, in the view and for main", () => {
-    const store = create();
-    expect(store.view().wakeWordEnabled).toBe(true);
-    expect(store.wakeWord()).toBe(true);
-  });
-
-  it("round-trips through settings.json and survives unrelated saves", () => {
-    const store = create();
-    expect(store.save({ wakeWordEnabled: false }).wakeWordEnabled).toBe(false);
-    expect(JSON.parse(readFileSync(join(dir, "settings.json"), "utf8")).wakeWordEnabled).toBe(false);
-    store.save({ hintsEnabled: false });
-    expect(create().view().wakeWordEnabled).toBe(false);
-    expect(create().wakeWord()).toBe(false);
-    store.save({ wakeWordEnabled: true });
-    expect(create().view().wakeWordEnabled).toBe(true);
-  });
-
-  it("stays on for an older settings file without it, and reads a bad stored value as on", () => {
-    writeFileSync(join(dir, "settings.json"), JSON.stringify({ meetingMode: true }));
-    expect(create().view()).toMatchObject({ meetingMode: true, wakeWordEnabled: true });
-    writeFileSync(join(dir, "settings.json"), JSON.stringify({ wakeWordEnabled: "no" }));
-    expect(create().view().wakeWordEnabled).toBe(true);
-    writeFileSync(join(dir, "settings.json"), JSON.stringify({ wakeWordEnabled: null }));
-    expect(create().wakeWord()).toBe(true);
-  });
-
-  it("starts on from a missing or corrupt file", () => {
-    writeFileSync(join(dir, "settings.json"), "{not json");
-    expect(create().view().wakeWordEnabled).toBe(true);
-  });
-
-  it("rejects a non-boolean update at the IPC schema", async () => {
-    const { settingsUpdateSchema, settingsViewSchema } = await import("../shared/ipc");
-    expect(() => settingsUpdateSchema.parse({ wakeWordEnabled: "off" })).toThrow();
-    expect(settingsUpdateSchema.parse({ wakeWordEnabled: false })).toEqual({ wakeWordEnabled: false });
-    // The view always carries it, so the renderer never guesses.
-    expect(settingsViewSchema.parse(create().view()).wakeWordEnabled).toBe(true);
-  });
-});
-
-describe("settings ask before sending or deleting", () => {
-  it("is on by default, in the view and for main", () => {
-    const store = create();
-    expect(store.view().askBeforeSendingEnabled).toBe(true);
-    expect(store.askBeforeSending()).toBe(true);
-  });
-
-  it("round-trips through settings.json, survives unrelated saves, and applies to main at once", () => {
-    const store = create();
-    expect(store.save({ askBeforeSendingEnabled: false }).askBeforeSendingEnabled).toBe(false);
-    expect(JSON.parse(readFileSync(join(dir, "settings.json"), "utf8")).askBeforeSendingEnabled).toBe(false);
-    expect(store.askBeforeSending()).toBe(false);
-    store.save({ wakeWordEnabled: false });
-    expect(create().view().askBeforeSendingEnabled).toBe(false);
-    store.save({ askBeforeSendingEnabled: true });
-    expect(create().askBeforeSending()).toBe(true);
-  });
-
-  it("reads a missing, bad or corrupt value as on, the safe side", () => {
-    writeFileSync(join(dir, "settings.json"), JSON.stringify({ meetingMode: true }));
-    expect(create().view()).toMatchObject({ meetingMode: true, askBeforeSendingEnabled: true });
-    writeFileSync(join(dir, "settings.json"), JSON.stringify({ askBeforeSendingEnabled: "no" }));
-    expect(create().askBeforeSending()).toBe(true);
-    writeFileSync(join(dir, "settings.json"), JSON.stringify({ askBeforeSendingEnabled: 0 }));
-    expect(create().askBeforeSending()).toBe(true);
-    writeFileSync(join(dir, "settings.json"), "{not json");
-    expect(create().view().askBeforeSendingEnabled).toBe(true);
-  });
-
-  it("rejects a non-boolean update at the IPC schema, and the view always carries it", async () => {
-    const { settingsUpdateSchema, settingsViewSchema } = await import("../shared/ipc");
-    expect(() => settingsUpdateSchema.parse({ askBeforeSendingEnabled: "off" })).toThrow();
-    expect(settingsUpdateSchema.parse({ askBeforeSendingEnabled: false })).toEqual({ askBeforeSendingEnabled: false });
-    expect(settingsViewSchema.parse(create().view()).askBeforeSendingEnabled).toBe(true);
-  });
-});
-
-describe("settings verbose debug logs", () => {
-  it("is on by default, in the view and for main, and the view names the logs folder", () => {
-    const store = create();
-    expect(store.view().verboseLogging).toBe(true);
-    expect(store.verboseLogging()).toBe(true);
-    expect(store.view().logsDir).toBe(join(dir, "logs"));
-  });
-
-  it("round-trips through settings.json, survives unrelated saves, and applies to main at once", () => {
-    const store = create();
-    expect(store.save({ verboseLogging: false }).verboseLogging).toBe(false);
-    expect(JSON.parse(readFileSync(join(dir, "settings.json"), "utf8")).verboseLogging).toBe(false);
-    expect(store.verboseLogging()).toBe(false);
-    store.save({ hintsEnabled: false });
-    expect(create().view().verboseLogging).toBe(false);
-    store.save({ verboseLogging: true });
-    expect(create().verboseLogging()).toBe(true);
-  });
-
-  it("stays on for an older settings file without it, and reads a bad stored value as on", async () => {
-    writeFileSync(join(dir, "settings.json"), JSON.stringify({ meetingMode: true }));
-    expect(create().view()).toMatchObject({ meetingMode: true, verboseLogging: true });
-    writeFileSync(join(dir, "settings.json"), JSON.stringify({ verboseLogging: "no" }));
-    expect(create().verboseLogging()).toBe(true);
-    const { settingsUpdateSchema, settingsViewSchema } = await import("../shared/ipc");
-    expect(() => settingsUpdateSchema.parse({ verboseLogging: "off" })).toThrow();
-    expect(settingsUpdateSchema.parse({ verboseLogging: false })).toEqual({ verboseLogging: false });
-    expect(settingsViewSchema.parse(create().view())).toMatchObject({ verboseLogging: true, logsDir: join(dir, "logs") });
+describe("settings logs folder", () => {
+  it("is named in the view", () => {
+    expect(create().view().logsDir).toBe(join(dir, "logs"));
   });
 });
 

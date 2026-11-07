@@ -1,30 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { record } from "../../test/helpers/meeting-records";
-import { MEMORY_MAX_BYTES, MEMORY_MAX_RECORDS, addRecord, boundRecord, createMeetingMemoryStore, inMemoryFs, parseMemory, type MeetingRecord } from "./meeting-memory";
+import { addRecord, boundRecord, createMeetingMemoryStore, inMemoryFs, parseMemory, type MeetingRecord } from "./meeting-memory";
 
 describe("addRecord", () => {
-  it("keeps only the newest records past the count cap, dropping the oldest", () => {
+  it("keeps every meeting, oldest first, with no count or size cap", () => {
     let records: MeetingRecord[] = [];
-    for (let n = 1; n <= MEMORY_MAX_RECORDS + 5; n++) records = addRecord(records, record(n));
-    expect(records).toHaveLength(MEMORY_MAX_RECORDS);
-    expect(records[0]?.id).toBe("r6");
-    expect(records.at(-1)?.id).toBe(`r${MEMORY_MAX_RECORDS + 5}`);
-  });
-
-  it("drops the oldest until the size cap holds", () => {
-    const fat = (n: number) => record(n, { summary: "x".repeat(800), decisions: Array.from({ length: 10 }, () => "d".repeat(240)), actionItems: Array.from({ length: 10 }, () => "a".repeat(240)) });
-    let records: MeetingRecord[] = [];
-    for (let n = 1; n <= 30; n++) records = addRecord(records, fat(n), { maxBytes: 20_000 });
-    expect(new TextEncoder().encode(JSON.stringify({ version: 1, records })).length).toBeLessThanOrEqual(20_000);
-    expect(records.length).toBeLessThan(30);
-    expect(records.at(-1)?.id).toBe("r30");
-  });
-
-  it("holds the default size cap with the default field limits", () => {
-    let records: MeetingRecord[] = [];
-    for (let n = 1; n <= 100; n++) records = addRecord(records, record(n, { summary: "s".repeat(900), decisions: Array(12).fill("d".repeat(300)) }));
-    expect(new TextEncoder().encode(JSON.stringify({ version: 1, records })).length).toBeLessThanOrEqual(MEMORY_MAX_BYTES);
-    expect(records.length).toBeLessThanOrEqual(MEMORY_MAX_RECORDS);
+    for (let n = 1; n <= 500; n++) records = addRecord(records, record(n, { summary: "s".repeat(900) }));
+    expect(records).toHaveLength(500);
+    expect(records[0]?.id).toBe("r1");
+    expect(records.at(-1)?.id).toBe("r500");
   });
 
   it("replaces a record saved twice under one id", () => {
@@ -61,10 +45,14 @@ describe("createMeetingMemoryStore", () => {
     expect(store.clear()).toBe(0);
   });
 
-  it("applies the limits it was given", () => {
-    const store = createMeetingMemoryStore({ path: "m.json", fs: inMemoryFs(), limits: { maxRecords: 2 } });
-    for (let n = 1; n <= 4; n++) store.add(record(n));
-    expect(store.list().map((item) => item.id)).toEqual(["r3", "r4"]);
+  it("keeps the file's records in memory after the first read, and writes each change", () => {
+    const fs = inMemoryFs();
+    fs.write("m.json", JSON.stringify({ version: 1, records: [record(1)] }));
+    const store = createMeetingMemoryStore({ path: "m.json", fs });
+    expect(store.list().map((item) => item.id)).toEqual(["r1"]);
+    store.add(record(2));
+    expect(parseMemory(fs.read("m.json")).map((item) => item.id)).toEqual(["r1", "r2"]);
+    expect(store.list().map((item) => item.id)).toEqual(["r1", "r2"]);
   });
 });
 

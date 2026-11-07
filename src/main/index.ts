@@ -241,11 +241,10 @@ function createTray(notesDir: string, logsDir: string): void {
  * The local debug log (main/debug-log.ts): JSON Lines in <userData>/logs, beside the notes folder. It stays on this computer,
  * is never uploaded, and Bee never deletes its files. Core, main and (through IPC) the renderer all write to it.
  */
-function startDebugLog(logsDir: string, verbose: boolean): DebugLogWriter {
+function startDebugLog(logsDir: string): DebugLogWriter {
   const writer = createDebugLog({
     dir: logsDir,
     sessionId: randomUUID(),
-    verbose,
     header: () => ({ version: app.getVersion(), platform: process.platform, release: release(), arch: process.arch, electron: process.versions.electron }),
     // Called once until a write works again, so this warning cannot loop through the console tee.
     onError: (error) => console.warn("Bee: debug log write failed:", error),
@@ -328,8 +327,8 @@ if (clerk.isPrimaryInstance) {
       logsDir,
       envGatewayKey: process.env.BEE_AI_GATEWAY_API_KEY,
     });
-    const debug = startDebugLog(logsDir, settings.verboseLogging());
-    // Always written, verbose or not, so every session leaves one line saying what ran.
+    const debug = startDebugLog(logsDir);
+    // The first event of every session: one line saying what ran.
     debug.write({ level: "info", category: "app", event: "start", data: {
       version: app.getVersion(),
       packaged: app.isPackaged,
@@ -345,7 +344,6 @@ if (clerk.isPrimaryInstance) {
       userDataDir,
       notesDir,
       logsDir,
-      verbose: debug.verbose(),
       settings: settings.view(),
     } });
     registerDebugLogIpc({ writer: debug, logsDir });
@@ -422,8 +420,6 @@ if (clerk.isPrimaryInstance) {
       }
       settings.save(update);
       const view = settingsView();
-      // Applies at once. Always written, so a log that goes quiet says why.
-      debug.setVerbose(view.verboseLogging);
       debug.write({ level: "info", category: "settings", event: "changed", data: settingsChange(update, before, view) });
       // Switching the meeting window reader on checks access at once; switching it off stops it at once.
       void meetingWindow.read();
@@ -519,9 +515,8 @@ if (clerk.isPrimaryInstance) {
       claudeCode,
       briefings: briefings.get,
       desktop,
-      wakeWordEnabled: settings.wakeWord,
       computer: computerRunner
-        ? { platform: isMac ? "mac" : "windows", run: computerRunner.run, askFirst: settings.askBeforeSending, cleanup: computerRunner.cleanup }
+        ? { platform: isMac ? "mac" : "windows", run: computerRunner.run, cleanup: computerRunner.cleanup }
         : undefined,
     });
 
