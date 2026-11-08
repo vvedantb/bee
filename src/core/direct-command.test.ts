@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { pipelineResultSchema } from "../shared/ipc";
 import { assistantMessage, userMessage } from "./bee-history";
 import { MEMORY_RULES, inMemoryBeeMemory } from "./bee-memory";
-import { ACCESSIBILITY_LINE, type RunControl } from "./computer-control";
+import { ACCESSIBILITY_LINE, LINUX_A11Y_LINE, type RunControl } from "./computer-control";
 import type { DesktopActions } from "./desktop-actions";
 import { frontWindowLine, runDirectCommand, type ComputerHost } from "./direct-command";
 import { GUIDE_MODEL, type BeeGateway } from "./gateway";
@@ -367,6 +367,15 @@ describe("runDirectCommand: computer use", () => {
     const { computer, commands } = host({ accessibility: "denied" });
     const result = await run({ command: "send Sam a message in Discord", snippets, gateway, actions: fakeActions().actions, computer });
     expect(result.tips).toEqual([ACCESSIBILITY_LINE]);
+    expect(generateCalls()).toBe(0);
+    expect(commands).toEqual(["list-windows", "permissions"]);
+  });
+
+  it("on Linux without the accessibility bus, runs no loop and says to start Bee in the desktop session", async () => {
+    const { gateway, generateCalls } = bothModel({ turns: [{ tool: "snapshot", input: { app: "Discord" } }] });
+    const { computer, commands } = host({ accessibility: "denied" });
+    const result = await run({ command: "send Sam a message in Discord", snippets, gateway, actions: fakeActions().actions, computer: { ...computer, platform: "linux" } });
+    expect(result.tips).toEqual([LINUX_A11Y_LINE]);
     expect(generateCalls()).toBe(0);
     expect(commands).toEqual(["list-windows", "permissions"]);
   });
@@ -741,5 +750,80 @@ describe("runDirectCommand: OpenCode Browse", () => {
     await runDirectCommand({ command: "say hi", snippets, agent: Object.assign(agent, { browse: false }), gateway: null, actions: null });
     expect(requests[0]?.system).not.toContain(BROWSE_RULES);
     expect(requests[0]?.confirm).toBeUndefined();
+  });
+});
+
+describe("runDirectCommand: names where spelling wins (PR #80 e2e B and G)", () => {
+  const known = ["Chris Lee", "Krzysztof Nowak"];
+  const sara = ["Sara Kim", "Sarah Ode"];
+
+  it("asks which Kris, with no model call and no desktop action, when a name spells neither person", async () => {
+    const { gateway, calls } = stepsModel([]);
+    const { actions, calls: desktop } = fakeActions();
+    const result = await run({ command: "send Kris a message saying hi on Teams", snippets, gateway, actions, knownNames: known });
+    expect(result.tips).toEqual(["Which Kris: Chris Lee or Krzysztof Nowak?"]);
+    expect(calls).toEqual([]);
+    expect(desktop).toEqual([]);
+  });
+
+  it("asks for the missing app and words in the same question", async () => {
+    const { gateway, calls } = stepsModel([]);
+    const result = await run({ command: "message Kris", snippets, gateway, actions: fakeActions().actions, knownNames: known });
+    expect(result.tips[0]).toMatch(/^Which Kris \(Chris Lee or Krzysztof Nowak\), which app, and what should the message say\?$/);
+    expect(calls).toEqual([]);
+  });
+
+  it("asks which Sara when both Sara Kim and Sarah Ode are spelled like it", async () => {
+    const { gateway, calls } = stepsModel([]);
+    const result = await run({ command: "send Sara a message saying hi on Teams", snippets, gateway, actions: fakeActions().actions, knownNames: sara });
+    expect(result.tips).toEqual(["Which Sara: Sara Kim or Sarah Ode?"]);
+    expect(calls).toEqual([]);
+  });
+
+  it("never asks for Krzys or Chris: spelling settles it, and the AI is told who is meant", async () => {
+    for (const [name, person] of [["Krzys", "Krzysztof Nowak"], ["Chris", "Chris Lee"]] as const) {
+      const { gateway, calls } = stepsModel([text("Done.")]);
+      const result = await run({ command: `send ${name} a message saying hi on Teams`, snippets, gateway, actions: fakeActions().actions, knownNames: known });
+      expect(result.tips.join(" "), name).not.toMatch(/^Which /);
+      expect(calls, name).toHaveLength(1);
+      expect(calls[0]?.prompt, name).toContain(`\\"${name}\\" in this request means ${person}`);
+      expect(calls[0]?.prompt, name).not.toContain("never pick one yourself");
+    }
+  });
+
+  it("tells the computer-use loop who was meant, and does not ask", async () => {
+    const prompts: string[] = [];
+    const model = new MockLanguageModelV4({
+      doGenerate: async (options) => {
+        prompts.push(JSON.stringify(options.prompt));
+        return { content: [{ type: "text", text: "Done." }], finishReason: { unified: "stop", raw: undefined }, usage, warnings: [] };
+      },
+    });
+    const gateway = { languageModel: () => model } as unknown as BeeGateway;
+    const computer: ComputerHost = { platform: "linux", run: async (command) => (command === "permissions" ? { ok: true, data: { accessibility: { state: "granted" } } } : { ok: true, data: {} }), confirm: async () => true };
+    const result = await run({ command: "send Krzys a message saying hi in Discord", snippets, gateway, actions: fakeActions().actions, computer, knownNames: known });
+    expect(result.tips.join(" ")).not.toMatch(/^Which /);
+    expect(prompts.join("\n")).toContain('\\"Krzys\\" in this request means Krzysztof Nowak');
+  });
+
+  it("goes on, and says who, when the user's recent requests were about one of the people a name could be", async () => {
+    const { gateway, calls } = stepsModel([text("Done.")]);
+    const history: ModelMessage[] = [userMessage("find Sarah Ode's chat"), assistantMessage("Opened Sarah Ode's chat.")];
+    const result = await run({ command: "send Sara a message saying hi on Teams", snippets, gateway, actions: fakeActions().actions, knownNames: sara, history });
+    expect(result.tips.join(" ")).not.toMatch(/^Which /);
+    expect(calls[0]?.prompt).toContain("recent requests were about Sarah Ode");
+  });
+
+  it("does not take an app for a name", async () => {
+    const { gateway, calls } = stepsModel([text("Done.")]);
+    await run({ command: "open Chrome and find Krzys", snippets, gateway, actions: fakeActions().actions, knownNames: ["Chris Lee", "Krzysztof Nowak", "Chrissy Park"] });
+    expect(calls).toHaveLength(1);
+  });
+
+  it("learns the name the user corrects Bee to (\"I meant Krzysztof\"), as a spelling only", async () => {
+    const { gateway } = stepsModel([text("Done.")]);
+    const learned: string[][] = [];
+    await run({ command: "No, I meant Krzysztof.", snippets, gateway, actions: fakeActions().actions, knownNames: known, onLearnNames: (names) => learned.push(names) });
+    expect(learned.flat()).toContain("Krzysztof");
   });
 });

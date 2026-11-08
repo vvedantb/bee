@@ -37,3 +37,11 @@ describe("playbookBlock", () => {
     }
   });
 });
+
+describe("playbookBlock on Linux", () => {
+  it("gives Linux the ctrl keys, never cmd", () => {
+    const block = playbookBlock("open Slack", "linux");
+    expect(block).toMatch(/ctrl\+k/);
+    expect(block).not.toMatch(/cmd\+/);
+  });
+});

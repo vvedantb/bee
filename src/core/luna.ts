@@ -1,4 +1,5 @@
 import { isStepCount, streamText, type FinishReason, type LanguageModel, type LanguageModelUsage, type ModelMessage, type ProviderMetadata, type SystemModelMessage, type ToolSet } from "ai";
+import { guardMeetingTips } from "./meeting-claims";
 import { z } from "zod";
 import { TIP_SOURCE_MAX_CHARS, clampTip } from "../shared/ipc";
 import { withTimeout } from "./abort";
@@ -8,7 +9,7 @@ import { debugLog, errorData, modelName, msSince, onceText, stepData } from "./d
 import { ANTHROPIC_CACHE, guideProviderOptions } from "./gateway";
 import type { Snippet } from "./notes";
 import { MEMORY_RULES } from "./bee-memory";
-import { knownNamesBlock } from "./known-names";
+import { knownNamesBlock, type ResolvedName } from "./known-names";
 import { MAX_TIPS, tipCap, tipKey } from "./steering";
 import { lunaTools, sourcesFromGenerateResult, type BeeSource } from "./tools";
 import type { SearchLocation } from "./web-search";
@@ -115,7 +116,9 @@ export const LUNA_SYSTEM = [
   "Otherwise, suggest what to say or do next, using the notes when they help and citing them.",
   "Never invent facts, figures or dates about the user's own work that are not in the transcript or notes.",
   "If nothing useful can be said, reply with exactly NONE.",
-  "Bee can open apps and use the computer, but only for a request that starts with its name. Never say Bee cannot open apps or control the computer. If the newest line asks Bee to do something on the computer, give one tip: Say \"Bee\" first, for example \"Bee, open Teams\".",
+  "Bee can open apps and use the computer, but only for a request that starts with its name, and never in a tip turn. Never say Bee cannot open apps or control the computer.",
+  "Never claim in a tip that Bee opened, is opening, typed, sent, clicked or otherwise acted on the computer: nothing ran, so never write \"Opening Chrome now\" or \"as requested\".",
+  "If the newest line asks Bee to do something on the computer and already starts with \"Bee\", give one tip that it is a request for Bee: use Talk to Bee (typed), or say \"Bee\" and speak it. Never write \"say Bee first\" for it. If the line does not start with \"Bee\", give one tip: Say \"Bee\" first, for example \"Bee, open Teams\".",
   "Output only the tips. Start every tip with a fact about the world or words to say. Never write as yourself (\"I\", \"me\", \"my\") or about your own work: the request, these rules, which tips you keep or drop, the search or its results, the sources, or how you phrase, rewrite or copy anything. Put words for the user to say in quotes, for example: Say \"I can confirm by Friday.\"",
   `Put any plan or note to yourself on its own line starting with "${NOTE_PREFIX}"; Bee never shows it. Never put a plan in a tip.`,
   "Good tip lines (they show the format only: never reuse their facts):",
@@ -301,6 +304,8 @@ export function buildLunaPrompt(args: {
   lookAtScreen?: boolean;
   /** Names Bee should know (core/known-names.ts), for a direct request: in the context, so the AI spells them right. */
   knownNames?: readonly string[];
+  /** Names in the request Bee settled from the user's recent requests (core/known-names.ts recentChoice). */
+  resolvedNames?: readonly ResolvedName[];
   /**
    * For a direct request with the memory tools (core/bee-memory.ts): what Bee remembers, as a short summary for the context. Any
    * string, even empty, adds the memory rules to the system prompt.
@@ -323,7 +328,7 @@ export function buildLunaPrompt(args: {
   const mcp = lunaMcpSystem(args.connectedServers ?? [], args.unavailableServers ?? []);
   const command = args.command?.replace(/\s+/g, " ").trim();
   if (command) {
-    const names = knownNamesBlock(args.knownNames ?? []);
+    const names = knownNamesBlock(args.knownNames ?? [], command, args.resolvedNames);
     const remembered = args.memory?.trim() ?? "";
     return {
       system: [
@@ -1015,7 +1020,8 @@ export async function guideWithLuna(args: {
   const maxTips = tipCap(args.shown?.length ?? 0);
   // A new turn never shows the last answer again: a tip that repeats it is dropped (the prompt asks for no repeats).
   const repeats = new Set((args.shown?.length ? [] : (args.earlier ?? [])).map(tipKey));
-  const fresh = (tips: LunaTip[]) => tips.filter((tip) => !repeats.has(tipKey(tip.text)));
+  // Meeting tips run no computer tools, so a tip that says Bee acted on the computer is false (core/meeting-claims.ts).
+  const fresh = (tips: LunaTip[]) => guardMeetingTips(tips.filter((tip) => !repeats.has(tipKey(tip.text))), args.transcript);
   let firstTokenMs: number | null = null;
   let extra: ToolSet = { ...args.extraTools };
   let web = args.webSearch ?? true;
@@ -1207,6 +1213,7 @@ export async function answerCommand(args: {
   /** Folds the oldest messages into a summary when they near the window (core/bee-history.ts). */
   summarise?: Summarise;
   knownNames?: readonly string[];
+  resolvedNames?: readonly ResolvedName[];
   /** What Bee remembers (buildLunaPrompt memory), with the memory tools in desktopTools. */
   memory?: string;
   /** The window at the front (direct-command.ts frontWindowLine). */

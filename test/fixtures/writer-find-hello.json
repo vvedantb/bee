@@ -1,0 +1,63 @@
+{
+ "version": "2.6",
+ "ok": true,
+ "command": "find",
+ "data": {
+  "matches": [
+   {
+    "bounds": {
+     "height": 1159.0,
+     "width": 1920.0,
+     "x": 0.0,
+     "y": 0.0
+    },
+    "interactive": false,
+    "name": "Untitled 1 — LibreOffice Writer",
+    "path": [],
+    "ref_id": null,
+    "role": "window",
+    "states": [],
+    "value": null
+   },
+   {
+    "interactive": true,
+    "name": "Undo: Typing: “hello”",
+    "path": [
+     "window:Untitled 1 — LibreOffice Writer",
+     "group",
+     "group",
+     "group:Untitled 1 — LibreOffice Writer",
+     "menu",
+     "menu:Edit"
+    ],
+    "ref_id": "@s3kimx1rzl0tn:e3",
+    "role": "menuitem",
+    "states": [
+     "hidden"
+    ],
+    "value": null
+   },
+   {
+    "interactive": true,
+    "name": "Repeat: Typing: “hello”",
+    "path": [
+     "window:Untitled 1 — LibreOffice Writer",
+     "group",
+     "group",
+     "group:Untitled 1 — LibreOffice Writer",
+     "menu",
+     "menu:Edit"
+    ],
+    "ref_id": "@s3kimx1rzl0tn:e4",
+    "role": "menuitem",
+    "states": [
+     "hidden"
+    ],
+    "value": null
+   }
+  ],
+  "snapshot_id": "s3kimx1rzl0tn",
+  "total_matches": 8,
+  "truncated": false
+ }
+}

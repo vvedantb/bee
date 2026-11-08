@@ -1,9 +1,10 @@
+import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HEADED_FLAG, STDIN_FLAG, assertComputerUse, type AgentDesktopResult, type ComputerRun, type ComputerUseCommand } from "./agent-desktop-envelope";
 import { createRunControl, type ComputerPlatform, type RunControl } from "./computer-control";
 import { shellElement, type Element } from "./computer-gate";
 import {
-  ACT_MAX, CANNOT_CONTROL, COMPUTER_TOOL_NAMES, actionDone, CONFIRM_LABEL, STOPPED, computerTools, errorLine, findRole, formatDone, formatMatches, formatSnapshot, matchApp, offLimitsApp, shallowTree,
+  ACT_MAX, CANNOT_CONTROL, COMPUTER_TOOL_NAMES, actionDone, CONFIRM_LABEL, STOPPED, computerTools, errorLine, findRole, formatDone, formatMatches, formatSnapshot, matchApp, offLimitsApp, shallowTree, holdsText, undoTypingLabel, writerRecordedTyping,
   thinTree,
   type ConfirmRequest,
 } from "./computer-tools";
@@ -186,9 +187,15 @@ describe("computerTools: what runs", () => {
     } finally {
       setDebugSink(null);
     }
+    // type_text reads the field before (to replace what it holds) and after (to check it); the fake cannot say what it holds.
+    const GET = ["get", ["@s1abc:e1", "--property=value"], undefined];
     expect(calls.slice(1).map(({ command, args, stdin }) => [command, args, stdin])).toEqual([
+      GET,
       ["type", ["@s1abc:e1", STDIN_FLAG], "-5 is fine"],
+      GET,
+      GET,
       ["type", ["@s1abc:e1", HEADED_FLAG, STDIN_FLAG], "ok"],
+      GET,
       ["set-value", ["@s1abc:e1", STDIN_FLAG], "hunter2-secret"],
     ]);
     for (const { command, args } of calls.slice(1)) {
@@ -196,7 +203,7 @@ describe("computerTools: what runs", () => {
       expect(() => assertComputerUse(command, args)).not.toThrow();
     }
     const exec = events.filter((event) => event.event === "exec");
-    expect(exec).toHaveLength(4);
+    expect(exec).toHaveLength(8);
     expect(JSON.stringify(exec)).not.toMatch(/hunter2|-5 is fine/);
   });
 
@@ -322,6 +329,8 @@ describe("computerTools: what runs", () => {
     const order: string[] = [];
     const run: ComputerRun = async (command, args) => {
       if (command === "snapshot") return { ok: true, data: SNAPSHOT };
+      // A field read (type_text checks what the field holds) is not one of the steps under test.
+      if (command === "get") return { ok: true, data: {} };
       order.push(`start ${command}`);
       await new Promise((resolve) => setTimeout(resolve, command === "type" ? 20 : 0));
       order.push(`end ${command} ${args.at(-1)}`);
@@ -392,7 +401,7 @@ describe("computerTools: ask before sending or deleting", () => {
     await call("click", { ref: "@s1abc:e3", effect: "none" });
     expect(asked).toEqual([]);
     await call("press_key", { keys: "return", app: "Discord", effect: "none" });
-    expect(asked.map((request) => [request.kind, request.detail])).toEqual([["send", "Press Return in “Message @sam”"]]);
+    expect(asked.map((request) => [request.kind, request.detail])).toEqual([["send", "Press Return in “Message @sam” — “Running late”"]]);
     await call("click", { ref: "@s1abc:e3", effect: "delete" });
     expect(asked.map((request) => request.kind)).toEqual(["send", "delete"]);
   });
@@ -1142,7 +1151,7 @@ describe("computerTools: Teams on Windows (app names, focus for keys, ambiguous 
     // A send never runs again by itself: the AI acts on the new ref, through the gate.
     const send = String(await call("click", { ref: "@s7:e3", effect: "send" }));
     expect(send).toMatch(/^Error AMBIGUOUS_TARGET.*that element is now @s8:e3\. Use that ref\.$/);
-    expect(asked.map(({ detail }) => detail)).toEqual(["Click “Send” in ms-teams.exe"]);
+    expect(asked.map(({ detail }) => detail)).toEqual(["Click “Send” in ms-teams.exe — “Zuzanna”"]);
     expect(calls.filter(({ command }) => command === "click").map(({ args }) => args[0])).toEqual(["@s7:e3"]);
   });
 
@@ -1195,6 +1204,8 @@ describe("computerTools: act runs a short batch in one step", () => {
     expect(calls.slice(1).map(({ command, args }) => [command, ...args])).toEqual([
       ["click", "@s1abc:e1"],
       ["set-value", "@s1abc:e1", STDIN_FLAG],
+      // The send's Confirm waits for a read-back of the field (the text it shows).
+      ["get", "@s1abc:e1", "--property=value"],
       ["focus", "@s1abc:e1"],
       ["press", "return", "--app=Discord"],
     ]);
@@ -1247,7 +1258,8 @@ describe("computerTools: act runs a short batch in one step", () => {
     await call("snapshot", { app: "Discord" });
     const output = String(await call("act", { actions: [fill, send, { do: "click", ref: "@s1abc:e3", effect: "none" }] }));
     expect(asked.map((request) => request.kind)).toEqual(["send"]);
-    expect(calls.slice(1).map((item) => item.command)).toEqual(["set-value"]);
+    // The field is read back before the Confirm asks; a decline then stops everything.
+    expect(calls.slice(1).map((item) => item.command)).toEqual(["set-value", "get"]);
     expect(output).toContain(STOPPED);
     expect(control.reason()).toBe("declined");
     expect(await call("act", { actions: [fill] })).toBe(STOPPED);
@@ -1272,5 +1284,406 @@ describe("computerTools: act runs a short batch in one step", () => {
     expect(actionDone("Using ms-teams.exe for Teams. Done.")).toBe(true);
     expect(actionDone("Error ACTION_FAILED: it may still have happened.")).toBe(false);
     expect(actionDone("Bee could not focus that field, so pressed nothing.")).toBe(false);
+  });
+});
+
+describe("computerTools: replace, don't append (PR #80 e2e D: \"hi Krzys\" became \"hi Krzyshi\")", () => {
+  const FIELD = "@s1abc:e1";
+  const SEND = "@s1abc:e2";
+
+  // A text field the fake agent-desktop keeps state for: type adds to it, set-value and clear replace it. stubborn: the field
+  // ignores clear and set-value (an app that rewrites its own text), so only appending works.
+  function field(start: string, options: { stubborn?: boolean; failClear?: boolean; keysClear?: boolean; garble?: boolean } = {}) {
+    let value = start;
+    let selected = false;
+    const sent: string[] = [];
+    const log: Call[] = [];
+    const run: ComputerRun = async (command, args, runOptions) => {
+      log.push({ command, args, ...(runOptions?.stdin !== undefined ? { stdin: runOptions.stdin } : {}) });
+      if (command === "snapshot") return { ok: true, data: SNAPSHOT };
+      if (command === "get") return { ok: true, data: { value } };
+      if (command === "clear") {
+        if (options.failClear) return { ok: false, code: "ACTION_FAILED", message: "no clear" };
+        if (!options.stubborn) value = "";
+        return { ok: true, data: {} };
+      }
+      // Select all, then delete, in the focused field: what clears a web field that agent-desktop's clear cannot.
+      if (command === "press") {
+        if (/^(?:cmd|ctrl)\+a$/.test(args[0] ?? "")) selected = true;
+        else if (args[0] === "delete" && selected && options.keysClear) value = "";
+        return { ok: true, data: {} };
+      }
+      if (command === "type") {
+        value += (runOptions?.stdin ?? "") + (options.garble ? "!" : "");
+        return { ok: true, data: {} };
+      }
+      if (command === "set-value") {
+        if (options.stubborn) return { ok: false, code: "ACTION_FAILED", message: "read only" };
+        value = runOptions?.stdin ?? "";
+        return { ok: true, data: {} };
+      }
+      if (command === "click" && args[0] === SEND) sent.push(value);
+      return { ok: true, data: { disposition: { delivery: "delivered_verified" } } };
+    };
+    return { run, log, sent, value: () => value };
+  }
+
+  it("clears a field that holds other text before it types, reads it back, then shows the Confirm with the exact text", async () => {
+    const f = field("hi Krzys");
+    const { call, asked } = setup({ run: f.run });
+    await call("snapshot", { app: "Discord" });
+    const typed = String(await call("type_text", { ref: FIELD, text: "hi", effect: "none" }));
+    expect(typed).toMatch(/^Done/);
+    expect(typed).toContain("Read back: the field holds exactly that text.");
+    expect(f.value()).toBe("hi");
+    expect(f.log.slice(1).map((item) => item.command)).toEqual(["get", "clear", "get", "type", "get"]);
+
+    expect(String(await call("click", { ref: SEND, effect: "send" }))).toMatch(/^Done/);
+    expect(asked).toHaveLength(1);
+    expect(asked[0]?.detail).toBe("Click “Send” in Discord — “hi”");
+    // What was sent is the exact text, never the appended one.
+    expect(f.sent).toEqual(["hi"]);
+    expect(f.sent).not.toContain("hi Krzyshi");
+  });
+
+  it("does not clear a field that is empty, and appends only when asked to", async () => {
+    const empty = field("");
+    const first = setup({ run: empty.run });
+    await first.call("snapshot", { app: "Discord" });
+    await first.call("type_text", { ref: FIELD, text: "hello", effect: "none" });
+    expect(empty.log.some((item) => item.command === "clear")).toBe(false);
+    expect(empty.value()).toBe("hello");
+
+    const held = field("hi Krzys");
+    const second = setup({ run: held.run });
+    await second.call("snapshot", { app: "Discord" });
+    await second.call("type_text", { ref: FIELD, text: " there", effect: "none", append: true });
+    expect(held.value()).toBe("hi Krzys there");
+    expect(held.log.some((item) => item.command === "clear")).toBe(false);
+  });
+
+  it("clears with select all and delete when agent-desktop's clear fails, then types and reads back", async () => {
+    const f = field("hi Krzys", { failClear: true, keysClear: true });
+    const { call, asked } = setup({ run: f.run });
+    await call("snapshot", { app: "Discord" });
+    const typed = String(await call("type_text", { ref: FIELD, text: "hi", effect: "none" }));
+    expect(typed).toMatch(/^Done/);
+    expect(f.value()).toBe("hi");
+    expect(f.log.slice(1).map((item) => [item.command, item.args[0]])).toEqual([
+      ["get", FIELD], ["clear", FIELD], ["focus", FIELD], ["press", "cmd+a"], ["press", "delete"], ["get", FIELD], ["type", FIELD], ["get", FIELD],
+    ]);
+    expect(await call("click", { ref: SEND, effect: "send" })).toMatch(/^Done/);
+    expect(asked.map((request) => request.detail)).toEqual(["Click “Send” in Discord — “hi”"]);
+    expect(f.sent).toEqual(["hi"]);
+  });
+
+  it("says so and types nothing when the field cannot be cleared either way, and never sends", async () => {
+    const f = field("hi Krzys", { failClear: true });
+    const { call, asked } = setup({ run: f.run });
+    await call("snapshot", { app: "Discord" });
+    const typed = String(await call("type_text", { ref: FIELD, text: "hi", effect: "none" }));
+    expect(actionDone(typed)).toBe(false);
+    expect(typed).toContain("typed nothing");
+    expect(f.value()).toBe("hi Krzys");
+    expect(f.log.some((item) => item.command === "type")).toBe(false);
+    const sent = String(await call("click", { ref: SEND, effect: "send" }));
+    expect(sent).toMatch(/^Error: Bee could not make the field hold exactly/);
+    expect(asked).toEqual([]);
+    expect(f.sent).toEqual([]);
+  });
+
+  it("repairs text the app changed while it was typed, and reports a field that will not hold it", async () => {
+    // The app adds a character as it types: Bee sets the whole value, reads it back, and only then goes on.
+    const repaired = field("hi Krzys", { garble: true });
+    const first = setup({ run: repaired.run });
+    await first.call("snapshot", { app: "Discord" });
+    expect(String(await first.call("type_text", { ref: FIELD, text: "hi", effect: "none" }))).toMatch(/^Done.*Read back/);
+    expect(repaired.value()).toBe("hi");
+
+    // The field also refuses set-value and select-all (stubborn): the text cannot be made exact, so nothing is sent.
+    const stuck = field("", { stubborn: true, garble: true });
+    const second = setup({ run: stuck.run });
+    await second.call("snapshot", { app: "Discord" });
+    const typed = String(await second.call("type_text", { ref: FIELD, text: "hi", effect: "none" }));
+    expect(actionDone(typed)).toBe(false);
+    expect(typed).toMatch(/^Error: the field does not hold exactly the text typed/);
+    const sent = String(await second.call("click", { ref: SEND, effect: "send" }));
+    expect(sent).toMatch(/^Error: Bee could not make the field hold exactly/);
+    expect(sent).toContain("nothing was sent");
+    expect(second.asked).toEqual([]);
+    expect(stuck.sent).toEqual([]);
+    expect(stuck.log.some((item) => item.command === "click")).toBe(false);
+  });
+
+  it("checks a set_value text again before its send, repairs a field the app changed, and blocks the send when it cannot", async () => {
+    // The app rewrites the field after set_value ("hi Krzys" comes back): Bee sets it once more, reads it back, then asks.
+    let value = "";
+    let rewrites = 1;
+    const sent: string[] = [];
+    const run: ComputerRun = async (command, args, options) => {
+      if (command === "snapshot") return { ok: true, data: SNAPSHOT };
+      if (command === "get") return { ok: true, data: { value } };
+      if (command === "set-value") {
+        value = rewrites > 0 ? ((rewrites -= 1), "hi Krzys") : (options?.stdin ?? "");
+        return { ok: true, data: {} };
+      }
+      if (command === "click" && args[0] === SEND) sent.push(value);
+      return { ok: true, data: { disposition: { delivery: "delivered_verified" } } };
+    };
+    const { call, asked } = setup({ run });
+    await call("snapshot", { app: "Discord" });
+    expect(String(await call("set_value", { ref: FIELD, value: "hi", effect: "none" }))).toMatch(/^Done/);
+    expect(String(await call("click", { ref: SEND, effect: "send" }))).toMatch(/^Done/);
+    expect(asked.map((request) => request.detail)).toEqual(["Click “Send” in Discord — “hi”"]);
+    expect(sent).toEqual(["hi"]);
+
+    const stubborn = field("hi Krzys", { stubborn: true });
+    const blocked = setup({ run: stubborn.run });
+    await blocked.call("snapshot", { app: "Discord" });
+    await blocked.call("set_value", { ref: FIELD, value: "hi", effect: "none" });
+    expect(String(await blocked.call("click", { ref: SEND, effect: "send" }))).toMatch(/^Error: Bee could not make the field hold exactly/);
+    expect(blocked.asked).toEqual([]);
+    expect(stubborn.sent).toEqual([]);
+  });
+
+  it("goes on as before when the field cannot be read back (the check needs a value to compare)", async () => {
+    const run: ComputerRun = async (command) => (command === "snapshot" ? { ok: true, data: SNAPSHOT } : command === "get" ? { ok: false, code: "ACTION_FAILED" } : { ok: true, data: {} });
+    const { call, asked } = setup({ run });
+    await call("snapshot", { app: "Discord" });
+    await call("set_value", { ref: FIELD, value: "hi", effect: "none" });
+    expect(String(await call("click", { ref: SEND, effect: "send" }))).toMatch(/^Done/);
+    expect(asked).toHaveLength(1);
+  });
+
+  it("shows the message for a send only, not for a delete", async () => {
+    const f = field("");
+    const { call, asked } = setup({ run: f.run });
+    await call("snapshot", { app: "Discord" });
+    // The message is shown for a send only: a delete after a write shows no message and is never blocked by one.
+    await call("set_value", { ref: FIELD, value: "hi", effect: "none" });
+    await call("click", { ref: "@s1abc:e3", effect: "delete" });
+    expect(asked.map((request) => request.detail)).toEqual(["Click “Compose” in Discord"]);
+  });
+
+  it("tells the AI to replace, never append, in the system rules and the tool text", () => {
+    const { tools } = setup();
+    expect(String(tools.type_text.description)).toMatch(/replaces what the field holds \(never appends\)/);
+    expect(String(tools.set_value.description)).toMatch(/replacing what it held/);
+  });
+});
+
+const fixture = (name: string) => JSON.parse(readFileSync(new URL(`../../test/fixtures/${name}`, import.meta.url), "utf8")) as { data?: { matches: unknown[] }; tree?: unknown };
+
+describe("Writer Undo: Typing readback (real agent-desktop 2.6 shapes, soffice.bin)", () => {
+  const find = fixture("writer-find-hello.json");
+  const slim = fixture("writer-slim.json");
+  it("builds the label with curly quotes", () => {
+    expect(undoTypingLabel("hello")).toBe("Undo: Typing: “hello”");
+  });
+  it("finds Undo: Typing for the typed text in the real find and snapshot, and not Repeat, other text or a longer text", () => {
+    expect(writerRecordedTyping(find.data!.matches, "hello")).toBe(true);
+    expect(writerRecordedTyping([slim.tree], "hello")).toBe(true);
+    expect(writerRecordedTyping(find.data!.matches, "Hello")).toBe(true);
+    expect(writerRecordedTyping(find.data!.matches, "hell")).toBe(false);
+    expect(writerRecordedTyping(find.data!.matches, "hello world")).toBe(false);
+    expect(writerRecordedTyping(find.data!.matches, "")).toBe(false);
+    const repeat = [{ role: "menuitem", name: "Repeat: Typing: “hello”" }, { role: "button", name: "Undo: Typing: “hello”" }];
+    expect(writerRecordedTyping(repeat, "hello")).toBe(false);
+    expect(writerRecordedTyping([{ role: "menuitem", name: 'Undo: Typing: "hello"' }], "hello")).toBe(true);
+  });
+  it("cannot read the typed text from the real paragraph or document nodes", () => {
+    expect(holdsText([slim.tree], "hello")).toBe(false);
+  });
+  it("maps soffice, LibreOffice and LibreOffice Writer onto the only soffice.bin, and not onto other apps", () => {
+    const running = ["gnome-shell", "soffice.bin", "firefox"];
+    for (const ask of ["soffice", "LibreOffice", "LibreOffice Writer", "Writer", "soffice.bin"]) expect(matchApp(ask, running), ask).toBe("soffice.bin");
+    expect(matchApp("LibreOffice", ["firefox", "gnome-shell"])).toBeNull();
+    expect(matchApp("LibreOffice", ["soffice.bin", "soffice"])).toBeNull();
+    expect(matchApp("Firefox", running)).toBe("firefox");
+  });
+});
+
+describe("computerTools: typing into a document page with no editable field (LibreOffice Writer, PR #80 e2e H)", () => {
+  // Writer's page as AT-SPI showed it on the Linux test desktop: the window's own controls and a toolbar, no text field.
+  const WRITER = {
+    app: "soffice.bin",
+    window: { id: "w-310", title: "Untitled 1 - LibreOffice Writer" },
+    snapshot_id: "s9w",
+    complete: true,
+    tree: {
+      role: "frame",
+      name: "Untitled 1 - LibreOffice Writer",
+      children: [
+        { role: "button", name: "Close", ref_id: "@s9w:e1" },
+        { role: "toolbar", name: "Standard", ref_id: "@s9w:e2", children: [{ role: "button", name: "Save", ref_id: "@s9w:e3" }] },
+      ],
+    },
+  };
+
+  function writer(options: { undo?: boolean; page?: boolean; dialog?: boolean; viaSnapshot?: boolean } = {}) {
+    const calls: Call[] = [];
+    const pressed: string[] = [];
+    const focused: string[] = [];
+    const run: ComputerRun = async (command, args, runOptions) => {
+      // Every call passes Bee's own allowlist, as main/agent-desktop.ts checks before it spawns anything.
+      assertComputerUse(command, args);
+      calls.push({ command, args, ...(runOptions?.stdin !== undefined ? { stdin: runOptions.stdin } : {}) });
+      // Real box: the process is soffice.bin, and any other --app name is APP_NOT_FOUND.
+      const appArg = args.find((arg) => arg.startsWith("--app="));
+      if (appArg && appArg !== "--app=soffice.bin") return { ok: false, code: "APP_NOT_FOUND", message: `Application '${appArg.slice(6)}' not found`, retry: "safe" };
+      if (command === "list-apps") return { ok: true, data: { apps: [{ name: "gnome-shell", pid: 1 }, { name: "soffice.bin", pid: 2 }] } };
+      const marks: Record<string, string> = { space: " ", comma: ",", period: "." };
+      const typedText = pressed.map((key) => marks[key] ?? key.replace(/^shift\+/, "")).join("");
+      const holds = options.page === true && !options.dialog && typedText.length > 0;
+      const recorded = options.undo !== false && !options.dialog && typedText.length > 0;
+      const undoItem = { role: "menuitem", name: `Undo: Typing: “${typedText}”`, ref_id: "@s9x:e3", value: null };
+      if (command === "list-windows") {
+        const frame = { id: "w-310", app_name: "soffice.bin", title: WRITER.window.title, is_focused: !options.dialog };
+        return { ok: true, data: { windows: options.dialog ? [{ id: "w-311", app_name: "soffice.bin", title: "Document Recovery", is_focused: true }, frame] : [frame] } };
+      }
+      if (command === "snapshot" && options.viaSnapshot && recorded) return { ok: true, data: { ...WRITER, tree: { ...WRITER.tree, children: [{ role: "menu", name: "Edit", children: [undoItem] }] } } };
+      if (command === "snapshot" && options.viaSnapshot && holds) return { ok: true, data: { ...WRITER, tree: { ...WRITER.tree, children: [{ role: "document text", name: "", children: [{ role: "paragraph", name: typedText }] }] } } };
+      if (command === "snapshot") return { ok: true, data: WRITER };
+      if (command === "find" && args.some((arg) => arg.startsWith("--text="))) return { ok: true, data: { matches: recorded && !options.viaSnapshot ? [undoItem, { ...undoItem, name: `Repeat: Typing: “${typedText}”` }] : [] } };
+      // The real paragraph: no name, null value, no ref.
+      if (command === "find" && args.includes("--role=paragraph")) return { ok: true, data: { matches: [{ role: "paragraph", name: "", value: null, ref_id: null }] } };
+      if (command === "find" && args.includes("--role=document")) return { ok: true, data: { matches: [] } };
+      if (command === "find" && args.includes("--role=textfield")) return { ok: true, data: { matches: [], roles_present: ["frame", "button", "toolbar"] } };
+      if (command === "press") {
+        pressed.push(args[0] ?? "");
+        return { ok: true, data: { disposition: { delivery: "delivered_verified" } } };
+      }
+      return { ok: true, data: {} };
+    };
+    const tools = computerTools({
+      run,
+      desktop: { ...desktop, focusWindow: async ({ app }) => (focused.push(app), { ok: true, message: `Focused ${app}` }) },
+      control: createRunControl(),
+      platform: "linux",
+      confirm: async () => true,
+    });
+    const call = (name: keyof typeof tools, input: unknown) => (tools[name].execute as (input: unknown, options: unknown) => Promise<string>)(input, { toolCallId: `t-${String(name)}`, messages: [] });
+    return { tools, call, calls, pressed, focused };
+  }
+
+  const turnOf = (typed: string) => [
+    { role: "assistant" as const, content: [{ type: "tool-call" as const, toolCallId: "t1", toolName: "type_text", input: { app: "soffice", text: "hello", effect: "none" } }] },
+    { role: "tool" as const, content: [{ type: "tool-result" as const, toolCallId: "t1", toolName: "type_text", output: { type: "text" as const, value: typed } }] },
+  ];
+
+  it("types hello with the keyboard into soffice.bin, checks the Edit menu's Undo: Typing item, and never says Bee cannot control it", async () => {
+    const { call, calls, pressed, focused } = writer();
+    const read = await call("snapshot", { app: "soffice" });
+    expect(read).not.toMatch(/^\s*(?:textfield|textarea|text field|document text)\b/m);
+    // The thin read points at the keyboard, not only at stopping.
+    expect(read).toContain("call type_text with app and no ref");
+    expect(await call("find", { app: "soffice", role: "textfield" })).toMatch(/No matches/);
+
+    const typed = await call("type_text", { app: "soffice", text: "hello", effect: "none" });
+    expect(actionDone(typed)).toBe(true);
+    expect(typed).toMatch(/^(?:Using soffice\.bin for soffice\. )?Done: typed 5 characters into soffice\.bin with the keyboard\./);
+    expect(typed).toContain("Edit menu shows Undo Typing for that text");
+    expect(calls.some((item) => item.command === "find" && item.args.includes("--text=hello") && item.args.includes("--app=soffice.bin"))).toBe(true);
+    expect(typed).not.toMatch(/cannot control|isn['’]t exposed|not exposed/i);
+    expect(focused).toEqual(["soffice"]);
+    expect(pressed).toEqual(["h", "e", "l", "l", "o"]);
+    // One headed press per character, into the app: never agent-desktop's type, which needs a ref.
+    expect(calls.filter((item) => item.command === "press").map((item) => item.args)).toEqual(["h", "e", "l", "l", "o"].map((key) => [key, "--app=soffice.bin", HEADED_FLAG]));
+    expect(calls.some((item) => item.command === "type")).toBe(false);
+  });
+
+  it("reads Undo: Typing from a compact snapshot when find --text shows nothing", async () => {
+    const { call, calls } = writer({ viaSnapshot: true });
+    const typed = await call("type_text", { app: "soffice", text: "hello", effect: "none" });
+    expect(typed).toMatch(/^(?:Using soffice\.bin for soffice\. )?Done: typed 5 characters/);
+    expect(typed).toContain("Edit menu shows Undo Typing");
+    expect(calls.some((item) => item.command === "snapshot" && item.args.includes("--compact"))).toBe(true);
+  });
+
+  it("comes back Done with honest wording when every key went through but no Undo item and no page text can be read, and the claim guard keeps a typed claim", async () => {
+    const { runEvidence, guardLine } = await import("./claim-guard");
+    const { call, pressed } = writer({ undo: false });
+    const typed = (await call("type_text", { app: "soffice", text: "hello", effect: "none" })) as string;
+    expect(pressed).toEqual(["h", "e", "l", "l", "o"]);
+    expect(actionDone(typed)).toBe(true);
+    expect(typed).toMatch(/^(?:Using soffice\.bin for soffice\. )?Done: typed 5 characters into soffice\.bin with the keyboard\./);
+    expect(typed).toContain("Bee cannot read the page back to check");
+    expect(typed).not.toMatch(/^Error|Checked:|holds that text/);
+    expect(guardLine("Typed hello in LibreOffice Writer.", runEvidence(turnOf(typed)))).toMatchObject({ rewritten: false });
+  });
+
+  it("keeps the claim guard standing after an Undo-confirmed type", async () => {
+    const { runEvidence, guardLine } = await import("./claim-guard");
+    const { call } = writer();
+    const typed = (await call("type_text", { app: "soffice", text: "hello", effect: "none" })) as string;
+    expect(runEvidence(turnOf(typed)).typed).toEqual(["hello"]);
+    expect(guardLine("Typed hello in LibreOffice Writer.", runEvidence(turnOf(typed)))).toMatchObject({ rewritten: false });
+  });
+
+  it("presses no key when a Document Recovery dialog is focused, and says the dialog blocks typing", async () => {
+    const { runEvidence, guardLine } = await import("./claim-guard");
+    const { call, pressed } = writer({ dialog: true });
+    const typed = await call("type_text", { app: "soffice", text: "hello", effect: "none" });
+    expect(pressed).toEqual([]);
+    expect(actionDone(typed)).toBe(false);
+    expect(typed).toMatch(/^Error: a Document Recovery dialog is open and blocks typing/);
+    expect(typed).not.toMatch(/Bee typed|Done/);
+    const turn = [
+      { role: "assistant" as const, content: [{ type: "tool-call" as const, toolCallId: "t1", toolName: "type_text", input: { app: "soffice", text: "hello", effect: "none" } }] },
+      { role: "tool" as const, content: [{ type: "tool-result" as const, toolCallId: "t1", toolName: "type_text", output: { type: "text" as const, value: typed } }] },
+    ];
+    expect(guardLine("Typed hello in LibreOffice Writer.", runEvidence(turn))).toMatchObject({ rewritten: true, reason: "unproven-typing" });
+  });
+
+  it("presses shift for capitals and names the marks it can type, and checks every character before pressing any", async () => {
+    const { call, pressed } = writer();
+    expect(await call("type_text", { app: "soffice", text: "Hi, Bee.", effect: "none" })).toMatch(/^(?:Using soffice\.bin for soffice\. )?Done: typed 8 characters/);
+    expect(pressed).toEqual(["shift+h", "i", "comma", "space", "shift+b", "e", "e", "period"]);
+
+    const refused = writer();
+    expect(await refused.call("type_text", { app: "soffice", text: "hi?", effect: "none" })).toMatch(/^Error: the keyboard can type only letters/);
+    expect(await refused.call("type_text", { app: "soffice", text: "line one\nline two", effect: "none" })).toMatch(/^Error: /);
+    expect(await refused.call("type_text", { app: "soffice", text: "x".repeat(201), effect: "none" })).toMatch(/^Error: the keyboard types at most 200/);
+    expect(refused.pressed).toEqual([]);
+  });
+
+  it("says how much was typed when a key fails, and never comes back Done", async () => {
+    let presses = 0;
+    const run: ComputerRun = async (command) => {
+      if (command !== "press") return { ok: true, data: {} };
+      presses += 1;
+      return presses <= 2 ? { ok: true, data: {} } : { ok: false, code: "ACTION_FAILED", message: "keyboard focus not proven" };
+    };
+    const { call } = setup({ run, platform: "linux" });
+    const output = (await call("type_text", { app: "soffice", text: "hello", effect: "none" })) as string;
+    expect(actionDone(output)).toBe(false);
+    expect(output).toContain("Bee typed 2 of 5 characters with the keyboard before it stopped.");
+    expect(presses).toBe(3);
+  });
+
+  it("keeps the plain cannot-control note for a thin app that is no document, and needs a ref or an app", async () => {
+    const run: ComputerRun = async (command) => (command === "snapshot" ? { ok: true, data: { app: "Teams", window: { id: "w-1", title: "Teams" }, snapshot_id: "s5t", complete: true, tree: { role: "window", name: "Teams" } } } : { ok: true, data: {} });
+    const { call, tools } = setup({ run });
+    const read = String(await call("snapshot", { app: "Teams" }));
+    expect(read).toContain(CANNOT_CONTROL);
+    expect(read).not.toContain("call type_text with app and no ref");
+    type Schema = { safeParse: (value: unknown) => { success: boolean } };
+    const typeText = tools.type_text.inputSchema as unknown as Schema;
+    expect(typeText.safeParse({ app: "soffice", text: "hello", effect: "none" }).success).toBe(true);
+    expect(typeText.safeParse({ text: "hello", effect: "none" }).success).toBe(false);
+  });
+
+  it("feeds the claim guard: a typed claim stands after the keyboard typed it, and not after it failed", async () => {
+    const { runEvidence, guardLine } = await import("./claim-guard");
+    const { call } = writer();
+    const output = await call("type_text", { app: "soffice", text: "hello", effect: "none" });
+    const turn = (result: string) => [
+      { role: "assistant" as const, content: [{ type: "tool-call" as const, toolCallId: "t1", toolName: "type_text", input: { app: "soffice", text: "hello", effect: "none" } }] },
+      { role: "tool" as const, content: [{ type: "tool-result" as const, toolCallId: "t1", toolName: "type_text", output: { type: "text" as const, value: result } }] },
+    ];
+    expect(runEvidence(turn(output)).typed).toEqual(["hello"]);
+    expect(guardLine("Typed hello in LibreOffice Writer.", runEvidence(turn(output)))).toMatchObject({ rewritten: false });
+    const failed = "Error: keyboard focus not proven. Bee typed 2 of 5 characters with the keyboard before it stopped. Look before you type again.";
+    expect(guardLine("Typed hello in LibreOffice Writer.", runEvidence(turn(failed)))).toMatchObject({ rewritten: true, reason: "unproven-typing" });
   });
 });

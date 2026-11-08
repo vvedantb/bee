@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ACCESS_NEEDS_ACCESSIBILITY, ACCESS_NEEDS_SCREEN_RECORDING, ACCESS_UNSUPPORTED, computerAccessMessage, screenRecordingMessage } from "./computer-access";
+import { ACCESS_LINUX_NO_BUS, ACCESS_NEEDS_ACCESSIBILITY, ACCESS_NEEDS_SCREEN_RECORDING, ACCESS_UNSUPPORTED, computerAccessMessage, screenRecordingMessage } from "./computer-access";
 
 describe("computerAccessMessage", () => {
   const mac = { supported: true, platform: "mac", accessibility: "granted", screenRecording: "granted" } as const;
@@ -15,6 +15,15 @@ describe("computerAccessMessage", () => {
     expect(computerAccessMessage({ ...mac, accessibility: "unknown", screenRecording: "unknown" })).toBeNull();
     expect(computerAccessMessage({ supported: true, platform: "windows", accessibility: "not_required", screenRecording: "not_required" })).toBeNull();
     expect(computerAccessMessage(null)).toBeNull();
+  });
+
+  it("names the AT-SPI bus on Linux, not macOS Accessibility settings", () => {
+    const linux = { supported: true, platform: "linux", accessibility: "denied", screenRecording: "not_required" } as const;
+    expect(computerAccessMessage(linux)).toBe(ACCESS_LINUX_NO_BUS);
+    expect(ACCESS_LINUX_NO_BUS).toMatch(/AT-SPI/);
+    expect(computerAccessMessage({ ...linux, accessibility: "granted" })).toBeNull();
+    expect(computerAccessMessage({ ...linux, supported: false })).toBe(ACCESS_UNSUPPORTED);
+    expect(ACCESS_UNSUPPORTED).not.toMatch(/Windows and Mac only/);
   });
 
   it("says where computer use works", () => {

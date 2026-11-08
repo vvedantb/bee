@@ -9,8 +9,8 @@ export type AppPlaybook = {
   app: string;
   /** Words in a request that mean this app. Matched as whole words, any case. */
   names: readonly string[];
-  /** One or two short lines per OS. */
-  hints: Record<ComputerPlatform, string>;
+  /** One or two short lines per OS. Linux uses the Windows keys (ctrl). */
+  hints: Record<"mac" | "windows", string>;
 };
 
 export const APP_PLAYBOOKS: readonly AppPlaybook[] = [
@@ -82,5 +82,5 @@ export function playbooksFor(text: string): AppPlaybook[] {
 export function playbookBlock(text: string, platform: ComputerPlatform): string {
   const books = playbooksFor(text);
   if (books.length === 0) return "";
-  return ["Quick ways in for the apps in this request (hints; when the screen shows otherwise, follow the screen):", ...books.map((book) => `- ${book.app}: ${book.hints[platform]}`)].join("\n");
+  return ["Quick ways in for the apps in this request (hints; when the screen shows otherwise, follow the screen):", ...books.map((book) => `- ${book.app}: ${book.hints[platform === "mac" ? "mac" : "windows"]}`)].join("\n");
 }

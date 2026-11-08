@@ -13,9 +13,10 @@ import type { CommandAgent } from "./claude-agent";
 import { CLAUDE_CODE_MISSING } from "./claude-code";
 import { GUIDE_MODEL, JEV_MODEL, type BeeGateway } from "./gateway";
 import type { McpTools } from "./mcp";
-import { routeCommand, type DesktopActionResult, type DesktopActions } from "./desktop-actions";
+import { isKnownApp, routeCommand, type DesktopActionResult, type DesktopActions } from "./desktop-actions";
 import { desktopTools } from "./desktop-tools";
-import { screenNames, spelledName } from "./known-names";
+import { clarifyingQuestion } from "./clarify";
+import { correctedName, nameAmbiguities, recentChoice, screenNames, spelledName, type ResolvedName } from "./known-names";
 import { answerCommand, noteCitation, type LunaToolActivity, type TipFields } from "./luna";
 import type { Snippet } from "./notes";
 import { loadMcp } from "./pipeline";
@@ -50,6 +51,41 @@ const MCP_ERRORS_MAX = 20;
 const MCP_ERROR_CHARS = 300;
 // Streamed lines over IPC (shared/ipc.ts lunaPartialSchema).
 const PARTIAL_MAX = 5;
+
+// A request that does something to or for a person: sending, messaging, calling, inviting, deleting, or finding or opening their
+// chat ("open chris's chat", "find krzys"). A name in it must be the right person. Any case: speech-to-text may write "send chris".
+// An app ("open Chrome") never asks: runDirectCommand skips known app words.
+const REACHES_PERSON =
+  /\b(?:send|message|dm|text|e-?mail|mail|reply|respond|post|tell|ping|call|ring|phone|invite|share|forward|delete|remove|add|open|find|show|search|look\s+up|chat|talk|with|to|cc)\b|['’]s\s+(?:chat|dm|messages?|thread|conversation|inbox)\b/i;
+// How many of the user's latest requests count as recent, for a person they meant (core/known-names.ts recentChoice).
+const RECENT_TURNS = 3;
+
+/**
+ * Text from the user's last RECENT_TURNS requests, oldest first: their words, the AI's text and its tool inputs (a name typed in a
+ * search box). Never tool results: a contact list or a chat list names everyone.
+ */
+export function recentTexts(history: readonly ModelMessage[], turns = RECENT_TURNS): string[] {
+  let start = history.length;
+  let users = 0;
+  for (let index = history.length - 1; index >= 0 && users < turns; index -= 1) {
+    if (history[index]?.role !== "user") continue;
+    users += 1;
+    start = index;
+  }
+  const texts: string[] = [];
+  for (const message of history.slice(start)) {
+    if (message.role !== "user" && message.role !== "assistant") continue;
+    if (typeof message.content === "string") {
+      texts.push(message.content);
+      continue;
+    }
+    for (const part of message.content) {
+      if (part.type === "text") texts.push(part.text);
+      else if (part.type === "tool-call") texts.push(JSON.stringify(part.input));
+    }
+  }
+  return texts;
+}
 
 const FAST_TOOL = { "open-app": "open_app", "focus-app": "focus_window", "open-url": "open_url" } as const;
 // The computer tools a direct answer may use to read windows ("what am I working on?"): they look, and never act.
@@ -118,6 +154,8 @@ async function runComputerCommand(args: {
   onActivity?: (activity: LunaToolActivity) => void;
   summarise?: Summarise;
   knownNames?: readonly string[];
+  /** Names in the request Bee settled from the user's recent requests (core/known-names.ts recentChoice). */
+  resolvedNames?: readonly ResolvedName[];
   /** The run's messages for Bee's history (core/bee-history.ts), without the request. */
   onMessages?: (messages: ModelMessage[]) => void;
   /** Bee's memory: its summary goes with the request, and the AI may read and change it. */
@@ -140,7 +178,7 @@ async function runComputerCommand(args: {
   host.onStep?.("Starting…");
   try {
     debugLog.info("computer", "run-start", { platform: host.platform, maxSteps: maxSteps ?? null, maxMs: host.maxMs ?? null, command: args.command });
-    if (host.platform === "mac") {
+    if (host.platform === "mac" || host.platform === "linux") {
       const access = await computerAccess(host.run, control.signal);
       debugLog.info("computer", "access", access);
       if (control.reason()) {
@@ -179,6 +217,7 @@ async function runComputerCommand(args: {
       history: args.history,
       summarise: args.summarise,
       ...(args.knownNames?.length ? { knownNames: args.knownNames } : {}),
+      ...(args.resolvedNames?.length ? { resolvedNames: args.resolvedNames } : {}),
       ...(remembered ? { memory: remembered } : {}),
       tools,
       control,
@@ -323,8 +362,10 @@ export async function runDirectCommand(args: {
     const turn = cleanForHistory([userMessage(command), ...messages]);
     args.onTurn?.(turn);
     if (!agentUsed) sessionAgent?.note?.(turn);
-    // Names to keep: a spelling the user just gave, and chat names in the tool results and the AI's reply.
-    const learned = [...(spelledName(command) ? [spelledName(command) as string] : []), ...screenNames(JSON.stringify(turn.slice(1)).replace(/\\"/g, '"'))];
+    // Names to keep: a spelling or a correction the user just gave ("I meant Krzysztof"), and chat names in the tool results and
+    // the AI's reply. A correction teaches the spelling only: Bee never stores that one name means another.
+    const said = [spelledName(command), correctedName(command)].filter((name): name is string => name !== null);
+    const learned = [...said, ...screenNames(JSON.stringify(turn.slice(1)).replace(/\\"/g, '"'))];
     if (learned.length > 0) {
       debugLog.info("ai", "names-learned", { names: learned });
       args.onLearnNames?.(learned);
@@ -360,6 +401,29 @@ export async function runDirectCommand(args: {
     return { notes: [], rankSource: "fallback", rankError: null, tips: [result.message], tipSources: [null], sources: [], guideError: null, actions: [result.message], timingsMs: timings() };
   }
 
+  // A message, a send, a call or a chat for a name that could be more than one person the user has taught Bee ("Kris": Chris Lee
+  // or Krzysztof Nowak) asks which one first, before any AI call or action: never a silent pick. The answer is a follow-up. When
+  // the user's last few requests were about one of them, that one is meant, and the AI is told so (nothing is stored).
+  // A name spelled like one known person never gets here ("Krzys": Krzysztof Nowak; "Chris": Chris Lee): nameMatches drops
+  // sound-alike rivals of a spelling match. Only a genuine tie ("Kris", "Sara") goes to recent text, then to a question.
+  const ambiguous = nameAmbiguities(command, args.knownNames ?? []).filter((item) => !isKnownApp(item.heard));
+  const recent = ambiguous.length > 0 ? recentTexts(history) : [];
+  const resolvedNames: ResolvedName[] = ambiguous.flatMap((item) => {
+    const name = recentChoice(item, recent);
+    return name ? [{ heard: item.heard, name }] : [];
+  });
+  if (resolvedNames.length > 0) debugLog.info("ai", "name-recent", { command, resolved: resolvedNames });
+  const unclear = REACHES_PERSON.test(command) ? ambiguous.find((item) => !resolvedNames.some((done) => done.heard === item.heard)) : undefined;
+  if (unclear) {
+    // One question for everything missing (which person, which app, what to say), so the answer needs no second question.
+    const context = [...recent, ...(args.memory?.facts().map((fact) => fact.text) ?? [])];
+    const question = clarifyingQuestion({ command, ambiguity: unclear, context });
+    debugLog.info("ai", "name-ambiguous", { command, heard: unclear.heard, matches: unclear.matches, question });
+    record([assistantMessage(question)]);
+    return lineResult(question);
+  }
+  const names = resolvedNames.length > 0 ? { resolvedNames } : {};
+
   // A task on screen goes straight to the loop: it needs no notes, connectors or web search.
   const computer = args.computer && args.actions && agent ? { host: args.computer, actions: args.actions, agent } : null;
   const memory = args.memory ?? null;
@@ -372,7 +436,7 @@ export async function runDirectCommand(args: {
   const screenRead = computer ? frontWindowLine(computer.host.run) : Promise.resolve(null);
   const loop = async (fast = false) => {
     if (!computer) throw new Error("no computer use");
-    const result = await runComputerCommand({ ...computer, command, transcript: args.transcript, history, signal: args.signal, onActivity: args.onActivity, summarise, knownNames: args.knownNames, onMessages: record, memory, onMemory, screen: await screenRead, fast, browseConfirmed });
+    const result = await runComputerCommand({ ...computer, command, transcript: args.transcript, history, signal: args.signal, onActivity: args.onActivity, summarise, knownNames: args.knownNames, ...names, onMessages: record, memory, onMemory, screen: await screenRead, fast, browseConfirmed });
     return memoryNote && !result.guideNote ? { ...result, guideNote: memoryNote } : result;
   };
   if (computer && (await wantsLoop(command, gateway, args.signal))) {
@@ -474,6 +538,7 @@ export async function runDirectCommand(args: {
     historyMessages: history,
     summarise,
     knownNames: args.knownNames,
+    ...names,
     ...(memory ? { memory: memorySummary(memory.facts()) } : {}),
     onActivity: args.onActivity,
     onPartial: (partial) => {

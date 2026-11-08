@@ -24,7 +24,8 @@
     "test:replay": "electron-vite build && BEE_E2E_MODE=replay vitest run --config vitest.e2e.config.ts test/conversation-live.e2e.test.ts",
     "relay:mock": "esbuild relay/src/dev.ts --bundle --platform=node --format=esm --outfile=out/relay-dev.mjs --log-level=warning && node out/relay-dev.mjs",
     "dist:win": "npm run build && electron-builder --win",
-    "dist:mac": "npm run build && electron-builder --mac"
+    "dist:mac": "npm run build && electron-builder --mac",
+    "dist:linux": "npm run build && electron-builder --linux"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "4.0.65",
@@ -204,7 +205,18 @@
     },
     "linux": {
       "target": [
-        "AppImage"
+        "AppImage",
+        "dir"
+      ],
+      "extraResources": [
+        {
+          "from": "node_modules/agent-desktop/bin/agent-desktop-linux-${arch}",
+          "to": "agent-desktop/agent-desktop"
+        },
+        {
+          "from": "resources/licenses/agent-desktop-Apache-2.0.txt",
+          "to": "agent-desktop/LICENSE"
+        }
       ],
       "icon": "resources/icon.png",
       "mimeTypes": [

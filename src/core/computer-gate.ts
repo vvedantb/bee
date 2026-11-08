@@ -43,6 +43,8 @@ export type GateAction = {
   keys?: string;
   /** type, set-value, select: the text written or the option chosen. */
   text?: string;
+  /** A send or submit: the exact text its field was read back as holding, shown in the Confirm (core/computer-tools.ts checkMessage). */
+  message?: string;
   /** Where keyboard focus is, as far as Bee knows: the field written last, or what a snapshot showed focused. Null: unknown. */
   lastField?: Element | null;
 };
@@ -271,6 +273,8 @@ const QUESTION: Record<IrreversibleKind, string> = {
 export const confirmQuestion = (kind: IrreversibleKind): string => QUESTION[kind];
 
 const NAME_MAX = 40;
+// The most of a message the Confirm shows.
+const MESSAGE_SHOWN = 120;
 /** A name cut to fit one island line. */
 export function shortName(name: string, max = NAME_MAX): string {
   const line = name.replace(/\s+/g, " ").trim();
@@ -289,9 +293,10 @@ export function keysLabel(keys: string): string {
 export function confirmDetail(action: GateAction, app: string | null): string {
   const target = action.target?.name ? `“${shortName(action.target.name)}”` : "the selected item";
   const where = app ? ` in ${shortName(app, 24)}` : "";
+  const said = action.message ? ` — “${shortName(action.message, MESSAGE_SHOWN)}”` : "";
   switch (action.command) {
     case "press":
-      return `Press ${keysLabel(action.keys ?? "")}${action.lastField?.name ? ` in “${shortName(action.lastField.name)}”` : where}`;
+      return `Press ${keysLabel(action.keys ?? "")}${action.lastField?.name ? ` in “${shortName(action.lastField.name)}”` : where}${said}`;
     case "type":
       return `Type and press Return in ${target}${where}`;
     case "select":
@@ -299,6 +304,6 @@ export function confirmDetail(action: GateAction, app: string | null): string {
     case "set-value":
       return `Fill in ${target}${where}`;
     default:
-      return `Click ${target}${where}`;
+      return `Click ${target}${where}${said}`;
   }
 }

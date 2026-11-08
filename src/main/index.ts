@@ -26,9 +26,10 @@ import { registerBeeMemoryIpc } from "./bee-memory-ipc";
 import { createBeeMemoryStore } from "./bee-memory-store";
 import { createDebugLog, settingsChange, type DebugLogWriter } from "./debug-log";
 import { registerDebugLogIpc } from "./debug-log-ipc";
-import { createAgentDesktopActionRunner, createAgentDesktopComputerRunner, createAgentDesktopRunner, resolveAgentDesktop } from "./agent-desktop";
+import { computerPlatformOf, createAgentDesktopActionRunner, createAgentDesktopComputerRunner, createAgentDesktopRunner, resolveAgentDesktop } from "./agent-desktop";
 import { bringToFront, registerClerkOAuthIpc } from "./clerk-oauth-ipc";
-import { createDesktopActions, windowsStartMenuDirs } from "./desktop-actions";
+import { createDesktopActions, listX11Windows, windowsStartMenuDirs } from "./desktop-actions";
+import { userDataOverride } from "./user-data-dir";
 import { registerFaviconIpc } from "./favicon-ipc";
 import { registerGatewayKeyIpc } from "./gateway-key-ipc";
 import { registerLinkIpc } from "./link-ipc";
@@ -268,6 +269,12 @@ function startDebugLog(logsDir: string): DebugLogWriter {
   return writer;
 }
 
+// An isolated profile for testing (docs/linux-independent-test.md): BEE_USER_DATA_DIR or --user-data-dir=<folder>. Set before
+// anything reads the user data folder, the single-instance lock included, so a test copy never shares settings, history, memory,
+// logs or the lock with the user's own Bee.
+const userDataDirOverride = userDataOverride(process.argv, process.env);
+if (userDataDirOverride) app.setPath("userData", userDataDirOverride);
+
 // Before whenReady: registers the bee:// scheme, Clerk's token and OAuth IPC, and the single-instance lock. Bee then
 // swaps the OAuth IPC for its loopback (registerClerkOAuthIpc below).
 const clerk = createClerkBridge({
@@ -396,10 +403,14 @@ if (clerk.isPrimaryInstance) {
       openExternal: (url) => shell.openExternal(url),
       openPath: (path) => shell.openPath(path),
       startMenuDirs: windowsStartMenuDirs(process.env),
+      // Linux (X11): a visible window for an app counts as open, so Bee never launches a second copy.
+      ...(process.platform === "linux" ? { listVisibleWindows: listX11Windows } : {}),
     });
     // Computer use for a direct request ("Bee, send Sam a message in Discord"): a third agent-desktop runner, with its own
-    // allowlist (assertComputerUse) and state folder. Never the meeting window reader's. Windows and macOS only.
-    const computerRunner = agentDesktopBinary && (isMac || process.platform === "win32") ? createAgentDesktopComputerRunner(agentDesktopBinary) : null;
+    // allowlist (assertComputerUse) and state folder. Never the meeting window reader's. Windows, macOS and Linux; on Linux it
+    // needs the AT-SPI bus in the desktop session, and without it the access check says so and no loop starts (direct-command.ts).
+    const computerPlatform = computerPlatformOf(process.platform);
+    const computerRunner = agentDesktopBinary && computerPlatform ? createAgentDesktopComputerRunner(agentDesktopBinary) : null;
     app.on("will-quit", () => computerRunner?.cleanup());
     ipcMain.handle(IPC.openAccessibilitySettings, async () => {
       if (!isMac) return;
@@ -521,8 +532,8 @@ if (clerk.isPrimaryInstance) {
       browse,
       briefings: briefings.get,
       desktop,
-      computer: computerRunner
-        ? { platform: isMac ? "mac" : "windows", run: computerRunner.run, cleanup: computerRunner.cleanup }
+      computer: computerRunner && computerPlatform
+        ? { platform: computerPlatform, run: computerRunner.run, cleanup: computerRunner.cleanup }
         : undefined,
       look: createScreenCapture(process.platform),
       ...(isMac ? { screenRecording: macScreenRecording } : {}),
