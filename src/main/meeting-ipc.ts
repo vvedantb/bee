@@ -1,7 +1,7 @@
 import { app, ipcMain, shell } from "electron";
 import { z } from "zod";
 import { meetingTerms, meetingWindowBrief, type MeetingWindowContext } from "../core/agent-desktop-meeting";
-import type { ComputerRun } from "../core/agent-desktop-envelope";
+import type { AccessState, ComputerRun } from "../core/agent-desktop-envelope";
 import type { ComputerPlatform, RunControl } from "../core/computer-control";
 import { computerAccess, computerSkills } from "../core/computer-use";
 import { debugLog, errorData, msSince } from "../core/debug-log";
@@ -19,6 +19,7 @@ import type { Browse } from "./browse";
 const claudeCodeView = (status: ClaudeCodeStatus): ClaudeCodeView => ({ state: status.state, version: "version" in status ? status.version : null, message: claudeCodeMessage(status) });
 import type { CommandAgent } from "../core/claude-agent";
 import { runDirectCommand, type ComputerHost } from "../core/direct-command";
+import type { ScreenCapture } from "../core/screen-look";
 import { classifyFollowUp } from "../core/follow-up";
 import { summariseRecap } from "../core/recap";
 import { loadMcpTools, type McpPool, type McpServerConfig } from "../core/mcp";
@@ -103,7 +104,11 @@ export function registerMeetingIpc(args: { notesDir: string;
   knownNames?: () => string[];
   learnNames?: (names: string[]) => void;
   /** Briefings shown before meetings (main/briefing-watcher.ts), by key, for "Dig deeper". */
-  briefings?: (key: string) => Briefing | undefined }): void {
+  briefings?: (key: string) => Briefing | undefined;
+  /** look_at_screen's picture of the front window (main/screen-capture.ts). Absent: no look_at_screen tool. */
+  look?: ScreenCapture;
+  /** macOS Screen Recording for Bee itself, for Settings (look_at_screen). Absent: as agent-desktop reports it. */
+  screenRecording?: () => AccessState }): void {
   const createGateway = args.gateway ?? createBeeGateway;
   // One controller per run in flight. The renderer cancels a run when a newer line supersedes it.
   const runs = new Map<string, AbortController>();
@@ -391,6 +396,7 @@ export function registerMeetingIpc(args: { notesDir: string;
         loadMcpTools: mcpTools,
         actions: args.desktop ?? null,
         computer,
+        look: args.look ?? null,
         // A request with no run id has no island prompt to answer: a risky browse step is refused instead.
         confirm: request.runId === undefined ? null : confirm,
         signal: controller.signal,
@@ -485,14 +491,16 @@ export function registerMeetingIpc(args: { notesDir: string;
   ipcMain.handle(IPC.computerAccess, async (): Promise<ComputerAccessView> => {
     if (!args.computer) return { supported: false, platform: "other", accessibility: "unknown", screenRecording: "unknown" };
     const platform = args.computer.platform;
+    // Screen Recording as macOS reports it for Bee itself, which look_at_screen needs; agent-desktop's own may differ.
+    const screen = args.screenRecording ? { screenRecording: args.screenRecording() } : {};
     computerRuns += 1;
     try {
       const access = await computerAccess(args.computer.run);
       debugLog.info("computer", "access", { platform, ...access });
-      return { supported: true, platform, ...access };
+      return { supported: true, platform, ...access, ...screen };
     } catch (error) {
       debugLog.warn("computer", "access-failed", { platform, error: errorData(error) });
-      return { supported: true, platform, accessibility: "unknown", screenRecording: "unknown" };
+      return { supported: true, platform, accessibility: "unknown", screenRecording: "unknown", ...screen };
     } finally {
       computerRuns -= 1;
       releaseComputer();

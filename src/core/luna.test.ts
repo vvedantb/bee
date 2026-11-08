@@ -11,6 +11,7 @@ import {
   MEETING_BLOCK_MAX,
   answerText,
   buildLunaPrompt,
+  LUNA_LOOK,
   errorText,
   guideWithLuna,
   hasSourceWording,
@@ -48,6 +49,11 @@ describe("buildLunaPrompt", () => {
     expect(context).toContain("[n1] Acme › Pricing\n10% discount");
     expect(context).toContain("[n2] Habits\nSummarise decisions");
     expect(tail).toBe("Today's date: Saturday 24 October 2026.\nGive at most 2 short tips.\n\nTips:");
+  });
+
+  it("adds the look_at_screen rule only for a direct request that has the tool", () => {
+    expect(buildLunaPrompt({ transcript: [], notes: [], command: "what does this chart show?", computerUse: true, lookAtScreen: true }).system).toContain(LUNA_LOOK);
+    expect(buildLunaPrompt({ transcript: [], notes: [], command: "what does this chart show?", computerUse: true }).system).not.toContain("look_at_screen");
   });
 
   it("adds the MCP block only when servers are connected or unavailable", () => {

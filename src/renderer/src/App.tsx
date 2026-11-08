@@ -34,7 +34,7 @@ import { SecretField } from "./SecretField";
 import { SettingRow } from "./SettingRow";
 import { KnownNamesField, PreferenceRows } from "./SettingsFields";
 import { ShortcutRow } from "./ShortcutRow";
-import { computerAccessMessage } from "./computer-access";
+import { computerAccessMessage, screenRecordingMessage } from "./computer-access";
 import { INTERFACE_SCALES } from "../../core/interface-scale";
 import { DEFAULT_MOTION_PREFERENCE, MOTION_PREFERENCES, resolveReducedMotion, type MotionPreference } from "../../core/motion-preference";
 import { visibleChips, type LinkChip } from "../../core/link-suggest";
@@ -483,12 +483,13 @@ function BrowseStatus({ state }: { state: BeeState }) {
   return <BrowseSection browse={state.browse} install={state.browseInstall} onInstall={() => void actions.installBrowse()} onCheck={() => void actions.refreshBrowse(true)} />;
 }
 
-// Settings → computer use: on a Mac, Accessibility for Bee. Computer use never needs Screen Recording.
+// Settings → computer use: on a Mac, Accessibility for Bee, and Screen Recording for look_at_screen. Computer use never needs it.
 function ComputerAccessSection({ access }: { access: BeeState["computerAccess"] }) {
   useEffect(() => {
     void actions.refreshComputerAccess();
   }, []);
   const message = computerAccessMessage(access);
+  const screenMessage = screenRecordingMessage(access);
   const mac = access?.supported === true && access.platform === "mac";
   if (!message && !mac) return null;
   const recheck = (open: () => Promise<void>) => async () => {
@@ -508,6 +509,18 @@ function ComputerAccessSection({ access }: { access: BeeState["computerAccess"] 
             Open Accessibility settings
           </Button>
         </div>
+      ) : null}
+      {screenMessage ? (
+        <>
+          <p className="muted" role="status">
+            {screenMessage}
+          </p>
+          <div className="row actions">
+            <Button type="button" variant="secondary" size="sm" onClick={() => void recheck(actions.openScreenRecordingSettings)()}>
+              Open Screen Recording settings
+            </Button>
+          </div>
+        </>
       ) : null}
     </div>
   );

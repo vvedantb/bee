@@ -509,8 +509,9 @@ describe("source scan: agent-desktop stays read-only", () => {
 
   it("calls input and close commands only from the computer tools, through the computer-use runner, with no shell", () => {
     const all = sources().filter(({ path }) => fromSrc(path) !== "main/teams-detector.ts");
+    // screen-look.ts reads list-windows only (the next test checks every command outside the computer tools is read-only).
     const computer = all.filter(({ text }) => /\bComputerRun\b/.test(text)).map(({ path }) => fromSrc(path));
-    expect(computer.sort()).toEqual(["core/agent-desktop-envelope.ts", "core/computer-tools.ts", "core/computer-use.ts", "core/direct-command.ts", "main/agent-desktop.ts", "main/meeting-ipc.ts"]);
+    expect(computer.sort()).toEqual(["core/agent-desktop-envelope.ts", "core/computer-tools.ts", "core/computer-use.ts", "core/direct-command.ts", "core/screen-look.ts", "main/agent-desktop.ts", "main/meeting-ipc.ts"]);
     const tools = readFileSync(repo("src/core/computer-tools.ts"), "utf8");
     const used = new Set([...tools.matchAll(/\b(?:exec|observe|readOnce)\(\s*"([a-z-]+)"/g), ...tools.matchAll(/onRef\(\s*"([a-z-]+)"/g)].map((match) => match[1]));
     for (const command of used) expect(COMPUTER_USE_COMMANDS as readonly (string | undefined)[], command).toContain(command);

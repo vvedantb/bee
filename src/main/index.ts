@@ -38,6 +38,7 @@ import { AGENT_CALENDAR_SYSTEM, agentCalendarPrompt, createAgentCalendarReader, 
 import { registerMcpIpc } from "./mcp-ipc";
 import { registerOpenUrlIpc } from "./open-url";
 import { registerMeetingIpc } from "./meeting-ipc";
+import { createScreenCapture, macScreenRecording } from "./screen-capture";
 import { createVmemTranscripts } from "./vmem-transcript-queue";
 import { ensureNotesDir } from "./notes";
 import { handleRendererProtocol } from "./renderer-protocol";
@@ -523,6 +524,8 @@ if (clerk.isPrimaryInstance) {
       computer: computerRunner
         ? { platform: isMac ? "mac" : "windows", run: computerRunner.run, cleanup: computerRunner.cleanup }
         : undefined,
+      look: createScreenCapture(process.platform),
+      ...(isMac ? { screenRecording: macScreenRecording } : {}),
     });
 
     const teams = registerTeamsIpc({ relayUrl: relayUrlFromEnv(process.env.BEE_RELAY_URL || import.meta.env.MAIN_VITE_BEE_RELAY_URL), detector });

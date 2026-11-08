@@ -63,6 +63,7 @@ describe("activityLabel", () => {
     expect(activityLabel("open_app")).toBe("Opening the app…");
     expect(activityLabel("focus_window")).toBe("Switching windows…");
     expect(activityLabel("open_url")).toBe("Opening the link…");
+    expect(activityLabel("look_at_screen")).toBe("Looking at your screen…");
   });
 
   it("names every computer-use tool, so none reads as Thinking…", async () => {

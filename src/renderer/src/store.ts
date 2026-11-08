@@ -1990,7 +1990,7 @@ export const actions = {
     }
   },
 
-  /** macOS: asks for Screen Recording for the Teams audio helper, then lets the next tick try Teams audio again. */
+  /** macOS: asks for Screen Recording (the Teams audio helper, look_at_screen), then lets the next tick try Teams audio again. */
   async openScreenRecordingSettings(): Promise<void> {
     try {
       await window.bee.teamsAudio.openScreenRecordingSettings();
