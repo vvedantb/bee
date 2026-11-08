@@ -14,6 +14,7 @@ import { followThrough, followThroughLines, followThroughTask, type FollowThroug
 import { CLAUDE_CODE_MISSING, claudeCodeMessage } from "../core/claude-code";
 import type { ClaudeCode } from "./claude-code";
 import type { ClaudeCodeStatus } from "../core/claude-code";
+import type { Browse } from "./browse";
 
 const claudeCodeView = (status: ClaudeCodeStatus): ClaudeCodeView => ({ state: status.state, version: "version" in status ? status.version : null, message: claudeCodeMessage(status) });
 import type { CommandAgent } from "../core/claude-agent";
@@ -45,6 +46,8 @@ import {
   type CardAction,
   type CardActionResult,
   type ClaudeCodeUpdateResult,
+  type BrowseInstallResult,
+  type BrowseView,
   type BackgroundJobView,
   type ClaudeCodeView,
   type ComputerAccessView,
@@ -77,6 +80,8 @@ export function registerMeetingIpc(args: { notesDir: string;
   gatewayApiKey: () => string | undefined;
   /** The user's Claude Code (main/claude-code.ts), which "Bee, …" requests run on. Absent: only quick opens work. */
   claudeCode?: ClaudeCode;
+  /** OpenCode Browse (main/browse.ts): its Settings status and installer. Absent: Settings shows it missing. */
+  browse?: Browse;
   /** Builds the Gateway models from the key. Defaults to the real Gateway; the E2E harness records or replays them. */
   gateway?: (apiKey: string) => BeeGateway;
   /** Desktop tools for a direct request ("Bee, open Teams", main/desktop-actions.ts). Without them the AI only answers. */
@@ -166,12 +171,41 @@ export function registerMeetingIpc(args: { notesDir: string;
       : { ok: false, message: `Bee is already running ${BACKGROUND_MAX} background tasks. Try again when one finishes.` };
   });
 
+  type Sender = { isDestroyed: () => boolean; send: (channel: string, payload: unknown) => void };
+  /** Island updates for one request (step lines, Confirm prompts), to the window that asked. */
+  const islandSend = (sender: Sender, runId: string | number | undefined) => (update: ComputerUpdate) => {
+    if (runId !== undefined && !sender.isDestroyed()) sender.send(IPC.computerUpdate, update);
+  };
+
+  /**
+   * The island's Confirm prompt for one request, for computer use and browse steps alike. Settled by the island's Confirm or Cancel
+   * (computerAnswer), or false once the run stops or the wait times out.
+   */
+  const islandConfirm = (sender: Sender, runId: string | number | undefined): ComputerHost["confirm"] => {
+    const send = islandSend(sender, runId);
+    return (request, signal) =>
+      new Promise((resolve) => {
+        if (runId === undefined) return resolve(false);
+        const id = ++confirmSeq;
+        const asked = performance.now();
+        const settle = (confirmed: boolean, how: "answer" | "closed") => {
+          if (!confirms.has(id)) return;
+          confirms.delete(id);
+          debugLog.info("computer", "confirm-settled", { runId, id, confirmed, how, waitedMs: msSince(asked) });
+          resolve(confirmed);
+        };
+        confirms.set(id, { runId: String(runId), resolve: (confirmed) => settle(confirmed, "answer") });
+        // A stop, the 60 s timeout or a newer request: the prompt closes as Cancel.
+        signal.addEventListener("abort", () => settle(false, "closed"), { once: true });
+        debugLog.info("computer", "confirm-asked", { runId, id, ...request });
+        send({ runId, type: "confirm", id, kind: request.kind, question: request.question.slice(0, COMPUTER_LINE_MAX), detail: request.detail.slice(0, COMPUTER_LINE_MAX) });
+      });
+  };
+
   /** Main's side of one request's computer use: step lines and Confirm prompts go to the window that asked. */
-  const computerHost = (computer: NonNullable<typeof args.computer>, sender: { isDestroyed: () => boolean; send: (channel: string, payload: unknown) => void }, runId: string | number | undefined): ComputerHost => {
+  const computerHost = (computer: NonNullable<typeof args.computer>, sender: Sender, runId: string | number | undefined, confirm: ComputerHost["confirm"]): ComputerHost => {
     const key = runId === undefined ? null : String(runId);
-    const send = (update: ComputerUpdate) => {
-      if (runId !== undefined && !sender.isDestroyed()) sender.send(IPC.computerUpdate, update);
-    };
+    const send = islandSend(sender, runId);
     return {
       platform: computer.platform,
       run: computer.run,
@@ -180,24 +214,7 @@ export function registerMeetingIpc(args: { notesDir: string;
         debugLog.info("computer", "step-line", { runId, label });
         if (runId !== undefined) send({ runId, type: "step", label: label.slice(0, COMPUTER_LINE_MAX) });
       },
-      // Settled by the island's Confirm or Cancel (computerAnswer), or false once the run stops or the wait times out.
-      confirm: (request, signal) =>
-        new Promise((resolve) => {
-          if (runId === undefined || key === null) return resolve(false);
-          const id = ++confirmSeq;
-          const asked = performance.now();
-          const settle = (confirmed: boolean, how: "answer" | "closed") => {
-            if (!confirms.has(id)) return;
-            confirms.delete(id);
-            debugLog.info("computer", "confirm-settled", { runId, id, confirmed, how, waitedMs: msSince(asked) });
-            resolve(confirmed);
-          };
-          confirms.set(id, { runId: key, resolve: (confirmed) => settle(confirmed, "answer") });
-          // A stop, the 60 s timeout or a newer request: the prompt closes as Cancel.
-          signal.addEventListener("abort", () => settle(false, "closed"), { once: true });
-          debugLog.info("computer", "confirm-asked", { runId, id, ...request });
-          send({ runId, type: "confirm", id, kind: request.kind, question: request.question.slice(0, COMPUTER_LINE_MAX), detail: request.detail.slice(0, COMPUTER_LINE_MAX) });
-        }),
+      confirm,
       onControl: (control) => {
         if (key !== null) controls.set(key, control);
       },
@@ -337,7 +354,8 @@ export function registerMeetingIpc(args: { notesDir: string;
     const windowContext = args.meetingWindow?.context() ?? null;
     const meetingBrief = [args.meeting.brief(), meetingWindowBrief(windowContext)].filter((part) => part && part.trim()).join("\n") || undefined;
     const key = request.runId === undefined ? null : String(request.runId);
-    const computer = args.computer ? computerHost(args.computer, event.sender, request.runId) : null;
+    const confirm = islandConfirm(event.sender, request.runId);
+    const computer = args.computer ? computerHost(args.computer, event.sender, request.runId, confirm) : null;
     if (computer) computerRuns += 1;
     const started = performance.now();
     // Bee's whole history, read from main's copy (the renderer no longer sends one).
@@ -376,6 +394,8 @@ export function registerMeetingIpc(args: { notesDir: string;
         actions: args.desktop ?? null,
         computer,
         look: args.look ?? null,
+        // A request with no run id has no island prompt to answer: a risky browse step is refused instead.
+        confirm: request.runId === undefined ? null : confirm,
         signal: controller.signal,
         onActivity: (activity) => {
           if (!event.sender.isDestroyed()) event.sender.send(IPC.lunaActivity, { runId: request.runId, ...activity } satisfies LunaActivity);
@@ -439,6 +459,19 @@ export function registerMeetingIpc(args: { notesDir: string;
     if (!args.claudeCode) return { view: { state: "missing", version: null, message: CLAUDE_CODE_MISSING }, error: null };
     const { status, error } = await args.claudeCode.update();
     return { view: claudeCodeView(status), error };
+  });
+
+  // Settings: OpenCode Browse, so "Bee, …" requests can use the user's own browser.
+  ipcMain.handle(IPC.browse, async (_event, payload): Promise<BrowseView> => {
+    if (!args.browse) return { state: "missing" };
+    return { state: (await args.browse.status(z.boolean().catch(false).parse(payload))).state };
+  });
+
+  // Settings → Install: the official installer, which waits while the user adds the extension; then the state now.
+  ipcMain.handle(IPC.browseInstall, async (): Promise<BrowseInstallResult> => {
+    if (!args.browse) return { view: { state: "missing" }, error: null };
+    const { status, error } = await args.browse.install();
+    return { view: { state: status.state }, error };
   });
 
   // Settings: may computer use run here, and has macOS allowed Bee Accessibility and Screen Recording. Fails open as unknown.

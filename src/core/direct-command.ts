@@ -25,6 +25,7 @@ import { needsWebSearch } from "./web-search";
 import { frontOf, lookTools, readFocusedWindows, type ScreenCapture } from "./screen-look";
 import type { BackgroundJobs } from "./background";
 import { answerEvidence, guardLine, replaceLastText, runEvidence, upgradeLine, withoutToolNames } from "./claim-guard";
+import { BROWSE_RULES } from "./browse";
 
 // A direct request to Bee: a mic phrase that started with the wake word ("Bee, open Teams", core/wake-word.ts). Bee answers
 // the user, not the meeting. Every AI step here runs on the user's own Claude Code and its login (core/claude-agent.ts); without
@@ -40,6 +41,8 @@ import { answerEvidence, guardLine, replaceLastText, runEvidence, upgradeLine, w
 // every earlier request with the AI's text, tool calls and results) goes to the AI before the request, so a follow-up ("the team
 // one", "yes") carries on from there.
 // Each request's own messages go back to main through onTurn, to be added to that history.
+// When the session has OpenCode Browse (core/browse.ts), every AI step gets BROWSE_RULES (websites go to the user's real browser) and
+// the island's Confirm for a browse step that sends, buys or deletes (core/browse-gate.ts); a confirmed one that ran is proof.
 
 const RETRIEVE_LIMIT = 5;
 const GUIDE_NOTE_LIMIT = 3;
@@ -125,6 +128,8 @@ async function runComputerCommand(args: {
   screen?: string | null;
   /** A simple task (simpleComputerTask): the fast model tries it first, and hands it to the planning model when it cannot. */
   fast?: boolean;
+  /** Browse executes the user confirmed, by tool call id: proof for the last line (core/claim-guard.ts). */
+  browseConfirmed: ReadonlyMap<string, IrreversibleKind>;
 }): Promise<PipelineResult> {
   const { host } = args;
   const maxSteps = host.maxSteps;
@@ -196,7 +201,7 @@ async function runComputerCommand(args: {
     // A last line that claims a send, delete, purchase or submit (or typing) this run did not prove becomes a cautious one; a line
     // that doubts one it did prove says it plainly (core/claim-guard.ts). The history keeps the line the user saw.
     if (!outcome.stopped && !outcome.error) {
-      const evidence = runEvidence(outcome.messages, committed);
+      const evidence = runEvidence(outcome.messages, committed, args.browseConfirmed);
       const checked = guardLine(outcome.line, evidence);
       const upgraded = checked.rewritten ? null : upgradeLine(outcome.line, evidence.proven, evidence.typed);
       const line = withoutToolNames(checked.rewritten ? checked.line : upgraded?.upgraded ? upgraded.line : outcome.line);
@@ -287,6 +292,8 @@ export async function runDirectCommand(args: {
   background?: BackgroundJobs["start"];
   /** A picture of the front window when the AI asks (core/screen-look.ts, main/screen-capture.ts). Absent: no look_at_screen tool. */
   look?: ScreenCapture | null;
+  /** The island's Confirm for this request (main/meeting-ipc.ts), for browse steps. Absent: a browse step that sends, buys or deletes is refused. */
+  confirm?: ComputerHost["confirm"] | null;
 }): Promise<PipelineResult> {
   const command = args.command.replace(/\s+/g, " ").trim();
   const route = routeCommand(command);
@@ -296,10 +303,18 @@ export async function runDirectCommand(args: {
   // as a note, so its next request knows it happened.
   let agentUsed = false;
   const sessionAgent = args.agent;
+  // Browse executes the user confirmed this request, by tool call id (core/claude-agent.ts onConfirmed).
+  const browseConfirmed = new Map<string, IrreversibleKind>();
+  const confirm = args.confirm ?? undefined;
   const agent: CommandAgent | null = sessionAgent
     ? (request) => {
         agentUsed = true;
-        return sessionAgent(request);
+        return sessionAgent({
+          ...request,
+          ...(sessionAgent.browse ? { system: `${request.system}\n${BROWSE_RULES}` } : {}),
+          ...(confirm ? { confirm } : {}),
+          onConfirmed: (toolCallId, kind) => browseConfirmed.set(toolCallId, kind),
+        });
       }
     : null;
   const record = (messages: readonly ModelMessage[]) => {
@@ -357,7 +372,7 @@ export async function runDirectCommand(args: {
   const screenRead = computer ? frontWindowLine(computer.host.run) : Promise.resolve(null);
   const loop = async (fast = false) => {
     if (!computer) throw new Error("no computer use");
-    const result = await runComputerCommand({ ...computer, command, transcript: args.transcript, history, signal: args.signal, onActivity: args.onActivity, summarise, knownNames: args.knownNames, onMessages: record, memory, onMemory, screen: await screenRead, fast });
+    const result = await runComputerCommand({ ...computer, command, transcript: args.transcript, history, signal: args.signal, onActivity: args.onActivity, summarise, knownNames: args.knownNames, onMessages: record, memory, onMemory, screen: await screenRead, fast, browseConfirmed });
     return memoryNote && !result.guideNote ? { ...result, guideNote: memoryNote } : result;
   };
   if (computer && (await wantsLoop(command, gateway, args.signal))) {
@@ -483,7 +498,7 @@ export async function runDirectCommand(args: {
   if (silent) debugLog.info("ai", "command-fallback", { command, empty: guide.empty ?? false });
   // Each line that claims a send, delete, purchase, submit, typing or an empty calendar that nothing proves becomes a cautious one
   // (core/claim-guard.ts). What earlier turns proved or showed counts, for an answer about them. A replaced line keeps no source.
-  const evidence = answerEvidence(guide.messages ?? [], history);
+  const evidence = answerEvidence(guide.messages ?? [], history, browseConfirmed);
   const checked = guide.tips.map((tip) => guardLine(tip, evidence));
   const rewritten = checked.some((item) => item.rewritten);
   if (rewritten) debugLog.warn("ai", "claim-rewritten", { tips: guide.tips, shown: checked.map((item) => item.line), reasons: checked.map((item) => item.reason) });

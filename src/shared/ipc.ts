@@ -65,6 +65,8 @@ export const IPC = {
   computerAccess: "bee:computer:access",
   claudeCode: "bee:claude-code:status",
   claudeCodeUpdate: "bee:claude-code:update",
+  browse: "bee:browse:status",
+  browseInstall: "bee:browse:install",
   classifyFollowUp: "bee:command:classify-follow-up",
   conversationEnded: "bee:command:conversation-ended",
   // Main → renderer: the show/hide shortcut brought Bee forward, so open the typing box.
@@ -275,6 +277,14 @@ export type ClaudeCodeView = z.infer<typeof claudeCodeViewSchema>;
 // After Settings → Update Claude Code: the state now, and why the update failed when it did.
 export const claudeCodeUpdateResultSchema = z.object({ view: claudeCodeViewSchema, error: z.string().max(300).nullable() });
 export type ClaudeCodeUpdateResult = z.infer<typeof claudeCodeUpdateResultSchema>;
+
+// OpenCode Browse (core/browse.ts), which lets "Bee, …" requests drive tabs in the user's own browser.
+export const browseViewSchema = z.object({ state: z.enum(["missing", "installed", "connected"]) });
+export type BrowseView = z.infer<typeof browseViewSchema>;
+
+// After Settings → Install: the state now, and why the install failed when it did.
+export const browseInstallResultSchema = z.object({ view: browseViewSchema, error: z.string().max(300).nullable() });
+export type BrowseInstallResult = z.infer<typeof browseInstallResultSchema>;
 
 // Lines the renderer keeps for the end-of-meeting summary (store.ts); the pipeline still gets only the last 8.
 export const SESSION_TRANSCRIPT_MAX = 200;

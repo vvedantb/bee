@@ -25,6 +25,7 @@ import { Connectors } from "./Connectors";
 import { logSignIn } from "./debug-log";
 import { MeetingContextSection } from "./MeetingContextSection";
 import { ClaudeCodeSection } from "./ClaudeCodeSection";
+import { BrowseSection } from "./BrowseSection";
 import { MemorySection } from "./MemorySection";
 import { NotchStatus } from "./NotchStatus";
 import { PANEL_TABS } from "./panel-tabs";
@@ -474,6 +475,14 @@ function ClaudeCodeStatus({ state }: { state: BeeState }) {
   return <ClaudeCodeSection claudeCode={state.claudeCode} update={state.claudeCodeUpdate} onUpdate={() => void actions.updateClaudeCode()} onCheck={() => void actions.refreshClaudeCode(true)} />;
 }
 
+// Settings → Browser: checks OpenCode Browse when Settings opens (BrowseSection shows it).
+function BrowseStatus({ state }: { state: BeeState }) {
+  useEffect(() => {
+    void actions.refreshBrowse();
+  }, []);
+  return <BrowseSection browse={state.browse} install={state.browseInstall} onInstall={() => void actions.installBrowse()} onCheck={() => void actions.refreshBrowse(true)} />;
+}
+
 // Settings → computer use: on a Mac, Accessibility for Bee, and Screen Recording for look_at_screen. Computer use never needs it.
 function ComputerAccessSection({ access }: { access: BeeState["computerAccess"] }) {
   useEffect(() => {
@@ -579,6 +588,7 @@ function SettingsTab({ state, settings }: { state: BeeState; settings: SettingsV
       />
       <PreferenceRows settings={settings} onSave={(update) => void actions.saveSettings(update)} />
       <ClaudeCodeStatus state={state} />
+      <BrowseStatus state={state} />
       <ComputerAccessSection access={state.computerAccess} />
       <div className="flex flex-col gap-1">
         Interface size

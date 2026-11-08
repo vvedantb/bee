@@ -20,6 +20,7 @@ import { searchMcpNotes } from "../core/meeting-search";
 import { createVmemSearch } from "../core/vmem-history";
 import { createBeeHistoryStore } from "./bee-history-store";
 import { createClaudeCode } from "./claude-code";
+import { createBrowse } from "./browse";
 import { registerBeeMemoryIpc } from "./bee-memory-ipc";
 import { createBeeMemoryStore } from "./bee-memory-store";
 import { createDebugLog, settingsChange, type DebugLogWriter } from "./debug-log";
@@ -448,8 +449,10 @@ if (clerk.isPrimaryInstance) {
     const detector = withMeetingWindow(teamsDetector, meetingWindow);
     // Which meeting the user is in: window titles and the classic Outlook calendar (Windows), saved meetings, connected tools.
     // The brief is built here in main and sent to Luna; saved meetings stay in meeting-memory.json in the user data folder.
-    // "Bee, …" requests: one Claude Code session on the user's own install, resumed from Bee's own folder.
-    const claudeCode = createClaudeCode({ sessionDir: join(userDataDir, "claude-session") });
+    // "Bee, …" requests: one Claude Code session on the user's own install, resumed from Bee's own folder, with OpenCode Browse
+    // attached once it is installed.
+    const browse = createBrowse();
+    const claudeCode = createClaudeCode({ sessionDir: join(userDataDir, "claude-session"), browsePath: browse.path });
     app.on("will-quit", () => claudeCode.close());
     // Today's calendar: classic Outlook on Windows; else the user's own calendar tools through Claude Code (core/agent-calendar.ts).
     const calendar = fallbackCalendarReader(
@@ -512,6 +515,7 @@ if (clerk.isPrimaryInstance) {
       meetingWindow,
       gatewayApiKey: settings.gatewayApiKey,
       claudeCode,
+      browse,
       briefings: briefings.get,
       desktop,
       computer: computerRunner

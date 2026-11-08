@@ -1,9 +1,14 @@
 import { createHash, randomUUID } from "node:crypto";
-import { query, type Options, type Query, type SDKMessage, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+import { query, type HookCallbackMatcher, type Options, type Query, type SDKMessage, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { CallToolRequestSchema, ListToolsRequestSchema, type CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { asSchema, type AssistantModelMessage, type ModelMessage, type ToolSet } from "ai";
+import { z } from "zod";
 import { historyAsText } from "./bee-history";
+import { BROWSE_EXECUTE, BROWSE_SERVER, browseMcpServer } from "./browse";
+import { browseDecision } from "./browse-gate";
+import type { IrreversibleKind } from "./computer-control";
+import type { ConfirmRequest } from "./computer-tools";
 import { debugLog, msSince } from "./debug-log";
 import { CLAUDE_CODE_SIGNED_OUT } from "./claude-code";
 import { noProgress } from "./loop-guard";
@@ -21,6 +26,10 @@ import { noProgress } from "./loop-guard";
 // live inside each tool's execute, so they are pre-approved. Claude Code's own tools (files anywhere, commands, web) and the user's
 // own Claude Code settings and MCP servers are on too, in auto mode: Claude Code's classifier approves or denies each call, and a
 // call it cannot decide is denied (Bee has no one to ask mid-request).
+//
+// OpenCode Browse (core/browse.ts), when installed, is a second MCP server, "browse": the AI drives tabs in the user's real browser.
+// Its tools are pre-approved too, and a hook runs before every execute: a script that sends, buys or deletes waits for the island's
+// Confirm (core/browse-gate.ts), or is refused when no one can be asked (a background task).
 
 /** A request's model. "plan" thinks first (adaptive, medium effort); "fast" is the fast pass for a simple task, thinking off. */
 export type AgentTier = "plan" | "fast";
@@ -47,6 +56,10 @@ export type AgentRequest = {
   maxTurns?: number;
   signal: AbortSignal;
   onEvent?: (event: AgentEvent) => void;
+  /** Shows the island's Confirm for a browse step that sends, buys or deletes. Absent (a background task): such a step is refused. */
+  confirm?: (request: ConfirmRequest, signal: AbortSignal) => Promise<boolean>;
+  /** A browse execute the user confirmed, by its tool call id: proof of that kind once it succeeds (core/claim-guard.ts). */
+  onConfirmed?: (toolCallId: string, kind: IrreversibleKind) => void;
 };
 
 export type AgentFinish = "stop" | "tool-calls" | "error";
@@ -73,6 +86,8 @@ export type CommandAgent = ((request: AgentRequest) => Promise<AgentResult>) & {
   note?: (messages: readonly ModelMessage[]) => void;
   /** Runs a request beside the conversation (a background task): a fork of the session that never blocks the next request. */
   background?: (request: AgentRequest) => Promise<AgentResult>;
+  /** The session has OpenCode Browse's tools (core/browse.ts): requests get BROWSE_RULES. */
+  browse?: boolean;
 };
 
 const SERVER = "bee";
@@ -82,6 +97,32 @@ const SDK_WEB_SEARCH = "WebSearch";
 const RESULT_CHARS = 40_000;
 // How long a request waits for Claude Code to list its new tools.
 const RELIST_MS = 3000;
+// How long Claude Code waits for the browse gate's hook: the island's Confirm waits up to 60 s.
+const BROWSE_HOOK_S = 120;
+const executeInput = z.object({ code: z.string() });
+
+/**
+ * The hook before each browse execute (core/browse-gate.ts browseDecision): a risky script waits for the current request's Confirm,
+ * or is denied with a reason the AI reads. A confirmed one is reported (onConfirmed) as proof once it succeeds.
+ */
+export function browseGateHook(current: () => Pick<AgentRequest, "confirm" | "onConfirmed" | "signal"> | null): HookCallbackMatcher {
+  return {
+    matcher: BROWSE_EXECUTE,
+    timeout: BROWSE_HOOK_S,
+    hooks: [
+      async (input, _toolUseId, { signal }) => {
+        if (input.hook_event_name !== "PreToolUse" || input.tool_name !== BROWSE_EXECUTE) return {};
+        const request = current();
+        const code = executeInput.safeParse(input.tool_input).data?.code ?? "";
+        const decision = await browseDecision({ code, confirm: request?.confirm, signal: request ? AbortSignal.any([signal, request.signal]) : signal });
+        if (!decision.allow) return { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: decision.message } };
+        if (!decision.confirmed) return {};
+        request?.onConfirmed?.(input.tool_use_id, decision.confirmed);
+        return { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow", permissionDecisionReason: "The user confirmed it in Bee." } };
+      },
+    ],
+  };
+}
 
 /**
  * Bee's name for an SDK tool name: Bee's own without the mcp__bee__ prefix, Claude Code's WebSearch as web_search, a tool of the
@@ -304,7 +345,7 @@ function turnResult(t: Turn, started: number, kind: string): AgentResult {
  * folder, so the session files never mix with the user's own Claude Code projects. A session that cannot resume, or that ends,
  * starts again on the next request with Bee's history as text.
  */
-export function claudeSession(options: { executable: string; cwd: string; store: SessionStore }): CommandAgent & { close: () => void } {
+export function claudeSession(options: { executable: string; cwd: string; store: SessionStore; browse?: string | null }): CommandAgent & { close: () => void } {
   const router = toolRouter();
   let live: { query: Query; push: (message: SDKUserMessage) => void; end: () => void; model: AgentTier; fresh: boolean } | null = null;
   let turn: Turn | null = null;
@@ -313,18 +354,23 @@ export function claudeSession(options: { executable: string; cwd: string; store:
   // Rules ids already in the session's context. Cleared when Claude Code compacts, so the next request sends its rules again.
   const sentRules = new Set<string>();
 
-  /** The options every Claude Code process here shares: Bee's system prompt, auto mode, the user's settings, Bee's tools. */
-  function baseOptions(server: McpServer): Options {
+  /**
+   * The options every Claude Code process here shares: Bee's system prompt, auto mode, the user's settings, Bee's tools, and Browse
+   * when installed (its server named "browse", so it replaces a "browse" entry in the user's own settings). `current`: the turn the
+   * browse gate asks for.
+   */
+  function baseOptions(server: McpServer, current: () => Turn | null): Options {
     return {
       model: AGENT_MODEL.plan,
       systemPrompt: SESSION_SYSTEM,
-      allowedTools: [`mcp__${SERVER}`],
+      allowedTools: [`mcp__${SERVER}`, `mcp__${BROWSE_SERVER}`],
+      hooks: { PreToolUse: [browseGateHook(() => current()?.request ?? null)] },
       permissionMode: "auto",
       canUseTool: async (tool) => {
         debugLog.warn("ai", "permission-undecided", { tool });
         return { behavior: "deny", message: "Auto mode could not approve this, and Bee cannot ask the user mid-request. Say what you would have done instead." };
       },
-      mcpServers: { [SERVER]: { type: "sdk", name: SERVER, instance: server } },
+      mcpServers: { [SERVER]: { type: "sdk", name: SERVER, instance: server }, ...(options.browse ? { [BROWSE_SERVER]: browseMcpServer(options.browse) } : {}) },
       thinking: { type: "adaptive" },
       effort: "medium",
       includePartialMessages: true,
@@ -349,7 +395,7 @@ export function claudeSession(options: { executable: string; cwd: string; store:
         else await new Promise<void>((resolve) => (wake = resolve));
       }
     }
-    const q = query({ prompt: input(), options: { ...baseOptions(router.server), ...(resume ? { resume } : {}) } });
+    const q = query({ prompt: input(), options: { ...baseOptions(router.server, () => turn), ...(resume ? { resume } : {}) } });
     const session = {
       query: q,
       push: (message: SDKUserMessage) => {
@@ -431,7 +477,7 @@ export function claudeSession(options: { executable: string; cwd: string; store:
       }
     } else if (message.type === "user") {
       if (message.parent_tool_use_id || typeof message.message.content === "string") return;
-      const results = message.message.content.flatMap((block) => (block.type === "tool_result" ? [{ id: block.tool_use_id, text: blockText(block.content) }] : []));
+      const results = message.message.content.flatMap((block) => (block.type === "tool_result" ? [{ id: block.tool_use_id, text: blockText(block.content), error: block.is_error === true }] : []));
       if (results.length === 0) return;
       for (const result of results) {
         const tool = t.toolNames.get(result.id) ?? "tool";
@@ -441,7 +487,8 @@ export function claudeSession(options: { executable: string; cwd: string; store:
       }
       t.messages.push({
         role: "tool",
-        content: results.map((result) => ({ type: "tool-result", toolCallId: result.id, toolName: t.toolNames.get(result.id) ?? "tool", output: { type: "text", value: result.text } })),
+        // A failed call (a tool's error, a hook's denial) stays marked, so the claim guard never reads it as done.
+        content: results.map((result) => ({ type: "tool-result", toolCallId: result.id, toolName: t.toolNames.get(result.id) ?? "tool", output: { type: result.error ? "error-text" : "text", value: result.text } })),
       });
       t.lastId = "";
       if (!t.looped && noProgress(t.steps)) {
@@ -510,8 +557,10 @@ export function claudeSession(options: { executable: string; cwd: string; store:
     await own.use(request.tools, request.signal);
     const resume = options.store.load();
     const parts = sessionParts({ system: request.system, sentRules: false, notes: [], history: resume ? [] : request.history, content: request.content });
-    const q = query({ prompt: single(parts), options: { ...baseOptions(own.server), persistSession: false, ...(resume ? { resume, forkSession: true } : {}) } });
+    let current: Turn | null = null;
+    const q = query({ prompt: single(parts), options: { ...baseOptions(own.server, () => current), persistSession: false, ...(resume ? { resume, forkSession: true } : {}) } });
     const { t, finished } = newTurn(request, () => void q.interrupt());
+    current = t;
     const stop = () => t.interrupt();
     request.signal.addEventListener("abort", stop, { once: true });
     void (async () => {
@@ -539,6 +588,7 @@ export function claudeSession(options: { executable: string; cwd: string; store:
   };
   return Object.assign(agent, {
     background,
+    browse: Boolean(options.browse),
     note: (messages: readonly ModelMessage[]) => {
       notes.push(...messages);
     },
