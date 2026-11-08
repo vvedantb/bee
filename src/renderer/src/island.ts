@@ -37,6 +37,8 @@ const ACTIVITY_LABELS = new Map([
   ["read", "Looking at the screen…"],
   ["list_apps", "Checking open apps…"],
   ["list_windows", "Checking open windows…"],
+  // look_at_screen (core/screen-look.ts): a picture of the front window, only when a request needs it.
+  ["look_at_screen", "Looking at your screen…"],
   ["click", "Clicking…"],
   ["type_text", "Typing…"],
   ["set_value", "Typing…"],

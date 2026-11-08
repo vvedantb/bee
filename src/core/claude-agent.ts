@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { query, type Options, type Query, type SDKMessage, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import { CallToolRequestSchema, ListToolsRequestSchema, type CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { asSchema, type AssistantModelMessage, type ModelMessage, type ToolSet } from "ai";
 import { historyAsText } from "./bee-history";
 import { debugLog, msSince } from "./debug-log";
@@ -99,7 +99,34 @@ function resultText(output: unknown): string {
   return text.length > RESULT_CHARS ? `${text.slice(0, RESULT_CHARS - 1)}…` : text;
 }
 
-type LocalTool = { execute: NonNullable<ToolSet[string]["execute"]>; schema: ReturnType<typeof asSchema>; description: string };
+type LocalTool = { execute: NonNullable<ToolSet[string]["execute"]>; toModelOutput: ToolSet[string]["toModelOutput"]; schema: ReturnType<typeof asSchema>; description: string };
+type McpContent = CallToolResult["content"][number];
+/** What a tool's toModelOutput gives (the AI SDK's ToolResultOutput, which "ai" does not export by name). */
+export type ToolModelOutput = Awaited<ReturnType<NonNullable<ToolSet[string]["toModelOutput"]>>>;
+type ContentPart = Extract<ToolModelOutput, { type: "content" }>["value"][number];
+
+/** One part of a tool's model output as an MCP block: an image file as an image block (base64), text as text, anything else named. */
+function partContent(part: ContentPart): McpContent {
+  if (part.type === "text") return { type: "text", text: part.text };
+  if (part.type === "file" && part.data.type === "data" && part.mediaType.startsWith("image/")) {
+    const data = part.data.data;
+    const base64 = typeof data === "string" ? data : Buffer.from(data instanceof ArrayBuffer ? new Uint8Array(data) : data).toString("base64");
+    return { type: "image", data: base64, mimeType: part.mediaType };
+  }
+  return { type: "text", text: `(${part.type} content Bee cannot pass on)` };
+}
+
+/**
+ * A tool's result as MCP content. A tool with toModelOutput (look_at_screen's picture, core/screen-look.ts) gives its own model
+ * output, so an image reaches Claude Code as an image block; any other result goes as text.
+ */
+export async function resultContent(toModelOutput: LocalTool["toModelOutput"], call: Parameters<NonNullable<LocalTool["toModelOutput"]>>[0]): Promise<Pick<CallToolResult, "content" | "isError">> {
+  if (!toModelOutput) return { content: [{ type: "text", text: resultText(call.output) }] };
+  const model = await toModelOutput(call);
+  if (model.type === "content") return { content: model.value.map(partContent) };
+  if (model.type === "execution-denied") return { content: [{ type: "text", text: `Error: ${model.reason ?? "denied"}` }], isError: true };
+  return { content: [{ type: "text", text: resultText(model.value) }], ...(model.type === "error-text" || model.type === "error-json" ? { isError: true } : {}) };
+}
 
 /**
  * Bee's tools as one in-process MCP server that runs the current request's tools. `use` swaps them in; when the names change it
@@ -126,8 +153,9 @@ function toolRouter() {
     const checked = found.schema.validate ? await found.schema.validate(input) : { success: true as const, value: input };
     if (!checked.success) return { content: [{ type: "text", text: `Error: bad input: ${checked.error.message}` }], isError: true };
     try {
-      const output = await found.execute(checked.value, { toolCallId: randomUUID(), messages: [], abortSignal: signal, context: {} });
-      return { content: [{ type: "text", text: resultText(output) }] };
+      const toolCallId = randomUUID();
+      const output = await found.execute(checked.value, { toolCallId, messages: [], abortSignal: signal, context: {} });
+      return await resultContent(found.toModelOutput, { toolCallId, input: checked.value, output });
     } catch (error) {
       return { content: [{ type: "text", text: `Error: ${error instanceof Error ? error.message : String(error)}` }], isError: true };
     }
@@ -136,7 +164,7 @@ function toolRouter() {
     server,
     /** Swaps in a request's tools (those with an execute). */
     use: async (tools: ToolSet, requestSignal: AbortSignal) => {
-      current = new Map(Object.entries(tools).flatMap(([name, item]) => (item.execute ? [[name, { execute: item.execute, schema: asSchema(item.inputSchema), description: typeof item.description === "string" ? item.description : name }] as const] : [])));
+      current = new Map(Object.entries(tools).flatMap(([name, item]) => (item.execute ? [[name, { execute: item.execute, toModelOutput: item.toModelOutput, schema: asSchema(item.inputSchema), description: typeof item.description === "string" ? item.description : name }] as const] : [])));
       signal = requestSignal;
       const names = [...current.keys()].sort().join(",");
       if (listedNames === null || names === listedNames || !server.isConnected()) return;

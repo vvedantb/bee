@@ -1,4 +1,5 @@
-// Bee never captures the screen or all system audio. The mic is primary; the Teams audio fallback captures the Teams app alone
+// Bee never records the screen or all system audio (look_at_screen takes one picture only when a request needs it,
+// main/screen-capture.ts). The mic is primary; the Teams audio fallback captures the Teams app alone
 // through the native helper (main/teams-audio-capture.ts), not Electron. This picks Teams' window, never a screen, for a future
 // Electron `audio: 'application'` path (see ARCHITECTURE.md); nothing captures with it today.
 import { desktopCapturer } from "electron";

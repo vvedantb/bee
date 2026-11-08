@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ACCESS_NEEDS_ACCESSIBILITY, ACCESS_UNSUPPORTED, computerAccessMessage } from "./computer-access";
+import { ACCESS_NEEDS_ACCESSIBILITY, ACCESS_NEEDS_SCREEN_RECORDING, ACCESS_UNSUPPORTED, computerAccessMessage, screenRecordingMessage } from "./computer-access";
 
 describe("computerAccessMessage", () => {
   const mac = { supported: true, platform: "mac", accessibility: "granted", screenRecording: "granted" } as const;
@@ -20,5 +20,16 @@ describe("computerAccessMessage", () => {
   it("says where computer use works", () => {
     expect(computerAccessMessage({ supported: false, platform: "other", accessibility: "unknown", screenRecording: "unknown" })).toBe(ACCESS_UNSUPPORTED);
     for (const text of [ACCESS_UNSUPPORTED, ACCESS_NEEDS_ACCESSIBILITY]) expect(text).not.toMatch(/claude|haiku|anthropic|clerk|screen recording/i);
+  });
+});
+
+describe("screenRecordingMessage", () => {
+  it("asks for Screen Recording on a Mac only, for a picture of the screen", () => {
+    const mac = { supported: true, platform: "mac", accessibility: "granted", screenRecording: "denied" } as const;
+    expect(screenRecordingMessage(mac)).toBe(ACCESS_NEEDS_SCREEN_RECORDING);
+    expect(screenRecordingMessage({ ...mac, screenRecording: "granted" })).toBeNull();
+    expect(screenRecordingMessage({ ...mac, screenRecording: "unknown" })).toBeNull();
+    expect(screenRecordingMessage({ supported: true, platform: "windows", accessibility: "not_required", screenRecording: "denied" })).toBeNull();
+    expect(screenRecordingMessage(null)).toBeNull();
   });
 });
