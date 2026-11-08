@@ -1488,7 +1488,7 @@ describe("computerTools: typing into a document page with no editable field (Lib
     },
   };
 
-  function writer(options: { page?: boolean } = {}) {
+  function writer(options: { page?: boolean; dialog?: boolean; viaSnapshot?: boolean } = {}) {
     const calls: Call[] = [];
     const pressed: string[] = [];
     const focused: string[] = [];
@@ -1496,13 +1496,19 @@ describe("computerTools: typing into a document page with no editable field (Lib
       // Every call passes Bee's own allowlist, as main/agent-desktop.ts checks before it spawns anything.
       assertComputerUse(command, args);
       calls.push({ command, args, ...(runOptions?.stdin !== undefined ? { stdin: runOptions.stdin } : {}) });
-      if (command === "snapshot") return { ok: true, data: WRITER };
-      if (command === "find" && args.includes("--role=textfield")) return { ok: true, data: { matches: [], roles_present: ["frame", "button", "toolbar"] } };
-      if (command === "find") {
-        // After the keys, the page's paragraph holds what was typed (when this page exposes its text).
-        const text = pressed.map((key) => (key === "space" ? " " : key.replace(/^shift\+/, ""))).join("");
-        return { ok: true, data: { matches: options.page !== false && text.includes("hello") ? [{ role: "paragraph", name: text, ref_id: "@s9x:e5" }] : [] } };
+      const marks: Record<string, string> = { space: " ", comma: ",", period: "." };
+      const typedText = pressed.map((key) => marks[key] ?? key.replace(/^shift\+/, "")).join("");
+      const holds = options.page !== false && !options.dialog && typedText.length > 0;
+      if (command === "list-windows") {
+        const frame = { id: "w-310", app_name: "soffice", title: WRITER.window.title, is_focused: !options.dialog };
+        return { ok: true, data: { windows: options.dialog ? [{ id: "w-311", app_name: "soffice", title: "Document Recovery", is_focused: true }, frame] : [frame] } };
       }
+      if (command === "snapshot" && options.viaSnapshot && holds) return { ok: true, data: { ...WRITER, tree: { ...WRITER.tree, children: [{ role: "document text", name: "", children: [{ role: "paragraph", name: typedText }] }] } } };
+      if (command === "snapshot") return { ok: true, data: WRITER };
+      if (command === "find" && args.some((arg) => arg.startsWith("--text="))) return { ok: true, data: { matches: [] } };
+      if (command === "find" && args.includes("--role=paragraph")) return { ok: true, data: { matches: holds && !options.viaSnapshot ? [{ role: "paragraph", name: typedText, ref_id: "@s9x:e5" }] : [] } };
+      if (command === "find" && args.includes("--role=document")) return { ok: true, data: { matches: [] } };
+      if (command === "find" && args.includes("--role=textfield")) return { ok: true, data: { matches: [], roles_present: ["frame", "button", "toolbar"] } };
       if (command === "press") {
         pressed.push(args[0] ?? "");
         return { ok: true, data: { disposition: { delivery: "delivered_verified" } } };
@@ -1531,7 +1537,9 @@ describe("computerTools: typing into a document page with no editable field (Lib
     const typed = await call("type_text", { app: "soffice", text: "hello", effect: "none" });
     expect(actionDone(typed)).toBe(true);
     expect(typed).toMatch(/^Done: typed 5 characters into soffice with the keyboard\./);
-    expect(typed).toContain("Checked: the page shows that text.");
+    expect(typed).toContain("Checked: the document holds that text.");
+    // find --text misses Writer's canvas: the document is read by role.
+    expect(calls.some((item) => item.command === "find" && item.args.includes("--role=paragraph"))).toBe(true);
     expect(typed).not.toMatch(/cannot control|isn['’]t exposed|not exposed/i);
     expect(focused).toEqual(["soffice"]);
     expect(pressed).toEqual(["h", "e", "l", "l", "o"]);
@@ -1540,12 +1548,41 @@ describe("computerTools: typing into a document page with no editable field (Lib
     expect(calls.some((item) => item.command === "type")).toBe(false);
   });
 
-  it("does not claim the page shows the text when its tree cannot show it", async () => {
+  it("reads the document from a compact snapshot when find by role shows nothing", async () => {
+    const { call, calls } = writer({ viaSnapshot: true });
+    const typed = await call("type_text", { app: "soffice", text: "hello", effect: "none" });
+    expect(typed).toMatch(/^Done: typed 5 characters/);
+    expect(typed).toContain("Checked: the document holds that text.");
+    expect(calls.some((item) => item.command === "snapshot" && item.args.includes("--compact"))).toBe(true);
+  });
+
+  it("does not come back Done when the document does not hold the text, and the claim guard rewrites a typed claim", async () => {
+    const { runEvidence, guardLine } = await import("./claim-guard");
     const { call } = writer({ page: false });
     const typed = await call("type_text", { app: "soffice", text: "hello", effect: "none" });
-    expect(actionDone(typed)).toBe(true);
-    expect(typed).toContain("Bee could not see that text on the page");
-    expect(typed).not.toContain("Checked:");
+    expect(actionDone(typed)).toBe(false);
+    expect(typed).toMatch(/^Error: Bee pressed 5 keys but could not confirm/);
+    expect(typed).not.toMatch(/Bee typed|Done|Checked:/);
+    const turn = [
+      { role: "assistant" as const, content: [{ type: "tool-call" as const, toolCallId: "t1", toolName: "type_text", input: { app: "soffice", text: "hello", effect: "none" } }] },
+      { role: "tool" as const, content: [{ type: "tool-result" as const, toolCallId: "t1", toolName: "type_text", output: { type: "text" as const, value: typed } }] },
+    ];
+    expect(guardLine("Typed hello in LibreOffice Writer.", runEvidence(turn))).toMatchObject({ rewritten: true, reason: "unproven-typing" });
+  });
+
+  it("presses no key when a Document Recovery dialog is focused, and says the dialog blocks typing", async () => {
+    const { runEvidence, guardLine } = await import("./claim-guard");
+    const { call, pressed } = writer({ dialog: true });
+    const typed = await call("type_text", { app: "soffice", text: "hello", effect: "none" });
+    expect(pressed).toEqual([]);
+    expect(actionDone(typed)).toBe(false);
+    expect(typed).toMatch(/^Error: a Document Recovery dialog is open and blocks typing/);
+    expect(typed).not.toMatch(/Bee typed|Done/);
+    const turn = [
+      { role: "assistant" as const, content: [{ type: "tool-call" as const, toolCallId: "t1", toolName: "type_text", input: { app: "soffice", text: "hello", effect: "none" } }] },
+      { role: "tool" as const, content: [{ type: "tool-result" as const, toolCallId: "t1", toolName: "type_text", output: { type: "text" as const, value: typed } }] },
+    ];
+    expect(guardLine("Typed hello in LibreOffice Writer.", runEvidence(turn))).toMatchObject({ rewritten: true, reason: "unproven-typing" });
   });
 
   it("presses shift for capitals and names the marks it can type, and checks every character before pressing any", async () => {

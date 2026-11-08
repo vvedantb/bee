@@ -651,6 +651,23 @@ const UNREADABLE = `Error: Bee could not read that snapshot. Take a skeleton sna
 // tries the tree another way, then stops: there is no other way in.
 const THIN_NOTE = `Few elements came back, though Bee gave the app time to load. Try find by role (textfield, button) or name, or a skeleton snapshot then root. If those show nothing usable either, ${CANNOT_CONTROL}.`;
 // A document app, whose page may take keys with no editable field in the tree: LibreOffice runs as soffice.
+/** A LibreOffice dialog that takes the keyboard from the document (crash recovery). Matched on the window title. */
+const BLOCKING_DIALOG = /document recovery/i;
+/** Roles whose node holds the page's text under Writer (AT-SPI paragraph or document text). */
+const DOCUMENT_TEXT_ROLE = /^(?:paragraph|document|document ?text|text)$/i;
+const squash = (a: string) => a.toLowerCase().replace(/\s+/g, " ").trim();
+/** Whether any node (find match or snapshot tree node) with a document-text role holds the typed text in its name or value. */
+export function holdsText(nodes: readonly unknown[], typed: string): boolean {
+  const want = squash(typed);
+  if (!want) return false;
+  const hit = (raw: unknown, depth: number): boolean => {
+    if (!isRecord(raw) || depth > 60) return false;
+    if (DOCUMENT_TEXT_ROLE.test(str(raw.role)) && [raw.name, raw.value, raw.text].some((field) => typeof field === "string" && squash(field).includes(want))) return true;
+    return Array.isArray(raw.children) && raw.children.some((child) => hit(child, depth + 1));
+  };
+  return nodes.some((node) => hit(node, 0));
+}
+
 const DOCUMENT_APP = /\b(?:soffice|libreoffice|writer)\b/i;
 /** The thin-read note, with the keyboard fallback for a document app: a page with no field is not an app Bee cannot control. */
 const thinNote = (app: string | null) =>
@@ -1076,7 +1093,7 @@ export function computerTools(deps: ComputerToolDeps) {
    * (LibreOffice Writer). agent-desktop's type needs a ref, so Bee brings the window forward, then presses one key per character
    * with physical delivery in that app (press --headed --app focuses its window first). Every character is checked before any key
    * is pressed. Stops at the first key that fails and says how much was typed; only a whole run comes back Done, and Bee then
-   * looks for the text on the page (find by text) and says whether it saw it.
+   * reads the document back (paragraph or document text) and comes back Done only when it holds the text.
    */
   const keyboardTypeAction = ({ app, window_id, text, effect }: { app: string; window_id?: string | undefined; text: string; effect: Effect }): Action => ({
     name: "type_text",
@@ -1090,6 +1107,14 @@ export function computerTools(deps: ComputerToolDeps) {
       const focused = await deps.desktop.focusWindow({ app }, control.signal);
       // On Wayland Bee cannot bring a window forward; the headed press still asks agent-desktop to focus it, and refuses if it cannot.
       const note = focused.ok ? "" : `Bee could not bring ${shortName(app, 30)} to the front first (${focused.message}). `;
+      // A Document Recovery dialog takes the keys: refuse before any key is pressed, and never come back Done.
+      const open = control.reason() ? null : await withApp(app, (name) => exec("list-windows", scope({ app: name }), READ_MS));
+      const windows = open?.result.ok ? parseWindows(open.result.data) : [];
+      const blocked = windows.find((window) => BLOCKING_DIALOG.test(window.title));
+      if (blocked && (blocked.focused || !windows.some((window) => window.focused && !BLOCKING_DIALOG.test(window.title)))) {
+        debugLog.info("computer", "keyboard-type-blocked", { app, windows: windows.length });
+        return `Error: a Document Recovery dialog is open and blocks typing into ${shortName(app, 30)}. Nothing was typed. Close or answer the dialog first, then open the document and type again.`;
+      }
       const press = (name: string | undefined, key: string) => exec("press", [key, ...scope({ app: name, window_id }), HEADED_FLAG], ACT_MS);
       const first = await withApp(app, (name) => press(name, keys[0]!));
       currentApp = first.app ?? currentApp;
@@ -1107,12 +1132,24 @@ export function computerTools(deps: ComputerToolDeps) {
         const why = failed ? errorLine(failed) : STOPPED;
         return `${first.note}${note}${why} Bee typed ${typed} of ${keys.length} characters with the keyboard before it stopped. Look before you type again.`;
       }
-      // Where possible, check the page shows it. A page whose tree does not expose its text cannot be checked.
-      const looked = control.reason() ? null : await exec("find", [`--text=${cleanText(text)}`, ...scope({ app: first.app, window_id })], READ_MS);
-      const seen = looked?.ok && isRecord(looked.data) && Array.isArray(looked.data.matches) && looked.data.matches.length > 0;
-      const check = seen ? "Checked: the page shows that text." : "Bee could not see that text on the page: check with find by text, or a snapshot, before saying it is there.";
+      // Read the document back through AT-SPI (paragraph or document text, then a compact snapshot): find --text misses Writer's canvas.
+      const where = scope({ app: first.app, window_id });
+      let seen = false;
+      for (const role of ["paragraph", "document"]) {
+        if (seen || control.reason()) break;
+        const looked = await exec("find", [`--role=${role}`, ...where], READ_MS);
+        seen = looked.ok && isRecord(looked.data) && Array.isArray(looked.data.matches) && holdsText(looked.data.matches, text);
+      }
+      if (!seen && !control.reason()) {
+        const snap = await exec("snapshot", ["--compact", ...where], READ_MS);
+        seen = snap.ok && isRecord(snap.data) && holdsText([snap.data.tree], text);
+      }
+      if (!seen) {
+        // No "Done" and no "typed": a dialog may have taken the keys, so this proves nothing to the claim guard.
+        return `${first.note}${note}Error: Bee pressed ${keys.length} keys but could not confirm ${shortName(first.app ?? app, 30)} holds that text. A dialog may have taken them. Look at the window before you say it is there.`;
+      }
       // "Done" first (after any app-name note), so actionDone and the claim guard read it as done.
-      return `${first.note}Done: typed ${keys.length} characters into ${shortName(first.app ?? app, 30)} with the keyboard. ${note}${check}`;
+      return `${first.note}Done: typed ${keys.length} characters into ${shortName(first.app ?? app, 30)} with the keyboard. ${note}Checked: the document holds that text.`;
     },
     gate: () => ({ command: "type", target: null, lastField, effect, text }),
   });
