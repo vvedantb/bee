@@ -50,6 +50,26 @@ describe.skipIf(process.platform === "win32")("createClaudeCode", () => {
     expect(result.error).toBe("Claude Code could not update: Error: no permission to write");
   });
 
+  it("starts a new process with the browse tools once Browse is installed, and keeps it while nothing changes", async () => {
+    const fake = fakeClaude({ version: "2.1.318", next: "" });
+    let browse: string | null = null;
+    const claude = createClaudeCode({ sessionDir: join(fake.path, "..", "session"), browsePath: () => browse });
+    const agentNow = async () => {
+      const found = await claude.agent();
+      if (!("agent" in found)) throw new Error(found.error);
+      return found.agent;
+    };
+    const before = await agentNow();
+    expect(before.browse).toBe(false);
+    expect(await agentNow()).toBe(before);
+    browse = "/home/sam/.local/bin/browse";
+    const after = await agentNow();
+    expect(after).not.toBe(before);
+    expect(after.browse).toBe(true);
+    expect(await agentNow()).toBe(after);
+    claude.close();
+  });
+
   it("reports a signed-out install", async () => {
     const fake = fakeClaude({ version: "2.1.318", next: "", loggedIn: false });
     expect(await createClaudeCode({ sessionDir: join(fake.path, "..", "session") }).status(true)).toEqual({ state: "signed-out", path: fake.path, version: "2.1.318" });

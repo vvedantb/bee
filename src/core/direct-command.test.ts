@@ -12,7 +12,8 @@ import { GUIDE_MODEL, type BeeGateway } from "./gateway";
 // The test gateway's id for the agent's planning tier (test/helpers/model-agent.ts); the fast pass uses GUIDE_MODEL.
 const COMMAND_MODEL = "plan";
 import { modelAgent } from "../../test/helpers/model-agent";
-import { AGENT_MODEL } from "./claude-agent";
+import { AGENT_MODEL, type AgentRequest, type AgentResult } from "./claude-agent";
+import { BROWSE_RULES } from "./browse";
 import { LUNA_COMPUTER, LUNA_DIRECT_SYSTEM, LUNA_NO_COMPUTER, LUNA_SYSTEM, MAX_DIRECT_LINES, TIP_MAX_STEPS, buildLunaPrompt, guideWithLuna } from "./luna";
 import { SEED_NOTES, chunkNotes } from "./notes";
 
@@ -699,5 +700,46 @@ describe("runDirectCommand: background tasks", () => {
     const plain = stepsModel([text("- Hi.\n")]);
     await runDirectCommand({ command: "say hi", snippets, agent: modelAgent(plain.model), gateway: null, actions: null, background: () => ({ ok: true, id: "x" }) });
     expect(plain.calls[0]?.tools ?? []).not.toContain("run_in_background");
+  });
+});
+
+describe("runDirectCommand: OpenCode Browse", () => {
+  /** A session agent with Browse whose AI ran one browse execute (the Claude Code session reports the confirmed one) and said `line`. */
+  function browseAgent(line: string, confirmedKind: "send" | null) {
+    const requests: AgentRequest[] = [];
+    const agent = async (request: AgentRequest): Promise<AgentResult> => {
+      requests.push(request);
+      if (confirmedKind) request.onConfirmed?.("toolu_send", confirmedKind);
+      const messages: ModelMessage[] = [
+        { role: "assistant", content: [{ type: "tool-call", toolCallId: "toolu_send", toolName: "browse__execute", input: { code: "await page.getByRole('button', { name: 'Send' }).click()" } }] },
+        { role: "tool", content: [{ type: "tool-result", toolCallId: "toolu_send", toolName: "browse__execute", output: { type: "text", value: '{"result":null}' } }] },
+        { role: "assistant", content: [{ type: "text", text: `- ${line}` }] },
+      ];
+      return { text: `- ${line}`, messages, finish: "stop", looped: false, sources: [], costUsd: null };
+    };
+    return { agent: Object.assign(agent, { browse: true }), requests };
+  }
+
+  it("gives each AI step the browse rules and the island's Confirm", async () => {
+    const { agent, requests } = browseAgent("Sent the email to Sam.", "send");
+    const confirm = async () => true;
+    const result = await runDirectCommand({ command: "email Sam that I'm running late", snippets, agent, gateway: null, actions: null, confirm });
+    expect(requests[0]?.system).toContain(BROWSE_RULES);
+    expect(requests[0]?.confirm).toBe(confirm);
+    expect(result.tips).toEqual(["Sent the email to Sam."]);
+  });
+
+  it("counts a confirmed browse send as proof, and nothing else", async () => {
+    const { agent } = browseAgent("Sent the email and deleted the draft.", "send");
+    // Only the gate's confirmed send is proven: the browse execute itself is not "outside" once confirmed.
+    const result = await runDirectCommand({ command: "send it and delete the draft", snippets, agent, gateway: null, actions: null, confirm: async () => true });
+    expect(result.tips).toEqual(["Sent the message. Bee could not confirm anything was deleted."]);
+  });
+
+  it("leaves rules alone for a session without Browse", async () => {
+    const { agent, requests } = browseAgent("Hi.", null);
+    await runDirectCommand({ command: "say hi", snippets, agent: Object.assign(agent, { browse: false }), gateway: null, actions: null });
+    expect(requests[0]?.system).not.toContain(BROWSE_RULES);
+    expect(requests[0]?.confirm).toBeUndefined();
   });
 });

@@ -1,3 +1,4 @@
+import type { BrowseInstall } from "./BrowseSection";
 import type { ClaudeCodeUpdate } from "./ClaudeCodeSection";
 import { getToken } from "@clerk/electron/react";
 import { useSyncExternalStore } from "react";
@@ -17,6 +18,7 @@ import {
   SESSION_TRANSCRIPT_MAX,
   clampTip,
   type ClaudeCodeView,
+  type BrowseView,
   type BackgroundJobView,
   type BriefingView,
   type CardAction,
@@ -155,6 +157,9 @@ export type BeeState = {
   claudeCode: ClaudeCodeView | null;
   // Settings → Update Claude Code: running, or why the last update failed.
   claudeCodeUpdate: ClaudeCodeUpdate;
+  // OpenCode Browse, so "Bee, …" requests can use the user's own browser, for Settings (null until asked), and its installer.
+  browse: BrowseView | null;
+  browseInstall: BrowseInstall;
   // The conversation window after a request to Bee (core/wake-word.ts CONVERSATION_WINDOW_MS): a follow-up needs no "Bee". The
   // pill says Bee is listening. State only, never words.
   conversationOpen: boolean;
@@ -231,6 +236,8 @@ let state: BeeState = {
   asking: false,
   claudeCode: null,
   claudeCodeUpdate: "idle",
+  browse: null,
+  browseInstall: "idle",
   conversationOpen: false,
 };
 const listeners = new Set<() => void>();
@@ -1951,6 +1958,26 @@ export const actions = {
       set({ claudeCode: result.view, claudeCodeUpdate: result.error ? { error: result.error } : "idle" });
     } catch {
       set({ claudeCodeUpdate: { error: "Claude Code could not update." } });
+    }
+  },
+
+  /** Settings: OpenCode Browse. `fresh` checks again now (Check again). Unknown on failure: missing. */
+  async refreshBrowse(fresh = false): Promise<void> {
+    try {
+      set({ browse: await window.bee.browse(fresh) });
+    } catch {
+      set({ browse: { state: "missing" } });
+    }
+  },
+
+  /** Settings → Install: runs the Browse installer in main (minutes, while the user adds the extension), then shows the new state. */
+  async installBrowse(): Promise<void> {
+    set({ browseInstall: "installing" });
+    try {
+      const result = await window.bee.installBrowse();
+      set({ browse: result.view, browseInstall: result.error ? { error: result.error } : "idle" });
+    } catch {
+      set({ browseInstall: { error: "Browse could not install." } });
     }
   },
 

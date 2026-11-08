@@ -1,36 +1,27 @@
-import { execFile } from "node:child_process";
-import { accessSync, constants, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { claudeSession, type CommandAgent, type SessionStore } from "../core/claude-agent";
 import { MIN_CLAUDE_CODE, claudeCandidates, claudeCodeMessage, parseClaudeVersion, parseLoggedIn, versionAtLeast, type ClaudeCodeStatus } from "../core/claude-code";
 import { debugLog } from "../core/debug-log";
+import { executable, runFile } from "./binary";
 
 // Main's side of "Bee, …" requests: find the user's own Claude Code (core/claude-code.ts), check its version and login, and build
 // the agent on it (core/claude-agent.ts). Bee ships no Claude Code and keeps no token: the install's own login is used, so a user who
 // signs in to Claude Code is signed in for Bee too. A ready result is kept for a few minutes; any other is checked again on the next
 // request, so installing, updating or signing in works without a restart. Requests share one Claude Code session for as long as
-// Bee runs (core/claude-agent.ts claudeSession); its id is kept in `sessionDir`, so the next start resumes the conversation.
+// Bee runs (core/claude-agent.ts claudeSession); its id is kept in `sessionDir`, so the next start resumes the conversation. OpenCode
+// Browse (main/browse.ts) is attached when installed: when it appears, moves or goes, the next request starts a new process on the
+// same session id, so it has (or drops) the browse tools and still resumes the conversation.
 
 const READY_FOR_MS = 5 * 60_000;
 const CHECK_MS = 10_000;
 // `claude update` downloads the new version: give it time.
 const UPDATE_MS = 5 * 60_000;
 
-function run(path: string, args: string[], timeout = CHECK_MS): Promise<{ ok: boolean; out: string }> {
-  return new Promise((resolve) => {
-    execFile(path, args, { timeout, windowsHide: true }, (error, stdout, stderr) => resolve({ ok: !error, out: `${String(stdout)}${error ? `\n${String(stderr)}` : ""}` }));
-  });
-}
-
-function executable(path: string): boolean {
-  try {
-    if (!statSync(path).isFile()) return false;
-    if (process.platform !== "win32") accessSync(path, constants.X_OK);
-    return true;
-  } catch {
-    return false;
-  }
+async function run(path: string, args: string[], timeout = CHECK_MS): Promise<{ ok: boolean; out: string }> {
+  const result = await runFile(path, args, timeout);
+  return { ok: result.ok, out: `${result.stdout}${result.ok ? "" : `\n${result.stderr}`}` };
 }
 
 export type ClaudeCode = {
@@ -67,9 +58,12 @@ function sessionStore(dir: string): SessionStore {
   };
 }
 
-/** `sessionDir`: Bee's own folder for the Claude Code session (its working folder, and the id to resume). */
-export function createClaudeCode(options: { sessionDir: string }): ClaudeCode {
-  let session: { path: string; agent: ReturnType<typeof claudeSession> } | null = null;
+/**
+ * `sessionDir`: Bee's own folder for the Claude Code session (its working folder, and the id to resume). `browsePath`: where the
+ * `browse` binary is now, or null (main/browse.ts path), read per request.
+ */
+export function createClaudeCode(options: { sessionDir: string; browsePath?: () => string | null }): ClaudeCode {
+  let session: { path: string; browse: string | null; agent: ReturnType<typeof claudeSession> } | null = null;
   let ready: { status: ClaudeCodeStatus; at: number } | null = null;
   async function check(): Promise<ClaudeCodeStatus> {
     const path = claudeCandidates({ platform: process.platform, home: homedir(), env: process.env }).find(executable);
@@ -102,11 +96,14 @@ export function createClaudeCode(options: { sessionDir: string }): ClaudeCode {
     agent: async () => {
       const found = await status();
       if (found.state !== "ready") return { error: claudeCodeMessage(found) ?? "" };
-      // One session per install: a new path (moved or reinstalled) starts its own process, resuming the same conversation.
-      if (session?.path !== found.path) {
+      // One process per install and Browse path: a new path (moved, reinstalled, Browse just installed) starts its own process,
+      // resuming the same conversation.
+      const browse = options.browsePath?.() ?? null;
+      if (session?.path !== found.path || session.browse !== browse) {
+        if (session) debugLog.info("ai", "session-restart", { claude: session.path !== found.path, browse: Boolean(browse) });
         session?.agent.close();
         mkdirSync(options.sessionDir, { recursive: true });
-        session = { path: found.path, agent: claudeSession({ executable: found.path, cwd: options.sessionDir, store: sessionStore(options.sessionDir) }) };
+        session = { path: found.path, browse, agent: claudeSession({ executable: found.path, cwd: options.sessionDir, store: sessionStore(options.sessionDir), browse }) };
       }
       return { agent: session.agent };
     },
