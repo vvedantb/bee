@@ -67,6 +67,17 @@ export function offLimitsApp(name: string): boolean {
 }
 
 const SHELL_MESSAGE = "Error: Bee does not type into terminals or consoles.";
+// Ref commands that write to, or focus, an element: never on a terminal or console.
+const SHELL_COMMANDS = new Set<ComputerUseCommand>(["click", "type", "set-value", "clear", "focus"]);
+// Keys as press_key sends them: lower case, no spaces around +.
+const cleanKeys = (keys: string) => keys.trim().toLowerCase().replace(/\s*\+\s*/g, "+");
+const KEYS_PATTERN = /^[a-z0-9]{1,12}(?:\+[a-z0-9]{1,12}){0,4}$/;
+
+/**
+ * One action as a tool or a batch runs it: its name, step line, work and confirm gate, and refuse: why it must not run (an
+ * unseen ref, an app Bee never uses, a terminal), read just before the gate so a refused action never asks for a Confirm.
+ */
+type Action = { name: string; label: string; work: () => Promise<string>; gate?: () => GateAction; refuse?: () => string | null };
 
 // Overlays snapshot and find may read instead of the window, as each OS has them (agent-desktop status supported_surfaces).
 // Since agent-desktop 1.1 a kind the OS does not have is INVALID_ARGS, so the AI is never offered one. Windows reads an open
@@ -713,18 +724,22 @@ export function computerTools(deps: ComputerToolDeps) {
   };
 
   /**
-   * One action inside a step: shows its line, asks first when the gate says so, then does the work. Never throws. A decline
-   * stops the run.
+   * One action inside a step: shows its line, refuses it when its checks say so, asks first when the gate says so, then does
+   * the work. Never throws. A decline stops the run.
    */
-  const runAction = async (name: string, label: string, work: () => Promise<string>, gate?: () => GateAction): Promise<string> => {
+  const runAction = async ({ name, label, work, gate, refuse }: Action): Promise<string> => {
     const started = performance.now();
     debugLog.info("computer", "step", { n: control.steps(), tool: name, label, app: currentApp });
     deps.onStep?.(clip(label, 60));
     deps.onActivity?.({ tool: name, phase: "start" });
-    // What the gate counts this action as, read before it runs (a key press can move focus): proof once it is done.
-    const before = gate ? gate() : null;
-    const committed = before ? irreversibleKind(before) : null;
     try {
+      // Every check that would refuse the action, before the gate: a refused action never asks for a Confirm.
+      const refused = refuse?.() ?? null;
+      if (refused) return refused;
+      if (control.reason()) return STOPPED;
+      // What the gate counts this action as, read before it runs (a key press can move focus): proof once it is done.
+      const before = gate ? gate() : null;
+      const committed = before ? irreversibleKind(before) : null;
       if (before && committed) {
         const kind = committed;
         deps.onStep?.(CONFIRM_LABEL);
@@ -760,15 +775,11 @@ export function computerTools(deps: ComputerToolDeps) {
   };
 
   /**
-   * Runs one tool step: counts it, shows its line, asks first when the gate says so, then does the work. A step after the run
-   * stopped does nothing.
+   * Runs one tool step: counts it, shows its line, refuses or asks first when its checks or gate say so, then does the work.
+   * A step after the run stopped does nothing.
    */
-  const step = (name: string, label: string, work: () => Promise<string>, gate?: () => GateAction): Promise<string> =>
-    serial(async () => (countStep(name) ? runAction(name, label, work, gate) : STOPPED));
-
-  /** One action as a tool or a batch runs it: its name, step line, work and confirm gate. */
-  type Action = { name: string; label: string; work: () => Promise<string>; gate?: () => GateAction };
-  const run = (action: Action) => step(action.name, action.label, action.work, action.gate);
+  const run = (action: Action): Promise<string> => serial(async () => (countStep(action.name) ? runAction(action) : STOPPED));
+  const step = (name: string, label: string, work: () => Promise<string>) => run({ name, label, work });
 
   /** A ref the AI gave: one this run's snapshots or finds showed it, else the error to send back. */
   const badRef = (ref: string): string | null => (REF_PATTERN.test(ref) && refs.has(ref) ? null : "Error: use a ref from this task's latest snapshot or find, for example @s8f3k2p9:e12.");
@@ -859,7 +870,7 @@ export function computerTools(deps: ComputerToolDeps) {
   };
 
   /**
-   * A ref action: check the ref, run it, and keep where focus is for Return. Never in a terminal or console. Once more when
+   * A ref action: run it (refuseRef checks the ref first), and keep where focus is for Return. Once more when
    * agent-desktop could not check the element in time and says nothing was sent (resolution_identity_unknown). stdin: text for
    * type and set-value, sent on the child's stdin with --stdin so it is never in argv or the logs. A ref refused as ambiguous
    * (AMBIGUOUS_TARGET: nothing reached the app) is found again in a new read of its window by role and name; the action runs on
@@ -867,7 +878,6 @@ export function computerTools(deps: ComputerToolDeps) {
    */
   const onRef = (command: ComputerUseCommand, given: string, args: string[] = [], timeoutMs = ACT_MS, stdin?: string, gate?: (ref: string) => GateAction) => async () => {
     let ref = given;
-    if (["click", "type", "set-value", "clear", "focus"].includes(command) && shellElement(refs.get(ref))) return SHELL_MESSAGE;
     let result = await exec(command, [ref, ...args], timeoutMs, stdin);
     if (!result.ok && result.kind === "resolution_identity_unknown" && result.retry === "safe" && !control.reason()) {
       debugLog.info("computer", "act-again", { command, kind: result.kind });
@@ -879,7 +889,7 @@ export function computerTools(deps: ComputerToolDeps) {
       const twin = fresh?.ok ? twinOf(refs.get(given), fresh.kept) : null;
       debugLog.info("computer", "ambiguous-again", { command, kind: result.kind ?? null, found: !!twin });
       if (twin && gate && (irreversibleKind(gate(given)) || irreversibleKind(gate(twin)))) return `${errorLine(result)} Bee read the window again: that element is now ${twin}. Use that ref.`;
-      if (twin && shellElement(refs.get(twin)) && ["click", "type", "set-value", "clear", "focus"].includes(command)) return SHELL_MESSAGE;
+      if (twin && shellElement(refs.get(twin)) && SHELL_COMMANDS.has(command)) return SHELL_MESSAGE;
       if (twin && !control.reason()) {
         result = await exec(command, [twin, ...args], timeoutMs, stdin);
         [ref, note] = [twin, ` (Bee read the window again and used ${twin}.)`];
@@ -891,57 +901,66 @@ export function computerTools(deps: ComputerToolDeps) {
   };
 
   const gateFor = (command: string, ref: string, extra: Partial<GateAction> & { effect?: Effect }) => (): GateAction => ({ command, target: refs.get(ref) ?? null, lastField, ...extra });
+  /** A ref action's refusal: a ref this run has not seen (or dropped with an app Bee never uses), or a terminal or console. */
+  const refuseRef = (command: ComputerUseCommand, ref: string) => (): string | null =>
+    badRef(ref) ?? (SHELL_COMMANDS.has(command) && shellElement(refs.get(ref)) ? SHELL_MESSAGE : null);
 
   // The acting tools as actions, so a tool call and a batch (act) run the same checks, gates and work.
   const clickAction = ({ ref, effect }: { ref: string; effect: Effect }): Action => ({
     name: "click",
     label: label(ref, "Clicking", "Clicking…"),
-    work: async () => badRef(ref) ?? onRef("click", ref, [], ACT_MS, undefined, (to) => gateFor("click", to, { effect })())(),
+    work: onRef("click", ref, [], ACT_MS, undefined, (to) => gateFor("click", to, { effect })()),
     gate: gateFor("click", ref, { effect }),
+    refuse: refuseRef("click", ref),
   });
   const typeAction = ({ ref, text, effect, physical }: { ref: string; text: string; effect: Effect; physical?: boolean | undefined }): Action => ({
     name: "type_text",
     label: label(ref, "Typing in", "Typing…"),
-    work: async () =>
-      badRef(ref) ??
-      onRef("type", ref, [...(physical ? [HEADED_FLAG] : []), STDIN_FLAG], ACT_MS + Math.min(40_000, text.length * 40), cleanText(text), (to) => gateFor("type", to, { effect, text })())(),
+    work: onRef("type", ref, [...(physical ? [HEADED_FLAG] : []), STDIN_FLAG], ACT_MS + Math.min(40_000, text.length * 40), cleanText(text), (to) => gateFor("type", to, { effect, text })()),
     gate: gateFor("type", ref, { effect, text }),
+    refuse: refuseRef("type", ref),
   });
   const setValueAction = ({ ref, value, effect }: { ref: string; value: string; effect: Effect }): Action =>
     value === ""
       ? {
           name: "set_value",
           label: label(ref, "Clearing", "Clearing a field…"),
-          work: async () => badRef(ref) ?? onRef("clear", ref, [], ACT_MS, undefined, (to) => gateFor("clear", to, { effect })())(),
+          work: onRef("clear", ref, [], ACT_MS, undefined, (to) => gateFor("clear", to, { effect })()),
           gate: gateFor("clear", ref, { effect }),
+          refuse: refuseRef("clear", ref),
         }
       : {
           name: "set_value",
           label: label(ref, "Typing in", "Typing…"),
-          work: async () => badRef(ref) ?? onRef("set-value", ref, [STDIN_FLAG], ACT_MS, cleanText(value), (to) => gateFor("set-value", to, { effect, text: value })())(),
+          work: onRef("set-value", ref, [STDIN_FLAG], ACT_MS, cleanText(value), (to) => gateFor("set-value", to, { effect, text: value })()),
           gate: gateFor("set-value", ref, { effect, text: value }),
+          refuse: refuseRef("set-value", ref),
         };
   const focusAction = ({ ref, physical }: { ref: string; physical?: boolean | undefined }): Action => ({
     name: "focus",
     label: label(ref, "Selecting", "Selecting a field…"),
-    work: async () => badRef(ref) ?? onRef("focus", ref, physical ? [HEADED_FLAG] : [])(),
+    work: onRef("focus", ref, physical ? [HEADED_FLAG] : []),
+    refuse: refuseRef("focus", ref),
   });
   const selectAction = ({ ref, option, effect }: { ref: string; option: string; effect: Effect }): Action => ({
     name: "select_option",
     label: `Choosing ${shortName(option, 30)}…`,
-    work: async () => badRef(ref) ?? onRef("select", ref, ["--", cleanText(option)], ACT_MS, undefined, (to) => gateFor("select", to, { effect, text: option })())(),
+    work: onRef("select", ref, ["--", cleanText(option)], ACT_MS, undefined, (to) => gateFor("select", to, { effect, text: option })()),
     gate: gateFor("select", ref, { effect, text: option }),
+    refuse: refuseRef("select", ref),
   });
   type PressInput = { keys: string; app: string; window_id?: string | undefined; ref?: string | undefined; effect: Effect; physical?: boolean | undefined };
   const pressAction = (input: PressInput): Action => ({
     name: "press_key",
     label: `Pressing ${keysLabel(input.keys)}…`,
+    refuse: () =>
+      (KEYS_PATTERN.test(cleanKeys(input.keys)) ? null : "Error: keys look like return or cmd+w.") ??
+      badApp(input.app) ??
+      badWindow(input.window_id) ??
+      (input.ref ? badRef(input.ref) : null) ??
+      (shellElement(input.ref ? refs.get(input.ref) : lastField) ? SHELL_MESSAGE : null),
     work: async () => {
-      const keys = input.keys.trim().toLowerCase().replace(/\s*\+\s*/g, "+");
-      if (!/^[a-z0-9]{1,12}(?:\+[a-z0-9]{1,12}){0,4}$/.test(keys)) return "Error: keys look like return or cmd+w.";
-      const invalid = badApp(input.app) ?? badWindow(input.window_id) ?? (input.ref ? badRef(input.ref) : null);
-      if (invalid) return invalid;
-      if (shellElement(input.ref ? refs.get(input.ref) : lastField)) return SHELL_MESSAGE;
+      const keys = cleanKeys(input.keys);
       const headed = input.physical ? [HEADED_FLAG] : [];
       if (input.ref) {
         const focused = await exec("focus", [input.ref, ...headed], ACT_MS);
@@ -965,7 +984,7 @@ export function computerTools(deps: ComputerToolDeps) {
     },
     gate: () => ({
       command: "press",
-      keys: input.keys.trim().toLowerCase().replace(/\s*\+\s*/g, "+"),
+      keys: cleanKeys(input.keys),
       lastField: (input.ref ? refs.get(input.ref) : undefined) ?? lastField,
       effect: input.effect,
     }),
@@ -994,7 +1013,7 @@ export function computerTools(deps: ComputerToolDeps) {
           lines.push(STOPPED);
           break;
         }
-        const output = await runAction(action.name, action.label, action.work, action.gate);
+        const output = await runAction(action);
         lines.push(`${index + 1}. ${action.name}: ${output}`);
         if (output === STOPPED) break;
         if (!actionDone(output)) {
