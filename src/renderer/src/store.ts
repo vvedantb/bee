@@ -7,6 +7,7 @@ import { detectLinks, mergeChips, sourceChips, visibleChips, type LinkChip } fro
 import { MAX_STEERING_TIPS, isFiller, isNewTurn, isQuestion, mergeTips, recentRestarts, runDelayMs, tipCap, tipKey, waitsForRun } from "../../core/steering";
 import { mergeLines, pipelineText, summaryTranscript, type SessionLine } from "../../core/sync-lines";
 import { TEAMS_AUDIO_SPEAKER, TEAMS_AUDIO_SPEAKER_ID, teamsAudioEcho, teamsAudioPlan, teamsAudioReplaced, type TeamsAudioPlan } from "../../core/teams-audio";
+import { RECAP_AI_MIN_LINES, RECAP_LINES_SENT, RECAP_WINDOW_MS, beeLines, isRecapRequest, localMeetingLines, missedLines, recapBody, speakerText, type RecapEvent } from "../../core/recap";
 import { CONVERSATION_IDLE_MS, addExchange, commandFallbackReply, type BeeExchange } from "../../core/bee-history";
 import { CONVERSATION_QUESTION_MS, CONVERSATION_WINDOW_MS, OTHERS_QUIET_MS, REOPEN_WINDOW_MS, WAKE_FOLLOW_MS, isConfirmWords, isForBee, replyInvitesAnswer, routeLine } from "../../core/wake-word";
 import type { TeamsAudioFailure } from "../../core/teams-audio-protocol";
@@ -73,8 +74,9 @@ export type McpTestState = { busy: boolean; result: McpTestResult | null };
 
 // A card in the island, shown until the island closes: "Last time with these people…" at meeting start (once per detected
 // meeting), the briefing before a meeting (core/briefing.ts), or the follow-up after a saved one (core/follow-through.ts).
-// label: the pill's text while the card is alone. Each button starts a background task; a pressed one goes.
-export type CardButton = { label: string; action: CardAction };
+// label: the pill's text while the card is alone. Each button starts a background task; a pressed one goes. The recap card
+// (core/recap.ts) may instead offer "Open summary", which opens the saved summary and stays.
+export type CardButton = { label: string; action: CardAction | { kind: "openSummary" } };
 export type MeetingCard = { id: string; label: string; lines: string[]; buttons: CardButton[] };
 
 // Computer use in progress for a direct request ("Bee, send Sam a message in Discord"): the step as one short line for the
@@ -336,6 +338,18 @@ let islandTimer: ReturnType<typeof setTimeout> | undefined;
 // Mic hints: one detector for the app, so a hint's cooldown outlasts a mic toggle. Fed by each mic frame and phrase outcome.
 const hintDetector = createHintDetector();
 let hintShownAt = 0;
+// "What did I miss?" (core/recap.ts): Bee's own activity as it happens, the last follow-up card while it has buttons, when the
+// user last dealt with Bee (a request, a dismiss, a recap), the away period last recapped, and whether this meeting's
+// join-late recap was offered.
+let recapEvents: RecapEvent[] = [];
+let followCard: MeetingCard | null = null;
+let lastSeenAt = 0;
+let recapAwaySince = 0;
+let joinRecapOffered = false;
+let recapSeq = 0;
+const RECAP_EVENTS_MAX = 20;
+// The mic goes on in a meeting with at least this many missed lines from others: offer the recap once.
+const JOIN_RECAP_MIN_LINES = 2;
 const EMPTY_RESULT = { tips: [], guideError: null };
 const STOPPED_RESULT: PipelineResult = {
   notes: [],
@@ -1043,6 +1057,14 @@ async function stopCommand(): Promise<void> {
  * (rememberExchange) and opens the conversation window.
  */
 async function runCommand(command: string): Promise<void> {
+  // "Bee, what did I miss?": the recap card, made here from what the store already has, instead of an AI request.
+  if (isRecapRequest(command)) {
+    debugLog.info("ai", "recap-request", { command });
+    set({ result: null, partialTips: null, tipSources: {}, chips: [], dismissedChipIds: [], fullText: false });
+    await showRecap("request", recapRequestSince());
+    return;
+  }
+  lastSeenAt = Date.now();
   const previous = latestRun;
   const run = ++latestRun;
   const started = performance.now();
@@ -1266,6 +1288,70 @@ function showCard(card: MeetingCard): void {
   void applyWindowSize();
 }
 
+function noteRecap(event: RecapEvent): void {
+  recapEvents = [...recapEvents, event].slice(-RECAP_EVENTS_MAX);
+}
+
+type RecapReason = "away" | "joined" | "request";
+const RECAP_HEADING: Record<RecapReason, string> = { away: "While you were away", joined: "Before you joined", request: "While you were away" };
+const clock = (at: number) => new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+
+/**
+ * The recap card (core/recap.ts) for what happened since `since`: other people's lines and, unless the user just joined, Bee's
+ * own activity. It shows at once with the lines listed; with enough lines, the AI's short take replaces them when it lands. The
+ * user's own last line moves `since` on: they were there. Nothing to recap: no card, except on request. Logs counts only.
+ */
+async function showRecap(reason: RecapReason, since: number): Promise<void> {
+  const from = Math.max(since, ...state.session.lines.filter((line) => line.own).map((line) => line.clientTs));
+  const missed = missedLines(state.session.lines, from);
+  const bee = reason === "joined" ? [] : beeLines(recapEvents, from);
+  const saved = reason !== "joined" && recapEvents.some((event) => event.kind === "summary" && event.at > from);
+  const buttons: CardButton[] = !saved ? [] : followCard?.buttons.length ? followCard.buttons : [{ label: "Open summary", action: { kind: "openSummary" } }];
+  debugLog.info("recap", "show", { reason, missed: missed.length, bee: bee.length });
+  lastSeenAt = Date.now();
+  recapSeq += 1;
+  const id = `recap-${recapSeq}`;
+  if (missed.length === 0 && bee.length === 0) {
+    if (reason === "request") showCard({ id, label: "Recap", lines: [`Nothing new since ${clock(from)}.`], buttons: [] });
+    return;
+  }
+  const card = (meeting: string[]): MeetingCard => ({ id, label: "Recap", lines: [RECAP_HEADING[reason], ...recapBody(meeting, bee)], buttons });
+  const shown = card(localMeetingLines(missed));
+  showCard(shown);
+  if (missed.length < RECAP_AI_MIN_LINES) return;
+  const bullets = await recapSummary(missed);
+  // Only over the card as shown: not one that was replaced, closed or had a button pressed meanwhile.
+  if (!bullets || state.meetingCard !== shown) return;
+  showCard(card(bullets));
+}
+
+/** The AI's bullets for the missed lines (main, core/recap.ts), or null: no key, a failure, or an older preload. */
+async function recapSummary(missed: readonly SessionLine[]): Promise<string[] | null> {
+  const ask = window.bee.recapSummary;
+  if (typeof ask !== "function") return null;
+  try {
+    return await ask({ lines: missed.slice(-RECAP_LINES_SENT).map((line) => speakerText(line).slice(0, 1000)), sessionToken: await sessionToken() });
+  } catch {
+    return null;
+  }
+}
+
+/** "What did I miss?" looks back to the user's last dealing with Bee, but not before this meeting began (or 30 min, with none). */
+function recapRequestSince(): number {
+  const first = state.session.lines[0];
+  return Math.max(lastSeenAt, first ? first.clientTs - 1 : Date.now() - RECAP_WINDOW_MS);
+}
+
+/** The mic went on in a meeting others have been talking in, and the user has said nothing yet: offer the recap, once a meeting. */
+function offerJoinRecap(): void {
+  const lines = state.session.lines;
+  const first = lines[0];
+  if (joinRecapOffered || !first || lines.some((line) => line.own)) return;
+  if (missedLines(lines, 0).length < JOIN_RECAP_MIN_LINES) return;
+  joinRecapOffered = true;
+  void showRecap("joined", first.clientTs - 1);
+}
+
 function setSummary(patch: Partial<SummaryState>): void {
   set({ summary: { ...state.summary, ...patch } });
 }
@@ -1481,6 +1567,7 @@ async function startMic({ transcribe, onFrame }: MicOptions): Promise<void> {
       void mic.stop();
     };
     set({ mic: { on: true, level: 0, error: null } });
+    offerJoinRecap();
     // Off the critical path: Teams audio (if the fallback applies) never blocks the mic.
     void syncTeamsAudio();
   } catch (error) {
@@ -1606,6 +1693,7 @@ export const actions = {
   dismissIsland(): Promise<void> {
     debugLog.info("ui", "dismiss", { confirm: state.computer?.confirm?.id ?? null, hint: state.hint?.id ?? null });
     closeConversation("dismissed");
+    lastSeenAt = Date.now();
     if (state.asking) set({ asking: false });
     // Closing a Confirm prompt is Cancel.
     if (state.computer?.confirm) return actions.answerConfirm(false);
@@ -1799,22 +1887,31 @@ export const actions = {
 
   /** A background task started, moved on a step, or ended. An ended task's result opens the island once no answer is on its way. */
   backgroundUpdate(job: BackgroundJobView): void {
+    const before = state.background.find((item) => item.id === job.id);
+    if ((job.status === "done" || job.status === "failed") && before?.status !== job.status) noteRecap({ kind: "job", at: Date.now(), title: job.title, failed: job.status === "failed" });
     set({ background: [...state.background.filter((item) => item.id !== job.id), job].slice(-BACKGROUND_SHOWN) });
     if (job.status !== "running" && job.result) showBackgroundResult(job.result);
   },
 
   /** A briefing from main, a couple of minutes before a meeting. */
   briefing(view: BriefingView): void {
+    // The key is "<subject>@<start>" (core/briefing.ts).
+    const at = view.key.lastIndexOf("@");
+    noteRecap({ kind: "briefing", at: Date.now(), subject: at > 0 ? view.key.slice(0, at) : "" });
     showCard({ id: `brief-${view.key}`, label: "Next meeting", lines: view.lines, buttons: [{ label: "Dig deeper", action: { kind: "brief", key: view.key } }] });
   },
 
   /** A card's button: starts its background task. The button goes, and the card says what happened. */
   async pressCard(button: CardButton): Promise<void> {
     const card = state.meetingCard;
+    const action = button.action;
     if (!card) return;
+    if (action.kind === "openSummary") return actions.openSummary();
+    // The follow-up's buttons may be on the recap card: a pressed one goes from both.
+    if (followCard) followCard = { ...followCard, buttons: followCard.buttons.filter((item) => item !== button) };
     let message: string;
     try {
-      message = (await window.bee.cardAction(button.action, await sessionToken())).message;
+      message = (await window.bee.cardAction(action, await sessionToken())).message;
     } catch (error) {
       message = error instanceof Error ? error.message : "Bee could not start that.";
     }
@@ -1899,6 +1996,7 @@ export const actions = {
     lastAnswer = [];
     // Lines waiting for a direct request's reply are in the session being saved.
     parkedLines = [];
+    joinRecapOffered = false;
     set({ keptTips: [], revising: false, session: EMPTY_SESSION, chips: [], dismissedChipIds: [], summary: { saving: true, result: null, error: null } });
     try {
       const result = await window.bee.writeMeetingSummary({
@@ -1909,8 +2007,10 @@ export const actions = {
         sessionToken: await sessionToken(),
       });
       setSummary({ saving: false, result });
+      noteRecap({ kind: "summary", at: Date.now(), text: result.followUp[0] ?? "Summary saved" });
+      followCard = null;
       if (result.followUp.length > 0) {
-        showCard({
+        followCard = {
           id: `follow-${result.path}`,
           label: "Follow up",
           lines: result.followUp,
@@ -1918,7 +2018,8 @@ export const actions = {
             { label: "Draft follow-up email", action: { kind: "email", path: result.path } },
             { label: "Create tasks", action: { kind: "tasks", path: result.path } },
           ],
-        });
+        };
+        showCard(followCard);
       }
     } catch (error) {
       if (!options.auto) sessionMeetingId ??= meetingId;
@@ -2022,6 +2123,13 @@ export const actions = {
     }
   },
 
+  /** Main: the user is back after a while away (core/recap.ts AWAY_MS). The recap shows once per away period, if there is any. */
+  userReturned(since: number): void {
+    if (since <= recapAwaySince) return;
+    recapAwaySince = since;
+    void showRecap("away", since);
+  },
+
   /** Show or hide the invite step (the roster of teammates in a meeting). */
   setInviteOpen(inviteOpen: boolean): void {
     set({ inviteOpen });
@@ -2040,3 +2148,5 @@ setInterval(() => {
 }, MEETING_TICK_MS);
 // Live captions from the experimental meeting window reader. Test stubs of window.bee may leave it out.
 window.bee.meetingWindow?.onCaptions(({ lines }) => actions.captionLines(lines));
+// The user is back after a while away. Test stubs of window.bee may leave it out.
+window.bee.onUserReturned?.(({ since }) => actions.userReturned(since));
