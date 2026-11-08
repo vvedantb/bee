@@ -82,7 +82,7 @@ type Action = { name: string; label: string; work: () => Promise<string>; gate?:
 // Overlays snapshot and find may read instead of the window, as each OS has them (agent-desktop status supported_surfaces).
 // Since agent-desktop 1.1 a kind the OS does not have is INVALID_ARGS, so the AI is never offered one. Windows reads an open
 // menu as menu and a Chromium modal (Teams, Edge) as sheet, and has no menubar.
-const SURFACES = { mac: ["menu", "menubar", "sheet", "popover", "alert"], windows: ["menu", "sheet"] } as const satisfies Record<ComputerPlatform, readonly string[]>;
+const SURFACES = { mac: ["menu", "menubar", "sheet", "popover", "alert"], windows: ["menu", "sheet"], linux: ["menu"] } as const satisfies Record<ComputerPlatform, readonly string[]>;
 // Text in a snapshot line, and the whole snapshot, so a dense app cannot flood the context.
 const NODE_TEXT = 80;
 // What the confirm gate keeps about where each ref sits: containers above it, neighbours each side, a description or value.
@@ -130,6 +130,36 @@ const WAIT_MAX_MS = 15_000;
  */
 export const CANNOT_CONTROL = "stop and say Bee cannot control this app";
 const KEEPS_FAILING = `If it keeps failing, ${CANNOT_CONTROL}.`;
+// A document app's page (LibreOffice Writer's canvas) often has no editable field in the tree, though its window takes keys.
+const KEYBOARD_NOTE = "To type into a document whose page shows no editable field (LibreOffice Writer), call type_text with app and no ref: Bee types into that window with the keyboard.";
+
+/** The most characters the keyboard fallback types: one key press each. */
+export const KEYBOARD_TYPE_MAX = 200;
+// Characters the keyboard fallback can press, by agent-desktop key name. Letters, digits, space and a few marks with the same key
+// on every common layout; anything else is refused before a key is pressed.
+const KEY_NAMES: Record<string, string> = { " ": "space", ",": "comma", ".": "period", "/": "slash", "-": "minus" };
+
+/** The key presses that type this text, one per character, or null when a character has no key here (a line break, "?", "é"). */
+export function keyPresses(text: string): string[] | null {
+  const keys: string[] = [];
+  for (const char of text) {
+    if (/^[a-z0-9]$/.test(char)) keys.push(char);
+    else if (/^[A-Z]$/.test(char)) keys.push(`shift+${char.toLowerCase()}`);
+    else if (KEY_NAMES[char]) keys.push(KEY_NAMES[char]);
+    else return null;
+  }
+  return keys;
+}
+
+/** What a field holds, from a get --property=value reply: a bare string or { value }. Null when the reply gives no text. */
+export function fieldValue(data: unknown): string | null {
+  if (typeof data === "string") return data;
+  if (isRecord(data) && typeof data.value === "string") return data.value;
+  return null;
+}
+
+/** A field holds exactly this text (line endings aside). Never trimmed: "hi " is not "hi". */
+export const sameText = (held: string, wanted: string): boolean => held.replace(/\r\n/g, "\n") === wanted.replace(/\r\n/g, "\n");
 
 const HINTS: Record<string, string> = {
   STALE_REF: "the screen changed. Take a new snapshot and use its refs.",
@@ -620,6 +650,11 @@ const UNREADABLE = `Error: Bee could not read that snapshot. Take a skeleton sna
 // What a whole-window read says when Bee's second read did not fix it. Bee has already waited for the app by then, so the AI
 // tries the tree another way, then stops: there is no other way in.
 const THIN_NOTE = `Few elements came back, though Bee gave the app time to load. Try find by role (textfield, button) or name, or a skeleton snapshot then root. If those show nothing usable either, ${CANNOT_CONTROL}.`;
+// A document app, whose page may take keys with no editable field in the tree: LibreOffice runs as soffice.
+const DOCUMENT_APP = /\b(?:soffice|libreoffice|writer)\b/i;
+/** The thin-read note, with the keyboard fallback for a document app: a page with no field is not an app Bee cannot control. */
+const thinNote = (app: string | null) =>
+  app && DOCUMENT_APP.test(app) ? THIN_NOTE.replace("If those show nothing usable either,", `${KEYBOARD_NOTE} If those show nothing usable either,`) : THIN_NOTE;
 const SHALLOW_NOTE = `The controls sit deeper than this read: snapshot one region marked inside with root, or use find by role or name. If those show no usable controls, ${CANNOT_CONTROL}.`;
 const UNPROVEN_NOTE = `Bee could not read the whole window in time, so some refs may be refused (AMBIGUOUS_TARGET). If one is, snapshot again or use find. If they keep being refused, ${CANNOT_CONTROL}.`;
 
@@ -723,6 +758,79 @@ export function computerTools(deps: ComputerToolDeps) {
     return lookAgain(first) ? exec(command, args, READ_MS) : first;
   };
 
+  // The text the AI last wrote into a field this run (set_value or type_text), and whether the field was shown to hold exactly it.
+  // A send or submit that follows asks for that text, and Bee checks the field first: a message is never what a field happened to
+  // hold ("hi Krzyshi" for "hi"). failed: Bee could not make the field hold it.
+  let lastWrite: { ref: string; text: string; failed: boolean } | null = null;
+
+  /** What a field holds now (get --property=value), or null when agent-desktop cannot say. */
+  const readField = async (ref: string): Promise<string | null> => {
+    const result = await readOnce("get", [ref, "--property=value"]);
+    return result.ok ? fieldValue(result.data) : null;
+  };
+
+  /**
+   * Empties a field: agent-desktop clear, and when that fails or leaves text (some web fields), select all and delete with the
+   * keyboard in the focused app. True when the field is empty or cannot be read back (the later read-back then decides).
+   */
+  const emptyField = async (ref: string): Promise<boolean> => {
+    const cleared = await exec("clear", [ref], ACT_MS);
+    if (cleared.ok) {
+      const held = await readField(ref);
+      if (held === null || held === "") return true;
+    }
+    if (control.reason() || !(await exec("focus", [ref, HEADED_FLAG], ACT_MS)).ok) return false;
+    const where = scope({ app: currentApp ?? undefined });
+    for (const keys of [deps.platform === "mac" ? "cmd+a" : "ctrl+a", "delete"]) {
+      if (control.reason() || !(await exec("press", [keys, ...where, HEADED_FLAG], ACT_MS)).ok) return false;
+    }
+    const held = await readField(ref);
+    return held === null || held === "";
+  };
+
+  /** Makes a field hold this text: set its whole value, or when that fails empty it and type. False when neither worked. */
+  const rewriteField = async (ref: string, text: string): Promise<boolean> => {
+    if ((await exec("set-value", [ref, STDIN_FLAG], ACT_MS, cleanText(text))).ok) return true;
+    if (!(await emptyField(ref))) return false;
+    return (await exec("type", [ref, STDIN_FLAG], ACT_MS + Math.min(40_000, text.length * 40), cleanText(text))).ok;
+  };
+
+  /**
+   * Makes sure a field holds exactly this text: reads it, and when it differs rewrites it once and reads again.
+   * exact: it holds it; unread: agent-desktop cannot read the field, so Bee cannot check (it goes on as before); failed: it holds
+   * something else, or the rewrite failed.
+   */
+  const settleField = async (ref: string, text: string): Promise<"exact" | "unread" | "failed"> => {
+    const held = await readField(ref);
+    if (held === null) return "unread";
+    if (sameText(held, text)) return "exact";
+    debugLog.warn("computer", "field-differs", { heldChars: held.length, wantedChars: text.length });
+    if (!(await rewriteField(ref, text))) return "failed";
+    const again = await readField(ref);
+    return again === null ? "unread" : sameText(again, text) ? "exact" : "failed";
+  };
+
+  const NOT_EXACT = "Error: Bee could not make the field hold exactly the text it was asked to send, so nothing was sent. Read the field's value, clear it, and write the text again before sending.";
+
+  /**
+   * Before a send or submit asks for a Confirm: when it follows a write into the field it concerns, check the field still holds
+   * exactly that text. Returns the text to show in the Confirm, or an error to give back instead (no Confirm, no send). A field
+   * agent-desktop cannot read is not checked.
+   */
+  const checkMessage = async (action: GateAction): Promise<{ text: string | null } | { error: string }> => {
+    const write = lastWrite;
+    const field = write ? refs.get(write.ref) : undefined;
+    const sameField = (other: Element | null | undefined) => !!field && !!other && (other === field || (other.role === field.role && other.name === field.name));
+    if (!write || !(sameField(action.lastField) || sameField(action.target?.context?.field))) return { text: null };
+    if (write.failed) return { error: NOT_EXACT };
+    const settled = await settleField(write.ref, write.text);
+    if (settled === "failed") {
+      lastWrite = { ...write, failed: true };
+      return { error: NOT_EXACT };
+    }
+    return { text: write.text };
+  };
+
   /**
    * One action inside a step: shows its line, refuses it when its checks say so, asks first when the gate says so, then does
    * the work. Never throws. A decline stops the run.
@@ -738,10 +846,18 @@ export function computerTools(deps: ComputerToolDeps) {
       if (refused) return refused;
       if (control.reason()) return STOPPED;
       // What the gate counts this action as, read before it runs (a key press can move focus): proof once it is done.
-      const before = gate ? gate() : null;
+      let before = gate ? gate() : null;
       const committed = before ? irreversibleKind(before) : null;
       if (before && committed) {
         const kind = committed;
+        // The exact text goes in the Confirm, once the field is shown to hold it; when it cannot be made to, no Confirm shows.
+        const message = kind === "send" || kind === "submit" ? await checkMessage(before) : { text: null };
+        if ("error" in message) {
+          debugLog.warn("computer", "send-blocked", { tool: name, kind });
+          return message.error;
+        }
+        if (control.reason()) return STOPPED;
+        if (message.text !== null) before = { ...before, message: message.text };
         deps.onStep?.(CONFIRM_LABEL);
         const request: ConfirmRequest = { kind, question: confirmQuestion(kind), detail: confirmDetail(before, currentApp) };
         debugLog.info("computer", "confirm-needed", { tool: name, kind, request, action: before });
@@ -757,7 +873,10 @@ export function computerTools(deps: ComputerToolDeps) {
       if (control.reason()) return STOPPED;
       const output = await work();
       debugLog.debug("computer", "step-done", { n: control.steps(), tool: name, ms: msSince(started), output });
-      if (committed && actionDone(output)) deps.onEffect?.(committed);
+      if (committed && actionDone(output)) {
+        deps.onEffect?.(committed);
+        lastWrite = null;
+      }
       return output;
     } catch (error) {
       debugLog.warn("computer", "step-failed", { n: control.steps(), tool: name, ms: msSince(started), reason: control.reason(), error: error instanceof Error ? error.message : String(error) });
@@ -913,26 +1032,112 @@ export function computerTools(deps: ComputerToolDeps) {
     gate: gateFor("click", ref, { effect }),
     refuse: refuseRef("click", ref),
   });
-  const typeAction = ({ ref, text, effect, physical }: { ref: string; text: string; effect: Effect; physical?: boolean | undefined }): Action => ({
+  /**
+   * type_text on a field: replaces what the field holds, never appends ("hi Krzys" plus "hi" is "hi Krzyshi"). A field that holds
+   * text is cleared first, the text is typed, and the field is read back: only a field that holds exactly the text comes back Done.
+   * append keeps what is there. Text with a line break presses Return, so it is not read back.
+   */
+  const typeAction = ({ ref, text, effect, physical, append }: { ref: string; text: string; effect: Effect; physical?: boolean | undefined; append?: boolean | undefined }): Action => ({
     name: "type_text",
     label: label(ref, "Typing in", "Typing…"),
-    work: onRef("type", ref, [...(physical ? [HEADED_FLAG] : []), STDIN_FLAG], ACT_MS + Math.min(40_000, text.length * 40), cleanText(text), (to) => gateFor("type", to, { effect, text })()),
+    work: async () => {
+      const typing = onRef("type", ref, [...(physical ? [HEADED_FLAG] : []), STDIN_FLAG], ACT_MS + Math.min(40_000, text.length * 40), cleanText(text), (to) => gateFor("type", to, { effect, text })());
+      if (append) {
+        lastWrite = null;
+        return typing();
+      }
+      const held = await readField(ref);
+      if (held !== null && held !== "" && !(await emptyField(ref))) {
+        lastWrite = { ref, text, failed: true };
+        return "Error: Bee could not clear the field first, so typed nothing: typing would add to what it holds. Look at the field again.";
+      }
+      const output = await typing();
+      if (/[\r\n]/.test(text)) {
+        lastWrite = null;
+        return output;
+      }
+      if (!actionDone(output)) {
+        lastWrite = { ref, text, failed: true };
+        return output;
+      }
+      lastWrite = { ref, text, failed: false };
+      const settled = await settleField(ref, text);
+      if (settled === "failed") {
+        lastWrite = { ref, text, failed: true };
+        return `Error: the field does not hold exactly the text typed. ${NOT_EXACT.replace(/^Error: /, "")}`;
+      }
+      return settled === "exact" ? `${output} Read back: the field holds exactly that text.` : output;
+    },
     gate: gateFor("type", ref, { effect, text }),
     refuse: refuseRef("type", ref),
+  });
+  /**
+   * type_text with an app and no ref: the keyboard fallback for a focused document whose page has no editable field in the tree
+   * (LibreOffice Writer). agent-desktop's type needs a ref, so Bee brings the window forward, then presses one key per character
+   * with physical delivery in that app (press --headed --app focuses its window first). Every character is checked before any key
+   * is pressed. Stops at the first key that fails and says how much was typed; only a whole run comes back Done, and Bee then
+   * looks for the text on the page (find by text) and says whether it saw it.
+   */
+  const keyboardTypeAction = ({ app, window_id, text, effect }: { app: string; window_id?: string | undefined; text: string; effect: Effect }): Action => ({
+    name: "type_text",
+    label: `Typing in ${shortName(app, 30)}…`,
+    refuse: () => badApp(app) ?? badWindow(window_id) ?? (shellElement(lastField) ? SHELL_MESSAGE : null),
+    work: async () => {
+      if ([...text].length > KEYBOARD_TYPE_MAX) return `Error: the keyboard types at most ${KEYBOARD_TYPE_MAX} characters at a time. Nothing was typed.`;
+      const keys = keyPresses(text);
+      if (!keys) return "Error: the keyboard can type only letters, digits, spaces, commas, full stops, slashes and hyphens. Press other keys, such as return, with press_key. Nothing was typed.";
+      lastWrite = null;
+      const focused = await deps.desktop.focusWindow({ app }, control.signal);
+      // On Wayland Bee cannot bring a window forward; the headed press still asks agent-desktop to focus it, and refuses if it cannot.
+      const note = focused.ok ? "" : `Bee could not bring ${shortName(app, 30)} to the front first (${focused.message}). `;
+      const press = (name: string | undefined, key: string) => exec("press", [key, ...scope({ app: name, window_id }), HEADED_FLAG], ACT_MS);
+      const first = await withApp(app, (name) => press(name, keys[0]!));
+      currentApp = first.app ?? currentApp;
+      lastField = null;
+      let typed = first.result.ok ? 1 : 0;
+      let failed = first.result.ok ? null : first.result;
+      for (const key of keys.slice(1)) {
+        if (failed || control.reason()) break;
+        const result = await press(first.app, key);
+        if (result.ok) typed += 1;
+        else failed = result;
+      }
+      debugLog.info("computer", "keyboard-type", { chars: keys.length, typed, ok: typed === keys.length });
+      if (typed < keys.length) {
+        const why = failed ? errorLine(failed) : STOPPED;
+        return `${first.note}${note}${why} Bee typed ${typed} of ${keys.length} characters with the keyboard before it stopped. Look before you type again.`;
+      }
+      // Where possible, check the page shows it. A page whose tree does not expose its text cannot be checked.
+      const looked = control.reason() ? null : await exec("find", [`--text=${cleanText(text)}`, ...scope({ app: first.app, window_id })], READ_MS);
+      const seen = looked?.ok && isRecord(looked.data) && Array.isArray(looked.data.matches) && looked.data.matches.length > 0;
+      const check = seen ? "Checked: the page shows that text." : "Bee could not see that text on the page: check with find by text, or a snapshot, before saying it is there.";
+      // "Done" first (after any app-name note), so actionDone and the claim guard read it as done.
+      return `${first.note}Done: typed ${keys.length} characters into ${shortName(first.app ?? app, 30)} with the keyboard. ${note}${check}`;
+    },
+    gate: () => ({ command: "type", target: null, lastField, effect, text }),
   });
   const setValueAction = ({ ref, value, effect }: { ref: string; value: string; effect: Effect }): Action =>
     value === ""
       ? {
           name: "set_value",
           label: label(ref, "Clearing", "Clearing a field…"),
-          work: onRef("clear", ref, [], ACT_MS, undefined, (to) => gateFor("clear", to, { effect })()),
+          work: async () => {
+            lastWrite = null;
+            return onRef("clear", ref, [], ACT_MS, undefined, (to) => gateFor("clear", to, { effect })())();
+          },
           gate: gateFor("clear", ref, { effect }),
           refuse: refuseRef("clear", ref),
         }
       : {
           name: "set_value",
           label: label(ref, "Typing in", "Typing…"),
-          work: onRef("set-value", ref, [STDIN_FLAG], ACT_MS, cleanText(value), (to) => gateFor("set-value", to, { effect, text: value })()),
+          work: async () => {
+            const output = await onRef("set-value", ref, [STDIN_FLAG], ACT_MS, cleanText(value), (to) => gateFor("set-value", to, { effect, text: value })())();
+            // A send that follows is checked against this text (checkMessage): the field is read back before its Confirm.
+            // A set that failed leaves the old text in the field: a send is blocked until a write works.
+            lastWrite = { ref, text: value, failed: !actionDone(output) };
+            return output;
+          },
           gate: gateFor("set-value", ref, { effect, text: value }),
           refuse: refuseRef("set-value", ref),
         };
@@ -1091,7 +1296,7 @@ export function computerTools(deps: ComputerToolDeps) {
           if (!shown.ok) return shown.text;
           const notes = whole
             ? [
-                thinTree(result.data) ? THIN_NOTE : !skeleton && shallowTree(result.data) ? SHALLOW_NOTE : null,
+                thinTree(result.data) ? thinNote(currentApp) : !skeleton && shallowTree(result.data) ? SHALLOW_NOTE : null,
                 unproven(result.data) ? UNPROVEN_NOTE : null,
               ].filter((line) => line !== null)
             : [];
@@ -1201,13 +1406,27 @@ export function computerTools(deps: ComputerToolDeps) {
     }),
 
     type_text: tool({
-      description: "Type text into the text field with this ref, as keystrokes. A line break presses Return, which sends in most chat apps.",
-      inputSchema: z.object({ ref: refSchema, text: z.string().min(1).max(4000), effect: effectSchema, physical: physicalSchema }),
-      execute: (input) => run(typeAction(input)),
+      description: `Type text into the text field with this ref, as keystrokes. It replaces what the field holds (never appends) and reads the field back; give append only to add to the end. A line break presses Return, which sends in most chat apps. For a document whose page shows no editable field (LibreOffice Writer), give app and no ref: Bee brings that window forward and types with the keyboard (letters, digits, spaces, commas, full stops, slashes and hyphens; at most ${KEYBOARD_TYPE_MAX} characters).`,
+      inputSchema: z
+        .object({
+          ref: refSchema.optional().describe("The text field to type in. Leave it out only for the keyboard fallback, with app."),
+          app: appSchema.optional().describe("With no ref: the app whose window to type into with the keyboard."),
+          window_id: windowSchema.optional(),
+          text: z.string().min(1).max(4000),
+          effect: effectSchema,
+          physical: physicalSchema,
+          append: z.boolean().optional().describe("Add to the end of what the field holds instead of replacing it. Rarely right: to send exact text, leave it out."),
+        })
+        .refine((input) => input.ref !== undefined || input.app !== undefined, { message: "Give ref, or app for the keyboard fallback." }),
+      execute: ({ ref, app, window_id, text, effect, physical, append }) => {
+        if (ref) return run(typeAction({ ref, text, effect, physical, append }));
+        if (app) return run(keyboardTypeAction({ app, window_id, text, effect }));
+        return Promise.resolve("Error: give ref (a text field), or app to type into its window with the keyboard.");
+      },
     }),
 
     set_value: tool({
-      description: "Fill a text field: set its whole value at once; an empty value clears it. Faster than type_text and headless; use it for drafts, searches and form fields.",
+      description: "Fill a text field: set its whole value at once, replacing what it held; an empty value clears it. Faster than type_text and headless; use it for drafts, searches and form fields, and whenever the field must hold exactly this text.",
       inputSchema: z.object({ ref: refSchema, value: z.string().max(4000), effect: effectSchema }),
       execute: (input) => run(setValueAction(input)),
     }),

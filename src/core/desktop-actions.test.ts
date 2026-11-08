@@ -38,7 +38,7 @@ describe("cleanAppName", () => {
 
 describe("resolveApp", () => {
   it("knows common apps by short names, with each OS's own target", () => {
-    expect(resolveApp("teams")).toEqual({ ok: true, app: { label: "Teams", mac: "Microsoft Teams", win: { uri: "msteams:", startMenu: ["Microsoft Teams", "Teams"] }, known: true } });
+    expect(resolveApp("teams")).toEqual({ ok: true, app: { label: "Teams", mac: "Microsoft Teams", win: { uri: "msteams:", startMenu: ["Microsoft Teams", "Teams"] }, linux: [], known: true } });
     expect(resolveApp("Microsoft Teams").ok && resolveApp("the Teams app")).toMatchObject({ ok: true, app: { label: "Teams" } });
     expect(resolveApp("google chrome")).toMatchObject({ ok: true, app: { label: "Chrome", mac: "Google Chrome", win: { startMenu: ["Google Chrome"] } } });
     expect(resolveApp("Zoom")).toMatchObject({ ok: true, app: { mac: "zoom.us", win: { startMenu: ["Zoom Workplace", "Zoom"] } } });
@@ -47,7 +47,7 @@ describe("resolveApp", () => {
   });
 
   it("uses any other plain name as given", () => {
-    expect(resolveApp("Figma")).toEqual({ ok: true, app: { label: "Figma", mac: "Figma", win: { startMenu: ["Figma"] }, known: false } });
+    expect(resolveApp("Figma")).toEqual({ ok: true, app: { label: "Figma", mac: "Figma", win: { startMenu: ["Figma"] }, linux: [], known: false } });
   });
 
   it("refuses shells, script tools and system tools, however they are named", () => {

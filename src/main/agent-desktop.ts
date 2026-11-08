@@ -15,6 +15,7 @@ import {
   type DesktopActionCommand,
   type ReadOnlyCommand,
 } from "../core/agent-desktop-envelope";
+import type { ComputerPlatform } from "../core/computer-control";
 
 // Runs the agent-desktop CLI (npm agent-desktop, Apache-2.0). The experimental meeting window reader gets a runner for
 // read-only commands only (assertReadOnly). Bee's desktop tools for a direct request ("Bee, open Teams") get a separate runner
@@ -25,6 +26,11 @@ import {
 // that computer use types or sets goes on the child's stdin (--stdin), never in argv, and is never logged.
 
 export type AgentDesktopBinary = { path: string; macHelper: string | null };
+
+/** Where computer use runs, from Node's platform name, or null where it does not (no agent-desktop binary ships). */
+export function computerPlatformOf(platform: NodeJS.Platform): ComputerPlatform | null {
+  return platform === "darwin" ? "mac" : platform === "win32" ? "windows" : platform === "linux" ? "linux" : null;
+}
 
 /** The platform file names inside node_modules/agent-desktop/bin. Null where Bee ships no binary. */
 export function platformBinaryNames(platform: NodeJS.Platform, arch: string): { binary: string; macHelper: string | null } | null {

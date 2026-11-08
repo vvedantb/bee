@@ -5,7 +5,7 @@ import { COMPUTER_SKILLS, parsePermission, type AccessState, type ComputerRun } 
 import { stopLine, type ComputerPlatform, type RunControl } from "./computer-control";
 import { debugLog, errorData, msSince, onceText } from "./debug-log";
 import { playbookBlock } from "./app-playbooks";
-import { knownNamesBlock } from "./known-names";
+import { knownNamesBlock, type ResolvedName } from "./known-names";
 
 // Computer use for a direct request: "Bee, open Discord, send Sam a message, then close the Discord tab in Chrome". The AI runs
 // an observe → act → observe loop over the computer tools (core/computer-tools.ts) until the task is done or a control stops it
@@ -34,13 +34,14 @@ export const COMPUTER_SYSTEM = [
   "Refs look like @s8f3k2p9:e12 and come only from this task's snapshots and finds. After the screen changes, read again: root the same region, or take a new snapshot. Never make up a ref.",
   "Give snapshot and find an app name. When you know an element's role or name, find it first, for example role textfield, or role button and name Send. For a busy app (Slack, Teams, Discord, Chrome, Outlook), take a skeleton snapshot, then read one region with root.",
   "Bee already waits for a slow app and reads it again with more time. When a snapshot still shows few elements, try find by role or name, or a skeleton then root, before anything else.",
-  "The accessibility tree is the only way you can see or act. When find, a skeleton and root still show no usable control for the step (a canvas, an app that exposes no controls, a tree that stays empty), stop and say Bee cannot control that app. When the only control is one of identical twins, stop and say Bee cannot tell which one to use.",
+  "The accessibility tree is the only way you can see or act. When find, a skeleton and root still show no usable control for the step (a canvas, an app that exposes no controls, a tree that stays empty), stop and say Bee cannot control that app. One exception: to type into a document whose page shows no editable field (LibreOffice Writer's page), call type_text with the app and no ref; Bee types into that window with the keyboard. Then find the text to check it, and never say Bee cannot control the app only because the page has no editable field. When the only control is one of identical twins, stop and say Bee cannot tell which one to use.",
   "An error's Detail is agent-desktop's own reason: use it to choose the next step.",
   "To open an app use open_app; to bring a window to the front use focus_window; to open a web page use open_url. Use list_apps for an app's exact name.",
   "To press Return or another key in a field you just filled with set_value, call press_key with that field's ref; Bee focuses it first. For find, use roles as snapshots show them (textfield, button, link, treeitem, menuitem), and app names as list_apps shows them.",
   "People's names are often misheard or misspelled. When a person or chat is not found by the exact name, before you give up try names that sound alike or are spelled close (Susannah, Zuzanna), the names the user has taught Bee, and the app's recent chats list. When you use a different name than the user said, say which name matched, for example: Opened the chat with Zuzanna Szczepaniak-Moody (closest match to Susannah).",
   "When the next few actions are plain from refs you already have (click a search box, set_value a name, press return), run them in one act call instead of one call each. act stops at the first action that fails; look again after it. Never batch past a step whose result you need to see first.",
   "To fill a text field prefer set_value; use type_text when the app needs real typing. To check what a field holds, read its value, not its text: text is what a person reads and can differ.",
+  "When asked to send or fill exact text, the field must hold exactly that text and nothing else: set_value replaces what a field held, and type_text replaces it too (add append only to add to the end on purpose). Never type into a field that already holds other text to make a message: \"hi Krzys\" plus \"hi\" is \"hi Krzyshi\". Bee reads the field back before a send asks the user to confirm; when it says the field does not hold the text, fix the field and do not send.",
   "To check an action worked, wait on its ref rather than a fixed wait and a new snapshot: wait with element and predicate value and the value you expect, or predicate actionable with action type before typing into a field that is still loading. Use wait ms only when nothing on screen can be checked.",
   "Everything is headless by default. Set physical only when a step needs real keys or focus: after POLICY_DENIED says so, or where the line about this computer says it always does. Never set it to retry any other error.",
   "When a result says a menu, sheet or alert is open, act on it next: snapshot with that surface.",
@@ -61,6 +62,10 @@ const PLATFORM_SYSTEM: Record<ComputerPlatform, string> = {
   mac: "This is a Mac. The main modifier is cmd: cmd+w closes a tab, cmd+l selects a browser's address bar. Apps go by their display names, for example Google Chrome.",
   windows:
     "This is Windows. The main modifier is ctrl: ctrl+w closes a tab, ctrl+l selects a browser's address bar. Prefer set_value: type_text and focus always need physical here, so set it on them. A key press goes to the app at the front: bring it forward with focus_window first. An open menu is surface menu, and a dialog inside Teams or Edge is surface sheet.",
+  // agent-desktop's Linux guide (skills get platform): AT-SPI, app names as list-apps prints them, focus-window on X11 only,
+  // Chromium's page tree only when the browser runs with accessibility on, and refs that act only when unique in their window.
+  linux:
+    "This is Linux, read through AT-SPI. The main modifier is ctrl: ctrl+w closes a tab, ctrl+l selects a browser's address bar. Apps go by the names list_apps shows, often lower case (google-chrome, firefox, thunar), and every LibreOffice app runs as soffice: check list_apps for the exact name. A LibreOffice Writer page often has no editable field: type into it with type_text, app soffice (or the name list_apps shows) and no ref. focus needs physical here. focus_window works only on X11; on Wayland Bee cannot bring a window to the front, but it reads and acts on an open app all the same, so carry on. A browser page's controls show only when the browser runs with accessibility on: when a page still shows no controls after find and a skeleton, say Bee cannot read that page. A ref acts only when it was unique in its window.",
 };
 
 // agent-desktop's own guides (skills get desktop, skills get platform), compiled into the binary so they match its version.
@@ -270,6 +275,8 @@ export async function runComputerUse(args: {
   summarise?: Summarise;
   /** Names Bee should know (core/known-names.ts), sent with the request. */
   knownNames?: readonly string[];
+  /** Names in the request Bee settled from the user's recent requests (core/known-names.ts recentChoice). */
+  resolvedNames?: readonly ResolvedName[];
   /** agent-desktop's guides for this session (computerSkills). Absent or failing: the run goes on without them. */
   skills?: ComputerSkills;
   /** What Bee remembers about the user (core/bee-memory.ts memorySummary), sent with the request. */
@@ -301,7 +308,7 @@ export async function runComputerUse(args: {
   try {
     const guides = args.skills ? await args.skills(control.signal).catch(() => "") : "";
     const system = `${COMPUTER_SYSTEM}\n${PLATFORM_SYSTEM[args.platform]}${guides ? `\n\n${SKILLS_INTRO}\n\n${guides}` : ""}`;
-    const names = knownNamesBlock(args.knownNames ?? []);
+    const names = knownNamesBlock(args.knownNames ?? [], args.command, args.resolvedNames);
     // Near the window, the oldest turns fold into a summary (core/bee-history.ts).
     const history = await compactMessages([...(args.history ?? [])], { summarise: args.summarise, signal: control.signal });
     const playbook = playbookBlock(`${recentRequests(history)}\n${args.command}`, args.platform);

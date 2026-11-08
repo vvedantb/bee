@@ -8,7 +8,7 @@ import { debugLog, errorData, modelName, msSince, onceText, stepData } from "./d
 import { ANTHROPIC_CACHE, guideProviderOptions } from "./gateway";
 import type { Snippet } from "./notes";
 import { MEMORY_RULES } from "./bee-memory";
-import { knownNamesBlock } from "./known-names";
+import { knownNamesBlock, type ResolvedName } from "./known-names";
 import { MAX_TIPS, tipCap, tipKey } from "./steering";
 import { lunaTools, sourcesFromGenerateResult, type BeeSource } from "./tools";
 import type { SearchLocation } from "./web-search";
@@ -301,6 +301,8 @@ export function buildLunaPrompt(args: {
   lookAtScreen?: boolean;
   /** Names Bee should know (core/known-names.ts), for a direct request: in the context, so the AI spells them right. */
   knownNames?: readonly string[];
+  /** Names in the request Bee settled from the user's recent requests (core/known-names.ts recentChoice). */
+  resolvedNames?: readonly ResolvedName[];
   /**
    * For a direct request with the memory tools (core/bee-memory.ts): what Bee remembers, as a short summary for the context. Any
    * string, even empty, adds the memory rules to the system prompt.
@@ -323,7 +325,7 @@ export function buildLunaPrompt(args: {
   const mcp = lunaMcpSystem(args.connectedServers ?? [], args.unavailableServers ?? []);
   const command = args.command?.replace(/\s+/g, " ").trim();
   if (command) {
-    const names = knownNamesBlock(args.knownNames ?? []);
+    const names = knownNamesBlock(args.knownNames ?? [], command, args.resolvedNames);
     const remembered = args.memory?.trim() ?? "";
     return {
       system: [
@@ -1207,6 +1209,7 @@ export async function answerCommand(args: {
   /** Folds the oldest messages into a summary when they near the window (core/bee-history.ts). */
   summarise?: Summarise;
   knownNames?: readonly string[];
+  resolvedNames?: readonly ResolvedName[];
   /** What Bee remembers (buildLunaPrompt memory), with the memory tools in desktopTools. */
   memory?: string;
   /** The window at the front (direct-command.ts frontWindowLine). */

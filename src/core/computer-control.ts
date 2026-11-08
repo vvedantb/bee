@@ -136,7 +136,9 @@ export function awaitAnswer(ask: (signal: AbortSignal) => Promise<boolean>, pare
   });
 }
 
-export type ComputerPlatform = "mac" | "windows";
+/** Where computer use runs. Linux needs the AT-SPI accessibility bus in the user's desktop session (D-Bus); without it agent-desktop
+ * reports accessibility denied, and Bee says so rather than start a loop that cannot see anything. */
+export type ComputerPlatform = "mac" | "windows" | "linux";
 
 const DECLINED: Record<IrreversibleKind, string> = {
   send: "Cancelled. Nothing was sent.",
@@ -149,6 +151,8 @@ const DECLINED: Record<IrreversibleKind, string> = {
 export const ACCESSIBILITY_LINE = "Bee needs Accessibility access. Allow it in Settings.";
 /** Windows refused input: usually an app running as administrator. */
 export const ELEVATED_LINE = "Windows blocked Bee from that app. It may be running as administrator.";
+/** Linux with no accessibility bus (no D-Bus session or AT-SPI): Bee can open apps and pages, but cannot read or act in them. */
+export const LINUX_A11Y_LINE = "Bee cannot reach the Linux accessibility bus (AT-SPI). Start Bee in your desktop session.";
 
 /** The one line a run that stopped early ends with. */
 export function stopLine(reason: StopReason, detail: { maxSteps?: number; declined?: IrreversibleKind | null; platform?: ComputerPlatform } = {}): string {
@@ -162,7 +166,7 @@ export function stopLine(reason: StopReason, detail: { maxSteps?: number; declin
     case "time":
       return "Stopped: that took too long.";
     case "permission":
-      return detail.platform === "windows" ? ELEVATED_LINE : ACCESSIBILITY_LINE;
+      return detail.platform === "windows" ? ELEVATED_LINE : detail.platform === "linux" ? LINUX_A11Y_LINE : ACCESSIBILITY_LINE;
     case "declined":
       return detail.declined ? DECLINED[detail.declined] : "Cancelled.";
   }

@@ -99,7 +99,8 @@ describe("computer use over IPC", () => {
 
   it("reports access as agent-desktop's states only", () => {
     expect(computerAccessSchema.parse({ supported: true, platform: "mac", accessibility: "denied", screenRecording: "granted" }).accessibility).toBe("denied");
-    expect(computerAccessSchema.safeParse({ supported: true, platform: "linux", accessibility: "denied", screenRecording: "granted" }).success).toBe(false);
+    expect(computerAccessSchema.safeParse({ supported: true, platform: "linux", accessibility: "denied", screenRecording: "granted" }).success).toBe(true);
+    expect(computerAccessSchema.safeParse({ supported: true, platform: "freebsd", accessibility: "denied", screenRecording: "granted" }).success).toBe(false);
   });
 });
 

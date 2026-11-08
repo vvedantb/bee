@@ -85,7 +85,7 @@ describe("runComputerUse", () => {
       ],
     });
     expect(await result).toMatchObject({ line: "Sent the message to Sam.", stopped: false, steps: 5, error: false });
-    expect(commands).toEqual(["snapshot", "set-value", "click", "snapshot"]);
+    expect(commands).toEqual(["snapshot", "set-value", "get", "click", "snapshot"]);
   });
 
   it("stops at a step limit when a test sets one", async () => {
@@ -240,7 +240,7 @@ describe("runComputerUse: snapshots and refs only", () => {
     const tools = computerTools({ run, desktop, control, platform: "windows", confirm: async () => true });
     const result = await runComputerUse({ agent: modelAgent(model, { stream: false }), command: "send Sam running late in Teams", tools, control, platform: "windows", maxSteps: 30 });
     expect(result).toMatchObject({ line: "Sent the message in Teams.", stopped: false, steps: 4, error: false, endedWhere: "Microsoft Teams, Chat" });
-    expect(commands.map(([command]) => command)).toEqual(["find", "set-value", "find", "click"]);
+    expect(commands.map(([command]) => command)).toEqual(["find", "set-value", "find", "get", "click"]);
     // The text goes on stdin (--stdin), never in argv.
     expect(commands[1]).toEqual(["set-value", "@s5:e1", "--stdin"]);
     expect(commands.flat().join(" ")).not.toContain("Running late");
