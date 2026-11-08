@@ -44,7 +44,8 @@ import { displayTip, islandClick, mcpErrorNote, timingsLabel, timingsTitle } fro
 import { NOTCH_LOGO_PX } from "./logo";
 import { focusKeyFieldWhenReady, GATEWAY_KEY_FIELD_ID, statusClick, type StatusClick } from "./island-click";
 import { CONVERSATION_LABEL, NOTCH_BUTTON, NOTCH_UPDATE_BUTTON, logoState, notchLine, workingLabel, type NotchLine } from "./notch";
-import { actions, answerFolded, displayResult, islandOpen, responseOpen, teamsAudioNow, useBee, type BeeState, type ComputerConfirm, type MeetingCard, type SummaryState, type UpdateState } from "./store";
+import { actions, answerFolded, displayResult, islandOpen, responseOpen, teamsAudioNow, useBee, type BeeState, type ComputerConfirm, type TypedCommandOutcome, type MeetingCard, type SummaryState, type UpdateState } from "./store";
+import { TYPED_COMMAND_HINT, TYPED_COMMAND_PLACEHOLDER, TYPED_COMMAND_TITLE, clearsTypedCommand, typedCommandNote } from "./typed-command";
 import { SyncCard, SyncSection, TeamSection, syncedWith } from "./Teams";
 import { TEAMS_AUDIO_LISTENING } from "./teams-audio-message";
 import { updateButton } from "./update";
@@ -392,6 +393,7 @@ function LiveTab({ state }: { state: BeeState }) {
       {/* Manual test: runs the same pipeline as a spoken phrase. The line is not kept on screen. */}
       <section>
         <h2>Manual test</h2>
+        <TypedCommandForm />
         <form className="simulate" onSubmit={onSubmit}>
           <Input className="h-9" name="line" placeholder="Type a line, or leave blank for a sample" autoComplete="off" />
           <Button type="submit" variant="secondary" size="sm" disabled={state.busy}>
@@ -407,6 +409,51 @@ function LiveTab({ state }: { state: BeeState }) {
           />
         ) : null}
       </section>
+    </div>
+  );
+}
+
+/**
+ * Manual test → Talk to Bee (typed): a request through the wake word router, like a mic phrase after speech-to-text, for testing
+ * without a microphone. Not a meeting line (that is the form below it), and not a test of audio or speech-to-text. The field
+ * empties once Bee takes the request and stays usable while one runs: a newer request replaces it, and "Bee, stop" stops it.
+ */
+function TypedCommandForm() {
+  const [outcome, setOutcome] = useState<TypedCommandOutcome | null>(null);
+  const [line, setLine] = useState("");
+  const note = typedCommandNote(outcome);
+
+  function onSubmit(event: FormEvent<HTMLFormElement>): void {
+    event.preventDefault();
+    const result = actions.typeCommand(line);
+    setOutcome(result);
+    if (clearsTypedCommand(result)) setLine("");
+  }
+
+  return (
+    <div className="flex flex-col gap-1">
+      <form className="simulate" onSubmit={onSubmit} aria-label={TYPED_COMMAND_TITLE}>
+        <Input
+          className="h-9"
+          name="command"
+          placeholder={TYPED_COMMAND_PLACEHOLDER}
+          autoComplete="off"
+          aria-describedby="typed-command-hint"
+          value={line}
+          onChange={(event) => setLine(event.currentTarget.value)}
+        />
+        <Button type="submit" size="sm">
+          {TYPED_COMMAND_TITLE}
+        </Button>
+      </form>
+      <p id="typed-command-hint" className="muted">
+        {TYPED_COMMAND_HINT}
+      </p>
+      {note ? (
+        <p className="error" role="status">
+          {note}
+        </p>
+      ) : null}
     </div>
   );
 }

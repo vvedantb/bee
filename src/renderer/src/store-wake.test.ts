@@ -709,3 +709,72 @@ describe("store: Bee's history and the conversation window", () => {
     expect(second.commands).toHaveLength(1);
   });
 });
+
+// Live → Manual test → Talk to Bee (typed): typed text through the same wake path as a mic phrase after speech-to-text. It is
+// mic-path routing with typed text, not a test of audio or speech-to-text, and it is never a meeting line.
+describe("store: Talk to Bee (typed)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.resetModules();
+    micSessions.length = 0;
+    vi.spyOn(console, "debug").mockImplementation(() => undefined);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("runs \"Bee, open Chrome\" as a direct request, like the same words from the mic", async () => {
+    const { store, pipeline, commands, published, state } = await loadStore({ command: async () => result(["Opened Chrome"]) });
+    const { debugLog } = await import("../../core/debug-log");
+    const info = vi.spyOn(debugLog, "info");
+    expect(store.actions.typeCommand("Bee, open Chrome")).toBe("taken");
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(commands.map((request) => request.command)).toEqual(["open Chrome"]);
+    expect(state().result?.tips).toEqual(["Opened Chrome"]);
+    expect(info).toHaveBeenCalledWith("wake", "typed-command", { text: "Bee, open Chrome" });
+    expect(info.mock.calls.some(([area, event, data]) => area === "wake" && event === "command" && (data as { via?: string }).via === "typed-command")).toBe(true);
+    expect(pipeline).toEqual([]);
+    expect(published).toEqual([]);
+    expect(state().session.lines).toEqual([]);
+  });
+
+  it("drops a line without the wake word: never a request, a meeting line or a shared line", async () => {
+    const { store, pipeline, commands, published, state } = await loadStore();
+    expect(store.actions.typeCommand("open Chrome")).toBe("no-wake");
+    expect(store.actions.typeCommand("   ")).toBe("empty");
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(commands).toEqual([]);
+    expect(pipeline).toEqual([]);
+    expect(published).toEqual([]);
+    expect(state().session.lines).toEqual([]);
+  });
+
+  it("is not the meeting-line simulator: a typed meeting line with \"Bee\" never wakes Bee", async () => {
+    const { store, commands, state } = await loadStore();
+    store.actions.simulateLine("Bee, open Chrome");
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(commands).toEqual([]);
+    expect(state().session.lines.map((line) => line.text)).toEqual(["Bee, open Chrome"]);
+  });
+
+  it("lets a newer typed request cancel the one in flight, and \"Bee, stop\" stop it", async () => {
+    let release: (value: PipelineResult) => void = () => undefined;
+    const { store, commands, cancelled, stops } = await loadStore({ command: () => new Promise((resolve) => (release = resolve)) });
+    store.actions.typeCommand("Bee, type hi in the fixture form");
+    await vi.advanceTimersByTimeAsync(100);
+    const first = commands[0]?.runId;
+    store.actions.typeCommand("Bee, click Help in the fixture form");
+    await vi.advanceTimersByTimeAsync(100);
+    expect(commands.map((request) => request.command)).toEqual(["type hi in the fixture form", "click Help in the fixture form"]);
+    expect(cancelled).toContain(first);
+    const second = commands[1]?.runId;
+    expect(store.actions.typeCommand("Bee, stop")).toBe("taken");
+    await vi.advanceTimersByTimeAsync(100);
+    expect(stops).toContain(second);
+    release(result(["Stopped."]));
+    await vi.advanceTimersByTimeAsync(100);
+  });
+});

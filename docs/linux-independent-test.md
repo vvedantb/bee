@@ -76,7 +76,7 @@ Rules:
 - Do not point the flag or variable at `~/.config/Bee` or any profile Bee uses day to day.
 - Do not delete `SingletonLock`, `SingletonSocket` or `SingletonCookie` from a profile that a running Bee owns. If Bee reports that another copy is running, start with a new `mktemp -d` folder instead.
 - A new profile is signed out and has no AI Gateway key. Sign in, then enter the key in Settings. Avoid typing the key on the command line, where shell history keeps it.
-- Keep **Talk to Bee by saying 'Bee'** and **Ask before sending or deleting** on (both default to on).
+- There is no setting for the wake word or for confirming. Wake-by-name is always on for the mic, and Bee's computer gate always shows a Confirm before it sends, deletes, buys or submits. Do not look for toggles in Settings.
 - Keep **Verbose debug logs** on (the default) if you want timings (section 6).
 
 ### Electron's sandbox on the unpacked folder
@@ -91,10 +91,12 @@ Keep these apart in every report. A pass in one does not prove another.
 |---|---|---|---|
 | A. Real microphone audio | Mic capture, phrase detection, speech-to-text, wake word routing, the request | Nothing is skipped | Turn the mic on and speak |
 | B. E2E mic injection (`startTestMic`) | Wake word routing and the request, with text injected as a mic phrase | Audio, speech-to-text accuracy, false wakes from noise | Repository E2E tests only; not in this build's UI |
-| C. Manual test: **Simulate meeting line** | The meeting tip pipeline. A typed meeting line never wakes Bee, even if it starts with "Bee" | The wake word path and any request | Live tab, Manual test |
-| D. Manual test: **Talk to Bee (typed)** | The same wake word and request path a mic phrase takes after speech-to-text: "Bee, open Chrome" becomes a request; "Bee, stop" stops the request in flight | Audio, speech-to-text, false wakes | Live tab, Manual test |
+| C. Manual test: **Simulate meeting line** | The meeting tip pipeline. A typed meeting line never wakes Bee, even if it starts with "Bee" | The wake word path and any request. Text typed here that asks for an action ("Bee, open Chrome") gets only a meeting tip, which never acts on the computer | Live tab, Manual test |
+| D. Manual test: **Talk to Bee (typed)** | The same wake word router a mic phrase takes after speech-to-text: "Bee, open Chrome" becomes a request; "Bee, stop" stops the request in flight. The field is above **Simulate meeting line** and stays usable while a request runs | Audio, speech-to-text, false wakes | Live tab, Manual test |
 
 Use D for the scenarios below unless a step says otherwise. Start every typed request with "Bee,". A line without it is dropped with a note; it never becomes a meeting line. Typed tests never prove speech-to-text; only A does.
+
+Do not type a request into **Simulate meeting line** (path C). It goes to the meeting tip pipeline, never to Bee's request path, and it never wakes Bee. The Ask box from the island shortcut also sends a request, but it skips the wake word router, so it does not replace path D.
 
 ## 4. Fixture page
 
