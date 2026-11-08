@@ -71,6 +71,9 @@ export const IPC = {
   conversationEnded: "bee:command:conversation-ended",
   // Main → renderer: the show/hide shortcut brought Bee forward, so open the typing box.
   askOpen: "bee:ask:open",
+  // "What did I miss?" (core/recap.ts): the AI's short take on the missed meeting lines, and main → renderer when the user is back.
+  recapSummary: "bee:recap:summary",
+  userReturned: "bee:presence:returned",
 };
 
 // Collapsed notch, notch plus the sync popup, notch plus the island response, or the full panel.
@@ -225,6 +228,15 @@ export const followUpRequestSchema = z.object({
 export type FollowUpRequest = z.infer<typeof followUpRequestSchema>;
 export const followUpResultSchema = z.object({ addressed: z.enum(["bee", "meeting"]), confidence: z.number().min(0).max(1) }).nullable();
 export type FollowUpResult = z.infer<typeof followUpResultSchema>;
+
+// "What did I miss?" (core/recap.ts): the missed meeting lines ("Speaker: words"), newest kept. Null back: no key or a failure.
+export const recapRequestSchema = z.object({ lines: z.array(z.string().max(1000)).min(1).max(80), sessionToken: z.string().max(8000) });
+export type RecapRequest = z.infer<typeof recapRequestSchema>;
+export const recapResultSchema = z.array(z.string().max(200)).max(3).nullable();
+export type RecapResult = z.infer<typeof recapResultSchema>;
+// Main → renderer: the user is back after core/recap.ts AWAY_MS with no input, a locked screen or sleep. since: when they left.
+export const userReturnedSchema = z.object({ since: z.number() });
+export type UserReturned = z.infer<typeof userReturnedSchema>;
 
 export const pipelineCancelSchema = z.object({ runId: runIdSchema });
 export type PipelineCancel = z.infer<typeof pipelineCancelSchema>;

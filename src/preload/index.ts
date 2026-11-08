@@ -32,6 +32,8 @@ import {
   openExternalUrlResultSchema,
   pipelineResultSchema,
   followUpResultSchema,
+  recapResultSchema,
+  userReturnedSchema,
   revealGatewayKeyResultSchema,
   settingsViewSchema,
   teamsActionResultSchema,
@@ -48,6 +50,8 @@ import {
   type CommandRequest,
   type ConversationEnded,
   type FollowUpRequest,
+  type RecapRequest,
+  type UserReturned,
   type CommandStop,
   type ComputerAnswer,
   type ComputerUpdate,
@@ -132,6 +136,19 @@ const api = {
   runCommand: async (request: CommandRequest) => pipelineResultSchema.parse(await ipcRenderer.invoke(IPC.runCommand, request)),
   // In the conversation window: is an unclear own mic phrase for Bee or the meeting? Null when main cannot tell (no key, failure).
   classifyFollowUp: async (request: FollowUpRequest) => followUpResultSchema.parse(await ipcRenderer.invoke(IPC.classifyFollowUp, request)),
+  // "What did I miss?": the AI's bullets for the missed meeting lines, or null (no key, failure).
+  recapSummary: async (request: RecapRequest) => recapResultSchema.parse(await ipcRenderer.invoke(IPC.recapSummary, request)),
+  /** The user is back after a while away (core/recap.ts AWAY_MS): since is when they left. */
+  onUserReturned: (listener: (returned: UserReturned) => void): (() => void) => {
+    const handler = (_event: unknown, payload: unknown) => {
+      const parsed = userReturnedSchema.safeParse(payload);
+      if (parsed.success) listener(parsed.data);
+    };
+    ipcRenderer.on(IPC.userReturned, handler);
+    return () => {
+      ipcRenderer.removeListener(IPC.userReturned, handler);
+    };
+  },
   // Bee's history cleared after idle: main may send that finished conversation to vmem. Fire and forget; main checks the setting.
   conversationEnded: async (request: ConversationEnded) => {
     z.void().parse(await ipcRenderer.invoke(IPC.conversationEnded, request));

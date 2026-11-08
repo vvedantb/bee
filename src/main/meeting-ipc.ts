@@ -21,6 +21,7 @@ import type { CommandAgent } from "../core/claude-agent";
 import { runDirectCommand, type ComputerHost } from "../core/direct-command";
 import type { ScreenCapture } from "../core/screen-look";
 import { classifyFollowUp } from "../core/follow-up";
+import { summariseRecap } from "../core/recap";
 import { loadMcpTools, type McpPool, type McpServerConfig } from "../core/mcp";
 import type { MeetingContext } from "../core/meeting-context";
 import { GUIDE_MODEL, NO_GATEWAY_KEY, STT_MODEL, createBeeGateway, type BeeGateway } from "../core/gateway";
@@ -37,6 +38,7 @@ import {
   computerAnswerSchema,
   conversationEndedSchema,
   followUpRequestSchema,
+  recapRequestSchema,
   meetingContextRequestSchema,
   meetingSummaryRequestSchema,
   pipelineCancelSchema,
@@ -53,6 +55,7 @@ import {
   type ComputerAccessView,
   type ComputerUpdate,
   type FollowUpResult,
+  type RecapResult,
   type LunaActivity,
   type LunaPartial,
   type MeetingSummaryResult,
@@ -427,6 +430,16 @@ export function registerMeetingIpc(args: { notesDir: string;
     const apiKey = args.gatewayApiKey();
     if (!apiKey) return null;
     return classifyFollowUp({ model: createGateway(apiKey).languageModel(GUIDE_MODEL), lastBee: request.lastBee, lines: request.lines, phrase: request.phrase, othersQuiet: request.othersQuiet });
+  });
+
+  // "What did I miss?" (core/recap.ts): one small call on the missed meeting lines. Null without a key or on any failure, so
+  // the renderer lists the lines itself.
+  ipcMain.handle(IPC.recapSummary, async (_event, payload): Promise<RecapResult> => {
+    const request = recapRequestSchema.parse(payload);
+    assertSignedIn(request.sessionToken);
+    const apiKey = args.gatewayApiKey();
+    if (!apiKey) return null;
+    return summariseRecap({ model: createGateway(apiKey).languageModel(GUIDE_MODEL), lines: request.lines });
   });
 
   // Stop for a direct request: the island's Stop button or "Bee, stop" from the user's own mic. Computer use stops at once (the
