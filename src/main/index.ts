@@ -8,9 +8,10 @@ import { fileURLToPath } from "node:url";
 import { RENDERER_HOST, RENDERER_SCHEME, RENDERER_URL } from "../shared/clerk";
 import { shortcutLabel } from "../core/shortcut";
 import { displayMatching, placeInWorkArea, restoreOverlayBounds, scaleSize, type DisplayInfo } from "../core/interface-scale";
-import { IPC, TEAMS_AUDIO_LINE_MAX, settingsUpdateSchema, windowSizeSchema, type MeetingWindowCaptions, type TeamsAudioEnded, type TeamsAudioLines, type WindowSize } from "../shared/ipc";
+import { IPC, TEAMS_AUDIO_LINE_MAX, settingsUpdateSchema, windowSizeSchema, type MeetingWindowCaptions, type TeamsAudioEnded, type TeamsAudioLines, type UserReturned, type WindowSize } from "../shared/ipc";
 import { debugLog, errorData, msSince, setDebugSink, teeConsole } from "../core/debug-log";
 import { NO_GATEWAY_KEY, STT_MODEL, createBeeGateway } from "../core/gateway";
+import { createAwayTracker } from "../core/recap";
 import { teamsAudioOsSupported, teamsAudioPlatform } from "../core/teams-audio";
 import { sttVocabulary, transcribeSpeech } from "../core/transcribe";
 import { createMcpPool } from "../core/mcp";
@@ -64,6 +65,8 @@ const TOP_MARGIN = 8;
 const isMac = process.platform === "darwin";
 // System Settings → Privacy & Security → Accessibility, for the experimental meeting window reader and computer use.
 const MAC_ACCESSIBILITY_SETTINGS = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility";
+// How often main reads the system idle time for the recap after time away (core/recap.ts).
+const AWAY_TICK_MS = 5000;
 
 const outDir = fileURLToPath(new URL(".", import.meta.url));
 
@@ -534,6 +537,19 @@ if (clerk.isPrimaryInstance) {
     const sendToOverlay = (channel: string, payload: unknown): void => {
       if (win && !win.isDestroyed()) win.webContents.send(channel, payload);
     };
+    // "What did I miss?" (core/recap.ts): the user is away after AWAY_MS with no keyboard or mouse input, a locked screen or
+    // sleep. When they come back, the renderer shows a recap card if there is something to recap. Times only, never content.
+    const away = createAwayTracker();
+    const returned = (since: number | null): void => {
+      if (since === null) return;
+      debugLog.info("presence", "returned", { awayMs: Date.now() - since });
+      sendToOverlay(IPC.userReturned, { since } satisfies UserReturned);
+    };
+    setInterval(() => returned(away.idle(Date.now(), powerMonitor.getSystemIdleTime() * 1000)), AWAY_TICK_MS).unref?.();
+    powerMonitor.on("lock-screen", () => away.leave("lock", Date.now()));
+    powerMonitor.on("unlock-screen", () => returned(away.back("lock", Date.now())));
+    powerMonitor.on("suspend", () => away.leave("suspend", Date.now()));
+    powerMonitor.on("resume", () => returned(away.back("suspend", Date.now())));
     debugLog.info("teams-audio", "helper", { found: teamsAudioHelper !== null, path: teamsAudioHelper });
     const teamsAudioCapture = createTeamsAudioCapture({
       helperPath: () => teamsAudioHelper,

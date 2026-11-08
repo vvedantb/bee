@@ -18,6 +18,7 @@ const SHOTS = [
   "meeting-card",
   "briefing-card",
   "follow-up-card",
+  "recap-card",
   "long-tip-top",
   "long-tip-scrolled",
   "update-available",

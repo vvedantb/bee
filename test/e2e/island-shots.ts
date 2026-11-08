@@ -1,5 +1,5 @@
 // Static island states for screenshots, styled by the real styles.css (no Clerk, no store). harness-main.ts loads this
-// page once per ?shot=collapsed|thinking|expanded|meeting-card|briefing-card|follow-up-card|long-tip-top|long-tip-scrolled|update-available|
+// page once per ?shot=collapsed|thinking|expanded|meeting-card|briefing-card|follow-up-card|recap-card|long-tip-top|long-tip-scrolled|update-available|
 // response-folded|response-full-text|fresh-utterance|hint-quiet|hint-no-input|hint-clipping|hint-noisy and captures it; the page
 // reports once it has rendered, with the notch's measured logo and button boxes. response-full-text clicks the folded answer, and
 // island.ts islandClick decides what opens. The hint shots show each mic hint (hints.ts) alone in the body, with the mic on.
@@ -88,8 +88,9 @@ function pill(status: string, busy: boolean, { update = false, folded = false, m
   </header>`;
 }
 
-// The island's cards (store.ts MeetingCard), as App.tsx renders them: at meeting start, before a meeting, and after one.
-const CARDS: Record<"meeting" | "briefing" | "follow-up", MeetingCard> = {
+// The island's cards (store.ts MeetingCard), as App.tsx renders them: at meeting start, before a meeting, after one, and the
+// recap after time away (core/recap.ts).
+const CARDS: Record<"meeting" | "briefing" | "follow-up" | "recap", MeetingCard> = {
   meeting: { id: "meeting-1", label: "Last time", lines: ["Last time in Weekly Sync (10 Oct)", "Open: Sam: send the renewal quote"], buttons: [] },
   briefing: {
     id: "brief-1",
@@ -105,6 +106,12 @@ const CARDS: Record<"meeting" | "briefing" | "follow-up", MeetingCard> = {
       { label: "Draft follow-up email", action: { kind: "email", path: "x" } },
       { label: "Create tasks", action: { kind: "tasks", path: "x" } },
     ],
+  },
+  recap: {
+    id: "recap-1",
+    label: "Recap",
+    lines: ["While you were away", "Launch moved to 4 Dec; Priya confirms with legal", "Sam owns the pricing page update", "Background task done: Draft release notes", "Summary saved"],
+    buttons: [{ label: "Open summary", action: { kind: "openSummary" } }],
   },
 };
 
@@ -181,6 +188,7 @@ const states: Record<string, string> = {
   "meeting-card": `<div class="island open">${pill(CARDS.meeting.label, false)}${islandBody(card("meeting"))}</div>`,
   "briefing-card": `<div class="island open">${pill(CARDS.briefing.label, false)}${islandBody(card("briefing"))}</div>`,
   "follow-up-card": `<div class="island open">${pill(CARDS["follow-up"].label, false)}${islandBody(card("follow-up"))}</div>`,
+  "recap-card": `<div class="island open">${pill(CARDS.recap.label, false)}${islandBody(card("recap"))}</div>`,
   "long-tip-top": longTip,
   "long-tip-scrolled": longTip,
   "update-available": `<div class="island">${pill("Bee is ready", false, { update: true })}</div>`,
