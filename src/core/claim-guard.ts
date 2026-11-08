@@ -1,4 +1,5 @@
 import type { ModelMessage } from "ai";
+import { BROWSE_EXECUTE_TOOL } from "./browse";
 import type { IrreversibleKind } from "./computer-control";
 
 // A last check on what Bee tells the user it did. The prompts already say "never claim a send without proof", yet logs show lines
@@ -99,7 +100,8 @@ export const UNPROVEN_TYPING_LINE = "Bee could not confirm anything was typed.";
 export type RunEvidence = {
   /**
    * Irreversible kinds this run proved, and only these: an action marked with that effect came back Done, the confirm gate counted
-   * a Done action as that kind, or a connector tool whose own name says that action succeeded (connectorEffect).
+   * a Done action as that kind, a connector tool whose own name says that action succeeded (connectorEffect), or a browse execute
+   * the user confirmed as that kind (core/browse-gate.ts) that succeeded.
    */
   proven: Set<ClaimKind>;
   /** Text Bee put in a field this run (set_value or type_text that succeeded), the newest last. */
@@ -116,7 +118,8 @@ export type RunEvidence = {
   calendarReads: number;
   /**
    * Claude Code's own command or file tools (Bash, Edit, Write) succeeded this run: they may have sent, deleted or typed something
-   * in ways Bee cannot read, so a claim of that kind is left as written (guardLine). Calendar claims are still checked.
+   * in ways Bee cannot read, so a claim of that kind is left as written (guardLine). Calendar claims are still checked. So does a
+   * browse execute that succeeded without a Confirm: it ran in the user's browser, where Bee cannot see what it did.
    */
   outside: boolean;
 };
@@ -203,8 +206,11 @@ const isError = (text: string, output: unknown) => /^\s*Error\b/.test(text) || (
 // A connector's own failure inside a result that came back as text: {"ok":false}, {"isError":true}, {"error":"…"}.
 const CONNECTOR_FAILED = /"(?:ok|success)"\s*:\s*false|"isError"\s*:\s*true|"error"\s*:\s*(?:"|\{)/;
 
-/** The evidence in one run's messages (the AI's tool calls and their results), plus the kinds the confirm gate counted. */
-export function runEvidence(messages: readonly ModelMessage[], gateKinds: Iterable<ClaimKind> = []): RunEvidence {
+/**
+ * The evidence in one run's messages (the AI's tool calls and their results), plus the kinds the confirm gate counted, and the
+ * browse executes the user confirmed, by tool call id (core/claude-agent.ts onConfirmed).
+ */
+export function runEvidence(messages: readonly ModelMessage[], gateKinds: Iterable<ClaimKind> = [], browseConfirmed: ReadonlyMap<string, ClaimKind> = new Map()): RunEvidence {
   const evidence: RunEvidence = { proven: new Set(gateKinds), typed: [], toolCalls: 0, okResults: 0, failedResults: 0, okReads: 0, calendarCalls: 0, calendarReads: 0, outside: false };
   const calls = new Map<string, { name: string; input: Record<string, unknown>; calendar: boolean }>();
   // The app Bee last opened, focused or read by name: a read that names no app reads that one.
@@ -236,6 +242,12 @@ export function runEvidence(messages: readonly ModelMessage[], gateKinds: Iterab
       }
       evidence.okResults += 1;
       if (OUTSIDE.has(name)) evidence.outside = true;
+      // A browse script that ran: proof of the kind the user confirmed, else something Bee cannot check.
+      if (name === BROWSE_EXECUTE_TOOL) {
+        const kind = browseConfirmed.get(String(part.toolCallId));
+        if (kind) evidence.proven.add(kind);
+        else evidence.outside = true;
+      }
       const input = call?.input ?? {};
       if (OPENS.has(name) || (!NOT_READS.has(name) && appOf(name, input))) current = appOf(name, input);
       if (!NOT_READS.has(name)) {
@@ -280,8 +292,8 @@ export function claimsShown(messages: readonly ModelMessage[]): Set<ClaimKind> {
  * plus what earlier turns proved or already told the user. Earlier claims count because the history keeps the line the user
  * saw, never an unproven claim Bee replaced (replaceLastText).
  */
-export function answerEvidence(turn: readonly ModelMessage[], history: readonly ModelMessage[]): RunEvidence {
-  const evidence = runEvidence(turn);
+export function answerEvidence(turn: readonly ModelMessage[], history: readonly ModelMessage[], browseConfirmed: ReadonlyMap<string, ClaimKind> = new Map()): RunEvidence {
+  const evidence = runEvidence(turn, [], browseConfirmed);
   const earlier = runEvidence(history);
   for (const kind of earlier.proven) evidence.proven.add(kind);
   if (earlier.outside) evidence.outside = true;

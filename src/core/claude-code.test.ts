@@ -50,5 +50,6 @@ describe("beeToolName", () => {
     expect(activityLabel(beeToolName("mcp__linear__list_issues"))).toBe("Using linear…");
     expect(activityLabel(beeToolName("Read"))).toBe("Reading a file…");
     expect(activityLabel(beeToolName("Bash"))).toBe("Running a command…");
+    expect(activityLabel(beeToolName("mcp__browse__execute"))).toBe("Using your browser…");
   });
 });
