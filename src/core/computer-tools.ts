@@ -620,6 +620,9 @@ export function findRole(asked: string, seen: ReadonlySet<string> = new Set()): 
 const appWords = (name: string) =>
   name.toLowerCase().trim().replace(/\.exe$/, "").replace(/^(?:microsoft|google|mozilla|apple)\s+/, "").replace(/[^a-z0-9]/g, "");
 
+const LIBREOFFICE_ASK = /^(?:soffice|libreoffice(?:writer|calc|impress)?|writer)$/;
+const LIBREOFFICE_PROCESS = /^(?:soffice(?:\.bin|\.exe)?|libreoffice[\w .-]*)$/i;
+
 /**
  * The running app (as list-apps names it) the AI means: the same name, the same but for case, the same words (Chrome is
  * chrome.exe, Google Chrome is chrome.exe), or the only one whose words contain them or sit in them (Teams is ms-teams.exe).
@@ -632,6 +635,11 @@ export function matchApp(name: string, running: readonly string[]): string | nul
   const lower = apps.filter((app) => app.toLowerCase() === name.toLowerCase());
   if (lower.length > 0) return lower[0] ?? null;
   const key = appWords(name);
+  // LibreOffice runs as soffice.bin on Linux: soffice, LibreOffice and LibreOffice Writer all mean that one process.
+  if (LIBREOFFICE_ASK.test(key)) {
+    const office = apps.filter((app) => LIBREOFFICE_PROCESS.test(app));
+    if (office.length === 1) return office[0] ?? null;
+  }
   if (key.length < 2) return null;
   const same = apps.filter((app) => appWords(app) === key);
   if (same.length > 0) return only(same);
@@ -668,7 +676,28 @@ export function holdsText(nodes: readonly unknown[], typed: string): boolean {
   return nodes.some((node) => hit(node, 0));
 }
 
-const DOCUMENT_APP = /\b(?:soffice|libreoffice|writer)\b/i;
+const DOCUMENT_APP = /\b(?:soffice(?:\.bin)?|libreoffice|writer)\b/i;
+
+/** The Edit-menu label Writer shows after typing: Undo: Typing: “text” (curly or straight quotes). */
+export const undoTypingLabel = (typed: string) => `Undo: Typing: “${typed}”`;
+const quotesFlat = (a: string) => a.replace(/[\u201c\u201d\u201e\u201f\u00ab\u00bb]/g, '"').replace(/[\u2018\u2019]/g, "'");
+const undoKey = (a: string) => quotesFlat(a).replace(/\s+/g, " ").trim().toLowerCase();
+/**
+ * Whether any menu item (find match or snapshot node) is Writer's Undo: Typing label for exactly this text. AT-SPI does not
+ * expose the page text, but the Edit menu's Undo item names what was typed. Exact on the text inside the quotes, so a longer
+ * label (typing "hello world") never proves "hello".
+ */
+export function writerRecordedTyping(nodes: readonly unknown[], typed: string): boolean {
+  const want = undoKey(typed);
+  if (!want) return false;
+  const label = `undo: typing: "${want}"`;
+  const hit = (raw: unknown, depth: number): boolean => {
+    if (!isRecord(raw) || depth > 60) return false;
+    if (/^menu ?item$/i.test(str(raw.role)) && typeof raw.name === "string" && undoKey(raw.name) === label) return true;
+    return Array.isArray(raw.children) && raw.children.some((child) => hit(child, depth + 1));
+  };
+  return nodes.some((node) => hit(node, 0));
+}
 /** The thin-read note, with the keyboard fallback for a document app: a page with no field is not an app Bee cannot control. */
 const thinNote = (app: string | null) =>
   app && DOCUMENT_APP.test(app) ? THIN_NOTE.replace("If those show nothing usable either,", `${KEYBOARD_NOTE} If those show nothing usable either,`) : THIN_NOTE;
@@ -1093,7 +1122,7 @@ export function computerTools(deps: ComputerToolDeps) {
    * (LibreOffice Writer). agent-desktop's type needs a ref, so Bee brings the window forward, then presses one key per character
    * with physical delivery in that app (press --headed --app focuses its window first). Every character is checked before any key
    * is pressed. Stops at the first key that fails and says how much was typed; only a whole run comes back Done, and Bee then
-   * reads the document back (paragraph or document text) and comes back Done only when it holds the text.
+   * looks for Writer's Edit-menu Undo: Typing item for that text. Done either way once every key was delivered; the line says whether Bee could check.
    */
   const keyboardTypeAction = ({ app, window_id, text, effect }: { app: string; window_id?: string | undefined; text: string; effect: Effect }): Action => ({
     name: "type_text",
@@ -1132,24 +1161,31 @@ export function computerTools(deps: ComputerToolDeps) {
         const why = failed ? errorLine(failed) : STOPPED;
         return `${first.note}${note}${why} Bee typed ${typed} of ${keys.length} characters with the keyboard before it stopped. Look before you type again.`;
       }
-      // Read the document back through AT-SPI (paragraph or document text, then a compact snapshot): find --text misses Writer's canvas.
+      // Read back through AT-SPI. Writer exposes no page text, only the Edit menu's Undo: Typing: “text” item, so look for that
+      // first; paragraph or document text (other platforms) is a second proof.
       const where = scope({ app: first.app, window_id });
+      const shownName = shortName(first.app ?? app, 30);
+      let undo = false;
       let seen = false;
+      if (!control.reason()) {
+        const looked = await exec("find", [`--text=${cleanText(text)}`, ...where], READ_MS);
+        undo = looked.ok && isRecord(looked.data) && Array.isArray(looked.data.matches) && writerRecordedTyping(looked.data.matches, text);
+      }
+      if (!undo && !control.reason()) {
+        const snap = await exec("snapshot", ["--compact", ...where], READ_MS);
+        undo = snap.ok && isRecord(snap.data) && writerRecordedTyping([snap.data.tree], text);
+        seen = snap.ok && isRecord(snap.data) && holdsText([snap.data.tree], text);
+      }
       for (const role of ["paragraph", "document"]) {
-        if (seen || control.reason()) break;
+        if (undo || seen || control.reason()) break;
         const looked = await exec("find", [`--role=${role}`, ...where], READ_MS);
         seen = looked.ok && isRecord(looked.data) && Array.isArray(looked.data.matches) && holdsText(looked.data.matches, text);
       }
-      if (!seen && !control.reason()) {
-        const snap = await exec("snapshot", ["--compact", ...where], READ_MS);
-        seen = snap.ok && isRecord(snap.data) && holdsText([snap.data.tree], text);
-      }
-      if (!seen) {
-        // No "Done" and no "typed": a dialog may have taken the keys, so this proves nothing to the claim guard.
-        return `${first.note}${note}Error: Bee pressed ${keys.length} keys but could not confirm ${shortName(first.app ?? app, 30)} holds that text. A dialog may have taken them. Look at the window before you say it is there.`;
-      }
       // "Done" first (after any app-name note), so actionDone and the claim guard read it as done.
-      return `${first.note}Done: typed ${keys.length} characters into ${shortName(first.app ?? app, 30)} with the keyboard. ${note}Checked: the document holds that text.`;
+      if (undo) return `${first.note}Done: typed ${keys.length} characters into ${shownName} with the keyboard. ${note}Checked: the Edit menu shows Undo Typing for that text, so Writer recorded it.`;
+      if (seen) return `${first.note}Done: typed ${keys.length} characters into ${shownName} with the keyboard. ${note}Checked: the document holds that text.`;
+      // Every key was delivered and no dialog blocked them: honest success, with no claim about the page.
+      return `${first.note}Done: typed ${keys.length} characters into ${shownName} with the keyboard. ${note}Writer’s page text is not exposed to accessibility, so Bee cannot read the page back to check.`;
     },
     gate: () => ({ command: "type", target: null, lastField, effect, text }),
   });

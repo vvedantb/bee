@@ -1,0 +1,49 @@
+{
+  "app": "soffice.bin",
+  "window": {
+    "title": "Untitled 1 \u2014 LibreOffice Writer"
+  },
+  "tree": {
+    "role": "frame",
+    "children": [
+      {
+        "role": "menu",
+        "name": "Edit",
+        "children": [
+          {
+            "role": "menuitem",
+            "name": "Undo: Typing: \u201chello\u201d",
+            "ref_id": "@s3lbdsglui4uyv:e792",
+            "states": [
+              "hidden"
+            ],
+            "value": null
+          },
+          {
+            "role": "menuitem",
+            "name": "Repeat: Typing: \u201chello\u201d",
+            "ref_id": "@s3lbdsglui4uyv:e794",
+            "states": [
+              "hidden"
+            ],
+            "value": null
+          }
+        ]
+      },
+      {
+        "role": "document",
+        "name": "Untitled 1 - LibreOffice Document",
+        "ref_id": "@s3lbdsglui4uyv:e1465",
+        "value": null,
+        "children": [
+          {
+            "role": "paragraph",
+            "name": "",
+            "value": null,
+            "ref_id": null
+          }
+        ]
+      }
+    ]
+  }
+}
