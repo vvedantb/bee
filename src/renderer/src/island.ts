@@ -32,6 +32,8 @@ const ACTIVITY_LABELS = new Map([
   ["memory_write", "Remembering…"],
   // Computer use (core/computer-tools.ts). The step line from main ("Clicking Send…") wins over these while it runs.
   ["use_computer", "Using your computer…"],
+  // OpenCode Browse (core/browse.ts): Playwright in the user's own browser.
+  ["browse__execute", "Using your browser…"],
   ["snapshot", "Looking at the screen…"],
   ["find", "Looking at the screen…"],
   ["read", "Looking at the screen…"],

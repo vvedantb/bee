@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { binaryCandidates, type FindArgs } from "./binary-path";
 
 // The user's own Claude Code install, which "Bee, …" requests run on (core/claude-agent.ts). Bee ships no Claude Code binary: it
 // uses the one the user installed, and that install's login. Pure: main/claude-code.ts runs the checks.
@@ -33,17 +34,16 @@ export function claudeCodeMessage(status: ClaudeCodeStatus): string | null {
  * Finder or the Start menu does not get the shell's PATH, so the install folders are checked by name. Only native binaries and
  * Unix launchers: npm's Windows claude.cmd shim cannot be started without a shell.
  */
-export function claudeCandidates(args: { platform: NodeJS.Platform; home: string; env: Readonly<Record<string, string | undefined>> }): string[] {
-  const windows = args.platform === "win32";
-  const sep = windows ? "\\" : "/";
-  const join = (...parts: string[]) => parts.join(sep);
-  const name = windows ? "claude.exe" : "claude";
-  const pathDirs = (args.env.PATH ?? args.env.Path ?? "").split(windows ? ";" : ":").filter(Boolean);
-  const installDirs = windows
-    ? [join(args.home, ".local", "bin"), ...(args.env.LOCALAPPDATA ? [join(args.env.LOCALAPPDATA, "Programs", "claude")] : [])]
-    : [join(args.home, ".local", "bin"), join(args.home, ".claude", "local"), "/opt/homebrew/bin", "/usr/local/bin", join(args.home, ".npm-global", "bin"), join(args.home, ".bun", "bin")];
-  const override = args.env.BEE_CLAUDE_PATH?.trim();
-  return [...new Set([...(override ? [override] : []), ...[...pathDirs, ...installDirs].map((dir) => join(dir.replace(/[\\/]+$/, ""), name))])];
+export function claudeCandidates(args: FindArgs): string[] {
+  return binaryCandidates({
+    ...args,
+    name: "claude",
+    override: "BEE_CLAUDE_PATH",
+    installDirs: (windows, join) =>
+      windows
+        ? [join(args.home, ".local", "bin"), ...(args.env.LOCALAPPDATA ? [join(args.env.LOCALAPPDATA, "Programs", "claude")] : [])]
+        : [join(args.home, ".local", "bin"), join(args.home, ".claude", "local"), "/opt/homebrew/bin", "/usr/local/bin", join(args.home, ".npm-global", "bin"), join(args.home, ".bun", "bin")],
+  });
 }
 
 /** "2.1.318 (Claude Code)" → "2.1.318". */

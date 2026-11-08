@@ -15,6 +15,8 @@ import {
   computerAccessSchema,
   claudeCodeViewSchema,
   claudeCodeUpdateResultSchema,
+  browseViewSchema,
+  browseInstallResultSchema,
   computerUpdateSchema,
   copyGatewayKeyResultSchema,
   meetingContextViewSchema,
@@ -163,6 +165,10 @@ const api = {
   claudeCode: async (fresh: boolean) => claudeCodeViewSchema.parse(await ipcRenderer.invoke(IPC.claudeCode, fresh)),
   /** Runs `claude update` (Settings → Update Claude Code). */
   updateClaudeCode: async () => claudeCodeUpdateResultSchema.parse(await ipcRenderer.invoke(IPC.claudeCodeUpdate)),
+  /** OpenCode Browse for "Bee, …" requests. `fresh` checks again now (Settings → Check again). */
+  browse: async (fresh: boolean) => browseViewSchema.parse(await ipcRenderer.invoke(IPC.browse, fresh)),
+  /** Runs the Browse installer (Settings → Install): minutes, while the user adds the extension. */
+  installBrowse: async () => browseInstallResultSchema.parse(await ipcRenderer.invoke(IPC.browseInstall)),
   transcribe: async (request: TranscribeRequest) =>
     transcribeResultSchema.parse(await ipcRenderer.invoke(IPC.transcribe, request)),
   writeMeetingSummary: async (request: MeetingSummaryRequest) =>

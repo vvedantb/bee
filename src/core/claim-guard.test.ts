@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   UNPROVEN_TYPING_LINE, UNSEEN_CALENDAR_LINE, answerEvidence, claimedTyping, claimedEffect, claimedEffects, claimsEmptyCalendar, connectorEffect, doubtedEffect, guardLine, provenLine, runEvidence, unprovenLine, upgradeLine,
   withoutToolNames,
+  type ClaimKind,
 } from "./claim-guard";
 
 // Synthetic runs only: tool calls and results shaped like computer-tools' own ("Done." / "Error …"), no real app or person.
@@ -78,6 +79,25 @@ describe("runEvidence", () => {
     expect([...runEvidence(stoppedAfterTyping).proven]).toEqual([]);
     // The gate read the tree and counted a click on a Send button as a send, whatever effect the AI gave.
     expect([...runEvidence(call("click", { ref: "@s1:e9", effect: "none" }, "Done."), ["send"]).proven]).toEqual(["send"]);
+  });
+
+  it("counts a browse execute the user confirmed as proof once it succeeded, and any other as outside Bee's view", () => {
+    const confirmedSend = call("browse__execute", { code: "await page.getByRole('button', { name: 'Send' }).click()" }, '{"result":null}');
+    const confirmed = new Map<string, ClaimKind>([[`call_${seq}`, "send"]]);
+    expect(runEvidence(confirmedSend, [], confirmed)).toMatchObject({ proven: new Set(["send"]), outside: false });
+    expect(guardLine("Sent the email to Sam.", runEvidence(confirmedSend, [], confirmed))).toMatchObject({ rewritten: false });
+    expect(guardLine("Deleted the old email.", runEvidence(confirmedSend, [], confirmed))).toMatchObject({ rewritten: true, reason: "delete" });
+    // A confirmed execute that failed (or the gate denied) proves nothing.
+    const failed: ModelMessage[] = [
+      { role: "assistant", content: [{ type: "tool-call", toolCallId: "browse_failed", toolName: "browse__execute", input: { code: "" } }] },
+      { role: "tool", content: [{ type: "tool-result", toolCallId: "browse_failed", toolName: "browse__execute", output: { type: "error-text", value: "TimeoutError: locator.click" } }] },
+    ];
+    expect(runEvidence(failed, [], new Map<string, ClaimKind>([["browse_failed", "send"]]))).toMatchObject({ proven: new Set(), outside: false, failedResults: 1 });
+    // A harmless execute (reading, navigating) ran in the user's browser: Bee cannot tell what it did, so claims stay as written.
+    const reading = runEvidence(call("browse__execute", { code: "await page.goto('https://mail.google.com')" }, '{"result":"Inbox"}'));
+    expect(reading.outside).toBe(true);
+    expect(guardLine("Sent the email to Sam.", reading)).toMatchObject({ rewritten: false });
+    expect(answerEvidence(confirmedSend, [], confirmed).proven).toEqual(new Set(["send"]));
   });
 
   it("counts reads apart from actions", () => {
