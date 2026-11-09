@@ -61,12 +61,17 @@ Automatic meeting detection ends the meeting (the call is over for 45 s)
 
 ## Quiet meeting flow
 
-Meetings start and stop by automatic detection and nothing else. There is no **End meeting & save summary** button, no manual start, no meeting tray item and no `Bee, stop` for meetings (that command still stops computer use and requests only). The mic toggle in the notch is for Talk to Bee and general listening: it never starts or ends a meeting, and it shows no meeting toast.
+Detection always runs. Meetings start from detection and nothing else: no manual start, no **End meeting & save summary** button, no meeting tray item and no `Bee, stop` for meetings (that command still stops computer use and requests only). The mic toggle in the notch is for Talk to Bee and general listening: it never starts or ends a meeting, and it shows no meeting toast.
 
 ```
 renderer store: meeting tick (5 s) → autoMeetingTick → window.bee.meeting.signals(token) → main/meeting-signals.ts
-  → core/auto-meeting-detection stepAutoMeeting(state, { signals, enabled, now }) → effect "start" | "stop" | "none"
-  start (call qualifies for 8 s; 5 s with a calendar event) → mic on, meeting mode for the session, start toast
+  → core/auto-meeting-detection stepAutoMeeting(state, { signals, enabled, now, event }) → effect "prompt" | "start" | "stop" | "dismiss" | "none"
+  confirmed (call qualifies for 8 s; 5 s with a calendar event):
+    setting on  → start: mic on, meeting mode for the session, start toast (no button)
+    setting off → prompt: toast "Meeting detected" with **Start meeting**; phase `prompted`, nothing recorded
+  Start click (event accept) → start, then a persistent toast "Meeting in progress" with **Stop meeting**
+  Stop click (event reject)  → stop and save once; the same meeting is suppressed (no re-prompt)
+  prompt ignored and call over for 45 s → dismiss: toast cleared, nothing saved
   stop  (end condition holds 45 s) → endMeeting({ auto, stopMic }) → save → end toast once the save has finished
 ```
 
@@ -75,9 +80,12 @@ renderer store: meeting tick (5 s) → autoMeetingTick → window.bee.meeting.si
   - End toast, after the save finishes: `Meeting ended, notes have been saved`. If the save failed: `Meeting ended, but notes could not be saved.` With no lines to save: `Meeting ended.` (it never claims a save that did not happen).
   - Notch and Live tab line while a meeting is active (`BeeState.meetingActive`, set by the machine): `Meeting in progress`. The Teams audio capture runs underneath and is not advertised: the old `Listening to you and Teams audio…` (notch) and `Listening to Teams audio for people without Bee.` (Live, Settings) are gone. If Teams audio is listening without an automatic meeting (detection off, mic on in a Teams call), the same `Meeting in progress` line shows.
   - Toasts come from `onAutoMeetingNotice` (`main.tsx` shows them with Sonner, below the notch). One start and one end toast per meeting: a call that drops and returns inside the 45 s grace is the same meeting, so it makes no second toast. Live → Meeting shows `Meeting in progress`, the saved file name and **Open summary** after a save, and no button that starts or ends anything.
-- **`autoMeetingDetection` off** (Settings, on by default): no meeting starts. The machine resets, no mic is turned on for a meeting, `meetingActive` stays false, no toast shows, and nothing saves a summary by itself (the quiet-session save in the meeting tick is also gated on the setting). The mic toggle still works for Talk to Bee; its lines collect in the session (up to 200) and are not saved. There is deliberately no manual meeting path.
-- **Safety net: maximum length** (`MAX_MEETING_MS`, 4 hours, `core/auto-meeting-detection.ts`). A window that lingers, or an OS that still reports the mic in use, cannot hold a meeting open for ever: at 4 hours the machine emits `stop` (the normal save and end toast) and suppresses the same meeting identity until the signal has been quiet for 45 s or a different meeting begins. It is not UI and has no setting.
-- **Manual-stop analysis.** The old manual paths are removed: the button, and the mic toggle's `manualStart` and `manualStop` events (a mic-off used to suppress the meeting). The mic going off mid-meeting no longer ends it; detection does. Hang risks are the call end signal never arriving (covered by the maximum length), and detection being wrong (covered by the setting).
+- **`autoMeetingDetection` means auto-confirm**, not detection on or off (Settings, on by default). A missing key in `settings.json` reads as on (Zod `.default(true)`); an explicit `false` stays off.
+  - **On**: a confirmed call starts by itself. Start toast `Meeting in progress, Bee is active`, end toast after a successful save, notch `Meeting in progress`. No Start or Stop button.
+  - **Off**: detection still runs. After the same confirm time Bee shows `Meeting detected` with **Start meeting** (Sonner, id `bee-meeting`, no timeout). Until the click: no mic, no speech-to-text, no Teams audio, `meetingActive` false, no meeting overlay. After the click: mic and overlay start as in the on path, and the same toast becomes `Meeting in progress` with **Stop meeting**. **Stop meeting** stops the mic, saves once, shows the end toast and suppresses that meeting until the call has been over for 45 s or a different meeting begins. If the call ends after Start with no click, the grace runs out and Bee stops and saves as in the on path. If it ends before any click, the prompt is cleared and nothing is saved.
+  - The mic toggle still works for Talk to Bee; its lines collect in the session (up to 200) and are saved only by an active meeting. Switching the setting on while a prompt waits accepts it. Switching it off mid-meeting keeps the meeting (the notes are not lost).
+- **Safety net: maximum length** (`MAX_MEETING_MS`, 4 hours, `core/auto-meeting-detection.ts`). A window that lingers, or an OS that still reports the mic in use, cannot hold a meeting open for ever: at 4 hours the machine emits `stop` (the normal save and end toast) and suppresses the same meeting identity until the signal has been quiet for 45 s or a different meeting begins. It applies to every active meeting, on or off path. It is not UI and has no setting.
+- **Stop paths.** The old manual paths stay removed: the notch mic toggle never starts or ends a meeting. The only user events are the toast buttons (`actions.acceptMeeting`, `actions.stopMeeting`). Hang risks are the call end signal never arriving (covered by the maximum length) and a wrong detection (the user can leave the prompt, which clears when the call ends).
 
 ## Speech-to-text
 

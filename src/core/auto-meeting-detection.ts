@@ -1,6 +1,7 @@
 // Automatic meeting detection, pure. Each tick takes the latest signals and returns the next state plus at most one effect:
-// "start" (mic on, meeting mode for the session) or "stop" (save the summary, mic off). This is the only way a meeting starts
-// or stops: there is no manual start or stop. Setting off means no meetings. No OS, Electron or IPC here;
+// "prompt" (ask the user to start), "start" (mic on, meeting mode for the session), "stop" (save the summary, mic off) or
+// "dismiss" (the prompt was ignored and the call ended). `enabled` means auto-confirm: on, a confirmed call starts by itself; off,
+// it prompts and waits for the user's accept event. Detection always runs. No OS, Electron or IPC here;
 // main/meeting-signals.ts reads the signals and the renderer store applies the effects.
 
 /** A call must qualify this long without a break before Bee starts. Long enough to skip a window flicker, short enough to catch the first words. */
@@ -28,7 +29,8 @@ export type AutoSignals = {
   identity?: string | null;
 };
 
-export type AutoPhase = "idle" | "confirming" | "active";
+/** prompted: confirmed with auto-confirm off, waiting for the user. Nothing records until they accept. */
+export type AutoPhase = "idle" | "confirming" | "prompted" | "active";
 
 export type AutoMeetingState = {
   phase: AutoPhase;
@@ -40,13 +42,16 @@ export type AutoMeetingState = {
   startedAt: number | null;
   /** The meeting identity of the session or confirmation. */
   identity: string | null;
-  /** Set by the max-duration stop: this meeting does not auto-start again. */
+  /** Set by the max-duration stop or a user stop/reject: this meeting does not start or prompt again. */
   suppressed: { identity: string | null } | null;
   /** When the signal last went quiet while suppressed. Enough quiet clears the suppression. */
   quietSince: number | null;
 };
 
-export type AutoEffect = "start" | "stop" | "none";
+export type AutoEffect = "prompt" | "start" | "stop" | "dismiss" | "none";
+
+/** The user's answer from a toast button: accept starts a prompted meeting; reject stops an active one (or declines a prompt). */
+export type AutoEvent = "accept" | "reject";
 
 export const IDLE_AUTO: AutoMeetingState = { phase: "idle", qualSince: null, endSince: null, startedAt: null, identity: null, suppressed: null, quietSince: null };
 
@@ -62,14 +67,19 @@ function sameMeeting(a: string | null, b: string | null): boolean {
 
 export function stepAutoMeeting(
   state: AutoMeetingState,
-  input: { signals: AutoSignals; enabled: boolean; now: number },
+  input: { signals: AutoSignals; enabled: boolean; now: number; event?: AutoEvent },
 ): { state: AutoMeetingState; effect: AutoEffect } {
-  const { signals, enabled, now } = input;
+  const { signals, enabled, now, event } = input;
   const qualifying = qualifies(signals);
   const identity = signals.identity ?? null;
 
-  // Off: no meetings. Forget any session without touching the mic or the summary.
-  if (!enabled) return { state: state.phase === "idle" && !state.suppressed ? state : IDLE_AUTO, effect: "none" };
+  // The user's answer comes first. A reject is a quiet no: the same meeting is not offered again.
+  if (event === "reject" && (state.phase === "active" || state.phase === "prompted")) {
+    return { state: { ...IDLE_AUTO, suppressed: { identity: identity ?? state.identity }, quietSince: null }, effect: state.phase === "active" ? "stop" : "dismiss" };
+  }
+  if (event === "accept" && state.phase === "prompted") {
+    return { state: { ...IDLE_AUTO, phase: "active", startedAt: now, identity: identity ?? state.identity }, effect: "start" };
+  }
 
   if (state.phase === "active") {
     const startedAt = state.startedAt ?? now;
@@ -83,7 +93,17 @@ export function stepAutoMeeting(
     return { state: { ...state, startedAt, endSince }, effect: "none" };
   }
 
-  // Suppressed by the max-duration stop: stays off until the meeting is clearly over or a different one starts.
+  // Prompted: the call going away for the full grace dismisses the prompt. Nothing was recorded, so nothing is saved.
+  if (state.phase === "prompted") {
+    // Turning auto-confirm on while a prompt waits accepts it.
+    if (qualifying && enabled) return { state: { ...IDLE_AUTO, phase: "active", startedAt: now, identity: identity ?? state.identity }, effect: "start" };
+    if (qualifying) return { state: { ...state, endSince: null, identity: identity ?? state.identity }, effect: "none" };
+    const endSince = state.endSince ?? now;
+    if (now - endSince >= END_GRACE_MS) return { state: { ...IDLE_AUTO, quietSince: now }, effect: "dismiss" };
+    return { state: { ...state, endSince }, effect: "none" };
+  }
+
+  // Suppressed (max-duration stop, or the user said no): stays quiet until the meeting is clearly over or a different one starts.
   let suppressed = state.suppressed;
   let quietSince = state.quietSince;
   if (suppressed) {
@@ -102,7 +122,8 @@ export function stepAutoMeeting(
   const qualSince = state.phase === "confirming" && state.qualSince !== null && sameMeeting(state.identity, identity) ? state.qualSince : now;
   const confirmMs = signals.calendarBoost ? CONFIRM_CALENDAR_MS : CONFIRM_MS;
   if (now - qualSince >= confirmMs) {
-    return { state: { ...IDLE_AUTO, phase: "active", startedAt: now, identity }, effect: "start" };
+    if (enabled) return { state: { ...IDLE_AUTO, phase: "active", startedAt: now, identity }, effect: "start" };
+    return { state: { ...IDLE_AUTO, phase: "prompted", identity }, effect: "prompt" };
   }
   return { state: { ...IDLE_AUTO, phase: "confirming", qualSince, identity }, effect: "none" };
 }

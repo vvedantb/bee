@@ -573,6 +573,18 @@ describe("settings: automatic meeting detection", () => {
     expect(create().view().autoMeetingDetection).toBe(true);
   });
 
+  it("reads a missing key as on and an explicit false as off, from a file written before the toggle", () => {
+    writeFileSync(join(dir, "settings.json"), JSON.stringify({ meetingMode: false, personalisedLinks: true }));
+    expect(create().view().autoMeetingDetection).toBe(true);
+    writeFileSync(join(dir, "settings.json"), JSON.stringify({ meetingMode: false, autoMeetingDetection: false }));
+    expect(create().view().autoMeetingDetection).toBe(false);
+    // Saving something else keeps the explicit false.
+    const store = create();
+    store.save({ meetingMode: true });
+    expect(create().view().autoMeetingDetection).toBe(false);
+    expect(JSON.parse(readFileSync(join(dir, "settings.json"), "utf8")).autoMeetingDetection).toBe(false);
+  });
+
   it("saves the choice and keeps it, without touching meeting mode", () => {
     const store = create();
     expect(store.save({ autoMeetingDetection: false }).autoMeetingDetection).toBe(false);

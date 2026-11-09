@@ -53,8 +53,8 @@ export function PreferenceRows({
       <SettingRow
         id="auto-meeting-detection"
         label="Automatic meeting detection"
-        description="Starts listening when a call begins and saves the summary when it ends."
-        info="Looks for Teams, Zoom or Google Meet on this computer. Needs a call window or the microphone in use; chat alone does not start it."
+        description="On: Bee starts and stops by itself. Off: Bee still detects calls and asks with a Start meeting button."
+        info="Looks for Teams, Zoom or Google Meet on this computer. Needs a call window or the microphone in use; chat alone does not count. Nothing is recorded until a meeting starts."
         checked={settings.autoMeetingDetection}
         onCheckedChange={(autoMeetingDetection) => onSave({ autoMeetingDetection })}
       />
