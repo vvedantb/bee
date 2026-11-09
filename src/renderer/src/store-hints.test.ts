@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
-import type { SettingsUpdate, SettingsView, TranscribeResult, WindowSize } from "../../shared/ipc";
+import type { SettingsUpdate, SettingsView, TranscribeResult, WindowRequest, WindowSize } from "../../shared/ipc";
 import { HINT_TEXT, NO_INPUT_MS } from "./hints";
 
 // Mic hints in the store: the real segmenter and hint detector, fed synthetic frames through a stubbed mic. Preload (window.bee)
@@ -56,7 +56,7 @@ async function loadStore(settings: Partial<SettingsView> = {}) {
       },
       mcp: { list: async () => [] },
       checkForUpdate: async () => ({ currentVersion: "0.0.0", latestVersion: null, available: false, error: null }),
-      setWindowSize: async (size: WindowSize) => {
+      setWindowSize: async ({ size }: WindowRequest) => {
         sizes.push(size);
       },
       transcribe: async (): Promise<TranscribeResult> => ({ text: null, error: null }),

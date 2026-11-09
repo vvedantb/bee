@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
+import { PILL_MAX } from "../src/core/overlay-size";
 import { runHarness } from "./e2e/run";
 
 // Electron screenshots of the meeting flow in Bee's pill (test/e2e/meeting-shots.ts): the short notices in place of the status,
@@ -20,7 +21,14 @@ const SHOTS = [
   "meeting-bar-stop-no-mic",
   "meeting-notch-in-progress",
 ];
-const page = z.object({ shot: z.string(), notch: z.string().nullable(), button: z.string().nullable(), fits: z.boolean(), truncated: z.boolean() });
+const page = z.object({
+  shot: z.string(),
+  notch: z.string().nullable(),
+  button: z.string().nullable(),
+  fits: z.boolean(),
+  truncated: z.boolean(),
+  compact: z.object({ natural: z.number(), pill: z.number(), island: z.number(), truncated: z.boolean() }),
+});
 
 describe("meeting pill screenshots (Electron E2E)", () => {
   it("renders the notices, the Start meeting and Stop meeting buttons and the notch line inside the pill, and writes each as a PNG", async () => {
@@ -43,5 +51,11 @@ describe("meeting pill screenshots (Electron E2E)", () => {
     expect(byShot["meeting-bar-stop-no-mic"]).toMatchObject({ notch: "Microphone unavailable", button: "Stop meeting", truncated: false });
     expect(byShot["meeting-notch-in-progress"]).toMatchObject({ notch: "Meeting in progress", button: null });
     for (const shot of SHOTS) expect(byShot[shot]?.fits).toBe(true);
+    // The pill hugs its content: "Meeting in progress" alone is compact, and Start meeting widens it.
+    console.log(`compact pill widths: ${JSON.stringify(Object.fromEntries(report.pages.map((entry) => [entry.shot, entry.compact])))}`);
+    for (const shot of SHOTS) expect(byShot[shot]?.compact.island).toBe(byShot[shot]?.compact.pill);
+    const width = (shot: string) => byShot[shot]?.compact.pill ?? PILL_MAX;
+    expect(width("meeting-notch-in-progress")).toBeLessThan(PILL_MAX);
+    expect(width("meeting-bar-start")).toBeGreaterThan(width("meeting-notch-in-progress"));
   });
 });

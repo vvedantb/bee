@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
+import { PILL_MAX, PILL_MIN } from "../src/core/overlay-size";
 import { HINT_TEXT, type HintId } from "../src/renderer/src/hints";
 import { runHarness } from "./e2e/run";
 
@@ -14,6 +15,7 @@ const PNG_MAGIC = "89504e470d0a1a0a";
 const SHOTS = [
   "collapsed",
   "thinking",
+  "long-status",
   "expanded",
   "meeting-card",
   "briefing-card",
@@ -44,6 +46,8 @@ const page = z.object({
   tips: z.number(),
   hint: z.string().nullable(),
   error: z.boolean(),
+  compact: z.object({ natural: z.number(), pill: z.number(), island: z.number(), truncated: z.boolean() }).nullable(),
+  island: z.number().nullable(),
 });
 
 describe("island screenshots (Electron E2E)", () => {
@@ -65,6 +69,24 @@ describe("island screenshots (Electron E2E)", () => {
     }
 
     const pageFor = (shot: string) => report.pages.find((item) => item.shot === shot);
+
+    // Collapsed, the island hugs its header: never narrower than the content, never wider than full. Open, it is full width.
+    console.log(`compact pill widths: ${JSON.stringify(Object.fromEntries(report.pages.map((item) => [item.shot, item.compact ?? item.island])))}`);
+    for (const { shot, compact, open, island } of report.pages) {
+      if (open) expect(island, shot).toBe(PILL_MAX);
+      else {
+        expect(compact, shot).not.toBeNull();
+        if (!compact) continue;
+        expect(compact.island, shot).toBe(compact.pill);
+        expect(compact.pill, shot).toBeGreaterThanOrEqual(Math.max(PILL_MIN, compact.natural));
+      }
+    }
+    expect(pageFor("collapsed")?.compact?.pill).toBeLessThan(PILL_MAX);
+    // A status past the cap truncates: the long status gives the same pill as the folded answer, still short of full width.
+    expect(pageFor("long-status")?.compact?.pill).toBe(pageFor("response-folded")?.compact?.pill);
+    expect(pageFor("long-status")?.compact?.pill).toBeLessThan(PILL_MAX);
+    expect(pageFor("long-status")?.compact?.truncated).toBe(true);
+    expect(pageFor("collapsed")?.compact?.truncated).toBe(false);
 
     // The folded answer is one line with no body; clicking it opens the full text in the island, never the panel.
     expect(pageFor("response-folded")).toMatchObject({ open: false, clicked: null });

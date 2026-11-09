@@ -18,6 +18,7 @@ import {
   lunaActivitySchema,
   lunaPartialSchema,
   meetingSummaryRequestSchema,
+  windowRequestSchema,
   memoryClearResultSchema,
   memoryFactViewSchema,
   memoryListResultSchema,
@@ -165,5 +166,18 @@ describe("Saved memory schemas", () => {
     expect(memoryListResultSchema.safeParse({ facts: [{ ...fact, kind: "health" }] }).success).toBe(false);
     expect(memoryClearResultSchema.safeParse({ cleared: -1 }).success).toBe(false);
     expect(memoryClearResultSchema.parse({ cleared: 3 })).toEqual({ cleared: 3 });
+  });
+});
+
+describe("windowRequestSchema", () => {
+  it("takes a mode and a whole-pixel pill width", () => {
+    expect(windowRequestSchema.parse({ size: "collapsed", width: 296 })).toEqual({ size: "collapsed", width: 296 });
+    expect(windowRequestSchema.parse({ size: "response", width: 472 })).toEqual({ size: "response", width: 472 });
+  });
+
+  it("rejects a bare mode, an unknown mode, and a fractional, negative or missing width", () => {
+    for (const bad of ["collapsed", { size: "huge", width: 300 }, { size: "collapsed", width: 300.5 }, { size: "collapsed", width: -8 }, { size: "collapsed" }]) {
+      expect(windowRequestSchema.safeParse(bad).success).toBe(false);
+    }
   });
 });

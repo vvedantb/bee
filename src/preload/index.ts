@@ -44,6 +44,7 @@ import {
   transcribeResultSchema,
   updateActionSchema,
   updateCheckSchema,
+  windowRequestSchema,
   type BackgroundJobView,
   type CommandRequest,
   type ConversationEnded,
@@ -67,7 +68,7 @@ import {
   type TeamsAudioEnded,
   type TeamsAudioLines,
   type TranscribeRequest,
-  type WindowSize,
+  type WindowRequest,
 } from "../shared/ipc";
 
 // One failure report per method and message a minute; repeats in between are counted into the next one.
@@ -196,8 +197,8 @@ const api = {
   getFavicon: async (domain: string) => faviconResultSchema.parse(await ipcRenderer.invoke(IPC.getFavicon, domain)),
   // A connector https icon URL as a data URL. null when none could be fetched. data: icons are used as-is in the renderer.
   getHttpsIcon: async (url: string) => httpsIconResultSchema.parse(await ipcRenderer.invoke(IPC.getHttpsIcon, url)),
-  setWindowSize: async (size: WindowSize) => {
-    z.void().parse(await ipcRenderer.invoke(IPC.setWindowSize, size));
+  setWindowSize: async (request: WindowRequest) => {
+    z.void().parse(await ipcRenderer.invoke(IPC.setWindowSize, windowRequestSchema.parse(request)));
   },
   openNotesFolder: async () => {
     z.string().parse(await ipcRenderer.invoke(IPC.openNotesFolder));
