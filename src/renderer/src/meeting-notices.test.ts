@@ -4,7 +4,7 @@ import { MEETING_IN_PROGRESS, MEETING_START_NOTICE, MEETING_START_NO_MIC_NOTICE,
 describe("meeting notices", () => {
   it("uses the exact quiet wording", () => {
     expect(MEETING_START_NOTICE).toBe("Meeting in progress, Bee is active");
-    expect(MEETING_START_NO_MIC_NOTICE).toBe("Meeting in progress, but the microphone is unavailable.");
+    expect(MEETING_START_NO_MIC_NOTICE).toBe("Microphone unavailable");
     expect(MEETING_IN_PROGRESS).toBe("Meeting in progress");
     expect(meetingEndNotice("saved")).toBe("Meeting ended, notes have been saved");
     expect(meetingEndNotice("failed")).toBe("Meeting ended, but notes could not be saved.");

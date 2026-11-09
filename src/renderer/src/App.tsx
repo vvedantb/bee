@@ -24,6 +24,7 @@ import { logSignIn } from "./debug-log";
 import { MeetingContextSection } from "./MeetingContextSection";
 import { ClaudeCodeSection } from "./ClaudeCodeSection";
 import { BrowseSection } from "./BrowseSection";
+import { MeetingButton } from "./MeetingButton";
 import { MemorySection } from "./MemorySection";
 import { NotchStatus } from "./NotchStatus";
 import { PANEL_TABS } from "./panel-tabs";
@@ -196,7 +197,8 @@ function Island({ state }: { state: BeeState }) {
   const cardOnly = (state.meetingCard?.lines.length ?? 0) > 0 && (result?.tips.length ?? 0) === 0;
   // In the conversation window after a request, the pill says Bee is listening for a follow-up (notch.ts CONVERSATION_LABEL).
   const answerText = state.conversationOpen ? CONVERSATION_LABEL : cardOnly ? (state.meetingCard?.label ?? "Tips") : "Tips";
-  const line: NotchLine = showResponse && !state.busy && !state.heard && !state.mic.error ? { kind: "answer", text: answerText } : notchLine(state, isSignedIn);
+  // A short meeting notice goes over the answer label too (notch.ts notchLine).
+  const line: NotchLine = showResponse && !state.busy && !state.heard && !state.mic.error && !state.meetingNotice ? { kind: "answer", text: answerText } : notchLine(state, isSignedIn);
   const status = line.text;
   // A folded answer opens in full in the island, even under a hint; status that asks for action opens its place in the panel (island-click.ts).
   const click = statusClick({ kind: line.kind, panelOpen: state.expanded, bodyShown: showResponse, answerFolded: answerFolded(state) });
@@ -218,6 +220,8 @@ function Island({ state }: { state: BeeState }) {
             <IconPlayerStop {...ICON} /> Stop
           </Button>
         ) : null}
+        {/* Auto-confirm off: Start meeting for a detected call, then Stop meeting for the meeting the user started. */}
+        <MeetingButton prompt={state.meetingPrompt} onStart={() => actions.acceptMeeting()} onStop={() => actions.stopMeeting()} />
         <BackgroundChip jobs={state.background} onOpen={() => void actions.openTab("live")} />
         <Show when="signed-in">
           <Button

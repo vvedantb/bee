@@ -2,12 +2,13 @@
 import type { TeamsAudioPlan } from "../../core/teams-audio";
 import type { TeamsAudioFailure } from "../../core/teams-audio-protocol";
 import type { TeamsAudioStatus } from "../../shared/ipc";
-import { MEETING_IN_PROGRESS } from "./meeting-notices";
 
 /** The Teams audio fallback as the UI shows it: main's status, the store's plan (store.ts teamsAudioNow) and capture state. */
 export type TeamsAudioView = { status: TeamsAudioStatus | null; plan: TeamsAudioPlan; listening: boolean; failed: boolean; failure?: TeamsAudioFailure | null };
 
 const MIC_ONLY = "Bee uses your mic only.";
+/** The Settings line while Bee hears the Teams app. Not "Meeting in progress": only a started meeting says that (notch.ts). */
+export const TEAMS_AUDIO_LISTENING = "Listening to Teams audio.";
 const CARRIES_ON = "Bee carries on with your mic.";
 const MISSING = `The Teams audio helper is missing. Reinstall Bee. ${MIC_ONLY}`;
 
@@ -47,8 +48,7 @@ export function teamsAudioNeedsScreenRecording(audio: TeamsAudioView | undefined
 export function teamsAudioMessage(audio: TeamsAudioView | undefined): string | null {
   if (!audio?.status || audio.plan === "off") return null;
   if (!audio.status.supported) return unavailable(audio.status);
-  // The capture runs quietly: the line says a meeting is on, not that Bee hears Teams.
-  if (audio.listening) return MEETING_IN_PROGRESS;
+  if (audio.listening) return TEAMS_AUDIO_LISTENING;
   if (teamsAudioNeedsScreenRecording(audio)) return TEAMS_AUDIO_SCREEN_RECORDING;
   if (audio.failed) return failed(audio.status.platform, audio.failure);
   // Waiting for a call: the switch already says what it does.

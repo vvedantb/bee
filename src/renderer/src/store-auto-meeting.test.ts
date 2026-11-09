@@ -2,11 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AutoSignals } from "../../core/auto-meeting-detection";
 import { CONFIRM_MS, END_GRACE_MS, MAX_MEETING_MS } from "../../core/auto-meeting-detection";
 import type { MeetingSummaryRequest, PipelineResult, SettingsView } from "../../shared/ipc";
-import type { MeetingNotice } from "./meeting-notices";
+import { notchLine } from "./notch";
 import type { startMicSession } from "./speech";
 
-// Automatic meeting detection in the store, the only way a meeting starts or stops: start turns the mic on and shows one toast,
-// the end saves the summary once, turns the mic off and shows one toast after the save. Preload (window.bee), Clerk, the mic and
+// Automatic meeting detection in the store, the only way a meeting starts or stops: start turns the mic on and shows one notice
+// in the pill, the end saves the summary once, turns the mic off and shows one notice after the save. Preload (window.bee), Clerk, the mic and
 // the summariser are stubbed: no AI call is made.
 type MicArgs = Parameters<typeof startMicSession>[0];
 
@@ -69,8 +69,9 @@ async function loadStore(options: { enabled?: boolean; summary?: "ok" | "fail" |
   const overlay: boolean[] = [];
   const shown = { inactive: 0, probes: 0 };
   const events: Array<{ level: string; category: string; event: string; data?: Record<string, unknown> }> = [];
+  // Every meeting notice the pill was given, and every change of the notch's meeting button (store.ts meetingPrompt).
   const notices: string[] = [];
-  const all: MeetingNotice[] = [];
+  const all: Array<"start" | "stop" | null> = [];
   let signals: AutoSignals | "fail" = NONE;
   let callActive = false;
   const settings = { ...SETTINGS, autoMeetingDetection: options.enabled ?? true };
@@ -110,9 +111,10 @@ async function loadStore(options: { enabled?: boolean; summary?: "ok" | "fail" |
   const store = await import("./store");
   const log = await import("../../core/debug-log");
   log.setDebugSink({ write: (event) => void events.push(event), wants: () => true });
-  store.onAutoMeetingNotice((notice) => {
-    all.push(notice);
-    if (notice.kind === "info") notices.push(notice.message);
+  store.subscribe(() => {
+    const { meetingNotice, meetingPrompt } = store.getBeeState();
+    if (meetingNotice && meetingNotice !== notices.at(-1)) notices.push(meetingNotice);
+    if (meetingPrompt !== (all.at(-1) ?? null)) all.push(meetingPrompt);
   });
   await vi.advanceTimersByTimeAsync(2100);
   const run = (ms: number) => vi.advanceTimersByTimeAsync(ms);
@@ -229,7 +231,7 @@ describe("store: automatic meeting detection", () => {
     expect(store.getBeeState().mic.on).toBe(false);
   });
 
-  it("shows one start toast and one end toast per meeting, with no duplicates on a flap inside the grace", async () => {
+  it("shows one start notice and one end notice per meeting, with no duplicates on a flap inside the grace", async () => {
     const { store, saved, notices, run, say, set } = await loadStore();
     set(CALL);
     await run(CONFIRM_RUN);
@@ -253,7 +255,7 @@ describe("store: automatic meeting detection", () => {
     expect(store.getBeeState().meetingActive).toBe(false);
   });
 
-  it("shows the end toast only after the save completes", async () => {
+  it("shows the end notice only after the save completes", async () => {
     const { store, notices, run, say, set } = await loadStore({ summary: "slow" });
     set(CALL);
     await run(CONFIRM_RUN);
@@ -286,19 +288,19 @@ describe("store: automatic meeting detection", () => {
     expect(notices).toEqual(["Meeting in progress, Bee is active", "Meeting ended."]);
   });
 
-  it("says honestly when the microphone is unavailable at the start, and still ends with one toast", async () => {
+  it("says honestly when the microphone is unavailable at the start, and still ends with one notice", async () => {
     micFails = true;
     const { store, notices, run, set } = await loadStore();
     set(CALL);
     await run(CONFIRM_RUN);
-    expect(notices).toEqual(["Meeting in progress, but the microphone is unavailable."]);
+    expect(notices).toEqual(["Microphone unavailable"]);
     expect(store.getBeeState().meetingActive).toBe(true);
     set(NONE);
     await run(END_RUN);
-    expect(notices).toEqual(["Meeting in progress, but the microphone is unavailable.", "Meeting ended."]);
+    expect(notices).toEqual(["Microphone unavailable", "Meeting ended."]);
   });
 
-  it("has no manual start or stop: the mic toggle never starts or ends a meeting, or shows a meeting toast", async () => {
+  it("has no manual start or stop: the mic toggle never starts or ends a meeting, or shows a meeting notice", async () => {
     const { store, saved, notices, run, say } = await loadStore();
     await store.actions.toggleMic();
     expect(store.getBeeState().mic.on).toBe(true);
@@ -341,15 +343,28 @@ describe("store: automatic meeting detection", () => {
   });
 
   it("with auto-confirm on, shows only info notices and no buttons", async () => {
-    const { all, run, say, set } = await loadStore();
+    const { all, notices, run, say, set } = await loadStore();
     set(CALL);
     await run(CONFIRM_RUN);
     await say("Agenda first.");
     set(NONE);
     await run(END_RUN);
-    expect(all.every((notice) => notice.kind === "info" || notice.kind === "clear")).toBe(true);
-    expect(all.map((notice) => notice.kind)).toEqual(["info", "clear", "info"]);
+    expect(all).toEqual([]);
+    expect(notices).toEqual(["Meeting in progress, Bee is active", "Meeting ended, notes have been saved"]);
   });
+  it("shows a notice as the pill's line for a few seconds, then the normal line returns", async () => {
+    const { store, run, set } = await loadStore();
+    const pill = () => notchLine(store.getBeeState(), true).text;
+    set(CALL);
+    // Tick by tick, so the check lands inside the notice's few seconds.
+    while (!store.getBeeState().meetingActive) await run(1000);
+    expect(store.getBeeState().meetingNotice).toBe("Meeting in progress, Bee is active");
+    expect(pill()).toBe("Meeting in progress, Bee is active");
+    await run(store.MEETING_NOTICE_MS);
+    expect(store.getBeeState().meetingNotice).toBeNull();
+    expect(pill()).toBe("Meeting in progress");
+  });
+
   it("never starts for chat only or a music app", async () => {
     const { store, run, set } = await loadStore();
     set({ meetingAppPresent: true, inCallTitle: false, micInUseByMeetingApp: false, identity: null });
@@ -371,7 +386,7 @@ describe("store: automatic meeting detection", () => {
 
   describe("auto-confirm off: Start / Stop meeting buttons", () => {
     const OFF = { enabled: false };
-    const prompts = (all: MeetingNotice[]) => all.filter((notice) => notice.kind === "prompt-start");
+    const prompts = (all: Array<"start" | "stop" | null>) => all.filter((prompt) => prompt === "start");
 
     it("prompts after the confirm time and records nothing before the click", async () => {
       const { store, saved, overlay, all, run, set } = await loadStore(OFF);
@@ -379,9 +394,11 @@ describe("store: automatic meeting detection", () => {
       await run(TICK);
       expect(all).toEqual([]);
       await run(CONFIRM_RUN);
-      expect(all).toEqual([{ kind: "prompt-start", message: "Meeting detected" }]);
+      expect(all).toEqual(["start"]);
       await run(5 * 60_000);
       expect(prompts(all)).toHaveLength(1);
+      // The pill says a call was found, not that a meeting is in progress.
+      expect(notchLine(store.getBeeState(), true).text).toBe("Meeting detected");
       expect(store.getBeeState().mic.on).toBe(false);
       expect(micSessions).toHaveLength(0);
       expect(store.getBeeState().meetingActive).toBe(false);
@@ -390,7 +407,7 @@ describe("store: automatic meeting detection", () => {
       expect(saved).toHaveLength(0);
     });
 
-    it("starts the mic once on the Start click, with a persistent Stop control and the notch line", async () => {
+    it("starts the mic once on the Start click, turning the Start meeting button into Stop meeting", async () => {
       const { store, overlay, all, run, set } = await loadStore(OFF);
       set(CALL);
       await run(CONFIRM_RUN);
@@ -402,10 +419,10 @@ describe("store: automatic meeting detection", () => {
       expect(micSessions).toHaveLength(1);
       expect(store.getBeeState().meetingActive).toBe(true);
       expect(overlay).toEqual([true]);
-      expect(all.at(-1)).toEqual({ kind: "prompt-stop", message: "Meeting in progress" });
+      expect(all.at(-1)).toBe("stop");
     });
 
-    it("saves exactly once on the Stop click, shows the end toast and does not prompt again for the same meeting", async () => {
+    it("saves exactly once on the Stop click, shows the end notice and does not prompt again for the same meeting", async () => {
       const { store, saved, overlay, notices, all, run, say, set } = await loadStore(OFF);
       set(CALL);
       await run(CONFIRM_RUN);
@@ -420,7 +437,7 @@ describe("store: automatic meeting detection", () => {
       expect(store.getBeeState().meetingActive).toBe(false);
       expect(overlay).toEqual([true, false]);
       expect(notices).toEqual(["Meeting ended, notes have been saved"]);
-      expect(all.at(-2)).toEqual({ kind: "clear" });
+      expect(all).toEqual(["start", "stop", null]);
       // The call goes on: no new prompt, no restart.
       await run(10 * 60_000);
       expect(prompts(all)).toHaveLength(1);
@@ -455,16 +472,16 @@ describe("store: automatic meeting detection", () => {
       expect(saved).toHaveLength(1);
       expect(store.getBeeState().mic.on).toBe(false);
       expect(notices).toEqual(["Meeting ended, notes have been saved"]);
-      expect(all.map((notice) => notice.kind)).toEqual(["prompt-start", "prompt-stop", "clear", "info"]);
+      expect(all).toEqual(["start", "stop", null]);
     });
 
-    it("dismisses an ignored prompt quietly when the call ends: no save, no end toast, no mic", async () => {
+    it("dismisses an ignored prompt quietly when the call ends: no save, no end notice, no mic", async () => {
       const { store, saved, notices, all, run, set } = await loadStore(OFF);
       set(CALL);
       await run(CONFIRM_RUN);
       set(NONE);
       await run(END_RUN);
-      expect(all).toEqual([{ kind: "prompt-start", message: "Meeting detected" }, { kind: "clear" }]);
+      expect(all).toEqual(["start", null]);
       expect(notices).toEqual([]);
       expect(saved).toHaveLength(0);
       expect(micSessions).toHaveLength(0);
@@ -509,7 +526,7 @@ describe("store: automatic meeting detection", () => {
       await run(TICK);
       expect(shown.inactive).toBe(0);
       await run(CONFIRM_RUN);
-      expect(all).toEqual([{ kind: "prompt-start", message: "Meeting detected" }]);
+      expect(all).toEqual(["start"]);
       expect(shown.inactive).toBe(1);
       await run(5 * 60_000);
       expect(shown.inactive).toBe(1);
@@ -527,13 +544,13 @@ describe("store: automatic meeting detection", () => {
       const { store, saved, shown, all, run, set } = await loadStore(OFF);
       set(PRE_JOIN);
       await run(TICK * 2);
-      expect(all).toEqual([{ kind: "prompt-start", message: "Meeting detected" }]);
+      expect(all).toEqual(["start"]);
       expect(shown.inactive).toBe(1);
       expect(store.getBeeState().mic.on).toBe(false);
       expect(store.getBeeState().meetingActive).toBe(false);
       set(MUTED_CALL);
       await run(CONFIRM_RUN * 2);
-      expect(all.filter((notice) => notice.kind === "prompt-start")).toHaveLength(1);
+      expect(all.filter((prompt) => prompt === "start")).toHaveLength(1);
       expect(shown.inactive).toBe(1);
       expect(store.getBeeState().mic.on).toBe(false);
       expect(saved).toHaveLength(0);
@@ -541,7 +558,7 @@ describe("store: automatic meeting detection", () => {
       store.actions.acceptMeeting();
       await run(TICK);
       expect(store.getBeeState().mic.on).toBe(true);
-      expect(all.at(-1)).toEqual({ kind: "prompt-stop", message: "Meeting in progress" });
+      expect(all.at(-1)).toBe("stop");
     });
 
     it("never shows Bee for chat only", async () => {
@@ -554,7 +571,7 @@ describe("store: automatic meeting detection", () => {
   });
 
   describe("auto-confirm on: pre-join is getting ready, recording waits for the call", () => {
-    it("shows Bee and a quiet getting-ready toast on pre-join, and does not record or lift meeting mode", async () => {
+    it("shows Bee and a quiet getting-ready notice on pre-join, and does not record or lift meeting mode", async () => {
       const { store, shown, overlay, notices, run, set } = await loadStore();
       set(PRE_JOIN);
       await run(TICK * 2);
