@@ -31,7 +31,7 @@ export function PreferenceRows({
   settings,
   onSave,
 }: {
-  settings: Pick<SettingsView, "personalisedLinks" | "sendSessionsToVmem" | "meetingMode">;
+  settings: Pick<SettingsView, "personalisedLinks" | "sendSessionsToVmem" | "meetingMode" | "autoMeetingDetection">;
   onSave: (update: SettingsUpdate) => void;
 }) {
   return (
@@ -49,6 +49,14 @@ export function PreferenceRows({
         info="Finished meetings and conversations, so vmem can learn from them."
         checked={settings.sendSessionsToVmem}
         onCheckedChange={(sendSessionsToVmem) => onSave({ sendSessionsToVmem })}
+      />
+      <SettingRow
+        id="auto-meeting-detection"
+        label="Automatic meeting detection"
+        description="Starts listening when a call begins and saves the summary when it ends."
+        info="Looks for Teams, Zoom or Google Meet on this computer. Needs a call window or the microphone in use; chat alone does not start it."
+        checked={settings.autoMeetingDetection}
+        onCheckedChange={(autoMeetingDetection) => onSave({ autoMeetingDetection })}
       />
       <SettingRow
         id="meeting-mode"

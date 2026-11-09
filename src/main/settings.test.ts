@@ -547,3 +547,21 @@ describe("settings: the show/hide shortcut", () => {
     expect(create().view().toggleShortcut).toBe("CommandOrControl+Shift+Space");
   });
 });
+
+describe("settings: automatic meeting detection", () => {
+  it("is on by default, for a new install and for a settings file from before the toggle", () => {
+    expect(create().view().autoMeetingDetection).toBe(true);
+    writeFileSync(join(dir, "settings.json"), JSON.stringify({ meetingMode: true }));
+    expect(create().view().autoMeetingDetection).toBe(true);
+  });
+
+  it("saves the choice and keeps it, without touching meeting mode", () => {
+    const store = create();
+    expect(store.save({ autoMeetingDetection: false }).autoMeetingDetection).toBe(false);
+    expect(create().view().autoMeetingDetection).toBe(false);
+    expect(create().view().meetingMode).toBe(false);
+    store.save({ meetingMode: true });
+    expect(create().view().autoMeetingDetection).toBe(false);
+    expect(store.save({ autoMeetingDetection: true }).autoMeetingDetection).toBe(true);
+  });
+});

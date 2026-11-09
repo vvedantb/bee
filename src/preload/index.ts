@@ -20,6 +20,7 @@ import {
   computerUpdateSchema,
   copyGatewayKeyResultSchema,
   meetingContextViewSchema,
+  meetingSignalsSchema,
   meetingWindowCaptionsSchema,
   mcpListSchema,
   mcpTestResultSchema,
@@ -290,6 +291,9 @@ const api = {
   // The detected meeting and its island card, and the saved-meetings clear. Main keeps the brief.
   meeting: {
     context: async (sessionToken: string) => meetingContextViewSchema.parse(await ipcRenderer.invoke(IPC.meetingContext, { sessionToken })),
+    // Automatic meeting detection: the OS signals now, and the overlay protection an auto session turns on (never saved to settings).
+    signals: async (sessionToken: string) => meetingSignalsSchema.parse(await ipcRenderer.invoke(IPC.meetingSignals, { sessionToken })),
+    autoOverlay: async (on: boolean) => void (await ipcRenderer.invoke(IPC.meetingAutoOverlay, on)),
     clearMemory: async (sessionToken: string) => clearMeetingMemoryResultSchema.parse(await ipcRenderer.invoke(IPC.clearMeetingMemory, { sessionToken })),
   },
   // Settings → Saved memory: Bee's memory facts for direct requests, oldest first, and the clear. Never history or saved meetings.

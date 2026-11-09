@@ -47,6 +47,8 @@ export const IPC = {
   /** One https image URL in, a data URL (or null) out. Used for connector icons (serverInfo.icons / Icon URL). */
   getHttpsIcon: "bee:icon:get",
   meetingContext: "bee:meeting:context",
+  meetingSignals: "bee:meeting:signals",
+  meetingAutoOverlay: "bee:meeting:auto-overlay",
   clearMeetingMemory: "bee:meeting:clear-memory",
   /** Settings → Saved memory: Bee's memory facts for direct requests (main/bee-memory-store.ts), listed and cleared. */
   memoryList: "bee:memory:list",
@@ -97,6 +99,8 @@ export const settingsViewSchema = z.object({
   // while an enabled vmem connector exists, until the user sets it.
   sendSessionsToVmem: z.boolean(),
   meetingMode: z.boolean(),
+  // Automatic meeting detection (core/auto-meeting-detection.ts): start the mic when a call begins, save the summary when it ends. On by default.
+  autoMeetingDetection: z.boolean(),
   // Zoom factor for the whole overlay, always an allowed value.
   interfaceScale: interfaceScaleSchema,
   motionPreference: motionPreferenceSchema,
@@ -119,6 +123,7 @@ export type SettingsView = z.infer<typeof settingsViewSchema>;
 export const settingsUpdateSchema = z.object({
   gatewayApiKey: z.string().max(500).optional(),
   meetingMode: z.boolean().optional(),
+  autoMeetingDetection: z.boolean().optional(),
   interfaceScale: interfaceScaleSchema.optional(),
   motionPreference: motionPreferenceSchema.optional(),
   personalisedLinks: z.boolean().optional(),
@@ -353,6 +358,16 @@ export const meetingContextViewSchema = z.object({
   reader: meetingWindowStatusSchema.optional(),
 });
 export type MeetingContextView = z.infer<typeof meetingContextViewSchema>;
+
+// Signals for automatic meeting detection (main/meeting-signals.ts). Booleans and a window-title key only; never audio or words.
+export const meetingSignalsSchema = z.object({
+  meetingAppPresent: z.boolean(),
+  inCallTitle: z.boolean(),
+  // Absent when the platform cannot say which app holds the mic.
+  micInUseByMeetingApp: z.boolean().optional(),
+  identity: z.string().max(300).nullable().optional(),
+});
+export type MeetingSignals = z.infer<typeof meetingSignalsSchema>;
 
 // Main → renderer: new live caption lines from the call window. The renderer adds them like teammates' lines. Never in
 // console output; the local debug log keeps them.

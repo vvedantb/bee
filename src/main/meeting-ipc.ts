@@ -1,5 +1,7 @@
 import { app, ipcMain, shell } from "electron";
 import { z } from "zod";
+import type { AutoSignals } from "../core/auto-meeting-detection";
+import { NO_SIGNALS } from "../core/meeting-signals";
 import { meetingTerms, meetingWindowBrief, type MeetingWindowContext } from "../core/agent-desktop-meeting";
 import type { AccessState, ComputerRun } from "../core/agent-desktop-envelope";
 import type { ComputerPlatform, RunControl } from "../core/computer-control";
@@ -79,6 +81,8 @@ export function registerMeetingIpc(args: { notesDir: string;
   /** Which meeting the user is in, its brief for Luna, and the saved meetings. */
   meeting: MeetingContext;
   /** Experimental meeting window reader: the call's name and people (retrieval boost and brief) and its Settings status. */
+  /** Signals for automatic meeting detection (main/meeting-signals.ts). Absent: never in a meeting. */
+  meetingSignals?: { read: () => Promise<AutoSignals> };
   meetingWindow?: { read: () => Promise<unknown>; context: () => MeetingWindowContext | null; status: () => MeetingWindowStatus };
   gatewayApiKey: () => string | undefined;
   /** The user's Claude Code (main/claude-code.ts), which "Bee, …" requests run on. Absent: only quick opens work. */
@@ -275,6 +279,12 @@ export function registerMeetingIpc(args: { notesDir: string;
       debugLog.info("meeting", "context", { ...result, brief: args.meeting.brief() ?? null });
     }
     return result;
+  });
+
+  // Automatic meeting detection polls this on the meeting tick. Fails open: a failed read is "no meeting".
+  ipcMain.handle(IPC.meetingSignals, async (_event, payload) => {
+    assertSignedIn(meetingContextRequestSchema.parse(payload).sessionToken);
+    return (await args.meetingSignals?.read().catch(() => null)) ?? NO_SIGNALS;
   });
 
   ipcMain.handle(IPC.clearMeetingMemory, (_event, payload) => {

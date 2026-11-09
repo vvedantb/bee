@@ -4,6 +4,7 @@ import { BrowserWindow, Menu, Tray, app, globalShortcut, ipcMain, nativeImage, p
 import { randomUUID } from "node:crypto";
 import { release } from "node:os";
 import { join, resolve } from "node:path";
+import { z } from "zod";
 import { fileURLToPath } from "node:url";
 import { RENDERER_HOST, RENDERER_SCHEME, RENDERER_URL } from "../shared/clerk";
 import { shortcutLabel } from "../core/shortcut";
@@ -45,6 +46,7 @@ import { ensureNotesDir } from "./notes";
 import { handleRendererProtocol } from "./renderer-protocol";
 import { createSettingsStore, type SettingsStore } from "./settings";
 import { isPermissionAllowed } from "./system-audio";
+import { createMeetingSignals } from "./meeting-signals";
 import { createMeetingWindowReader } from "./meeting-window-reader";
 import { createTeamsAudioStatus } from "./teams-audio";
 import { createTeamsAudioCapture } from "./teams-audio-capture";
@@ -107,6 +109,9 @@ function applyInterfaceScale(scale: number): void {
   for (const window of BrowserWindow.getAllWindows()) window.webContents.setZoomFactor(scale);
   if (win) resizeOverlay(win, scaleSize(SIZES[windowSize], scale));
 }
+
+// An automatic meeting session turns meeting mode on for its length without saving it. Main only.
+let autoOverlay = false;
 
 function applyMeetingMode(window: BrowserWindow, meetingMode: boolean): void {
   debugLog.debug("window", "meeting-mode", { meetingMode });
@@ -439,9 +444,15 @@ if (clerk.isPrimaryInstance) {
       debug.write({ level: "info", category: "settings", event: "changed", data: settingsChange(update, before, view) });
       // Switching the meeting window reader on checks access at once; switching it off stops it at once.
       void meetingWindow.read();
-      if (win) applyMeetingMode(win, view.meetingMode);
+      if (win) applyMeetingMode(win, view.meetingMode || autoOverlay);
       applyInterfaceScale(view.interfaceScale);
       return view;
+    });
+
+    // An automatic meeting session lifts meeting mode for its length. The saved setting is never touched.
+    ipcMain.handle(IPC.meetingAutoOverlay, (_event, payload) => {
+      autoOverlay = z.boolean().parse(payload);
+      if (win && !win.isDestroyed()) applyMeetingMode(win, settings.view().meetingMode || autoOverlay);
     });
 
     // Settings' eye and copy buttons. Only the overlay may ask, and only for the saved key.
@@ -527,6 +538,7 @@ if (clerk.isPrimaryInstance) {
       mcpPool,
       meeting,
       meetingWindow,
+      meetingSignals: createMeetingSignals({ reader: meetingWindow }),
       gatewayApiKey: settings.gatewayApiKey,
       claudeCode,
       browse,
@@ -610,7 +622,7 @@ if (clerk.isPrimaryInstance) {
     ipcMain.handle(IPC.downloadUpdate, () => updater.download());
     ipcMain.handle(IPC.installUpdate, () => updater.install());
 
-    win = createWindow(settings.view().meetingMode, settings.view().interfaceScale);
+    win = createWindow(settings.view().meetingMode || autoOverlay, settings.view().interfaceScale);
     createTray(notesDir, logsDir);
     registerToggleShortcut(settings.view().toggleShortcut);
     // Last of the will-quit handlers, so what the others log is written too.
@@ -622,7 +634,7 @@ if (clerk.isPrimaryInstance) {
     // macOS: re-create the overlay if it is gone, otherwise show it.
     app.on("activate", () => {
       if (win && !win.isDestroyed()) win.show();
-      else win = createWindow(settings.view().meetingMode, settings.view().interfaceScale);
+      else win = createWindow(settings.view().meetingMode || autoOverlay, settings.view().interfaceScale);
     });
   });
 
