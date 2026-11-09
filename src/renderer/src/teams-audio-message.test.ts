@@ -30,10 +30,9 @@ describe("teamsAudioMessage", () => {
     }
   });
 
-  it("reports a meeting in progress while listening (Teams audio is not advertised), and says nothing while waiting", () => {
-    expect(teamsAudioMessage(view({ listening: true }))).toBe("Meeting in progress");
-    expect(teamsAudioMessage(view({ listening: true }))).toBe(MEETING_IN_PROGRESS);
-    expect(teamsAudioMessage(view({ listening: true }))).not.toMatch(/teams audio|people without bee/i);
+  it("says Bee hears Teams while listening, never that a meeting is in progress, and says nothing while waiting", () => {
+    expect(teamsAudioMessage(view({ listening: true }))).toBe("Listening to Teams audio.");
+    expect(teamsAudioMessage(view({ listening: true }))).not.toBe(MEETING_IN_PROGRESS);
     // Waiting for a call says nothing: the switch already says what it does.
     expect(teamsAudioMessage(view({ plan: "waiting" }))).toBeNull();
   });

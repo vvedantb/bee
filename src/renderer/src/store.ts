@@ -48,7 +48,7 @@ import { LOGO_DONE_MS } from "./logo";
 import { openMic } from "./mic";
 import { motionReduced } from "./motion";
 import { framePeak, startMicSession, type PhraseOutcome } from "./speech";
-import { MEETING_PROMPT_NOTICE, MEETING_READY_NOTICE, MEETING_START_NOTICE, MEETING_START_NO_MIC_NOTICE, MEETING_STOP_NOTICE, meetingEndNotice, type MeetingEndOutcome, type MeetingNotice } from "./meeting-notices";
+import { MEETING_READY_NOTICE, MEETING_START_NOTICE, MEETING_START_NO_MIC_NOTICE, meetingEndNotice, type MeetingEndOutcome } from "./meeting-notices";
 import { openTeamsAudio } from "./teams-audio";
 import { downloadUpdate, installUpdate, updateNow } from "./update";
 import type { Tab } from "./panel-tabs";
@@ -136,6 +136,11 @@ export type BeeState = {
   update: UpdateState;
   // An automatic meeting is active (core/auto-meeting-detection.ts). Drives the notch and Live line "Meeting in progress".
   meetingActive: boolean;
+  // Auto-confirm off: the meeting button in the notch. start: a call was detected and waits for Start meeting; stop: the meeting
+  // the user started, with Stop meeting. Null: no button.
+  meetingPrompt: "start" | "stop" | null;
+  // A short meeting notice ("Meeting ended, notes have been saved") the pill shows for MEETING_NOTICE_MS (notch.ts notchLine).
+  meetingNotice: string | null;
   // Teams audio fallback (core/teams-audio.ts): main's status (support and a Teams call; codes only, null until the first
   // poll), and whether Bee hears the Teams app now. failed: the capture would not open or ended in this call; Bee carries on
   // with the mic and tries again in the next call. failure: why (core/teams-audio-protocol.ts), for the Settings line.
@@ -171,6 +176,8 @@ const EMPTY_SESSION: MeetingSession = { lines: [], notesCited: [], tips: [] };
 const SESSION_LIST_MAX = 100;
 // Main throttles its own title and calendar reads, so this poll only asks for the cached view.
 const MEETING_TICK_MS = 5000;
+// How long a meeting notice stays as the pill's status text before the normal line returns.
+export const MEETING_NOTICE_MS = 5000;
 // Lines kept, island dismissed and no new line for this long: the meeting is saved without a click.
 const DISMISS_FINALIZE_MS = 10 * 60_000;
 // With the mic on, a caption that repeats one of the user's own lines from this long ago is the same speech twice.
@@ -219,6 +226,8 @@ let state: BeeState = {
   hintClosing: false,
   update: { status: "idle", check: null, error: null },
   meetingActive: false,
+  meetingPrompt: null,
+  meetingNotice: null,
   teamsAudio: { status: null, listening: false, failed: false, failure: null },
   computer: null,
   computerAccess: null,
@@ -328,12 +337,11 @@ let scrollLoggedAt = 0;
 let sessionMeetingId: number | null = null;
 let cardShownFor = 0;
 let meetingTicking = false;
-// Automatic meeting detection (core/auto-meeting-detection.ts): the machine and a
-// notice listener (main.tsx shows a quiet toast; the store stays free of UI).
+// Automatic meeting detection (core/auto-meeting-detection.ts): the machine, and the timer that clears the pill's meeting notice.
 let autoState: AutoMeetingState = IDLE_AUTO;
 let autoTicking = false;
 let autoOverlayOn = false;
-let autoNotice: ((notice: MeetingNotice) => void) | null = null;
+let meetingNoticeTimer: ReturnType<typeof setTimeout> | undefined;
 // The user's Start / Stop click, waiting for the machine's next step. The last signals read stand in if a read fails.
 let autoEvent: AutoEvent | null = null;
 let lastSignals: MeetingSignals | null = null;
@@ -1225,14 +1233,16 @@ async function meetingTick(): Promise<void> {
   }
 }
 
-/** The meeting notices (toasts): quiet info lines, and the Start / Stop meeting prompts when auto-confirm is off. */
-export function onAutoMeetingNotice(listener: ((notice: MeetingNotice) => void) | null): void {
-  autoNotice = listener;
+/** Shows a meeting notice as the pill's status text for MEETING_NOTICE_MS; a newer notice replaces it and restarts the time. */
+function showMeetingNotice(text: string): void {
+  clearTimeout(meetingNoticeTimer);
+  set({ meetingNotice: text });
+  meetingNoticeTimer = setTimeout(() => set({ meetingNotice: null }), MEETING_NOTICE_MS);
 }
 
 /**
  * Automatic meeting detection. Reads the signals from main and steps the pure machine; detection always runs. The setting is
- * auto-confirm: on, a confirmed call starts by itself (quiet toast). Off, Bee prompts with a Start meeting button and records
+ * auto-confirm: on, a confirmed call starts by itself (a short notice in the pill). Off, the notch shows a Start meeting button and Bee records
  * nothing until it is clicked. Start turns the mic on (and meeting mode for the session); stop saves the summary through
  * endMeeting and turns the mic off. Fails open: a failed read leaves the machine and the mic as they are.
  */
@@ -1295,28 +1305,31 @@ async function autoMeetingStep(event: AutoEvent | null): Promise<void> {
     event: event ?? null,
   });
   if (out.effect === "prompt" || out.effect === "ready") {
-    // Bee may be hidden (tray, shortcut, auto-collapse): show it without taking focus, so the toast is seen.
+    // Bee may be hidden (tray, shortcut, auto-collapse): show it without taking focus, so the button or notice is seen.
     void window.bee.meeting.showInactive().catch(() => undefined);
     debugLog.info("meeting", out.effect === "prompt" ? "auto-prompt" : "auto-ready", { preJoin: signals?.preJoinTitle === true });
-    autoNotice?.(out.effect === "prompt" ? { kind: "prompt-start", message: MEETING_PROMPT_NOTICE } : { kind: "info", message: MEETING_READY_NOTICE });
+    if (out.effect === "prompt") set({ meetingPrompt: "start" });
+    else showMeetingNotice(MEETING_READY_NOTICE);
   } else if (out.effect === "start") await autoStart(wasPrompted);
   else if (out.effect === "stop") await autoStop();
-  else if (out.effect === "dismiss") autoNotice?.({ kind: "clear" });
+  else if (out.effect === "dismiss") set({ meetingPrompt: null });
 }
 
 async function autoStart(withStopControl: boolean): Promise<void> {
   debugLog.info("meeting", "auto-start", { mic: state.mic.on, prompted: withStopControl });
   if (!stopMic) await startMic({ transcribe: transcribePhrase });
-  const message = stopMic ? (withStopControl ? MEETING_STOP_NOTICE : MEETING_START_NOTICE) : MEETING_START_NO_MIC_NOTICE;
-  autoNotice?.(withStopControl ? { kind: "prompt-stop", message } : { kind: "info", message });
+  // Started from the Start meeting button: it becomes Stop meeting, and the pill already says "Meeting in progress".
+  set({ meetingPrompt: withStopControl ? "stop" : null });
+  if (!stopMic) showMeetingNotice(MEETING_START_NO_MIC_NOTICE);
+  else if (!withStopControl) showMeetingNotice(MEETING_START_NOTICE);
 }
 
 async function autoStop(): Promise<void> {
   debugLog.info("meeting", "auto-stop", { lines: state.session.lines.length });
-  // The Stop control goes at once; the mic goes off with the save, and the one end toast waits for the save to finish.
-  autoNotice?.({ kind: "clear" });
+  // The Stop button goes at once; the mic goes off with the save, and the one end notice waits for the save to finish.
+  set({ meetingPrompt: null });
   const outcome = await actions.endMeeting({ auto: true, stopMic: true });
-  autoNotice?.({ kind: "info", message: meetingEndNotice(outcome) });
+  showMeetingNotice(meetingEndNotice(outcome));
 }
 
 /** The user's Start meeting click (auto-confirm off). The meeting starts at once; a click with no prompt waiting does nothing. */

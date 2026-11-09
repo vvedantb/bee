@@ -1,7 +1,7 @@
 // The pill's status text and logo state. No React or window here, so tests can call them.
 import { activityLabel, displayTip } from "./island";
 import type { LogoState } from "./logo";
-import { MEETING_IN_PROGRESS } from "./meeting-notices";
+import { MEETING_IN_PROGRESS, MEETING_PROMPT_NOTICE } from "./meeting-notices";
 import type { SettingsView } from "../../shared/ipc";
 import type { BeeState } from "./store";
 
@@ -63,7 +63,8 @@ type LineInputs = Pick<BeeState, "busy" | "revising" | "tools" | "question" | "h
   settings: Pick<SettingsView, "gatewayKeySource" | "meetingMode"> | null;
   session: Pick<BeeState["session"], "lines">;
   meetingActive?: boolean;
-  teamsAudio?: Pick<BeeState["teamsAudio"], "listening">;
+  meetingPrompt?: BeeState["meetingPrompt"];
+  meetingNotice?: BeeState["meetingNotice"];
 };
 
 /** The pill's status text and what it is about. */
@@ -75,13 +76,16 @@ export function notchLine(state: LineInputs, signedIn: boolean | undefined): Not
   // The phrase ended and speech-to-text is running. No words are shown.
   if (state.heard) return { kind: "working", text: "Got it…" };
   if (state.mic.error) return { kind: "mic-error", text: state.mic.error };
+  // A short meeting notice (store.ts showMeetingNotice) is seen once, so it goes over a tip or the key line for its few seconds.
+  if (state.meetingNotice) return { kind: "idle", text: state.meetingNotice };
   const tip = state.result?.tips[0];
   // Bee waits for a follow-up. The reply stays in the island body, and a click on the pill still opens it.
   if (state.conversationOpen) return { kind: tip ? "answer" : "idle", text: CONVERSATION_LABEL };
   if (tip) return { kind: "answer", text: displayTip(tip) };
   if (state.settings?.gatewayKeySource === "none") return { kind: "gateway-key", text: "Add your AI Gateway key in Settings" };
-  // A meeting (automatic detection) or a Teams call Bee hears: one quiet line. Teams audio is not advertised.
-  if (state.meetingActive || (state.mic.on && state.teamsAudio?.listening)) return { kind: "idle", text: MEETING_IN_PROGRESS };
+  // Only a started meeting is in progress. A detected call that waits for Start meeting says so; Teams audio alone is the mic line.
+  if (state.meetingActive) return { kind: "idle", text: MEETING_IN_PROGRESS };
+  if (state.meetingPrompt === "start") return { kind: "idle", text: MEETING_PROMPT_NOTICE };
   if (state.mic.on || state.session.lines.length > 0) return { kind: "idle", text: "Listening for something useful…" };
   return { kind: "idle", text: state.settings?.meetingMode ? "Meeting mode on" : "Bee is ready" };
 }

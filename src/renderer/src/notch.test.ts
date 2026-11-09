@@ -84,3 +84,38 @@ describe("the conversation window", () => {
     expect(logoState({ ...idle, conversationOpen: true })).toBe("listening");
   });
 });
+
+describe("the meeting lines", () => {
+  const line = {
+    busy: false,
+    revising: false,
+    tools: [],
+    question: false,
+    heard: false,
+    mic: { on: false, level: 0, error: null },
+    result: null,
+    settings: { gatewayKeySource: "saved" as const, meetingMode: false },
+    session: { lines: [] },
+  };
+  const micOn = { on: true, level: 0, error: null };
+
+  it("says Meeting detected while a call waits for Start meeting, never Meeting in progress", () => {
+    expect(notchLine({ ...line, meetingPrompt: "start" }, true)).toEqual({ kind: "idle", text: "Meeting detected" });
+    expect(notchLine({ ...line, mic: micOn, meetingPrompt: "start" }, true).text).not.toBe("Meeting in progress");
+    expect(notchLine({ ...line, meetingActive: true, meetingPrompt: "stop" }, true).text).toBe("Meeting in progress");
+  });
+
+  it("does not say Meeting in progress for an open mic with Teams audio and no started meeting", () => {
+    const teams = { ...line, mic: micOn, teamsAudio: { listening: true }, meetingActive: false };
+    expect(notchLine(teams, true).text).toBe("Listening for something useful…");
+  });
+
+  it("shows a meeting notice over a tip and the meeting line, but not over work or a mic error", () => {
+    const notice = "Meeting ended, notes have been saved";
+    const tip = { ...failedRun, tips: ["Ask about the renewal date"], guideError: null };
+    expect(notchLine({ ...line, meetingNotice: notice, meetingActive: true, result: tip }, true)).toEqual({ kind: "idle", text: notice });
+    expect(notchLine({ ...line, meetingNotice: notice, meetingPrompt: "start" }, true).text).toBe(notice);
+    expect(notchLine({ ...line, meetingNotice: notice, busy: true }, true).kind).toBe("working");
+    expect(notchLine({ ...line, meetingNotice: notice, mic: { on: false, level: 0, error: "Microphone blocked" } }, true).kind).toBe("mic-error");
+  });
+});

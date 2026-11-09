@@ -67,15 +67,10 @@ describe("statusClick", () => {
     expect(clickFor({ ...ready, mic: { on: true, level: 0, error: null } })).toBe("panel");
   });
 
-  it("says Meeting in progress while a meeting is active or Teams audio runs, and never that it hears Teams", () => {
+  it("says Meeting in progress only while a meeting is active", () => {
     const micOn = { on: true, level: 0, error: null };
     expect(notchLine({ ...ready, meetingActive: true }, true)).toEqual({ kind: "idle", text: "Meeting in progress" });
     expect(notchLine({ ...ready, mic: micOn, meetingActive: true }, true).text).toBe(MEETING_IN_PROGRESS);
-    expect(notchLine({ ...ready, mic: micOn, teamsAudio: { listening: true } }, true)).toEqual({ kind: "idle", text: "Meeting in progress" });
-    for (const state of [{ ...ready, mic: micOn, teamsAudio: { listening: true } }, { ...ready, meetingActive: true }]) {
-      expect(notchLine(state, true).text).not.toMatch(/teams audio/i);
-    }
-    expect(notchLine({ ...ready, mic: micOn, teamsAudio: { listening: false } }, true).text).toBe("Listening for something useful…");
     expect(notchLine({ ...ready, mic: micOn, meetingActive: false }, true).text).toBe("Listening for something useful…");
     // The pill still shows work and answers first.
     expect(notchLine({ ...ready, meetingActive: true, busy: true }, true).kind).toBe("working");

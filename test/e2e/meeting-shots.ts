@@ -1,17 +1,18 @@
-// Meeting flow shots: the real Sonner toaster and the real toast mapping (meeting-toast.ts, the code main.tsx uses) showing the start and end toasts (auto-confirm on) and the Start / Stop meeting button toasts (off), and the real notch pill saying
-// "Meeting in progress". The words come from the app's own code: meeting-notices.ts (the strings the store sends to toast()) and
-// notch.ts notchLine() (the pill's text for a state). harness-main.ts loads this page once per ?shot=meeting-toast-start|
-// meeting-toast-end|meeting-toast-start-prompt|meeting-toast-stop-prompt|meeting-toast-prejoin-ready|meeting-toast-prejoin-prompt|meeting-notch-in-progress and captures it as <shot>.png. No store, no Clerk, no AI call.
+// Meeting flow shots: the real notch pill (logo, NotchStatus, MeetingButton, mic and collapse buttons, as App.tsx Island renders
+// it) for each meeting state. The pill's text comes from notch.ts notchLine() and the words from meeting-notices.ts, the code the
+// app runs: the short notices (start, end, getting ready, no microphone) that replace the status for a few seconds, the Start
+// meeting button for a detected call (auto-confirm off), the Stop meeting button after Start, and "Meeting in progress".
+// harness-main.ts loads this page once per ?shot=<name> (SHOTS below) and captures it as <shot>.png. No store, no Clerk, no AI call.
 import { createElement } from "react";
-import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { IconChevronDown, IconMicrophone, IconMicrophoneOff } from "@tabler/icons-react";
-import { Button, SonnerToaster } from "@vvedantb/ui";
+import { Button } from "@vvedantb/ui";
 import { BeeLogo } from "../../src/renderer/src/BeeLogo";
 import { NOTCH_LOGO_PX } from "../../src/renderer/src/logo";
-import { MEETING_PROMPT_NOTICE, MEETING_READY_NOTICE, MEETING_START_NOTICE, MEETING_STOP_NOTICE, meetingEndNotice, type MeetingNotice } from "../../src/renderer/src/meeting-notices";
-import { showMeetingNotice } from "../../src/renderer/src/meeting-toast";
+import { MeetingButton } from "../../src/renderer/src/MeetingButton";
+import { MEETING_READY_NOTICE, MEETING_START_NOTICE, MEETING_START_NO_MIC_NOTICE, meetingEndNotice } from "../../src/renderer/src/meeting-notices";
 import { NOTCH_BUTTON, notchLine } from "../../src/renderer/src/notch";
+import { NotchStatus } from "../../src/renderer/src/NotchStatus";
 import "../../src/renderer/src/styles.css";
 
 const ICON = { size: 16, stroke: 1.75 };
@@ -28,12 +29,14 @@ const QUIET: Inputs = {
   settings: { gatewayKeySource: "saved", meetingMode: false },
   session: { lines: [] },
 };
-// A meeting is active (automatic detection started it, so the mic is on), and one that has just ended.
+// A meeting is active (automatic detection started it, so the mic is on).
 const IN_MEETING: Inputs = { ...QUIET, meetingActive: true, mic: { on: true, level: 0.35, error: null } };
 
-// The pill as App.tsx Island renders it: the logo, the status text, the mic button and the collapse button.
+// The pill as App.tsx Island renders it: the logo, the status text, the meeting button, the mic button and the collapse button.
 function notch(state: Inputs): string {
   const { text } = notchLine(state, true);
+  const status = createElement(NotchStatus, { status: text, click: null, error: false, onOpen: () => undefined });
+  const meeting = createElement(MeetingButton, { prompt: state.meetingPrompt ?? null, onStart: () => undefined, onStop: () => undefined });
   const micOn = state.mic.on;
   const logo = micOn ? { size: NOTCH_LOGO_PX, state: "listening" as const, level: state.mic.level } : { size: NOTCH_LOGO_PX };
   const mic = micOn
@@ -52,21 +55,22 @@ function notch(state: Inputs): string {
   const chevron = createElement(Button, { type: "button", variant: "ghost", size: "sm", className: `chevron ${NOTCH_BUTTON}`, title: "Expand" }, createElement(IconChevronDown, ICON));
   return `<div class="island"><header class="notch">
     ${renderToStaticMarkup(createElement(BeeLogo, logo))}
-    <span class="notch-status">${text}</span>
+    ${renderToStaticMarkup(status)}${renderToStaticMarkup(meeting)}
     ${renderToStaticMarkup(mic)}${renderToStaticMarkup(chevron)}
   </header></div>`;
 }
 
 const shot = new URLSearchParams(location.search).get("shot") ?? "";
-const SHOTS: Record<string, { state: Inputs; notice: MeetingNotice | null }> = {
-  "meeting-toast-start": { state: IN_MEETING, notice: { kind: "info", message: MEETING_START_NOTICE } },
-  "meeting-toast-end": { state: QUIET, notice: { kind: "info", message: meetingEndNotice("saved") } },
-  "meeting-toast-start-prompt": { state: QUIET, notice: { kind: "prompt-start", message: MEETING_PROMPT_NOTICE } },
-  "meeting-toast-stop-prompt": { state: IN_MEETING, notice: { kind: "prompt-stop", message: MEETING_STOP_NOTICE } },
-  // Pre-join: Bee shows itself (showInactive) with the toast, and records nothing. Auto-confirm on: getting ready. Off: Start meeting.
-  "meeting-toast-prejoin-ready": { state: QUIET, notice: { kind: "info", message: MEETING_READY_NOTICE } },
-  "meeting-toast-prejoin-prompt": { state: QUIET, notice: { kind: "prompt-start", message: MEETING_PROMPT_NOTICE } },
-  "meeting-notch-in-progress": { state: IN_MEETING, notice: null },
+const SHOTS: Record<string, Inputs> = {
+  // Auto-confirm on: a short notice in the pill at the start, at the end and on Teams' join screen. No button.
+  "meeting-notice-start": { ...IN_MEETING, meetingNotice: MEETING_START_NOTICE },
+  "meeting-notice-end": { ...QUIET, meetingNotice: meetingEndNotice("saved") },
+  "meeting-notice-prejoin-ready": { ...QUIET, meetingNotice: MEETING_READY_NOTICE },
+  // Auto-confirm off: a detected call waits for Start meeting; after Start, Stop meeting. The longest notice next to the button.
+  "meeting-bar-start": { ...QUIET, meetingPrompt: "start" },
+  "meeting-bar-stop": { ...IN_MEETING, meetingPrompt: "stop" },
+  "meeting-bar-stop-no-mic": { ...QUIET, meetingActive: true, meetingPrompt: "stop", meetingNotice: MEETING_START_NO_MIC_NOTICE },
+  "meeting-notch-in-progress": IN_MEETING,
 };
 const plan = SHOTS[shot];
 if (!plan) throw new Error(`Unknown shot: ${shot}`);
@@ -75,22 +79,18 @@ window.addEventListener("DOMContentLoaded", () => {
   document.documentElement.classList.add("dark");
   // A plain dark desktop behind the transparent overlay window, so the PNG reads on any viewer.
   document.body.style.background = "#1b1b1f";
-  document.body.innerHTML = `<div id="root"><div class="shell" style="margin: 0 auto; width: 480px">${notch(plan.state)}</div></div><div id="toasts"></div>`;
-  const mount = document.getElementById("toasts");
-  if (mount) {
-    // The same toaster and placement as main.tsx.
-    createRoot(mount).render(createElement(SonnerToaster, { theme: "dark", position: "top-right", offset: 64, mobileOffset: { top: 64, right: 16, left: 16 } }));
-  }
+  document.body.innerHTML = `<div id="root"><div class="shell" style="margin: 0 auto; width: 480px">${notch(plan)}</div></div>`;
   // A hidden Electron window may not advance CSS transitions; show the settled end state, as the island shots do.
   document.head.insertAdjacentHTML("beforeend", "<style>*, *::before, *::after { animation: none !important; transition: none !important; }</style>");
-  const text = document.querySelector(".notch-status")?.textContent ?? null;
-  // Toaster first, then the toast, then time for Sonner to settle it.
-  setTimeout(() => {
-    if (plan.notice) showMeetingNotice(plan.notice, { accept: () => undefined, stop: () => undefined });
-  }, 400);
-  setTimeout(() => {
-    const toastText = document.querySelector("[data-sonner-toast] [data-title]")?.textContent ?? document.querySelector("[data-sonner-toast]")?.textContent ?? null;
-    const button = document.querySelector("[data-sonner-toast] [data-button]")?.textContent ?? null;
-    console.log(`E2E_RESULT ${JSON.stringify({ ok: true, shot, notch: text, toast: toastText, button })}`);
-  }, 2000);
+  // Time for the first paint, so the capture has a frame.
+  setTimeout(report, 300);
 });
+
+function report(): void {
+  const status = document.querySelector(".notch-status");
+  const notchBox = document.querySelector(".notch")?.getBoundingClientRect();
+  // Every control stays inside the 480px pill, and the status text truncates rather than pushing them out.
+  const fits = [...document.querySelectorAll(".notch > *")].every((child) => notchBox !== undefined && child.getBoundingClientRect().right <= notchBox.right + 0.5);
+  const button = [...document.querySelectorAll(".notch button")].map((node) => node.textContent?.trim() ?? "").find((label) => label.endsWith("meeting")) ?? null;
+  console.log(`E2E_RESULT ${JSON.stringify({ ok: true, shot, notch: status?.textContent ?? null, button, fits, truncated: status ? status.scrollWidth > status.clientWidth : false })}`);
+}

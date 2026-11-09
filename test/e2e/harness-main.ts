@@ -63,7 +63,7 @@ async function captureShots(dir: string, names: string[]): Promise<{ files: stri
   mkdirSync(dir, { recursive: true });
   const files: string[] = [];
   const pages: PageReport[] = [];
-  const tabShot = (name: string) => name.startsWith("mcp-") || name.startsWith("settings-") || name.startsWith("live-") || name.startsWith("gateway-key-") || name.startsWith("meeting-toast-") || name.startsWith("meeting-notch-");
+  const tabShot = (name: string) => name.startsWith("mcp-") || name.startsWith("settings-") || name.startsWith("live-") || name.startsWith("gateway-key-") || name.startsWith("meeting-notice-") || name.startsWith("meeting-bar-") || name.startsWith("meeting-notch-");
   const tall = names.some((name) => tabShot(name) && !name.startsWith("meeting-")) || /(mcp|meeting)-settings-shots|gateway-key-shots/.test(page as string);
   // One window for every shot: closing the only window would quit the app.
   const shotWin = new BrowserWindow({
@@ -73,7 +73,7 @@ async function captureShots(dir: string, names: string[]): Promise<{ files: stri
     frame: false,
     transparent: true,
     backgroundColor: "#00000000",
-    // Sonner mounts its toasts on requestAnimationFrame, which a hidden window would otherwise throttle (meeting-shots).
+    // Pages that wait on requestAnimationFrame or timers render in a hidden window too.
     webPreferences: { preload, sandbox: true, contextIsolation: true, nodeIntegration: false, backgroundThrottling: false },
   });
   // A page that throws before reporting would otherwise only show as a timeout.

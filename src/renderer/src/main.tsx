@@ -7,15 +7,11 @@ import { createRoot } from "react-dom/client";
 import { CLERK_PUBLISHABLE_KEY } from "../../shared/clerk";
 import { App } from "./App";
 import { logStateChanges } from "./debug-log";
-import { showMeetingNotice } from "./meeting-toast";
-import { actions, getBeeState, onAutoMeetingNotice, subscribe } from "./store";
+import { actions, getBeeState, subscribe } from "./store";
 import "./styles.css";
 
 // Island and panel state changes for the debug log.
 logStateChanges(subscribe, getBeeState);
-
-// Automatic meeting detection starts and stops quietly: a toast, never a dialog. With auto-confirm off the toast has a button.
-onAutoMeetingNotice((notice) => showMeetingNotice(notice, { accept: () => actions.acceptMeeting(), stop: () => actions.stopMeeting() }));
 
 // Focus went to another app: the user clicked outside Bee, so an answer open in full folds back to the pill.
 window.addEventListener("blur", () => actions.clickedOutside());
