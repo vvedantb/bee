@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import type { PipelineResult } from "../../shared/ipc";
 import { focusKeyField, focusKeyFieldWhenReady, KEY_FIELD_FRAMES, statusClick } from "./island-click";
-import { TEAMS_AUDIO_LABEL, notchLine, type NotchStatusKind } from "./notch";
+import { MEETING_IN_PROGRESS } from "./meeting-notices";
+import { notchLine, type NotchStatusKind } from "./notch";
 
 const answered: PipelineResult = {
   notes: [],
@@ -66,13 +67,20 @@ describe("statusClick", () => {
     expect(clickFor({ ...ready, mic: { on: true, level: 0, error: null } })).toBe("panel");
   });
 
-  it("says when Bee also hears Teams audio, only while the mic is on and nothing else needs the pill", () => {
+  it("says Meeting in progress while a meeting is active or Teams audio runs, and never that it hears Teams", () => {
     const micOn = { on: true, level: 0, error: null };
-    expect(notchLine({ ...ready, mic: micOn, teamsAudio: { listening: true } }, true)).toEqual({ kind: "idle", text: TEAMS_AUDIO_LABEL });
+    expect(notchLine({ ...ready, meetingActive: true }, true)).toEqual({ kind: "idle", text: "Meeting in progress" });
+    expect(notchLine({ ...ready, mic: micOn, meetingActive: true }, true).text).toBe(MEETING_IN_PROGRESS);
+    expect(notchLine({ ...ready, mic: micOn, teamsAudio: { listening: true } }, true)).toEqual({ kind: "idle", text: "Meeting in progress" });
+    for (const state of [{ ...ready, mic: micOn, teamsAudio: { listening: true } }, { ...ready, meetingActive: true }]) {
+      expect(notchLine(state, true).text).not.toMatch(/teams audio/i);
+    }
     expect(notchLine({ ...ready, mic: micOn, teamsAudio: { listening: false } }, true).text).toBe("Listening for something useful…");
-    expect(notchLine({ ...ready, mic: micOn, teamsAudio: { listening: true }, busy: true }, true).kind).toBe("working");
-    expect(notchLine({ ...ready, mic: micOn, teamsAudio: { listening: true }, result: answered }, true).kind).toBe("answer");
-    expect(clickFor({ ...ready, mic: micOn, teamsAudio: { listening: true } })).toBe("panel");
+    expect(notchLine({ ...ready, mic: micOn, meetingActive: false }, true).text).toBe("Listening for something useful…");
+    // The pill still shows work and answers first.
+    expect(notchLine({ ...ready, meetingActive: true, busy: true }, true).kind).toBe("working");
+    expect(notchLine({ ...ready, meetingActive: true, result: answered }, true).kind).toBe("answer");
+    expect(clickFor({ ...ready, meetingActive: true })).toBe("panel");
   });
 
   it("classifies the searching and answering working states as working", () => {

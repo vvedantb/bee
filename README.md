@@ -90,7 +90,7 @@ The installer is not code-signed. Windows SmartScreen will warn on first run unt
 3. Click the **microphone** on the notch and talk. The bar in the mic button shows the input level. Each phrase you say runs the pipeline. Bee does not show what was said; only tips and notes appear. Click the microphone again to stop.
 4. To test without speaking, use **Manual test** at the bottom of **Live**: type a line (or leave it blank for a sample) and click **Simulate meeting line**. Typed and spoken lines take the same path.
 5. Bee retrieves matching notes, ranks them with Jev, and shows up to two tips. While the AI works, the notch shows what it is doing (for example "Searching the web"). When the answer arrives, the notch grows downward into an island with the tips and any source links. Click **×** to dismiss it. If you leave the pointer off it, it folds back to one line in the notch after at least 30 seconds (longer for longer answers), and the same tips stay on **Live**. Click that line to read the answer in full in the island again; click outside to fold it. The chevron opens the full panel. A new question after an answer has finished shows only the new answer; speaking while Bee is still answering updates the answer on screen.
-6. When the meeting ends, click **End meeting & save summary** on **Live**. Bee writes `meeting-YYYY-MM-DD-HHmm.md` to the notes folder, with decisions, action items (with owners), topics and the notes cited. Click **Open summary** to view it. Next time, Bee finds it like any other note. Without a key, or if the AI call fails, Bee saves a plain summary with the meeting lines instead.
+6. Meetings start and end by themselves (**Settings → Automatic meeting detection**, on by default). When a Teams, Zoom or Google Meet call begins, Bee turns the mic on and shows "Meeting in progress, Bee is active". While it runs, the notch says "Meeting in progress". When the call ends, Bee writes `meeting-YYYY-MM-DD-HHmm.md` to the notes folder, with decisions, action items (with owners), topics and the notes cited, and shows "Meeting ended, notes have been saved". Click **Open summary** on **Live** to view it. There is no button to start or end a meeting. With the setting off, Bee starts no meetings and saves no summaries by itself; the microphone still works for Talk to Bee. A meeting that runs for 4 hours is stopped and saved. Next time, Bee finds the file like any other note. Without a key, or if the AI call fails, Bee saves a plain summary with the meeting lines instead.
 
 Notes are markdown files in the notes folder (Settings shows the path and has an **Open** button). On Windows this is `%APPDATA%\Bee\notes`; on macOS it is `~/Library/Application Support/Bee/notes`. Four fictional seed notes are written the first time the folder is empty. Edits are picked up on the next line; no restart is needed.
 
@@ -129,7 +129,7 @@ It fails open. The whole step has a 2 second limit. With the switch off or the G
 With the mic on, start a phrase with **"Bee"** (or "Hey Bee") and the rest is a request to the AI, not part of the meeting: "Bee, what's 15% of 18000?", "Bee, open Teams", "Hey Bee, open bbc.co.uk". The answer shows in the island straight away, written to you, not as words to say in the meeting. If you pause after "Bee", your next phrase is the request.
 
 - **Your own mic only.** Typed lines, live captions, Teams audio and teammates' lines never count, even when they start with "Bee". Speech-to-text often writes "Bee" as "B", "Be" or "Bea"; at the very start of a phrase those count too, when a pause or a request follows ("Be, open Teams", "B what's the time in Tokyo"). "Be careful…", "maybe later" and "the bee flew" do not. "Bea, can you share your screen?" to a colleague called Bea does count.
-- **Not meeting conversation.** The request and its answer stay out of the meeting summary, meeting memory and the Teams sync. Meeting tips wait while the answer is on screen (8 s, or until you close it), then catch up.
+- **Not meeting conversation.** The request and its answer stay out of the meeting summary, and meeting memory. Meeting tips wait while the answer is on screen (8 s, or until you close it), then catch up.
 - **Desktop actions.** The AI can open an app or bring it to the front ("open Teams", "switch to Outlook"), bring one window forward, and open a web page. "Open" or "switch to" a common app, and "open" a web address, run at once without the AI. Each action shows a short line, such as "Opened Teams". Bee never opens terminals or script tools. Opening apps works on Windows and macOS.
 - **Background tasks.** A long job that needs no screen ("Bee, draft the release notes from the merged PRs and tell me when it's done") runs in the background while you carry on. A chip in the notch shows how many run; the Live tab lists each with what it is doing and a Stop button. When one ends, the island shows its result, and Bee remembers it ("what did it find?"). Up to 3 at once; they never use the screen.
 - **What you are looking at.** Every "Bee, …" request carries the app and title of the window at the front, so "summarise this" or "reply to him" needs no "can you see". Bee reads the window itself only when the request needs what it shows.
@@ -172,46 +172,31 @@ Bee keeps a detailed log of each session on your computer, so a session can be r
 - **Local only.** Logs are never uploaded. Keys, tokens and sign-in details are redacted before anything is written.
 - **Detailed debug logs** (always on) log everything: what Bee hears, what you ask the AI and its replies, and each step it takes on screen.
 
-## Teams mode
+## Teams
 
-Teams mode lets teammates who are in the same Microsoft Teams meeting pool what they say, so each person's Bee sees the whole conversation and writes a speaker-labelled summary. Bee stays a desktop notch. It never joins the call, and it uses no Teams bot, no Teams local API and no Microsoft Graph or calendar access.
+Teams sync was removed from the Bee app. Bee no longer joins teams or sync rooms, and has no **Teams** tab, **Settings → Team**, invite codes or `bee://team` links. The relay (`relay/`, `convex/`) stays in the repository and may still run on the server, but the app does not use it. Bee still never joins a call and uses no Teams bot, no Teams local API and no Microsoft Graph.
 
-### Set up
+Bee still detects Teams, Zoom and Google Meet calls to start and end meetings (see **Use**, step 6), reads live captions (**Settings → Meeting context**) and can hear the Teams app (below).
 
-1. Deploy the relay (Convex HTTP backend; shared handler in `relay/src`). See [relay/README.md](relay/README.md).
-2. Start Bee with `BEE_RELAY_URL` set to the Convex site URL, for example `https://<deployment>.eu-west-1.convex.site`. Without it, Teams mode is off and Bee works solo as before.
-3. One person opens **Settings → Team**, types a team name and clicks **Create team**. Settings shows the invite link (`bee://team/XXXX-XXXX`) and the code. **Copy** puts the link on the clipboard.
-4. Teammates click the link (Bee opens with the code filled in) or paste the code in **Settings → Team**, then click **Join team**. Team membership is an allowlist of Clerk user ids. **Leave team** removes you.
+Relay environment variables (server side only):
 
-### In a meeting
-
-1. **Detection.** On Windows, Bee checks every few seconds whether desktop Teams is in a call: a Teams process that holds the microphone (Windows microphone privacy registry) or shows a meeting or call window title. This is a best-effort heuristic. Bee also lists each open meeting window by its title. On macOS and Linux there is no detector; use **Live → Manual test → Simulate Teams meeting**.
-2. **Popup.** After about 10 seconds of stable detection, a card opens under the notch:
-   - **Join "Alice, Bob"**: the best open sync on your team. Syncs you were invited to come first, then syncs started within 10 minutes of your meeting whose members are in a meeting now. The subtitle shows who invited you or when it started, and its word code.
-   - **Start new sync** (or **Start meeting sync** when there is nothing to join).
-   - **Other syncs (n)** and **Join by code** (for example `amber-otter`) as secondary links. **×** closes the card for this meeting.
-
-   Nothing joins automatically. Timing and presence only rank the choices; you always click.
-
-   If two or more Teams windows look like calls, the card first asks **Which meeting?** and lists them by title. Pick the one you are in; only then are syncs offered. If two or more syncs match equally well (two invites, or two live syncs started near your meeting), there is no one-click **Join**: the card lists them all as equal choices. Once you join or start, the sync stays bound to that meeting. Other meeting windows are ignored until it ends. When that window has been closed for 15 seconds, Bee leaves the sync, even if another meeting is still open.
-3. **After starting.** An optional **Invite who is here** step lists teammates who are in a meeting now. Nobody is pre-ticked. You can also paste the word code in the Teams chat.
-4. **Synced.** The notch shows a team icon with the member count. **Live → Teams sync** shows "Synced with Alice, Bob", **Pause sharing** / **Resume sharing** and **Leave sync**. Your mic phrases go to the sync only while the Bee mic is on and sharing is not paused. Typed test lines stay on your device. Teammates' phrases join your transcript in spoken order, labelled "Alice: …", and feed tips too.
-5. **Simultaneous starts.** If a teammate in a meeting started a sync within 30 seconds of yours, both of you see **Merge with Bob's sync?**. It merges only once both tap **Merge**.
-6. **Leaving.** When Teams has been out of the call for about 15 seconds, Bee leaves the sync. A new detection always shows a new popup; Bee never rejoins an old sync by itself.
-7. **Summary.** **End meeting & save summary** works as before. Each Bee writes its own markdown file locally. With synced lines, the transcript sent to the AI is `Speaker: text`, action items are attributed to the speaker who committed to them, and the file adds a `## Speakers` section that says the transcript is partial (Bee members only).
-
-If the relay cannot be reached, Bee says "Bee is working solo" and carries on with your own lines only.
+| Variable | Where | Meaning |
+| --- | --- | --- |
+| `CLERK_ISSUER` | Relay | Clerk issuer, default `https://clerk.vedantb.com`. |
+| `CLERK_JWKS_URL` | Relay (optional) | JWKS for RS256 checks. Default `<issuer>/.well-known/jwks.json`. |
+| `CLERK_AUTHORIZED_PARTIES` | Relay (optional) | Comma-separated `azp` allowlist. |
 
 ### Teams audio fallback
 
-**Settings → Meeting context → Hear Teams when not everyone has Bee** (off by default). The idea: when some people in a Teams call have no Bee, Bee hears the Teams app itself, so their words reach the AI too. It listens only when all of these hold:
+**Settings → Meeting context → Hear Teams when not everyone has Bee** (off by default). The idea: when some people in a Teams call have no Bee, Bee hears the Teams app itself, so their words reach the AI too. It listens when all of these hold:
 
-- you are in a Teams call (never Zoom or Google Meet) and your Bee mic is on;
-- someone may not be covered: you are not in a sync, or Bee cannot see the call's people list (see **Meeting window**), or someone on that list is not in your sync.
+- you are in a Teams call (never Zoom or Google Meet) and your Bee mic is on.
 
-What it hears joins your transcript as "Meeting: …". It is never shared with the sync. A phrase that repeats one of your lines, a teammate's or a caption from the last 20 seconds is dropped.
+Bee cannot tell who in the call has Bee (sync was removed), so it always treats the call as not covered.
 
-While it listens, **Live → Meeting** says "Listening to Teams audio for people without Bee."
+What it hears joins your transcript as "Meeting: …". A phrase that repeats one of your lines or a caption from the last 20 seconds is dropped.
+
+Bee does not say that it is listening to Teams. While a meeting is active, the notch and **Live → Meeting** say "Meeting in progress".
 
 **Teams only, never all system audio.** A small helper program that ships inside Bee captures the Teams desktop app alone (source in `native/teams-audio`). If it cannot keep to Teams, it does not start.
 
@@ -230,33 +215,11 @@ While it listens, **Live → Meeting** says "Listening to Teams audio for people
 
 Before this release, Bee mixed all system audio into the mic. That is gone. See [ARCHITECTURE.md](ARCHITECTURE.md#teams-audio-fallback) and [native/teams-audio/README.md](native/teams-audio/README.md).
 
-### Mute gating
-
-Teams' own mute state cannot be read without the Teams local API, which Bee does not use. Sharing is therefore gated on Bee's side: only while the Bee mic is on, only after you joined a sync, and never while **Pause sharing** is on. Muting in Teams alone does not stop Bee from sharing; turn off the Bee mic or pause sharing as well.
-
-### Environment variables
-
-| Variable | Where | Meaning |
-| --- | --- | --- |
-| `BEE_RELAY_URL` | Bee (main process, run time) | Relay base URL. Overrides the build-time value. |
-| `MAIN_VITE_BEE_RELAY_URL` | Bee (build time) | Relay URL baked into an installer. With neither set, Teams mode is off. |
-| `CLERK_ISSUER` | Relay | Clerk issuer, default `https://clerk.vedantb.com`. |
-| `CLERK_JWKS_URL` | Relay (optional) | JWKS for RS256 checks. Default `<issuer>/.well-known/jwks.json`. |
-| `CLERK_AUTHORIZED_PARTIES` | Relay (optional) | Comma-separated `azp` allowlist. |
-
-To show full names without typing them, add a `name` claim to the Clerk session token (Dashboard → Sessions → Customize session token: `{"name": "{{user.full_name}}"}`).
-
 ### Risks and limits
 
-- **Detection false positives and misses.** The Windows heuristic can fire on a Teams call that is not a meeting, or on another app's title that mentions a call inside Teams. It can miss new Teams builds with different window titles. It has not yet been tested on a real Windows machine. Back-to-back meetings with no gap look like one meeting.
-- **Presence privacy.** Everyone on your team can see when your Bee reports "in a meeting", even if you never join a sync. Consider this before rolling out, and consider a privacy review.
-- **Partial summaries.** Only Bee members who joined the sync are captured. Other attendees, and anyone with the Bee mic off, are missing from every summary.
-- **Consent.** Each person's summary contains colleagues' words, stored on each device. Tell participants, and get a privacy or legal review before wide use. The Teams audio fallback sends the words of people who do not use Bee to speech-to-text. It is off by default; review it before anyone turns it on, and before wide use. Anyone can turn it on or off in Settings.
-- **Wrong-room clicks.** A person can join the wrong sync by clicking the wrong button. Names are shown before joining, and **Leave sync** is one click. There is no "Remove" for uninvited joiners yet.
-- **No Microsoft IDs.** Bee has no Microsoft meeting id, so it cannot match a meeting to a sync by itself. It lists concurrent desktop meeting windows (by title) and equally ranked live syncs, and you pick. The session stays bound to that choice until it ends. Syncs are grouped only by who clicked. Two meeting windows with the same title count as one. A mic-only call with no meeting window is treated as one unnamed meeting.
-- **Display names.** Without a `name` claim, a user can type any name for themselves when joining the team. They cannot change anyone else's.
+- **Detection false positives and misses.** The Windows heuristic can fire on a Teams call that is not a meeting, or on another app's title that mentions a call inside Teams. It can miss new Teams builds with different window titles. Automatic detection also reads the microphone privacy record of Windows to see which meeting app holds the mic.
+- **Consent.** The summary contains colleagues' words, stored on your device. Tell participants, and get a privacy or legal review before wide use. The Teams audio fallback sends the words of people without Bee to speech-to-text.
 - **Unsigned installer.** Windows SmartScreen warns on first run.
-- **Relay scale.** One Convex deployment serves every team (kv-backed): fine for a few hundred users. Tokens are checked on every request; phrases are deleted when a sync ends, or 4 hours after it started.
 
 ## Sign-in (Clerk)
 
@@ -284,7 +247,7 @@ Social sign-in (Google, for example) opens the system browser. When it ends, the
 
 The browser does not return through `bee://renderer/`: a browser cannot show a `bee://` link as a page, so the tab would stay on the provider's sign-in page.
 
-The installer registers the `bee` scheme for **Return to Bee** and team invites. Social sign-in no longer depends on the scheme to finish. In `npm run dev` on Windows, the scheme points at the bare Electron binary, so **Return to Bee** may not open the app there.
+The installer registers the `bee` scheme for **Return to Bee**. Social sign-in no longer depends on the scheme to finish. In `npm run dev` on Windows, the scheme points at the bare Electron binary, so **Return to Bee** may not open the app there.
 
 ## Settings and secrets
 
@@ -307,8 +270,8 @@ On Linux without a keyring (for example, under Xvfb), Electron cannot encrypt to
 ```powershell
 npm test               # unit tests: retrieval, Jev ranking parser, AI prompt, meeting summary, pipeline, sign-in gate, phrase detection, WAV, STT, update checks, Teams mode (relay, JWT, room ranking, detection, sync)
 npm run test:gateway   # live smoke test against Vercel AI Gateway (needs BEE_AI_GATEWAY_API_KEY)
-npm run test:e2e       # Electron E2E: fake mic → Grok STT → Jev → AI, meeting summary files, Teams sync (needs BEE_AI_GATEWAY_API_KEY; xvfb-run on Linux)
-npm run relay:mock     # in-memory relay on http://127.0.0.1:8787 for local Teams mode
+npm run test:e2e       # Electron E2E: fake mic → Grok STT → Jev → AI, meeting summary files, screenshots (needs BEE_AI_GATEWAY_API_KEY; xvfb-run on Linux)
+npm run relay:mock     # in-memory relay on http://127.0.0.1:8787 (the app no longer uses it; relay tests only)
 npm run typecheck
 npm run build:teams-audio:win   # Teams audio helper (Windows only; needs Visual Studio 2022 C++ and CMake)
 npm run build:teams-audio:mac   # Teams audio helpers (macOS only; needs Xcode)
@@ -337,9 +300,7 @@ The live conversation E2E (`test/conversation-live.e2e.test.ts`) is skipped unle
 
 The live mic latency E2E (`test/mic-latency.e2e.test.ts`) costs money, so it is skipped, including under `test:e2e`, unless `BEE_E2E_LIVE_MIC=1` and `BEE_AI_GATEWAY_API_KEY` are set. The fake audio device plays `test/fixtures/london-tube-question.wav` (a London news question, then "why are there tube closures" with the mic still on) into the store's real mic, segmenter and Grok STT (`startTestMicCapture` in `store.ts`). For each line it reports the end-of-speech detection delay against the known speech end, end of speech → transcript and transcript → first answer text. It checks that both lines are transcribed apart and answered, with no `[web]` tag, at most 4 STT calls and 3 pipeline runs, and no Jev call (the notes folder holds one unrelated note). With `BEE_MIC_REPORT=<file>.md` it writes the report there and the raw timings beside it as `.json`.
 
-The Teams E2E needs no key. The test serves the in-memory relay over HTTP, with a local RS256 key pair and JWKS, and plays "Bob": it creates the team and a sync. Bee's real preload and main (with a stub detector) run as "Alice". Alice joins by invite link, simulates a meeting, takes the popup's **Join**, shares one mic phrase and one while sharing is paused, and receives Bob's phrase. She then writes the summary and turns the meeting off. The test checks that the relay stamped both speakers from their tokens and that the paused phrase never left Alice's device. It also checks that Alice left the sync after the debounce and that the plain summary lists `Alice: …` and `Bob Jones: …` lines and a `## Speakers` section.
 
-The concurrent-meeting E2E (`test/teams-pick.e2e.test.ts`) plays "Bob" and "Carol", each with a live sync. Alice simulates two meeting windows. The test checks that the card asks **Which meeting?** with no one-click sync, and that dismissing it joins nothing. On the next detection Alice picks "Call with Carol" and joins Carol's sync. The test checks that she is only in Carol's sync and that her phrase reached only Carol's.
 
 Unit tests cover the relay (JWT signature, issuer, expiry and `azp` checks; team invite and join; room ids, word codes and membership; phrase stamping; stale members and the 4-hour limit; two-tap merge). They also cover room ranking, the detection debounce, the Windows heuristics against sample `tasklist` and registry output, and the share gate. The last group covers the sync controller with two or three devices on one relay, including concurrent meetings, the "Which meeting?" pick, equally ranked syncs, leaving when the chosen meeting closes, merging, leaving without rejoining, and fail-open.
 

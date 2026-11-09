@@ -50,7 +50,6 @@ const SETTINGS: SettingsView = {
 
 async function loadStore(settings: Partial<SettingsView> = {}) {
   const requests: PipelineRequest[] = [];
-  const published: string[] = [];
   let captions: (payload: MeetingWindowCaptions) => void = () => undefined;
   vi.stubGlobal("window", {
     bee: {
@@ -65,7 +64,6 @@ async function loadStore(settings: Partial<SettingsView> = {}) {
         requests.push(pipelineRequestSchema.parse(request));
         return EMPTY;
       },
-      teams: { publish: async ({ text }: { text: string }) => published.push(text) },
       meetingWindow: {
         onCaptions: (listener: typeof captions) => {
           captions = listener;
@@ -80,7 +78,7 @@ async function loadStore(settings: Partial<SettingsView> = {}) {
     captions({ lines });
     await vi.advanceTimersByTimeAsync(1000);
   };
-  return { store, send, requests, published };
+  return { store, send, requests };
 }
 
 describe("store: live captions", () => {
@@ -96,7 +94,7 @@ describe("store: live captions", () => {
   });
 
   it("runs the pipeline on caption lines, labelled by speaker, and keeps them for the summary", async () => {
-    const { store, send, requests, published } = await loadStore();
+    const { store, send, requests } = await loadStore();
     await send([
       { speaker: "Priya Patel", text: "When does SSO ship for enterprise customers?" },
       { speaker: null, text: "Let's check the roadmap." },
@@ -104,7 +102,6 @@ describe("store: live captions", () => {
     expect(requests.at(-1)?.transcript).toEqual(["Priya Patel: When does SSO ship for enterprise customers?", "Meeting: Let's check the roadmap."]);
     expect(store.getBeeState().session.lines.map((line) => line.own)).toEqual([false, false]);
     // Captions are never shared with a Teams sync.
-    expect(published).toEqual([]);
   });
 
   it("drops a caption of the user's own mic line while the mic is on, and keeps other speakers", async () => {

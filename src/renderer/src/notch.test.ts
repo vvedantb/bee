@@ -12,7 +12,6 @@ const idle: Parameters<typeof logoState>[0] = {
   summary: { saving: false, result: null, error: null },
   mcp: { servers: [], tests: {}, error: null },
   update: { status: "idle", check: null, error: null },
-  teamsError: null,
 };
 
 const failedRun: PipelineResult = {
@@ -52,7 +51,6 @@ describe("logoState", () => {
     expect(logoState({ ...busy, summary: { saving: false, result: null, error: "Could not save" } })).toBe("error");
     expect(logoState({ ...busy, mcp: { servers: [], tests: {}, error: "Bad URL" } })).toBe("error");
     expect(logoState({ ...busy, update: { status: "idle", check: null, error: "Offline" } })).toBe("error");
-    expect(logoState({ ...busy, teamsError: "Sync failed" })).toBe("error");
   });
 
   it("counts the last run's guide error only once no newer run is busy", () => {

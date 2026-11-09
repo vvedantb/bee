@@ -1,12 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { TeamsAudioStatus } from "../../shared/ipc";
-import { TEAMS_AUDIO_LISTENING, TEAMS_AUDIO_SCREEN_RECORDING, teamsAudioMessage, teamsAudioNeedsScreenRecording, type TeamsAudioView } from "./teams-audio-message";
+import { MEETING_IN_PROGRESS } from "./meeting-notices";
+import { TEAMS_AUDIO_SCREEN_RECORDING, teamsAudioMessage, teamsAudioNeedsScreenRecording, type TeamsAudioView } from "./teams-audio-message";
 
-const SUPPORTED: TeamsAudioStatus = { platform: "windows", supported: true, reason: null, teamsCall: true, coverage: "uncovered", permission: "not-needed" };
+const SUPPORTED: TeamsAudioStatus = { platform: "windows", supported: true, reason: null, teamsCall: true, permission: "not-needed" };
 const MAC: TeamsAudioStatus = { ...SUPPORTED, platform: "mac", permission: "unknown" };
 const view = (patch: Partial<TeamsAudioView> = {}): TeamsAudioView => ({ status: SUPPORTED, plan: "listen", listening: false, failed: false, failure: null, ...patch });
 const unsupported = (platform: TeamsAudioStatus["platform"], reason: NonNullable<TeamsAudioStatus["reason"]>): TeamsAudioView =>
-  view({ plan: "unavailable", status: { platform, supported: false, reason, teamsCall: false, coverage: "unknown", permission: "not-needed" } });
+  view({ plan: "unavailable", status: { platform, supported: false, reason, teamsCall: false, permission: "not-needed" } });
 
 describe("teamsAudioMessage", () => {
   it("says nothing while off or before the first status", () => {
@@ -29,9 +30,10 @@ describe("teamsAudioMessage", () => {
     }
   });
 
-  it("reports listening, a covered call and waiting", () => {
-    expect(teamsAudioMessage(view({ listening: true }))).toBe(TEAMS_AUDIO_LISTENING);
-    expect(teamsAudioMessage(view({ plan: "covered" }))).toBe("Everyone in this call has Bee, so Bee is not listening to Teams.");
+  it("reports a meeting in progress while listening (Teams audio is not advertised), and says nothing while waiting", () => {
+    expect(teamsAudioMessage(view({ listening: true }))).toBe("Meeting in progress");
+    expect(teamsAudioMessage(view({ listening: true }))).toBe(MEETING_IN_PROGRESS);
+    expect(teamsAudioMessage(view({ listening: true }))).not.toMatch(/teams audio|people without bee/i);
     // Waiting for a call says nothing: the switch already says what it does.
     expect(teamsAudioMessage(view({ plan: "waiting" }))).toBeNull();
   });
@@ -64,7 +66,6 @@ describe("teamsAudioMessage", () => {
       ...(["linux", "other", "windows", "mac"] as const).map((platform) => unsupported(platform, "unsupported-platform")),
       ...(["os-too-old", "helper-missing", "needs-app-audio"] as const).flatMap((reason) => [unsupported("windows", reason), unsupported("mac", reason)]),
       view({ listening: true }),
-      view({ plan: "covered" }),
       view({ plan: "waiting" }),
       ...(["missing", "unsupported", "denied", "no-teams", "failed"] as const).flatMap((failure) => [
         view({ failed: true, failure }),

@@ -1,13 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { PARTICIPANTS_MAX } from "./agent-desktop-meeting";
-import type { SessionLine } from "./sync-lines";
+import type { SessionLine } from "./session-lines";
 import {
   TEAMS_AUDIO_ECHO_MS,
   TEAMS_AUDIO_SPEAKER,
   TEAMS_AUDIO_SPEAKER_ID,
   TEAMS_APP_AUDIO,
-  namesMatch,
-  teamsAudioCoverage,
   teamsAudioEcho,
   teamsAudioOsSupported,
   teamsAudioPlan,
@@ -71,75 +68,15 @@ describe("teamsAudioSupport", () => {
   });
 });
 
-describe("namesMatch", () => {
-  it("matches the same name across case, accents, punctuation and word order", () => {
-    expect(namesMatch("Alice Smith", "alice smith")).toBe(true);
-    expect(namesMatch("José Núñez", "Jose Nunez")).toBe(true);
-    expect(namesMatch("Smith, Alice", "Alice Smith")).toBe(true);
-    expect(namesMatch("Mary-Jane O'Neil", "Mary Jane O Neil")).toBe(true);
-    // "O'Neil" splits into an initial and a word, so the initial still matches "Oneil".
-    expect(namesMatch("Mary-Jane O'Neil", "mary jane oneil")).toBe(true);
-  });
-
-  it("matches a first name or an initial against a full name", () => {
-    expect(namesMatch("Alice", "Alice Smith")).toBe(true);
-    expect(namesMatch("Alice Smith", "Alice")).toBe(true);
-    expect(namesMatch("A. Smith", "Alice Smith")).toBe(true);
-    expect(namesMatch("Alice S", "Alice Smith")).toBe(true);
-  });
-
-  it("does not match different people, partial words or initials alone", () => {
-    expect(namesMatch("Alice Smith", "Bob Smith")).toBe(false);
-    expect(namesMatch("Al", "Alice")).toBe(false);
-    expect(namesMatch("A", "Alice")).toBe(false);
-    expect(namesMatch("A S", "Alice Smith")).toBe(false);
-    expect(namesMatch("Alice Smith Jones", "Alice Brown")).toBe(false);
-    expect(namesMatch("", "Alice")).toBe(false);
-    expect(namesMatch("...", "Alice")).toBe(false);
-  });
-});
-
-describe("teamsAudioCoverage", () => {
-  const members = ["Me Myself", "Bob Jones", "Priya"];
-
-  it("needs Teams audio when not in a sync", () => {
-    expect(teamsAudioCoverage({ inRoom: false, members: [], self: null, participants: ["Bob Jones"] })).toBe("uncovered");
-    expect(teamsAudioCoverage({ inRoom: false, members, self: "Me Myself", participants: null })).toBe("uncovered");
-  });
-
-  it("cannot tell in a sync without a roster, or with one that may be cut off", () => {
-    expect(teamsAudioCoverage({ inRoom: true, members, self: "Me Myself", participants: null })).toBe("unknown");
-    expect(teamsAudioCoverage({ inRoom: true, members, self: "Me Myself", participants: [] })).toBe("unknown");
-    const full = Array.from({ length: PARTICIPANTS_MAX }, (_, index) => `Person ${String.fromCharCode(65 + index)}`);
-    expect(teamsAudioCoverage({ inRoom: true, members: full, self: null, participants: full })).toBe("unknown");
-  });
-
-  it("is covered when every other person in the roster has Bee in this sync", () => {
-    expect(teamsAudioCoverage({ inRoom: true, members, self: "Me Myself", participants: ["Me Myself", "Bob Jones", "Priya Patel"] })).toBe("covered");
-    // Only the user is in the call.
-    expect(teamsAudioCoverage({ inRoom: true, members, self: "Me Myself", participants: ["Me Myself"] })).toBe("covered");
-  });
-
-  it("is uncovered when anyone else is not in the sync", () => {
-    expect(teamsAudioCoverage({ inRoom: true, members, self: "Me Myself", participants: ["Me Myself", "Bob Jones", "Sam Lee"] })).toBe("uncovered");
-  });
-
-  it("treats a roster name that is the user's under another name as someone without Bee", () => {
-    // Teams calls the user "Melissa M", Bee knows them as "Me Myself": Bee cannot tell, so it listens.
-    expect(teamsAudioCoverage({ inRoom: true, members, self: "Me Myself", participants: ["Melissa M", "Bob Jones"] })).toBe("uncovered");
-  });
-});
-
 describe("teamsAudioPlan", () => {
-  const ready = { enabled: true, supported: true, teamsCall: true, micOn: true, coverage: "uncovered" as const };
+  const ready = { enabled: true, supported: true, teamsCall: true, micOn: true };
 
-  it("listens in a Teams call with the mic on while someone may not have Bee", () => {
+  // Client sync is gone, so no call is ever covered by a teammate's Bee: a Teams call with the mic on always listens.
+  it("listens in a Teams call with the mic on, with no sync or coverage to ask", () => {
     expect(teamsAudioPlan(ready)).toBe("listen");
-    expect(teamsAudioPlan({ ...ready, coverage: "unknown" })).toBe("listen");
   });
 
-  it("does not listen when covered, off, unsupported, outside a Teams call or with the mic off", () => {
-    expect(teamsAudioPlan({ ...ready, coverage: "covered" })).toBe("covered");
+  it("does not listen when off, unsupported, outside a Teams call or with the mic off", () => {
     expect(teamsAudioPlan({ ...ready, enabled: false })).toBe("off");
     expect(teamsAudioPlan({ ...ready, supported: false })).toBe("unavailable");
     expect(teamsAudioPlan({ ...ready, teamsCall: false })).toBe("waiting");

@@ -467,6 +467,24 @@ describe("settings: meeting context and the calendar are always on", () => {
   });
 });
 
+describe("settings: no Team settings", () => {
+  it("has no team or sync keys in the view, and drops old ones from a file on load and on the next save", () => {
+    writeFileSync(
+      join(dir, "settings.json"),
+      JSON.stringify({ team: { id: "t1" }, inviteCode: "BEE-7Q4K", pendingInvite: "bee://team/BEE-7Q4K", relayUrl: "https://relay.example", shareMuted: true, autoMeetingDetection: false }),
+    );
+    const store = create();
+    const view = store.view();
+    for (const key of ["team", "inviteCode", "pendingInvite", "relayUrl", "shareMuted"]) expect(view).not.toHaveProperty(key);
+    // Known keys in the same file still load.
+    expect(view.autoMeetingDetection).toBe(false);
+    store.save({ meetingMode: true });
+    const onDisk = JSON.parse(readFileSync(join(dir, "settings.json"), "utf8"));
+    for (const key of ["team", "inviteCode", "pendingInvite", "relayUrl", "shareMuted"]) expect(onDisk).not.toHaveProperty(key);
+    expect(onDisk.autoMeetingDetection).toBe(false);
+  });
+});
+
 describe("settings: the meeting window reader is always on", () => {
   it("has no switch, and ignores one left in an old file", () => {
     writeFileSync(join(dir, "settings.json"), JSON.stringify({ readMeetingWindowEnabled: false, meetingWindowReader: false }));

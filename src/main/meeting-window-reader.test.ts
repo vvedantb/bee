@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { READ_ONLY_COMMANDS, assertReadOnly, parseEnvelope, type AgentDesktopResult, type ReadOnlyCommand } from "../core/agent-desktop-envelope";
 import type { CaptionLine } from "../core/agent-desktop-meeting";
-import type { DetectorReading } from "../core/sync-controller";
+import type { DetectorReading } from "../core/teams-heuristics";
 import type { AgentDesktopRun } from "./agent-desktop";
 import { createMeetingWindowReader } from "./meeting-window-reader";
 import { withMeetingWindow } from "./teams-detector";

@@ -1,6 +1,7 @@
 // The pill's status text and logo state. No React or window here, so tests can call them.
 import { activityLabel, displayTip } from "./island";
 import type { LogoState } from "./logo";
+import { MEETING_IN_PROGRESS } from "./meeting-notices";
 import type { SettingsView } from "../../shared/ipc";
 import type { BeeState } from "./store";
 
@@ -10,7 +11,7 @@ export const NOTCH_BUTTON = "rounded-full bg-[var(--surface-raised)] hover:bg-[#
 /** The notch's update button (App.tsx UpdateButton), a size="icon-sm" Button. Shown only when an update is available. */
 export const NOTCH_UPDATE_BUTTON = "notch-update bg-[var(--surface-raised)] hover:bg-[#2d271e]";
 
-type LogoInputs = Pick<BeeState, "busy" | "tools" | "done" | "mic" | "error" | "result" | "summary" | "mcp" | "update" | "teamsError"> & { conversationOpen?: boolean };
+type LogoInputs = Pick<BeeState, "busy" | "tools" | "done" | "mic" | "error" | "result" | "summary" | "mcp" | "update"> & { conversationOpen?: boolean };
 
 /**
  * The notch logo's state. Any error wins, then a tool call in flight (web search over the others), then a busy run,
@@ -19,7 +20,7 @@ type LogoInputs = Pick<BeeState, "busy" | "tools" | "done" | "mic" | "error" | "
 export function logoState(state: LogoInputs): LogoState {
   // A new run hides the last run's guide error (store.ts displayResult), so it counts only when idle.
   const guideError = state.busy ? null : state.result?.guideError;
-  const failed = [state.error, state.mic.error, guideError, state.summary.error, state.mcp.error, state.update.error, state.teamsError];
+  const failed = [state.error, state.mic.error, guideError, state.summary.error, state.mcp.error, state.update.error];
   if (failed.some(Boolean)) return "error";
   if (state.tools.includes("web_search")) return "searching";
   if (state.tools.length > 0) return "tool";
@@ -56,14 +57,12 @@ export type NotchLine = { kind: NotchStatusKind; text: string };
 /** The pill in the conversation window after a request (store.ts openConversation): a follow-up needs no "Bee". */
 export const CONVERSATION_LABEL = "I'm listening…";
 
-/** The pill while the mic is on and Bee also hears the Teams app (Teams audio fallback). */
-export const TEAMS_AUDIO_LABEL = "Listening to you and Teams audio…";
-
 type LineInputs = Pick<BeeState, "busy" | "revising" | "tools" | "question" | "heard" | "mic" | "result"> & {
   computer?: BeeState["computer"];
   conversationOpen?: boolean;
   settings: Pick<SettingsView, "gatewayKeySource" | "meetingMode"> | null;
   session: Pick<BeeState["session"], "lines">;
+  meetingActive?: boolean;
   teamsAudio?: Pick<BeeState["teamsAudio"], "listening">;
 };
 
@@ -81,7 +80,8 @@ export function notchLine(state: LineInputs, signedIn: boolean | undefined): Not
   if (state.conversationOpen) return { kind: tip ? "answer" : "idle", text: CONVERSATION_LABEL };
   if (tip) return { kind: "answer", text: displayTip(tip) };
   if (state.settings?.gatewayKeySource === "none") return { kind: "gateway-key", text: "Add your AI Gateway key in Settings" };
-  if (state.mic.on && state.teamsAudio?.listening) return { kind: "idle", text: TEAMS_AUDIO_LABEL };
+  // A meeting (automatic detection) or a Teams call Bee hears: one quiet line. Teams audio is not advertised.
+  if (state.meetingActive || (state.mic.on && state.teamsAudio?.listening)) return { kind: "idle", text: MEETING_IN_PROGRESS };
   if (state.mic.on || state.session.lines.length > 0) return { kind: "idle", text: "Listening for something useful…" };
   return { kind: "idle", text: state.settings?.meetingMode ? "Meeting mode on" : "Bee is ready" };
 }

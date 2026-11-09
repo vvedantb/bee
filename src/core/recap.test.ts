@@ -1,6 +1,6 @@
 import { MockLanguageModelV4 } from "ai/test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { SessionLine } from "./sync-lines";
+import type { SessionLine } from "./session-lines";
 import { AWAY_MS, beeLines, type RecapEvent, createAwayTracker, isRecapRequest, localMeetingLines, missedLines, parseRecap, recapBody, summariseRecap } from "./recap";
 
 // "What did I miss?": the pure parts, and the one AI call with a mock model (no network).

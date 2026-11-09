@@ -74,6 +74,9 @@ export function micAppKind(key: string): MicApp | null {
 // One desktop meeting window. No Microsoft meeting id: the key is only the window's own title, normalised.
 export type MeetingCandidate = { key: string; title: string; label: string };
 
+// What the Teams detector reads: meetings are the named meeting windows open now (may be empty while inMeeting, e.g. a mic-only call).
+export type DetectorReading = { inMeeting: boolean; source: "windows" | "none"; meetings: MeetingCandidate[] };
+
 /** "Meeting with Bob | Microsoft Teams" → label "Meeting with Bob", key "meeting with bob". */
 export function meetingCandidate(title: string): MeetingCandidate {
   const label = title.trim().replace(/\s*[|\u2013\u2014-]\s*Microsoft Teams\b.*$/i, "").trim() || title.trim();

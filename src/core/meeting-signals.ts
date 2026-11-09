@@ -1,6 +1,6 @@
 import { isZoomCallTitle, parseMeetTitle } from "./agent-desktop-meeting";
 import type { AutoSignals } from "./auto-meeting-detection";
-import type { DetectorReading } from "./sync-controller";
+import type { DetectorReading } from "./teams-heuristics";
 import { TEAMS_IMAGES, isMeetingTitle, meetingCandidate, micAppKind, type WindowRow } from "./teams-heuristics";
 
 // The signals for automatic meeting detection (core/auto-meeting-detection.ts), from what the OS already shows: process window

@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import type { AutoSignals } from "../core/auto-meeting-detection";
 import { NO_SIGNALS, SIGNAL_IMAGES, mergeSignals, readerSignals, windowsSignals } from "../core/meeting-signals";
-import type { DetectorReading } from "../core/sync-controller";
+import type { DetectorReading } from "../core/teams-heuristics";
 import { micInUseKeys, parseTasklistCsv } from "../core/teams-heuristics";
 
 // The signals for automatic meeting detection (core/auto-meeting-detection.ts). Thin adapters, best-effort, never throw.

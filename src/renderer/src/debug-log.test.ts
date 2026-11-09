@@ -106,7 +106,7 @@ describe("logStateChanges", () => {
     dismissedChipIds: [],
     mic: { on: false, level: 0, error: null },
     teamsAudio: { status: null, listening: false, failed: false, failure: null },
-    teams: null,
+    meetingActive: false,
     summary: { saving: false, result: null, error: null },
     update: { status: "idle", check: null, error: null },
   } as unknown as BeeState;

@@ -2,7 +2,6 @@
 export const PANEL_TABS = [
   { value: "live", label: "Live" },
   { value: "connectors", label: "Connectors" },
-  { value: "teams", label: "Teams" },
   { value: "settings", label: "Settings" },
 ] as const;
 

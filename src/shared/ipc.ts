@@ -24,9 +24,6 @@ export const IPC = {
   checkForUpdate: "bee:update:check",
   downloadUpdate: "bee:update:download",
   installUpdate: "bee:update:install",
-  teamsTick: "bee:teams:tick",
-  teamsAction: "bee:teams:action",
-  teamsPublish: "bee:teams:publish",
   lunaActivity: "bee:luna:activity",
   backgroundUpdate: "bee:background:update",
   stopBackground: "bee:background:stop",
@@ -78,8 +75,8 @@ export const IPC = {
   userReturned: "bee:presence:returned",
 };
 
-// Collapsed notch, notch plus the sync popup, notch plus the island response, or the full panel.
-export const windowSizeSchema = z.enum(["collapsed", "prompt", "response", "expanded"]);
+// Collapsed notch, notch plus the island response, or the full panel.
+export const windowSizeSchema = z.enum(["collapsed", "response", "expanded"]);
 export type WindowSize = z.infer<typeof windowSizeSchema>;
 
 // The allowed Interface size factors (core/interface-scale.ts); a save with any other number is rejected.
@@ -99,7 +96,7 @@ export const settingsViewSchema = z.object({
   // while an enabled vmem connector exists, until the user sets it.
   sendSessionsToVmem: z.boolean(),
   meetingMode: z.boolean(),
-  // Automatic meeting detection (core/auto-meeting-detection.ts): start the mic when a call begins, save the summary when it ends. On by default.
+  // Automatic meeting detection (core/auto-meeting-detection.ts): the only way a meeting starts or stops. Off means no meetings. On by default.
   autoMeetingDetection: z.boolean(),
   // Zoom factor for the whole overlay, always an allowed value.
   interfaceScale: interfaceScaleSchema,
@@ -110,7 +107,7 @@ export const settingsViewSchema = z.object({
   logsDir: z.string(),
   // Names Bee should know (core/known-names.ts): typed here or learned from spelling corrections and chat names on screen.
   knownNames: z.array(z.string()),
-  // Teams audio fallback: with the mic on in a Teams call where someone may not have Bee, hear the Teams app alone (never all
+  // Teams audio fallback: with the mic on in a Teams call, hear the Teams app alone (never all
   // system audio). Off by default; only platforms with a Teams-only capture path listen (core/teams-audio.ts).
   teamsAudioFallbackEnabled: z.boolean(),
   // The show/hide shortcut (core/shortcut.ts), and whether Bee holds it now (false: another app does, or it could not register).
@@ -187,8 +184,7 @@ export const pipelineRequestSchema = z.object({
 export type PipelineRequest = z.infer<typeof pipelineRequestSchema>;
 
 // A direct request to the AI: an own mic phrase that started with the wake word, without it ("open Teams"), or a follow-up in
-// the conversation window after one. It is never a meeting line: not in the session, the summary, meeting memory or the Teams
-// sync. The reply comes back as a PipelineResult.
+// the conversation window after one. It is never a meeting line: not in the session, the summary or meeting memory. The reply comes back as a PipelineResult.
 export const COMMAND_MAX_CHARS = 2000;
 // One exchange with Bee (core/bee-history.ts BeeExchange), for vmem's conversation transcript only: the AI gets Bee's whole
 // history from main (main/bee-history-store.ts), never from the renderer. A conversation sends at most this many at once; the
@@ -306,7 +302,7 @@ export type BrowseInstallResult = z.infer<typeof browseInstallResultSchema>;
 // Lines the renderer keeps for the end-of-meeting summary (store.ts); the pipeline still gets only the last 8.
 export const SESSION_TRANSCRIPT_MAX = 200;
 
-// A plain line (solo), or a speaker-labelled one once teammates are synced.
+// A plain line (own speech only), or a speaker-labelled one once anyone else is heard (captions, Teams audio).
 export const transcriptLineSchema = z.union([z.string().max(2000), z.object({ speaker: z.string().max(100), text: z.string().max(2000) })]);
 
 export const meetingSummaryRequestSchema = z.object({
@@ -369,7 +365,7 @@ export const meetingSignalsSchema = z.object({
 });
 export type MeetingSignals = z.infer<typeof meetingSignalsSchema>;
 
-// Main → renderer: new live caption lines from the call window. The renderer adds them like teammates' lines. Never in
+// Main → renderer: new live caption lines from the call window. The renderer adds them like other speakers' lines. Never in
 // console output; the local debug log keeps them.
 export const meetingWindowCaptionsSchema = z.object({
   lines: z.array(z.object({ speaker: z.string().max(100).nullable(), text: z.string().min(1).max(2000) })).min(1).max(50),
@@ -388,8 +384,6 @@ export const teamsAudioStatusSchema = z.object({
   reason: z.enum(["unsupported-platform", "needs-app-audio", "os-too-old", "helper-missing"]).nullable(),
   // A Teams call now: the built-in Windows detector, the meeting window reader on a Teams call, or a simulated Teams meeting.
   teamsCall: z.boolean(),
-  // covered: everyone in the call has Bee in this sync, so Bee does not listen. uncovered or unknown: Bee listens.
-  coverage: z.enum(["covered", "uncovered", "unknown"]),
   // macOS Screen Recording for the helper, as the last capture found it. not-needed on Windows and elsewhere. unknown until
   // the first capture; denied stays until a capture starts or the user asks for access again.
   permission: z.enum(["not-needed", "unknown", "granted", "denied"]),
@@ -533,133 +527,6 @@ export type UpdateCheck = z.infer<typeof updateCheckSchema>;
 // Download and install report failures as values, so offline states read cleanly in the UI.
 export const updateActionSchema = z.object({ error: z.string().nullable() });
 export type UpdateAction = z.infer<typeof updateActionSchema>;
-
-// Teams mode (main/teams-sync.ts, core/sync-controller.ts). Bee never joins the call: it only watches for desktop
-// Teams being in a meeting, and syncs mute-gated phrases with teammates who accepted, through the Bee relay.
-
-const memberViewSchema = z.object({ userId: z.string(), displayName: z.string() });
-
-export const roomOptionSchema = z.object({
-  roomId: z.string(),
-  code: z.string(),
-  names: z.array(z.string()),
-  label: z.string(),
-  reason: z.enum(["invited", "recent", "other"]),
-  createdAt: z.number(),
-  ageMinutes: z.number(),
-  invitedBy: z.string().nullable(),
-});
-
-// A desktop meeting window, named by its title only (Bee has no Microsoft meeting id). key: normalised label.
-export const meetingCandidateSchema = z.object({ key: z.string(), title: z.string(), label: z.string() });
-
-export const teamsViewSchema = z.object({
-  // False when BEE_RELAY_URL is not set: Teams mode is off and Bee works solo.
-  relayConfigured: z.boolean(),
-  // Set while the relay cannot be reached. Bee keeps working solo (fail open).
-  relayError: z.string().nullable(),
-  // Short-lived message, e.g. "The sync ended".
-  notice: z.string().nullable(),
-  me: memberViewSchema.nullable(),
-  team: z
-    .object({ id: z.string(), name: z.string(), inviteCode: z.string(), inviteLink: z.string(), members: z.array(memberViewSchema) })
-    .nullable(),
-  // From a bee://team/… link, waiting for the user to confirm.
-  pendingInvite: z.string().nullable(),
-  detection: z.object({
-    inMeeting: z.boolean(),
-    raw: z.boolean(),
-    epoch: z.number(),
-    source: z.enum(["windows", "simulated", "none"]),
-  }),
-  // The "Join Alice, Bob / Start new" popup for the current detection. With two or more meeting windows and none
-  // picked yet (selectedMeetingKey null), it first asks "Which meeting?" and has no primary. ambiguous: two or more
-  // syncs match equally well, so there is no one-click Join.
-  prompt: z
-    .object({
-      epoch: z.number(),
-      primary: roomOptionSchema.nullable(),
-      others: z.array(roomOptionSchema),
-      ambiguous: z.boolean(),
-      meetings: z.array(meetingCandidateSchema),
-      selectedMeetingKey: z.string().nullable(),
-    })
-    .nullable(),
-  room: z
-    .object({
-      id: z.string(),
-      code: z.string(),
-      createdAt: z.number(),
-      startedByMe: z.boolean(),
-      members: z.array(memberViewSchema),
-      invited: z.array(z.string()),
-    })
-    .nullable(),
-  // Teammates in a meeting now and not in my sync, for the optional invite step. Nobody is pre-ticked.
-  roster: z.array(memberViewSchema),
-  // Another sync started within 30 s of mine: "Merge with Bob's sync?". waiting: I tapped, they have not.
-  merge: z.object({ roomId: z.string(), label: z.string(), waiting: z.boolean() }).nullable(),
-  shareMuted: z.boolean(),
-});
-export type TeamsView = z.infer<typeof teamsViewSchema>;
-
-export const sessionLineSchema = z.object({
-  id: z.string(),
-  own: z.boolean(),
-  speakerId: z.string(),
-  speakerName: z.string(),
-  text: z.string(),
-  clientTs: z.number(),
-  serverTs: z.number().nullable(),
-});
-
-export const teamsTickRequestSchema = z.object({ sessionToken: z.string().max(8000) });
-export const teamsTickResultSchema = z.object({ view: teamsViewSchema, lines: z.array(sessionLineSchema) });
-export type TeamsTickResult = z.infer<typeof teamsTickResultSchema>;
-
-const token = { sessionToken: z.string().max(8000) };
-const name = z.string().trim().min(1).max(80);
-export const teamsActionSchema = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("createTeam"), name, displayName: name, ...token }),
-  z.object({ type: z.literal("joinTeam"), code: z.string().trim().min(1).max(200), displayName: name, ...token }),
-  z.object({ type: z.literal("leaveTeam"), ...token }),
-  z.object({ type: z.literal("copyInvite"), ...token }),
-  z.object({ type: z.literal("startSync"), invite: z.array(z.string().max(200)).max(50), ...token }),
-  z.object({ type: z.literal("joinSync"), roomId: z.string().max(100), ...token }),
-  z.object({ type: z.literal("joinSyncByCode"), code: z.string().trim().min(1).max(100), ...token }),
-  z.object({ type: z.literal("leaveSync"), ...token }),
-  z.object({ type: z.literal("invite"), userIds: z.array(z.string().max(200)).min(1).max(50), ...token }),
-  z.object({ type: z.literal("merge"), accept: z.boolean(), ...token }),
-  z.object({ type: z.literal("dismissPrompt"), ...token }),
-  // "Which meeting?": the user picks one of the concurrent meeting windows; the sync is bound to it until it ends.
-  z.object({ type: z.literal("selectMeeting"), key: z.string().max(300), ...token }),
-  z.object({ type: z.literal("setShareMuted"), muted: z.boolean(), ...token }),
-  // Manual test: pretend desktop Teams is in a meeting (for Linux, macOS and E2E). meetings: window titles to pretend
-  // are open; none means an unnamed call (mic only).
-  z.object({
-    type: z.literal("simulateMeeting"),
-    on: z.boolean(),
-    meetings: z.array(z.object({ title: z.string().trim().min(1).max(300) })).max(10).optional(),
-    ...token,
-  }),
-]);
-export type TeamsAction = z.infer<typeof teamsActionSchema>;
-type WithoutToken<A> = A extends TeamsAction ? Omit<A, "sessionToken"> : never;
-// Teams actions as the UI sends them; the store adds the session token.
-export type TeamsActionInput = WithoutToken<TeamsAction>;
-
-export const teamsActionResultSchema = z.object({ view: teamsViewSchema, error: z.string().nullable() });
-export type TeamsActionResult = z.infer<typeof teamsActionResultSchema>;
-
-export const teamsPublishRequestSchema = z.object({
-  text: z.string().trim().min(1).max(2000),
-  clientTs: z.number(),
-  // Only mic phrases are shared; typed test lines stay local.
-  source: z.enum(["mic", "typed"]),
-  ...token,
-});
-export type TeamsPublishRequest = z.infer<typeof teamsPublishRequestSchema>;
-export const teamsPublishResultSchema = z.object({ sent: z.boolean(), error: z.string().nullable() });
 
 // MCP servers (core/mcp.ts, main/settings.ts). Secrets (bearer token, header value, env values) stay in main.
 export const MCP_MAX_SERVERS = 20;

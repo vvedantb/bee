@@ -6,8 +6,6 @@ import {
   type PipelineResult,
   type SettingsView,
   type TeamsAudioStatus,
-  type TeamsTickResult,
-  type TeamsView,
 } from "../../shared/ipc";
 import type { startMicSession } from "./speech";
 import type { TeamsAudioCapture, TeamsAudioOpen } from "./teams-audio";
@@ -70,25 +68,10 @@ const SETTINGS: SettingsView = {
   toggleShortcutActive: true,
 };
 
-const VIEW: TeamsView = {
-  relayConfigured: true,
-  relayError: null,
-  notice: null,
-  me: { userId: "u-me", displayName: "Me Myself" },
-  team: null,
-  pendingInvite: null,
-  detection: { inMeeting: true, raw: true, epoch: 1, source: "windows" },
-  prompt: null,
-  room: null,
-  roster: [],
-  merge: null,
-  shareMuted: false,
-};
-
-// What Windows reports with the helper installed, in a Teams call where someone may not have Bee.
-const LISTEN: TeamsAudioStatus = { platform: "windows", supported: true, reason: null, teamsCall: true, coverage: "uncovered", permission: "not-needed" };
+// What Windows reports with the helper installed, in a Teams call.
+const LISTEN: TeamsAudioStatus = { platform: "windows", supported: true, reason: null, teamsCall: true, permission: "not-needed" };
 // What a copy of Bee without the helper reports: no Teams-only capture here.
-const NO_HELPER: TeamsAudioStatus = { platform: "windows", supported: false, reason: "helper-missing", teamsCall: false, coverage: "unknown", permission: "not-needed" };
+const NO_HELPER: TeamsAudioStatus = { platform: "windows", supported: false, reason: "helper-missing", teamsCall: false, permission: "not-needed" };
 
 /** A capture main started: lines() delivers text as main would, end() stops it from main's side. */
 function fakeCapture() {
@@ -109,8 +92,6 @@ function fakeCapture() {
 
 async function loadStore(options: { settings?: Partial<SettingsView>; status?: TeamsAudioStatus } = {}) {
   const requests: PipelineRequest[] = [];
-  const published: string[] = [];
-  let teammates: TeamsTickResult["lines"] = [];
   let captions: (payload: MeetingWindowCaptions) => void = () => undefined;
   const audio = { status: options.status ?? LISTEN, screenRecordingAsked: 0 };
   let settings = { ...SETTINGS, ...options.settings };
@@ -128,14 +109,6 @@ async function loadStore(options: { settings?: Partial<SettingsView>; status?: T
         requests.push(pipelineRequestSchema.parse(request));
         return EMPTY;
       },
-      teams: {
-        publish: async ({ text }: { text: string }) => published.push(text),
-        tick: async (): Promise<TeamsTickResult> => {
-          const lines = teammates;
-          teammates = [];
-          return { view: VIEW, lines };
-        },
-      },
       meetingWindow: {
         onCaptions: (listener: typeof captions) => {
           captions = listener;
@@ -152,10 +125,6 @@ async function loadStore(options: { settings?: Partial<SettingsView>; status?: T
   });
   const store = await import("./store");
   await vi.advanceTimersByTimeAsync(0);
-  const teammate = async (text: string, clientTs = Date.now()) => {
-    teammates = [{ id: `room:${clientTs}`, own: false, speakerId: "u-bob", speakerName: "Bob Jones", text, clientTs, serverTs: clientTs }];
-    await vi.advanceTimersByTimeAsync(2000);
-  };
   const caption = async (lines: MeetingWindowCaptions["lines"]) => {
     captions({ lines });
     await vi.advanceTimersByTimeAsync(1000);
@@ -168,7 +137,7 @@ async function loadStore(options: { settings?: Partial<SettingsView>; status?: T
     store.getBeeState().session.lines.map((line) => (line.own ? line.text : `${line.speakerName}: ${line.text}`));
   // The status poll runs with the meeting tick, every 5 s.
   const poll = () => vi.advanceTimersByTimeAsync(5000);
-  return { store, requests, published, teammate, caption, heard, said: () => said(store), poll, audio };
+  return { store, requests, caption, heard, said: () => said(store), poll, audio };
 }
 
 describe("store: Teams audio lines", () => {
@@ -186,12 +155,11 @@ describe("store: Teams audio lines", () => {
     vi.unstubAllGlobals();
   });
 
-  it("runs the pipeline on Teams audio as an unnamed speaker, and never shares it with the sync", async () => {
-    const { store, requests, published, heard } = await loadStore({ status: NO_HELPER });
+  it("runs the pipeline on Teams audio as an unnamed speaker", async () => {
+    const { store, requests, heard } = await loadStore({ status: NO_HELPER });
     await heard("When does SSO ship for enterprise customers?");
     expect(requests.at(-1)?.transcript).toEqual(["Meeting: When does SSO ship for enterprise customers?"]);
     expect(store.getBeeState().session.lines.map((line) => [line.own, line.speakerId])).toEqual([[false, "teams-audio"]]);
-    expect(published).toEqual([]);
   });
 
   it("ignores Teams audio lines while the setting is off", async () => {
@@ -201,34 +169,28 @@ describe("store: Teams audio lines", () => {
     expect(store.getBeeState().session.lines).toEqual([]);
   });
 
-  it("drops Teams audio that repeats the user's own line, a teammate's Bee line or a caption", async () => {
-    const { store, heard, teammate, caption, said } = await loadStore({ status: NO_HELPER });
+  it("drops Teams audio that repeats the user's own line or a caption", async () => {
+    const { store, heard, caption, said } = await loadStore({ status: NO_HELPER });
     await store.actions.toggleMic();
     sessions.at(-1)?.onLine("we can offer fifteen percent off this quarter");
     await vi.advanceTimersByTimeAsync(1000);
-    await teammate("does that include the support plan");
     await caption([{ speaker: "Priya Patel", text: "Can we get it signed by Friday?" }]);
     await heard("We can offer fifteen percent off this quarter.");
-    await heard("Does that include the support plan?");
     await heard("Can we get it signed by Friday?");
     await heard("What about pricing next year?");
     expect(said()).toEqual([
       "we can offer fifteen percent off this quarter",
-      "Bob Jones: does that include the support plan",
       "Priya Patel: Can we get it signed by Friday?",
       "Meeting: What about pricing next year?",
     ]);
   });
 
-  it("lets a later teammate or caption line replace a Teams audio line, without a second run", async () => {
-    const { requests, heard, teammate, caption, said } = await loadStore({ status: NO_HELPER });
-    const spokenAt = Date.now();
-    await heard("Does that include the support plan?");
+  it("lets a later caption line replace a Teams audio line, without a second run", async () => {
+    const { requests, heard, caption, said } = await loadStore({ status: NO_HELPER });
     await heard("Let us check the roadmap first.");
     const runs = requests.length;
-    await teammate("does that include the support plan", spokenAt);
     await caption([{ speaker: "Priya Patel", text: "Let's check the roadmap first." }]);
-    expect(said()).toEqual(["Bob Jones: does that include the support plan", "Priya Patel: Let's check the roadmap first."]);
+    expect(said()).toEqual(["Priya Patel: Let's check the roadmap first."]);
     expect(requests.length).toBe(runs);
   });
 });
@@ -261,7 +223,7 @@ describe("store: Teams audio capture", () => {
   it("listens beside the mic: main sends text, never audio, and it stops when the mic goes off", async () => {
     const fake = fakeCapture();
     capture.open = async () => fake.opened;
-    const { store, poll, published, said } = await loadStore();
+    const { store, poll, said } = await loadStore();
     await store.actions.toggleMic();
     await poll();
     expect(capture.opened).toBe(1);
@@ -271,25 +233,23 @@ describe("store: Teams audio capture", () => {
     fake.lines(["Can you send the contract today?"]);
     await vi.advanceTimersByTimeAsync(1000);
     expect(said()).toEqual(["Meeting: Can you send the contract today?"]);
-    expect(published).toEqual([]);
     store.actions.stopMic(null);
     await vi.advanceTimersByTimeAsync(0);
     expect(capture.stopped).toBe(1);
     expect(store.getBeeState().teamsAudio.listening).toBe(false);
   });
 
-  it("does not listen until the mic is on, or while everyone has Bee, and stops when the setting goes off", async () => {
+  it("does not listen until the mic is on, listens in any Teams call without a sync, and stops when the setting goes off", async () => {
     const fake = fakeCapture();
     capture.open = async () => fake.opened;
-    const { store, poll, audio } = await loadStore({ status: { ...LISTEN, coverage: "covered" } });
+    const { store, poll } = await loadStore({ status: { ...LISTEN } });
     await poll();
     expect(capture.opened).toBe(0);
+    expect(store.teamsAudioNow(store.getBeeState())).toBe("waiting");
     await store.actions.toggleMic();
     await poll();
-    expect(capture.opened).toBe(0);
-    expect(store.teamsAudioNow(store.getBeeState())).toBe("covered");
-    audio.status = { ...LISTEN, coverage: "unknown" };
-    await poll();
+    // No sync, so no one is ever covered: the call alone decides.
+    expect(store.teamsAudioNow(store.getBeeState())).toBe("listen");
     expect(capture.opened).toBe(1);
     await store.actions.saveSettings({ teamsAudioFallbackEnabled: false });
     await vi.advanceTimersByTimeAsync(0);

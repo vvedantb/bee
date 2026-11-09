@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { mergeReadings } from "../core/agent-desktop-meeting";
-import type { DetectorReading } from "../core/sync-controller";
+import type { DetectorReading } from "../core/teams-heuristics";
 import { TEAMS_IMAGES, meetingWindows, micInUseKeys, parseTasklistCsv, teamsInMeeting } from "../core/teams-heuristics";
 
 // Desktop Teams meeting detector. Windows only, best-effort (see core/teams-heuristics.ts). Other platforms read
@@ -49,17 +49,6 @@ export function withMeetingWindow(base: TeamsDetector, reader: { read: () => Pro
     read: async () => {
       const [own, extra] = await Promise.all([base.read(), reader.read().catch(() => null)]);
       return extra ? mergeReadings(own, extra) : own;
-    },
-  };
-}
-
-/** A detector tests (and the E2E harness) set by hand. */
-export function createStubDetector(initial = false): TeamsDetector & { set: (inMeeting: boolean) => void } {
-  let inMeeting = initial;
-  return {
-    read: async () => ({ inMeeting, source: "none", meetings: [] }),
-    set: (next) => {
-      inMeeting = next;
     },
   };
 }

@@ -4,9 +4,9 @@ import {
   CONFIRM_MS,
   END_GRACE_MS,
   IDLE_AUTO,
+  MAX_MEETING_MS,
   qualifies,
   stepAutoMeeting,
-  type AutoEvent,
   type AutoMeetingState,
   type AutoSignals,
 } from "./auto-meeting-detection";
@@ -17,11 +17,11 @@ const CHAT: AutoSignals = { meetingAppPresent: true, inCallTitle: false, micInUs
 const WINDOW_CLOSED: AutoSignals = { meetingAppPresent: true, inCallTitle: false, micInUseByMeetingApp: true, identity: "weekly sync" };
 
 // Runs the machine over (seconds, signals) steps. Effects are collected with the time they fired.
-function run(steps: Array<[number, AutoSignals, { enabled?: boolean; event?: AutoEvent }?]>, from: AutoMeetingState = IDLE_AUTO) {
+function run(steps: Array<[number, AutoSignals, { enabled?: boolean }?]>, from: AutoMeetingState = IDLE_AUTO) {
   let state = from;
   const effects: Array<{ at: number; effect: string }> = [];
   for (const [seconds, signals, options] of steps) {
-    const out = stepAutoMeeting(state, { signals, enabled: options?.enabled ?? true, now: seconds * 1000, event: options?.event });
+    const out = stepAutoMeeting(state, { signals, enabled: options?.enabled ?? true, now: seconds * 1000 });
     state = out.state;
     if (out.effect !== "none") effects.push({ at: seconds, effect: out.effect });
   }
@@ -57,7 +57,7 @@ describe("start rule", () => {
     const { effects, state } = run(hold(CALL, 0, CONFIRM_S + 20));
     expect(effects).toEqual([{ at: CONFIRM_S, effect: "start" }]);
     expect(state.phase).toBe("active");
-    expect(state.origin).toBe("auto");
+    expect(state.startedAt).toBe(CONFIRM_S * 1000);
   });
 
   it("does not start when the signal breaks before the confirmation time", () => {
@@ -147,61 +147,46 @@ describe("end grace", () => {
   });
 });
 
-describe("manual overrides", () => {
-  it("does not restart the same meeting after a manual stop", () => {
+describe("max duration safety net", () => {
+  const MAX_S = MAX_MEETING_MS / 1000;
+  const longCall = () => {
     const active = run(hold(CALL, 0, CONFIRM_S)).state;
-    const stopped = run([[CONFIRM_S + 1, CALL, { event: "manualStop" }], ...hold(CALL, CONFIRM_S + 2, CONFIRM_S + 200)], active);
-    expect(stopped.effects).toEqual([]);
-    expect(stopped.state.phase).toBe("idle");
-    expect(stopped.state.suppressed).not.toBeNull();
+    // The call never ends: the window lingers and the mic stays held.
+    return { active, steps: [[MAX_S - 1, CALL], [CONFIRM_S + MAX_S, CALL]] as Array<[number, AutoSignals]> };
+  };
+
+  it("keeps the length to a few hours", () => {
+    expect(MAX_MEETING_MS).toBeGreaterThanOrEqual(3 * 3_600_000);
+    expect(MAX_MEETING_MS).toBeLessThanOrEqual(4 * 3_600_000);
   });
 
-  it("starts a different meeting after a manual stop", () => {
-    const active = run(hold(CALL, 0, CONFIRM_S)).state;
+  it("stops a meeting that never ends, once, and does not restart the same meeting", () => {
+    const { active, steps } = longCall();
+    const out = run([...steps, ...hold(CALL, CONFIRM_S + MAX_S + 1, CONFIRM_S + MAX_S + 120)], active);
+    expect(out.effects).toEqual([{ at: CONFIRM_S + MAX_S, effect: "stop" }]);
+    expect(out.state.phase).toBe("idle");
+    expect(out.state.suppressed).not.toBeNull();
+  });
+
+  it("starts a different meeting after the max stop", () => {
+    const { active, steps } = longCall();
     const next = { ...CALL, identity: "standup" };
-    const out = run([[CONFIRM_S + 1, CALL, { event: "manualStop" }], ...hold(next, CONFIRM_S + 2, CONFIRM_S + 40)], active);
-    expect(out.effects).toEqual([{ at: CONFIRM_S + 2 + CONFIRM_S, effect: "start" }]);
+    const out = run([...steps, ...hold(next, CONFIRM_S + MAX_S + 1, CONFIRM_S + MAX_S + 40)], active);
+    expect(out.effects.map((item) => item.effect)).toEqual(["stop", "start"]);
   });
 
   it("starts the same meeting again once it has been clearly over", () => {
-    const active = run(hold(CALL, 0, CONFIRM_S)).state;
-    const steps: Array<[number, AutoSignals, { event?: AutoEvent }?]> = [
-      [20, CALL, { event: "manualStop" }],
-      ...hold(NONE, 21, 21 + GRACE_S + 1),
-      ...hold(CALL, 100, 100 + CONFIRM_S + 2),
-    ];
-    expect(run(steps, active).effects).toEqual([{ at: 100 + CONFIRM_S, effect: "start" }]);
+    const { active, steps } = longCall();
+    const after = CONFIRM_S + MAX_S;
+    const out = run([...steps, ...hold(NONE, after + 1, after + 1 + GRACE_S + 1), ...hold(CALL, after + 500, after + 500 + CONFIRM_S + 2)], active);
+    expect(out.effects).toEqual([{ at: after, effect: "stop" }, { at: after + 500 + CONFIRM_S, effect: "start" }]);
   });
 
   it("keeps the suppression through a short gap", () => {
-    const active = run(hold(CALL, 0, CONFIRM_S)).state;
-    const steps: Array<[number, AutoSignals, { event?: AutoEvent }?]> = [[20, CALL, { event: "manualStop" }], ...hold(NONE, 21, 30), ...hold(CALL, 31, 120)];
-    expect(run(steps, active).effects).toEqual([]);
-  });
-
-  it("does not suppress anything for a manual stop with no meeting around", () => {
-    const out = run([[0, NONE, { event: "manualStop" }], ...hold(CALL, 1, 30)]);
-    expect(out.effects).toEqual([{ at: 1 + CONFIRM_S, effect: "start" }]);
-  });
-
-  it("does not stop a manual start on detection noise", () => {
-    const manual = run([[0, NONE, { event: "manualStart" }]]).state;
-    expect(manual.origin).toBe("manual");
-    // No meeting app was ever seen: nothing to end.
-    expect(run(hold(NONE, 1, 600), manual).effects).toEqual([]);
-  });
-
-  it("stops a manual start that saw a call only after the full grace", () => {
-    const manual = run([[0, CALL, { event: "manualStart" }]]).state;
-    const brief = run([...hold(NONE, 1, GRACE_S - 5), ...hold(CALL, GRACE_S - 4, GRACE_S + 60)], manual);
-    expect(brief.effects).toEqual([]);
-    const full = run(hold(NONE, 1, GRACE_S + 1), manual);
-    expect(full.effects).toEqual([{ at: 1 + GRACE_S, effect: "stop" }]);
-  });
-
-  it("does not start twice when a manual start is already running", () => {
-    const manual = run([[0, CALL, { event: "manualStart" }]]).state;
-    expect(run(hold(CALL, 1, 120), manual).effects).toEqual([]);
+    const { active, steps } = longCall();
+    const after = CONFIRM_S + MAX_S;
+    const out = run([...steps, ...hold(NONE, after + 1, after + 10), ...hold(CALL, after + 11, after + 120)], active);
+    expect(out.effects).toEqual([{ at: after, effect: "stop" }]);
   });
 });
 

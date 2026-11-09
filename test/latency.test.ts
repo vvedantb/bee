@@ -37,7 +37,6 @@ async function setup() {
   const runs: Array<{ runId?: string | number; request: { transcript: string[]; shown?: string[] }; done: Deferred<PipelineResult> }> = [];
   const cancelled: Array<string | number> = [];
   const sizes: string[] = [];
-  let tickImpl: () => Promise<unknown> = () => Promise.reject(new Error("no relay"));
   let partialListener: (partial: { runId?: string | number; tips: string[] }) => void = () => undefined;
   let activityListener: (activity: LunaActivity) => void = () => undefined;
 
@@ -50,7 +49,6 @@ async function setup() {
       mcp: { list: async () => [] },
       checkForUpdate: async () => ({ currentVersion: "0", latestVersion: null, available: false, error: null }),
       setWindowSize: async (size: string) => void sizes.push(size),
-      teams: { tick: () => tickImpl(), publish: async () => ({ sent: false, error: null }) },
       enrichLinks: async () => ({ chips: [] }),
       transcribe: () => {
         const stt = deferred<Stt>();
@@ -103,8 +101,6 @@ async function setup() {
     emitPartial: (tips: string[], runId?: number) => partialListener({ runId, tips }),
     /** Steering runs start after a 500 ms debounce, so waits are longer than a bare tick. */
     waitRuns: (count: number) => vi.waitFor(() => expect(runs).toHaveLength(count), { timeout: 4000 }),
-    /** What the next relay ticks return (the store polls every 2 s). */
-    setTick: (impl: () => Promise<unknown>) => void (tickImpl = impl),
     runId: (index: number) => runs[index]?.runId as number,
   };
 }
@@ -114,7 +110,7 @@ describe("latency path, scripted", () => {
   beforeEach(() => {
     vi.resetModules();
     vi.spyOn(console, "debug").mockImplementation(() => undefined);
-    // Each fresh store polls the relay every 2 s. Stop old ones, so only the current store reads the fake tick.
+    // Each fresh store keeps its own timers. Stop old ones, so only the current store runs.
     const realSetInterval = globalThis.setInterval;
     vi.spyOn(globalThis, "setInterval").mockImplementation(((...args: Parameters<typeof setInterval>) => {
       const id = realSetInterval(...args);
@@ -520,20 +516,14 @@ describe("latency path, scripted", () => {
       expect(t.runs[1]?.request.shown).toBeUndefined();
     });
 
-    it("a teammate's line follows the same path and reads Updating…", { timeout: 15_000 }, async () => {
+    it("another speaker's line follows the same path and reads Updating…", { timeout: 15_000 }, async () => {
       const t = await setup();
       say(t, "Could we offer twenty percent off?");
       await t.waitRuns(1);
-      // Luna is still answering when the teammate speaks.
+      // Luna is still answering when someone else speaks.
       t.emitPartial([A, "Ask who owns the rol"], t.runId(0));
-      // A relay tick delivers a line from a teammate (the store reads it through the same addLines path).
-      const lines = [{ id: "room:1", own: false, speakerId: "u2", speakerName: "Alice", text: "What about the SSO date", clientTs: Date.now(), serverTs: null }];
-      let sent = false;
-      t.setTick(async () => {
-        const batch = sent ? [] : lines;
-        sent = true;
-        return { view: { room: null, prompt: null, merge: null, me: null }, lines: batch };
-      });
+      // A live caption delivers a line from another speaker (the store reads it through the same addLines path).
+      t.store.actions.captionLines([{ speaker: "Alice", text: "What about the SSO date" }]);
       await vi.waitFor(() => expect(t.store.getBeeState().revising).toBe(true), { timeout: 4000 });
       expect(t.status()).toBe("Updating…");
       t.runs[0]?.done.resolve(result([A, C]));

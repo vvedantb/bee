@@ -10,9 +10,16 @@ import {
   roomsResponseSchema,
   teamResponseSchema,
 } from "./relay-protocol";
-import { clockSample, type ClockSample } from "./sync-lines";
 
 // HTTP client for the Bee relay. Each call sends the caller's Clerk session token; the relay verifies it.
+// The Bee app no longer uses it (client sync was removed). It stays as the contract the relay's own tests run against.
+
+// Clock offset sample (server minus local), NTP style.
+export type ClockSample = { offsetMs: number; rttMs: number };
+
+export function clockSample(sentAt: number, receivedAt: number, serverNow: number): ClockSample {
+  return { offsetMs: serverNow - (sentAt + receivedAt) / 2, rttMs: receivedAt - sentAt };
+}
 
 const RELAY_TIMEOUT_MS = 8000;
 
