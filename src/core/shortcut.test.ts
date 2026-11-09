@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_TOGGLE_SHORTCUT, acceleratorFromKeys, acceleratorSchema, shortcutLabel } from "./shortcut";
+import { DEFAULT_ASK_SHORTCUT, DEFAULT_TOGGLE_SHORTCUT, acceleratorFromKeys, acceleratorSchema, shortcutLabel } from "./shortcut";
 
 const press = (code: string, mods: Partial<{ metaKey: boolean; ctrlKey: boolean; altKey: boolean; shiftKey: boolean }> = {}) => ({ code, metaKey: false, ctrlKey: false, altKey: false, shiftKey: false, ...mods });
 
@@ -24,5 +24,20 @@ describe("the show/hide shortcut", () => {
     expect(shortcutLabel(DEFAULT_TOGGLE_SHORTCUT, "mac")).toBe("Cmd+Shift+Space");
     expect(shortcutLabel(DEFAULT_TOGGLE_SHORTCUT, "other")).toBe("Ctrl+Shift+Space");
     expect(shortcutLabel("Alt+B", "mac")).toBe("Option+B");
+  });
+});
+
+describe("the type-to-Bee shortcut", () => {
+  it("defaults to CommandOrControl+Alt+Space: Cmd+Option on a Mac, Ctrl+Alt elsewhere, and differs from show/hide", () => {
+    expect(DEFAULT_ASK_SHORTCUT).toBe("CommandOrControl+Alt+Space");
+    expect(DEFAULT_ASK_SHORTCUT).not.toBe(DEFAULT_TOGGLE_SHORTCUT);
+    expect(acceleratorSchema.safeParse(DEFAULT_ASK_SHORTCUT).success).toBe(true);
+    expect(shortcutLabel(DEFAULT_ASK_SHORTCUT, "mac")).toBe("Cmd+Option+Space");
+    expect(shortcutLabel(DEFAULT_ASK_SHORTCUT, "other")).toBe("Ctrl+Alt+Space");
+  });
+
+  it("records from a key press the same way on both platforms", () => {
+    expect(acceleratorFromKeys(press("Space", { metaKey: true, altKey: true }), "mac")).toBe(DEFAULT_ASK_SHORTCUT);
+    expect(acceleratorFromKeys(press("Space", { ctrlKey: true, altKey: true }), "other")).toBe(DEFAULT_ASK_SHORTCUT);
   });
 });

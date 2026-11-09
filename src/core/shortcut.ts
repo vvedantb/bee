@@ -1,9 +1,11 @@
 import { z } from "zod";
 
-// The show/hide shortcut (main/index.ts registers it). Electron accelerators: modifiers, then one key, joined by "+".
-// Settings → Show or hide Bee records a new one from a key press (renderer/src/ShortcutField.tsx). Pure: no Electron.
+// Bee's two global shortcuts (main/shortcuts.ts registers them): show or hide Bee, and type to Bee (show with focus, typing box
+// open). Electron accelerators: modifiers, then one key, joined by "+". CommandOrControl is Cmd on a Mac and Ctrl elsewhere, so
+// one setting works on both. Settings records a new one from a key press (renderer/src/ShortcutRow.tsx). Pure: no Electron.
 
 export const DEFAULT_TOGGLE_SHORTCUT = "CommandOrControl+Shift+Space";
+export const DEFAULT_ASK_SHORTCUT = "CommandOrControl+Alt+Space";
 
 const MODIFIERS = ["CommandOrControl", "Command", "Control", "Alt", "Shift", "Super"] as const;
 const KEY = /^(?:[A-Z0-9]|F(?:[1-9]|1\d|2[0-4])|Space|Tab|Backspace|Delete|Insert|Return|Up|Down|Left|Right|Home|End|PageUp|PageDown|Escape|Plus|[`\-=[\]\;',./])$/;

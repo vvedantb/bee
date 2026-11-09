@@ -1,7 +1,7 @@
 import { Input } from "@vvedantb/ui";
 
-// The typing box at the top of the island: a "Bee, …" request typed instead of said. The show/hide shortcut opens it (main/index.ts
-// toggleWindow). Enter sends, Esc closes. No store here, so the island screenshots (test/e2e/island-shots.ts) render the same markup.
+// The typing box at the top of the island: a "Bee, …" request typed instead of said. The type-to-Bee shortcut opens it (main/index.ts
+// askWindow). Enter sends, Esc closes. No store here, so the island screenshots (test/e2e/island-shots.ts) render the same markup.
 
 export function AskBox(props: { onSubmit: (text: string) => void; onClose: () => void }) {
   return (

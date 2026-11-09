@@ -566,6 +566,27 @@ describe("settings: the show/hide shortcut", () => {
   });
 });
 
+describe("settings: the type-to-Bee shortcut", () => {
+  it("defaults to Cmd/Ctrl+Alt+Space, is separate from show/hide, saves a new one, and reads a bad value as the default", () => {
+    const view = create().view();
+    expect(view.askShortcut).toBe("CommandOrControl+Alt+Space");
+    expect(view.toggleShortcut).toBe("CommandOrControl+Shift+Space");
+    const saved = create().save({ askShortcut: "Alt+B" });
+    expect(saved.askShortcut).toBe("Alt+B");
+    expect(saved.toggleShortcut).toBe("CommandOrControl+Shift+Space");
+    expect(create().view().askShortcut).toBe("Alt+B");
+    writeFileSync(join(dir, "settings.json"), JSON.stringify({ askShortcut: "B" }));
+    expect(create().view().askShortcut).toBe("CommandOrControl+Alt+Space");
+  });
+
+  it("keeps an existing show/hide choice when the file has no ask shortcut yet", () => {
+    writeFileSync(join(dir, "settings.json"), JSON.stringify({ toggleShortcut: "Alt+B" }));
+    const view = create().view();
+    expect(view.toggleShortcut).toBe("Alt+B");
+    expect(view.askShortcut).toBe("CommandOrControl+Alt+Space");
+  });
+});
+
 describe("settings: automatic meeting detection", () => {
   it("is on by default, for a new install and for a settings file from before the toggle", () => {
     expect(create().view().autoMeetingDetection).toBe(true);

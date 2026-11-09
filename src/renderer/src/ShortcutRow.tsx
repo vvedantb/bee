@@ -1,11 +1,11 @@
 import { Badge, Button } from "@vvedantb/ui";
 import { useState, type KeyboardEvent } from "react";
-import { DEFAULT_TOGGLE_SHORTCUT, acceleratorFromKeys, shortcutLabel } from "../../core/shortcut";
+import { acceleratorFromKeys, shortcutLabel } from "../../core/shortcut";
 
-// Settings → Show or hide Bee: the global shortcut (main/index.ts registers it), and Change to record a new one from the next key
+// Settings → Show or hide Bee, and Type to Bee: a global shortcut (main/shortcuts.ts registers it), and Change to record a new one from the next key
 // press. Main saves it only if Bee can hold it; otherwise Settings shows main's error and the old shortcut stays. No store here.
 
-export function ShortcutRow(props: { shortcut: string; active: boolean; platform: "mac" | "other"; onSave: (accelerator: string) => void }) {
+export function ShortcutRow(props: { title: string; shortcut: string; defaultShortcut: string; active: boolean; platform: "mac" | "other"; onSave: (accelerator: string) => void }) {
   const [recording, setRecording] = useState(false);
   const [hint, setHint] = useState<string | null>(null);
   const label = shortcutLabel(props.shortcut, props.platform);
@@ -31,7 +31,7 @@ export function ShortcutRow(props: { shortcut: string; active: boolean; platform
   return (
     <div className="flex flex-col gap-1">
       <div className="row actions">
-        <span className="flex-1">Show or hide Bee</span>
+        <span className="flex-1">{props.title}</span>
         <Badge variant="secondary" className="font-mono">
           {label}
         </Badge>
@@ -48,8 +48,8 @@ export function ShortcutRow(props: { shortcut: string; active: boolean; platform
         >
           {recording ? "Press the new shortcut…" : "Change"}
         </Button>
-        {props.shortcut !== DEFAULT_TOGGLE_SHORTCUT && !recording ? (
-          <Button type="button" variant="link" size="sm" onClick={() => props.onSave(DEFAULT_TOGGLE_SHORTCUT)}>
+        {props.shortcut !== props.defaultShortcut && !recording ? (
+          <Button type="button" variant="link" size="sm" onClick={() => props.onSave(props.defaultShortcut)}>
             Reset
           </Button>
         ) : null}

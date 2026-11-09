@@ -31,6 +31,7 @@ import { MicHint } from "./MicHint";
 import { SecretField } from "./SecretField";
 import { SettingRow } from "./SettingRow";
 import { KnownNamesField, PreferenceRows } from "./SettingsFields";
+import { DEFAULT_ASK_SHORTCUT, DEFAULT_TOGGLE_SHORTCUT } from "../../core/shortcut";
 import { ShortcutRow } from "./ShortcutRow";
 import { computerAccessMessage, screenRecordingMessage } from "./computer-access";
 import { INTERFACE_SCALES } from "../../core/interface-scale";
@@ -600,10 +601,20 @@ function SettingsTab({ state, settings }: { state: BeeState; settings: SettingsV
         </div>
       </form>
       <ShortcutRow
+        title="Show or hide Bee"
         shortcut={settings.toggleShortcut}
+        defaultShortcut={DEFAULT_TOGGLE_SHORTCUT}
         active={settings.toggleShortcutActive}
         platform={navigator.userAgent.includes("Mac") ? "mac" : "other"}
         onSave={(toggleShortcut) => void actions.saveSettings({ toggleShortcut })}
+      />
+      <ShortcutRow
+        title="Type to Bee"
+        shortcut={settings.askShortcut}
+        defaultShortcut={DEFAULT_ASK_SHORTCUT}
+        active={settings.askShortcutActive}
+        platform={navigator.userAgent.includes("Mac") ? "mac" : "other"}
+        onSave={(askShortcut) => void actions.saveSettings({ askShortcut })}
       />
       <PreferenceRows settings={settings} onSave={(update) => void actions.saveSettings(update)} />
       <ClaudeCodeStatus state={state} />
@@ -716,7 +727,7 @@ function useBriefings(): void {
   useEffect(() => window.bee.onBriefing((view) => actions.briefing(view)), []);
 }
 
-/** The show/hide shortcut's "open the typing box" from main, for as long as the app runs. */
+/** The type-to-Bee shortcut's "open the typing box" from main, for as long as the app runs. */
 function useAskOpen(): void {
   useEffect(() => window.bee.onAskOpen(() => actions.openAsk()), []);
 }
