@@ -182,6 +182,7 @@ const EMPTY_SESSION: MeetingSession = { lines: [], notesCited: [], tips: [] };
 const SESSION_LIST_MAX = 100;
 // Main throttles its own title and calendar reads, so this poll only asks for the cached view.
 const MEETING_TICK_MS = 5000;
+const AUTO_MEETING_TICK_MS = 2000;
 // How long a meeting notice stays as the pill's status text before the normal line returns.
 export const MEETING_NOTICE_MS = 5000;
 // Lines kept, island dismissed and no new line for this long: the meeting is saved without a click.
@@ -1246,7 +1247,7 @@ async function meetingTick(): Promise<void> {
     }
     const lines = state.session.lines.length;
     if (sessionMeetingId === null || state.summary.saving) return;
-    // The auto machine owns the call-leave stop (its grace is longer than the context debounce). With auto-confirm off, Bee saves
+    // The auto machine owns the call-leave stop; meeting context never saves on its own. With auto-confirm off, Bee saves
     // nothing by itself until the user has started a meeting.
     const enabled = state.settings?.autoMeetingDetection === true;
     const quiet = (enabled || state.meetingActive) && state.dismissed && !state.busy && lines > 0 && Date.now() - lastLineAt >= DISMISS_FINALIZE_MS;
@@ -2286,9 +2287,10 @@ void actions.refreshMcp();
 void actions.checkForUpdate();
 setInterval(() => {
   void meetingTick();
-  void autoMeetingTick();
   void teamsAudioTick();
 }, MEETING_TICK_MS);
+// Meeting start and stop are checked more often than meeting context, so Bee reacts within a few seconds.
+setInterval(() => void autoMeetingTick(), AUTO_MEETING_TICK_MS);
 // Live captions from the experimental meeting window reader. Test stubs of window.bee may leave it out.
 window.bee.meetingWindow?.onCaptions(({ lines }) => actions.captionLines(lines));
 // The user is back after a while away. Test stubs of window.bee may leave it out.

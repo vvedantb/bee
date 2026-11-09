@@ -5,11 +5,13 @@
 // main/meeting-signals.ts reads the signals and the renderer store applies the effects.
 
 /** A call must qualify this long without a break before Bee starts. Long enough to skip a window flicker, short enough to catch the first words. */
-export const CONFIRM_MS = 8_000;
+export const CONFIRM_MS = 3_000;
 /** A calendar event now makes a qualifying call confirm sooner. It never starts anything alone. */
-export const CONFIRM_CALENDAR_MS = 5_000;
-/** The end condition must hold this long before Bee stops and saves. Covers a mic drop, a muted call or a pop-out window closing. */
-export const END_GRACE_MS = 45_000;
+export const CONFIRM_CALENDAR_MS = 1_500;
+/** The end condition must hold this long before Bee stops and saves, while the meeting app is still open. Covers a mic drop, a muted call or a pop-out window closing. */
+export const END_GRACE_MS = 12_000;
+/** The meeting app itself has closed: the call is over, so Bee stops almost at once (one missed reading is not enough). */
+export const END_APP_CLOSED_MS = 3_000;
 /**
  * Safety net, not UI: a meeting that runs this long is stopped and saved, even if a window lingers or the OS still reports the
  * mic in use. The same meeting does not start again until the signal has been quiet for END_GRACE_MS or a different one begins.
@@ -82,6 +84,10 @@ export function stepAutoMeeting(
   const preJoin = !qualifying && signals.meetingAppPresent && signals.preJoinTitle === true;
   const present = qualifying || preJoin;
   const identity = signals.identity ?? null;
+  // How long the end must hold: short when the meeting app is gone, longer while it is still open.
+  const endGrace = signals.meetingAppPresent ? END_GRACE_MS : END_APP_CLOSED_MS;
+  // The meeting app holds the mic and shows an in-call title: certain enough to start at once.
+  const certain = qualifying && signals.inCallTitle && signals.micInUseByMeetingApp === true;
 
   // The user's answer comes first. A reject is a quiet no: the same meeting is not offered again.
   if (event === "reject" && (state.phase === "active" || state.phase === "prompted")) {
@@ -99,7 +105,7 @@ export function stepAutoMeeting(
     }
     if (qualifying) return { state: { ...state, startedAt, endSince: null, identity: identity ?? state.identity }, effect: "none" };
     const endSince = state.endSince ?? now;
-    if (now - endSince >= END_GRACE_MS) return { state: { ...IDLE_AUTO, quietSince: now }, effect: "stop" };
+    if (now - endSince >= endGrace) return { state: { ...IDLE_AUTO, quietSince: now }, effect: "stop" };
     return { state: { ...state, startedAt, endSince }, effect: "none" };
   }
 
@@ -109,14 +115,14 @@ export function stepAutoMeeting(
     if (qualifying && enabled) return { state: { ...IDLE_AUTO, phase: "active", startedAt: now, identity: identity ?? state.identity }, effect: "start" };
     if (present) return { state: { ...state, endSince: null, identity: identity ?? state.identity }, effect: "none" };
     const endSince = state.endSince ?? now;
-    if (now - endSince >= END_GRACE_MS) return { state: { ...IDLE_AUTO, quietSince: now }, effect: "dismiss" };
+    if (now - endSince >= endGrace) return { state: { ...IDLE_AUTO, quietSince: now }, effect: "dismiss" };
     return { state: { ...state, endSince }, effect: "none" };
   }
 
   // Ready (pre-join seen, auto-confirm on): leaving the join screen without a call for the full grace clears it.
   if (state.phase === "ready" && !present) {
     const endSince = state.endSince ?? now;
-    if (now - endSince >= END_GRACE_MS) return { state: { ...IDLE_AUTO, quietSince: now }, effect: "dismiss" };
+    if (now - endSince >= endGrace) return { state: { ...IDLE_AUTO, quietSince: now }, effect: "dismiss" };
     return { state: { ...state, endSince }, effect: "none" };
   }
 
@@ -144,7 +150,7 @@ export function stepAutoMeeting(
   }
   // A different meeting appearing mid-confirmation restarts the count.
   const qualSince = state.phase === "confirming" && state.qualSince !== null && sameMeeting(state.identity, identity) ? state.qualSince : now;
-  const confirmMs = signals.calendarBoost ? CONFIRM_CALENDAR_MS : CONFIRM_MS;
+  const confirmMs = certain ? 0 : signals.calendarBoost ? CONFIRM_CALENDAR_MS : CONFIRM_MS;
   if (now - qualSince >= confirmMs) {
     if (enabled) return { state: { ...IDLE_AUTO, phase: "active", startedAt: now, identity }, effect: "start" };
     return { state: { ...IDLE_AUTO, phase: "prompted", identity }, effect: "prompt" };

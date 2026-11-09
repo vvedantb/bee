@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AutoSignals } from "../../core/auto-meeting-detection";
-import { CONFIRM_MS, END_GRACE_MS, MAX_MEETING_MS } from "../../core/auto-meeting-detection";
+import { CONFIRM_MS, END_APP_CLOSED_MS, END_GRACE_MS, MAX_MEETING_MS } from "../../core/auto-meeting-detection";
+import { LEAVE_DEBOUNCE_MS } from "../../core/meeting-tracker";
 import type { MeetingSummaryRequest, PipelineResult, SettingsView } from "../../shared/ipc";
 import { notchLine } from "./notch";
 import type { startMicSession } from "./speech";
@@ -51,8 +52,12 @@ const SETTINGS: SettingsView = {
 const PRE_JOIN: AutoSignals = { meetingAppPresent: true, inCallTitle: false, preJoinTitle: true, titleClass: "prejoin", micInUseByMeetingApp: false, identity: null };
 // In the call with the mic muted: new Teams holds no mic, so only the compact in-call title says so.
 const MUTED_CALL: AutoSignals = { meetingAppPresent: true, inCallTitle: true, preJoinTitle: false, titleClass: "incall", micInUseByMeetingApp: false, identity: "weekly sync" };
+// Certain: the meeting app holds the mic and shows an in-call title, so the machine starts on the first tick.
 const CALL: AutoSignals = { meetingAppPresent: true, inCallTitle: true, micInUseByMeetingApp: true, identity: "weekly sync" };
+// The meeting app has closed: the short END_APP_CLOSED_MS applies.
 const NONE: AutoSignals = { meetingAppPresent: false, inCallTitle: false, micInUseByMeetingApp: false, identity: null };
+// The meeting app is still open with no call: the full END_GRACE_MS applies.
+const APP_OPEN: AutoSignals = { meetingAppPresent: true, inCallTitle: false, micInUseByMeetingApp: false, identity: null };
 const RESULT: PipelineResult = {
   notes: [],
   rankSource: "fallback",
@@ -129,7 +134,8 @@ async function loadStore(options: { enabled?: boolean; summary?: "ok" | "fail" |
   return { store, saved, overlay, shown, events, notices, all, run, say, set: (next: AutoSignals | "fail") => void (signals = next), setContext: (active: boolean) => void (callActive = active) };
 }
 
-const TICK = 5000;
+// store.ts AUTO_MEETING_TICK_MS (not exported): how often autoMeetingTick runs.
+const TICK = 2000;
 const CONFIRM_RUN = CONFIRM_MS + 3 * TICK;
 const END_RUN = END_GRACE_MS + 3 * TICK;
 
@@ -152,7 +158,8 @@ describe("store: automatic meeting detection", () => {
 
   it("starts the mic and meeting mode once the call holds, with a quiet notice", async () => {
     const { store, overlay, notices, run, set } = await loadStore();
-    set(CALL);
+    // Title only: the call must hold for the confirmation time.
+    set(MUTED_CALL);
     await run(TICK);
     expect(store.getBeeState().mic.on).toBe(false);
     await run(CONFIRM_RUN);
@@ -166,13 +173,23 @@ describe("store: automatic meeting detection", () => {
     expect(micSessions).toHaveLength(1);
   });
 
+  it("starts on the first tick when the meeting app holds the mic and shows an in-call title", async () => {
+    const { store, notices, run, set } = await loadStore();
+    set(CALL);
+    await run(TICK);
+    expect(store.getBeeState().mic.on).toBe(true);
+    expect(store.getBeeState().meetingActive).toBe(true);
+    expect(notices).toEqual(["Meeting in progress, Bee is active"]);
+  });
+
   it("saves the summary exactly once at the end, stops the mic and lifts meeting mode", async () => {
     const { store, saved, overlay, notices, run, say, set } = await loadStore();
     set(CALL);
     await run(CONFIRM_RUN);
     await say("We will ship the quote on Friday.");
-    set(NONE);
-    await run(END_GRACE_MS - 2 * TICK);
+    // The call ends but the meeting app stays open: the full grace applies.
+    set(APP_OPEN);
+    await run(END_GRACE_MS - TICK);
     // Inside the grace: nothing saved, mic still on.
     expect(saved).toHaveLength(0);
     expect(store.getBeeState().mic.on).toBe(true);
@@ -189,18 +206,35 @@ describe("store: automatic meeting detection", () => {
     expect(micSessions).toHaveLength(1);
   });
 
+  it("stops soon after the meeting app closes, once", async () => {
+    const { store, saved, run, say, set } = await loadStore();
+    set(CALL);
+    await run(CONFIRM_RUN);
+    await say("We will ship the quote on Friday.");
+    set(NONE);
+    await run(TICK);
+    // One missed reading is not enough.
+    expect(saved).toHaveLength(0);
+    expect(store.getBeeState().mic.on).toBe(true);
+    await run(END_APP_CLOSED_MS + TICK);
+    expect(saved).toHaveLength(1);
+    expect(store.getBeeState().mic.on).toBe(false);
+    await run(120_000);
+    expect(saved).toHaveLength(1);
+  });
+
   it("leaves the save to the auto machine when the meeting context goes inactive", async () => {
     const { store, saved, run, say, set, setContext } = await loadStore();
     set(CALL);
     setContext(true);
     await run(CONFIRM_RUN);
     await say("We will ship the quote on Friday.");
-    set(NONE);
+    // The context goes inactive while the signals still show the call: past the context leave debounce, nothing is saved.
     setContext(false);
-    // ~20 s past the context leave debounce (15 s): the old path would have saved by now; the 45 s grace has not run out.
-    await run(20_000);
+    await run(LEAVE_DEBOUNCE_MS + 2 * TICK);
     expect(saved).toHaveLength(0);
     expect(store.getBeeState().mic.on).toBe(true);
+    set(NONE);
     await run(END_RUN);
     expect(saved).toHaveLength(1);
     expect(store.getBeeState().mic.on).toBe(false);
@@ -213,8 +247,13 @@ describe("store: automatic meeting detection", () => {
     set(CALL);
     await run(CONFIRM_RUN);
     await say("Agenda first.");
+    // The meeting app vanishes for one reading, then the call shows no signal for a while with the app open.
     set(NONE);
-    await run(2 * TICK);
+    await run(TICK);
+    set(CALL);
+    await run(TICK);
+    set(APP_OPEN);
+    await run(END_GRACE_MS - 2 * TICK);
     set(CALL);
     await run(END_RUN * 2);
     expect(saved).toHaveLength(0);
@@ -236,12 +275,12 @@ describe("store: automatic meeting detection", () => {
     set(CALL);
     await run(CONFIRM_RUN);
     await say("Agenda first.");
-    // The call flaps: gone, back, gone, back, all inside the grace.
-    set(NONE);
+    // The call flaps with the meeting app open: gone, back, gone, back, all inside the grace.
+    set(APP_OPEN);
     await run(2 * TICK);
     set(CALL);
     await run(2 * TICK);
-    set(NONE);
+    set(APP_OPEN);
     await run(2 * TICK);
     set(CALL);
     await run(END_RUN);
@@ -390,7 +429,7 @@ describe("store: automatic meeting detection", () => {
 
     it("prompts after the confirm time and records nothing before the click", async () => {
       const { store, saved, overlay, all, run, set } = await loadStore(OFF);
-      set(CALL);
+      set(MUTED_CALL);
       await run(TICK);
       expect(all).toEqual([]);
       await run(CONFIRM_RUN);
@@ -603,9 +642,11 @@ describe("store: automatic meeting detection", () => {
   describe("per-tick debug log", () => {
     it("logs one auto-tick line per tick with booleans and enums only", async () => {
       const { events, run, set } = await loadStore({ enabled: false });
+      // Ticks before the signal changes (loadStore runs past the first one) are not part of this check.
+      const before = events.length;
       set({ ...PRE_JOIN, identity: "secret meeting name" });
       await run(TICK * 3);
-      const ticks = events.filter((event) => event.event === "auto-tick");
+      const ticks = events.slice(before).filter((event) => event.event === "auto-tick");
       expect(ticks.length).toBeGreaterThanOrEqual(3);
       expect(ticks.every((event) => event.level === "debug" && event.category === "meeting")).toBe(true);
       expect(ticks[0]?.data).toMatchObject({ meetingAppPresent: true, titleClass: "prejoin", micInUseByMeetingApp: false, qualifies: false, enabled: false, effect: "prompt", phase: "prompted", promptShown: true, suppressed: false, why: "shown" });

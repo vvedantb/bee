@@ -18,7 +18,7 @@ import { micInUseKeys, parseTasklistCsv } from "../core/teams-heuristics";
 
 const MIC_KEY = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\CapabilityAccessManager\\ConsentStore\\microphone";
 // tasklist /v is slow (it asks every window for its title), so a reading is reused for this long.
-const MIN_INTERVAL_MS = 4000;
+const MIN_INTERVAL_MS = 1500;
 const COMMAND_TIMEOUT_MS = 4000;
 
 export type MeetingSignalsProbe = { read: () => Promise<AutoSignals> };
