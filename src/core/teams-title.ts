@@ -1,4 +1,4 @@
-import { TEAMS_IMAGES, isMeetingTitle } from "./teams-heuristics";
+import { TEAMS_IMAGES, isMeetingTitle, isTeamsPreJoinTitle } from "./teams-heuristics";
 
 // The meeting NAME from Teams window titles, for new Teams (ms-teams.exe) and classic Teams (teams.exe). Pure text work:
 // the readers that list window titles (PowerShell on Windows, System Events on macOS) live in main/local-readers.ts.
@@ -49,6 +49,26 @@ export function parseTeamsTitle(title: string): TeamsTitle | null {
   const view = parts.slice(1).some((part) => CHAT_TABS.has(part.toLowerCase())) ? "chat" : "meeting";
   const person = PERSON.exec(name)?.[1]?.trim();
   return { name, view, generic: GENERIC_NAME.test(name), ...(person ? { person } : {}) };
+}
+
+// Main-window titles that are not a call even in the compact form: "Home | Microsoft Teams".
+const NOT_A_CALL_NAME = new Set(["home", "settings", "search", "sign in", "loading", "welcome"]);
+const UNREAD = /^\(\d+\)\s*/;
+
+/**
+ * A Teams window title that reads like a live call. Meeting, call and huddle titles, plus the compact form new Teams uses in a
+ * call: just the meeting name, "Weekly Sync | Microsoft Teams". A compact title is one name before the app name. Tab-first titles
+ * ("Chat | Alice | ...", "Calendar | ..."), channel windows (two parts), chat views, the bare app title, pre-join and "N/A" are not.
+ */
+export function isTeamsInCallTitle(title: string): boolean {
+  if (isTeamsPreJoinTitle(title)) return false;
+  if (isMeetingTitle(title)) return true;
+  const cleaned = title.replace(/[‎‏]/g, "").trim().replace(UNREAD, "");
+  if (!APP_SUFFIX.test(cleaned)) return false;
+  const parts = cleaned.replace(APP_SUFFIX, "").split("|").map((part) => part.trim()).filter((part) => part.length > 0);
+  if (parts.length !== 1) return false;
+  const parsed = parseTeamsTitle(cleaned);
+  return parsed !== null && parsed.view === "meeting" && !NOT_A_CALL_NAME.has(parsed.name.toLowerCase());
 }
 
 /** A Teams window whose full title reads like a call, by the same test as the in-call detector. */

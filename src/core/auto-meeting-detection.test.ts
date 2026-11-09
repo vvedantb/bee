@@ -302,3 +302,81 @@ describe("setting changes", () => {
     expect(out.effects).toEqual([{ at: CONFIRM_S + 51 + GRACE_S, effect: "stop" }]);
   });
 });
+
+describe("pre-join (new Teams lobby)", () => {
+  const PRE: AutoSignals = { meetingAppPresent: true, inCallTitle: false, preJoinTitle: true, micInUseByMeetingApp: false, identity: null };
+  // In the call, mic muted: the in-call title alone qualifies.
+  const MUTED_CALL: AutoSignals = { meetingAppPresent: true, inCallTitle: true, preJoinTitle: false, micInUseByMeetingApp: false, identity: "weekly sync" };
+  const off = holdOff;
+
+  it("pre-join alone does not qualify", () => {
+    expect(qualifies(PRE)).toBe(false);
+  });
+
+  it("auto on: one ready effect at once, and nothing records while only pre-join shows", () => {
+    const { effects, state } = run(hold(PRE, 0, 600));
+    expect(effects).toEqual([{ at: 0, effect: "ready" }]);
+    expect(state.phase).toBe("ready");
+    expect(state.startedAt).toBeNull();
+  });
+
+  it("auto on: starts only once the in-call title holds for the confirm time (muted, no mic)", () => {
+    const { effects } = run([...hold(PRE, 0, 30), ...hold(MUTED_CALL, 31, 31 + CONFIRM_S + 2)]);
+    expect(effects).toEqual([{ at: 0, effect: "ready" }, { at: 31 + CONFIRM_S, effect: "start" }]);
+  });
+
+  it("auto on: the mic alone also confirms the call", () => {
+    const micCall: AutoSignals = { meetingAppPresent: true, inCallTitle: false, preJoinTitle: false, micInUseByMeetingApp: true, identity: null };
+    const { effects } = run([...hold(PRE, 0, 5), ...hold(micCall, 6, 6 + CONFIRM_S + 1)]);
+    expect(effects.map((entry) => entry.effect)).toEqual(["ready", "start"]);
+  });
+
+  it("auto on: leaving the lobby without joining clears it after the grace, once", () => {
+    const { effects, state } = run([...hold(PRE, 0, 10), ...hold(NONE, 11, 11 + GRACE_S + 2)]);
+    expect(effects).toEqual([{ at: 0, effect: "ready" }, { at: 11 + GRACE_S, effect: "dismiss" }]);
+    expect(state.phase).toBe("idle");
+  });
+
+  it("auto on: a short title flicker in the lobby does not show Bee a second time", () => {
+    const { effects } = run([...hold(PRE, 0, 5), ...hold(NONE, 6, 10), ...hold(PRE, 11, 20)]);
+    expect(effects).toEqual([{ at: 0, effect: "ready" }]);
+  });
+
+  it("auto off: prompts at once on pre-join, once, and starts nothing", () => {
+    const { effects, state } = run(off(PRE, 0, 600));
+    expect(effects).toEqual([{ at: 0, effect: "prompt" }]);
+    expect(state.phase).toBe("prompted");
+    expect(state.startedAt).toBeNull();
+  });
+
+  it("auto off: the call confirming after pre-join does not prompt again; Start still starts it", () => {
+    const { effects, state } = run([...off(PRE, 0, 10), ...off(MUTED_CALL, 11, 60)]);
+    expect(effects).toEqual([{ at: 0, effect: "prompt" }]);
+    expect(state.phase).toBe("prompted");
+    const accepted = run([[61, MUTED_CALL, { enabled: false, event: "accept" }]], state);
+    expect(accepted.effects).toEqual([{ at: 61, effect: "start" }]);
+    expect(accepted.state.phase).toBe("active");
+  });
+
+  it("auto off: a muted call with no pre-join seen prompts after the confirm time", () => {
+    expect(run(off(MUTED_CALL, 0, CONFIRM_S + 2)).effects).toEqual([{ at: CONFIRM_S, effect: "prompt" }]);
+  });
+
+  it("auto off: turning auto on while the lobby prompt waits does not start before the call", () => {
+    const prompted = run(off(PRE, 0, 5)).state;
+    expect(run(hold(PRE, 6, 60), prompted).effects).toEqual([]);
+    expect(run(hold(MUTED_CALL, 6, 7), prompted).effects).toEqual([{ at: 6, effect: "start" }]);
+  });
+
+  it("auto off: a rejected lobby prompt is not offered again for the same join", () => {
+    const prompted = run(off(PRE, 0, 5)).state;
+    const rejected = run([[6, PRE, { enabled: false, event: "reject" }]], prompted);
+    expect(rejected.effects).toEqual([{ at: 6, effect: "dismiss" }]);
+    expect(run([...off(PRE, 7, 40), ...off(MUTED_CALL, 41, 80)], rejected.state).effects).toEqual([]);
+  });
+
+  it("chat-only Teams never shows or prompts", () => {
+    expect(run(holdOff(CHAT, 0, 300)).effects).toEqual([]);
+    expect(run(hold(CHAT, 0, 300)).effects).toEqual([]);
+  });
+});
