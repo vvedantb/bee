@@ -74,7 +74,7 @@ renderer store: meeting tick (5 s) → autoMeetingTick → window.bee.meeting.si
     setting off → prompt: pill "Meeting detected" with **Start meeting**; phase `prompted`, nothing recorded
   Start click (event accept) → start; the pill says "Meeting in progress" and the button becomes **Stop meeting**
   Stop click (event reject)  → stop and save once; the same meeting is suppressed (no re-prompt)
-  prompt ignored and call over for 45 s → dismiss: button cleared, nothing saved
+  prompt ignored and call over for 12 s (3 s once the app closed) → dismiss: button cleared, nothing saved
   stop  (end condition holds 12 s, or 3 s once the meeting app has closed) → endMeeting({ auto, stopMic }) → save → end notice once the save has finished
 ```
 
@@ -482,7 +482,7 @@ Defined in `src/core/summary.ts`. The system prompt asks for exactly three `##` 
 | Computer use: thin window / shallow window | `core/computer-tools.ts` | under 4 refs, or partial under 20 / under 2 app controls above a cut |
 | Desktop actions: list-apps and focus-window / launch / execFile timeouts | `main/desktop-actions.ts` | 6 s / 8 s / 10 s |
 | Maximum meeting length (auto stop and save) | `core/auto-meeting-detection.ts` | 4 h |
-| Meeting confirm / end grace | `core/auto-meeting-detection.ts` | 8 s (5 s with a calendar event) / 45 s |
+| Meeting confirm / end grace | `core/auto-meeting-detection.ts` | 3 s (1.5 s with a calendar event; 0 s with mic + in-call title) / 12 s (3 s once the app closed) |
 | MCP connect and list timeout / call timeout | `core/mcp.ts` | 10 s / 15 s |
 | vmem search: connect (background) / call per source / whole enrichment | `core/vmem-history.ts`, `core/link-rank.ts` | 5 s / 1 s / 2 s |
 | MCP limits: servers / tools per server / result text | `shared/ipc.ts`, `core/mcp.ts` | 20 / 100 / 8000 characters |
