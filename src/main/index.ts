@@ -8,8 +8,9 @@ import { z } from "zod";
 import { fileURLToPath } from "node:url";
 import { RENDERER_HOST, RENDERER_SCHEME, RENDERER_URL } from "../shared/clerk";
 import { shortcutLabel } from "../core/shortcut";
-import { displayMatching, placeInWorkArea, restoreOverlayBounds, scaleSize, type DisplayInfo } from "../core/interface-scale";
-import { IPC, TEAMS_AUDIO_LINE_MAX, settingsUpdateSchema, windowSizeSchema, type MeetingWindowCaptions, type TeamsAudioEnded, type TeamsAudioLines, type UserReturned, type WindowSize } from "../shared/ipc";
+import { displayMatching, restoreOverlayBounds, scaleSize, type DisplayInfo } from "../core/interface-scale";
+import { OVERLAY_SIZES, PILL_MAX, fullWidthX, overlaySize, resizeAboutCentre } from "../core/overlay-size";
+import { IPC, TEAMS_AUDIO_LINE_MAX, settingsUpdateSchema, windowRequestSchema, type MeetingWindowCaptions, type TeamsAudioEnded, type TeamsAudioLines, type UserReturned, type WindowSize } from "../shared/ipc";
 import { debugLog, errorData, msSince, setDebugSink, teeConsole } from "../core/debug-log";
 import { NO_GATEWAY_KEY, STT_MODEL, createBeeGateway } from "../core/gateway";
 import { createAwayTracker } from "../core/recap";
@@ -56,13 +57,6 @@ import { registerTeamsAudioIpc } from "./teams-audio-ipc";
 import { createTeamsDetector, withMeetingWindow } from "./teams-detector";
 import { createUpdater } from "./updater";
 
-// One width in every state, so expanding only grows the height and the pill row never moves sideways.
-const SIZES: Record<WindowSize, { width: number; height: number }> = {
-  collapsed: { width: 480, height: 64 },
-  // Notch plus the island body (tips and sources).
-  response: { width: 480, height: 360 },
-  expanded: { width: 480, height: 640 },
-};
 const TOP_MARGIN = 8;
 const isMac = process.platform === "darwin";
 // System Settings → Privacy & Security → Accessibility, for the experimental meeting window reader and computer use.
@@ -75,6 +69,8 @@ const outDir = fileURLToPath(new URL(".", import.meta.url));
 let win: BrowserWindow | null = null;
 // The current window mode, so a zoom change re-applies its bounds, not the collapsed ones.
 let windowSize: WindowSize = "collapsed";
+// The compact pill's width in CSS px (core/overlay-size.ts), sent by the renderer; full until it has measured the pill.
+let pillWidth = PILL_MAX;
 let interfaceScale = 1;
 let tray: Tray | null = null;
 // Set at start-up, before the first window.
@@ -84,18 +80,25 @@ function displayInfos(): DisplayInfo[] {
   return screen.getAllDisplays().map(({ id, bounds, workArea, scaleFactor }) => ({ id, bounds, workArea, scaleFactor }));
 }
 
+// Saved as the full-width window's spot with the same centre, so start-up (full width until the pill is measured) lands there.
 function rememberPosition(window: BrowserWindow): void {
   const bounds = window.getBounds();
   const display = displayMatching(bounds, displayInfos());
-  if (display) settings.saveOverlayPosition({ x: bounds.x, y: bounds.y, displayId: display.id });
+  const x = fullWidthX(bounds, scaleSize(OVERLAY_SIZES.collapsed, interfaceScale).width);
+  if (display) settings.saveOverlayPosition({ x, y: bounds.y, displayId: display.id });
 }
 
-// Resize in place on the display the window is on; shift only to stay inside that work area.
+// The current mode's size at the current zoom: the compact pill when collapsed, full width otherwise.
+function currentSize(): { width: number; height: number } {
+  return scaleSize(overlaySize(windowSize, pillWidth), interfaceScale);
+}
+
+// Resize in place about the window's centre on the display it is on; shift only to stay inside that work area.
 function resizeOverlay(window: BrowserWindow, size: { width: number; height: number }): void {
   const current = window.getBounds();
   const display = displayMatching(current, displayInfos()) ?? displayInfos().find((item) => item.id === screen.getPrimaryDisplay().id);
   if (!display) return;
-  const bounds = placeInWorkArea({ size, current, area: display.workArea, margin: TOP_MARGIN });
+  const bounds = resizeAboutCentre({ size, current, area: display.workArea, margin: TOP_MARGIN });
   window.setBounds(bounds);
   debugLog.debug("window", "bounds", { mode: windowSize, scale: interfaceScale, bounds, displayId: display.id });
   rememberPosition(window);
@@ -105,7 +108,7 @@ function resizeOverlay(window: BrowserWindow, size: { width: number; height: num
 function applyInterfaceScale(scale: number): void {
   interfaceScale = scale;
   for (const window of BrowserWindow.getAllWindows()) window.webContents.setZoomFactor(scale);
-  if (win) resizeOverlay(win, scaleSize(SIZES[windowSize], scale));
+  if (win) resizeOverlay(win, currentSize());
 }
 
 // An automatic meeting session turns meeting mode on for its length without saving it. Main only.
@@ -121,10 +124,11 @@ function applyMeetingMode(window: BrowserWindow, meetingMode: boolean): void {
 function createWindow(meetingMode: boolean, scale: number): BrowserWindow {
   interfaceScale = scale;
   windowSize = "collapsed";
+  pillWidth = PILL_MAX;
   const window = new BrowserWindow({
     ...restoreOverlayBounds({
       saved: settings.overlayPosition(),
-      size: scaleSize(SIZES.collapsed, scale),
+      size: scaleSize(OVERLAY_SIZES.collapsed, scale),
       displays: displayInfos(),
       primaryId: screen.getPrimaryDisplay().id,
       margin: TOP_MARGIN,
@@ -585,9 +589,9 @@ if (clerk.isPrimaryInstance) {
     registerTeamsAudioIpc({ status: teamsAudioStatus, enabled: settings.teamsAudioFallback, capture: teamsAudioCapture, isMac });
 
     ipcMain.handle(IPC.setWindowSize, (_event, payload) => {
-      windowSize = windowSizeSchema.parse(payload);
-      debugLog.debug("window", "size", { mode: windowSize });
-      if (win) resizeOverlay(win, scaleSize(SIZES[windowSize], interfaceScale));
+      ({ size: windowSize, width: pillWidth } = windowRequestSchema.parse(payload));
+      debugLog.debug("window", "size", { mode: windowSize, pill: pillWidth });
+      if (win) resizeOverlay(win, currentSize());
     });
 
     ipcMain.handle(IPC.openNotesFolder, () => shell.openPath(notesDir));

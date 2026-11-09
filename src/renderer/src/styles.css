@@ -100,17 +100,23 @@ body {
 
 /* The pill and, when an answer is open, the body under it: one surface that grows downward. */
 
+/* Collapsed, App.tsx sets the width to the compact pill (core/overlay-size.ts) and it stays centred; open, it is full width.
+   The width eases like the body's spring (store.ts PILL_MORPH_MS); the window is never narrower than the island. */
 .island {
   display: flex;
   flex-direction: column;
   flex: none;
-  align-self: stretch;
+  align-self: center;
+  width: 100%;
+  max-width: 100%;
   min-height: 0;
   max-height: 100%;
   border-radius: 26px;
   background: var(--surface);
   overflow: hidden;
-  transition: border-radius 360ms var(--spring);
+  transition:
+    border-radius 360ms var(--spring),
+    width 380ms var(--spring);
 }
 
 .island.open {
@@ -472,9 +478,17 @@ body {
   }
 }
 
+/* Fills the free space in a wide pill, pushing the buttons right; its natural width is the text, capped so a long status
+   ends in "…" instead of widening the compact pill (pill-measure.ts). */
 .notch-status {
   animation: fade-in var(--medium) var(--ease-out);
-  flex: 1;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.notch-status-text {
+  display: block;
+  max-width: 240px;
   min-width: 0;
   overflow: hidden;
   white-space: nowrap;

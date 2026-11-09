@@ -14,6 +14,7 @@ import { MEETING_READY_NOTICE, MEETING_START_NOTICE, MEETING_START_NO_MIC_NOTICE
 import { NOTCH_BUTTON, notchLine } from "../../src/renderer/src/notch";
 import { NotchStatus } from "../../src/renderer/src/NotchStatus";
 import "../../src/renderer/src/styles.css";
+import { compactPill } from "./compact-pill";
 
 const ICON = { size: 16, stroke: 1.75 };
 
@@ -83,14 +84,16 @@ window.addEventListener("DOMContentLoaded", () => {
   // A hidden Electron window may not advance CSS transitions; show the settled end state, as the island shots do.
   document.head.insertAdjacentHTML("beforeend", "<style>*, *::before, *::after { animation: none !important; transition: none !important; }</style>");
   // Time for the first paint, so the capture has a frame.
-  setTimeout(report, 300);
+  setTimeout(() => void report(), 300);
 });
 
-function report(): void {
-  const status = document.querySelector(".notch-status");
+async function report(): Promise<void> {
+  // The collapsed pill hugs its content (compact-pill.ts), as the app's window does.
+  const compact = await compactPill();
+  const status = document.querySelector(".notch-status-text");
   const notchBox = document.querySelector(".notch")?.getBoundingClientRect();
-  // Every control stays inside the 480px pill, and the status text truncates rather than pushing them out.
+  // Every control stays inside the compact pill, and the status text truncates rather than pushing them out.
   const fits = [...document.querySelectorAll(".notch > *")].every((child) => notchBox !== undefined && child.getBoundingClientRect().right <= notchBox.right + 0.5);
   const button = [...document.querySelectorAll(".notch button")].map((node) => node.textContent?.trim() ?? "").find((label) => label.endsWith("meeting")) ?? null;
-  console.log(`E2E_RESULT ${JSON.stringify({ ok: true, shot, notch: status?.textContent ?? null, button, fits, truncated: status ? status.scrollWidth > status.clientWidth : false })}`);
+  console.log(`E2E_RESULT ${JSON.stringify({ ok: true, shot, notch: status?.textContent ?? null, button, fits, truncated: status ? status.scrollWidth > status.clientWidth : false, compact })}`);
 }

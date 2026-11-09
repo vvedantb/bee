@@ -23,7 +23,7 @@ describe("NotchStatus", () => {
     const open = render("Listening…", true);
     expect(closed.type).toBe(Button);
     expect(open.type).toBe(closed.type);
-    expect(open.props.children).toBe(closed.props.children);
+    expect(open.props.children).toStrictEqual(closed.props.children);
   });
 
   it("is clickable with the panel closed and inert with it open", () => {

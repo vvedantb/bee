@@ -28,6 +28,7 @@ import { MeetingButton } from "./MeetingButton";
 import { MemorySection } from "./MemorySection";
 import { NotchStatus } from "./NotchStatus";
 import { PANEL_TABS } from "./panel-tabs";
+import { watchNaturalWidth } from "./pill-measure";
 import { MicHint } from "./MicHint";
 import { SecretField } from "./SecretField";
 import { SettingRow } from "./SettingRow";
@@ -184,7 +185,11 @@ function openStatus(click: StatusClick): void {
   else if (click) void actions.openTab(click);
 }
 
-// The pill, and under it the response body: one dark surface that grows downward when an answer arrives.
+// The pill's header reports its natural width to the store, which sizes the compact pill and the window (applyWindowSize).
+const watchPill = (header: HTMLElement) => watchNaturalWidth(header, (natural) => actions.measurePill(natural));
+
+// The pill, and under it the response body: one dark surface that grows downward when an answer arrives. Collapsed, it hugs
+// its header like a Dynamic Island; its width eases between that and full width (styles.css .island).
 function Island({ state }: { state: BeeState }) {
   const { isSignedIn } = useAuth();
   const open = state.expanded && !state.collapsing;
@@ -206,10 +211,11 @@ function Island({ state }: { state: BeeState }) {
   return (
     <div
       className={["island", state.busy && "thinking", showBody && "open"].filter(Boolean).join(" ")}
+      style={{ width: state.pillWidth }}
       onPointerEnter={() => actions.setIslandHover(true)}
       onPointerLeave={() => actions.setIslandHover(false)}
     >
-      <header className="notch">
+      <header className="notch" ref={watchPill}>
         <BeeLogo size={NOTCH_LOGO_PX} state={logoState(state)} level={state.mic.level} />
         {/* Keyed so each new status fades in. One component either way, so the panel opening or closing does not remount it. */}
         <NotchStatus key={status} status={status} click={click} error={Boolean(state.mic.error)} onOpen={openStatus} />

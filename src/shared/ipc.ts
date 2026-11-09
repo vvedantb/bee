@@ -3,6 +3,7 @@ import { z } from "zod";
 import { DEBUG_LEVELS } from "../core/debug-log";
 import { INTERFACE_SCALES } from "../core/interface-scale";
 import { MOTION_PREFERENCES } from "../core/motion-preference";
+import { WINDOW_SIZES } from "../core/overlay-size";
 import { TEAMS_AUDIO_FAILURES } from "../core/teams-audio-protocol";
 import { MCP_ICON_MAX_CHARS } from "./mcp-icons";
 
@@ -78,8 +79,11 @@ export const IPC = {
 };
 
 // Collapsed notch, notch plus the island response, or the full panel.
-export const windowSizeSchema = z.enum(["collapsed", "response", "expanded"]);
+export const windowSizeSchema = z.enum(WINDOW_SIZES);
 export type WindowSize = z.infer<typeof windowSizeSchema>;
+// The mode and the compact pill's width in CSS px (core/overlay-size.ts); main clamps the width and uses it only when collapsed.
+export const windowRequestSchema = z.object({ size: windowSizeSchema, width: z.number().int().nonnegative() });
+export type WindowRequest = z.infer<typeof windowRequestSchema>;
 
 // The allowed Interface size factors (core/interface-scale.ts); a save with any other number is rejected.
 const interfaceScaleSchema = z.number().refine((value) => (INTERFACE_SCALES as readonly number[]).includes(value), { message: "Unsupported interface size" });

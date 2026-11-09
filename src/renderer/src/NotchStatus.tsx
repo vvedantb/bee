@@ -4,6 +4,7 @@ import type { StatusClick } from "./island-click";
 /**
  * The pill's status text. Always the same Button, clickable or not, so opening or closing the panel never remounts it and its
  * fade-in only plays when the text changes (the caller keys it by status). With no click it is inert and lets the notch drag.
+ * The text sits in its own span so it truncates with an ellipsis (a button's bare text cannot) at the pill's status cap.
  */
 export function NotchStatus(props: { status: string; click: StatusClick; error: boolean; onOpen: (click: NonNullable<StatusClick>) => void }) {
   const { status, click, error, onOpen } = props;
@@ -19,7 +20,7 @@ export function NotchStatus(props: { status: string; click: StatusClick; error: 
       aria-disabled={click ? undefined : true}
       onClick={click ? () => onOpen(click) : undefined}
     >
-      {status}
+      <span className="notch-status-text">{status}</span>
     </Button>
   );
 }

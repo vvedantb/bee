@@ -18,9 +18,11 @@ import { displayTip, islandClick } from "../../src/renderer/src/island";
 import { NOTCH_LOGO_PX } from "../../src/renderer/src/logo";
 import { MicHint } from "../../src/renderer/src/MicHint";
 import { NOTCH_BUTTON, NOTCH_UPDATE_BUTTON } from "../../src/renderer/src/notch";
+import { NotchStatus } from "../../src/renderer/src/NotchStatus";
 import type { MeetingCard, UpdateState } from "../../src/renderer/src/store";
 import { updateButton } from "../../src/renderer/src/update";
 import "../../src/renderer/src/styles.css";
+import { compactPill, islandWidth } from "./compact-pill";
 
 const ICON = { size: 16, stroke: 1.75 };
 
@@ -40,21 +42,9 @@ function updateButtonMarkup(): string {
   );
 }
 
-// App.tsx Island's status when it is an answer folded to one line: a text button that opens it in full in the island.
-function statusButton(status: string): string {
-  return renderToStaticMarkup(
-    createElement(
-      Button,
-      {
-        type: "button",
-        variant: "ghost",
-        title: status,
-        className:
-          "notch-status h-auto justify-start rounded-none p-0 text-[13px] font-normal text-foreground hover:bg-transparent hover:text-foreground hover:underline",
-      },
-      status,
-    ),
-  );
+// App.tsx Island's status (NotchStatus): a text button that opens a folded answer in full in the island, inert otherwise.
+function statusButton(status: string, folded: boolean): string {
+  return renderToStaticMarkup(createElement(NotchStatus, { status, click: folded ? "full-text" : null, error: false, onOpen: () => undefined }));
 }
 
 // App.tsx Island's mic button. On: the accent button with the level meter (store.ts: the frame's RMS × 4, capped at 1).
@@ -83,7 +73,7 @@ function pill(status: string, busy: boolean, { update = false, folded = false, m
   const logo = mic === null ? { size: NOTCH_LOGO_PX, busy } : { size: NOTCH_LOGO_PX, state: "listening" as const, level: mic };
   return `<header class="notch">
     ${renderToStaticMarkup(createElement(BeeLogo, logo))}
-    ${folded ? statusButton(status) : `<span class="notch-status">${status}</span>`}
+    ${statusButton(status, folded)}
     ${update ? updateButtonMarkup() : ""}${renderToStaticMarkup(micButton(mic))}${renderToStaticMarkup(chevron)}
   </header>`;
 }
@@ -184,6 +174,8 @@ const shot = new URLSearchParams(location.search).get("shot") ?? "collapsed";
 const states: Record<string, string> = {
   collapsed: `<div class="island">${pill("Bee is ready", false)}</div>`,
   thinking: `<div class="island thinking">${pill("The AI is searching the web…", true)}</div>`,
+  // A status longer than the pill's cap ends in "…"; the pill stays compact.
+  "long-status": `<div class="island">${pill("Reading the Acme renewal thread, the pricing note and last week's call summary…", false)}</div>`,
   expanded: `<div class="island open">${pill("Tips", false)}${islandBody(tipsContent())}</div>`,
   "meeting-card": `<div class="island open">${pill(CARDS.meeting.label, false)}${islandBody(card("meeting"))}</div>`,
   "briefing-card": `<div class="island open">${pill(CARDS.briefing.label, false)}${islandBody(card("briefing"))}</div>`,
@@ -236,10 +228,12 @@ window.addEventListener("DOMContentLoaded", () => {
     setTimeout(() => scroller.scrollTo({ top: (scroller.scrollHeight - scroller.clientHeight) * 0.4, behavior: "instant" }), 800);
   }
   const logo = document.querySelector(".notch .bee-logo");
-  const buttons = [...document.querySelectorAll(".notch button")];
+  const buttons = [...document.querySelectorAll(".notch button:not(.notch-status)")];
   const notch = logo ? { logo: box(logo), buttons: buttons.map(box) } : undefined;
   // Let the open animation and the scroll settle before the harness captures.
-  setTimeout(() => {
+  setTimeout(async () => {
+    // A collapsed island hugs its header (compact-pill.ts); an open one stays full width.
+    const compact = await compactPill();
     const scroll = scroller
       ? { scrollTop: scroller.scrollTop, scrollHeight: scroller.scrollHeight, clientHeight: scroller.clientHeight, scrollWidth: scroller.scrollWidth, clientWidth: scroller.clientWidth }
       : undefined;
@@ -247,6 +241,6 @@ window.addEventListener("DOMContentLoaded", () => {
     // The hint line, and whether anything on the island is styled as an error.
     const hint = document.querySelector(".island-hint")?.textContent ?? null;
     const error = document.querySelector(".island .island-error, .island .error-text") !== null;
-    console.log(`E2E_RESULT ${JSON.stringify({ ok: true, shot, notch, scroll, clicked, open, tips, hint, error })}`);
+    console.log(`E2E_RESULT ${JSON.stringify({ ok: true, shot, notch, scroll, clicked, open, tips, hint, error, compact, island: islandWidth() })}`);
   }, 1200);
 });
