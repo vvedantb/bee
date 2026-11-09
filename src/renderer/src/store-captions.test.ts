@@ -46,6 +46,8 @@ const SETTINGS: SettingsView = {
   teamsAudioFallbackEnabled: true,
   toggleShortcut: "CommandOrControl+Shift+Space",
   toggleShortcutActive: true,
+  askShortcut: "CommandOrControl+Alt+Space",
+  askShortcutActive: true,
 };
 
 async function loadStore(settings: Partial<SettingsView> = {}) {

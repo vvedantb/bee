@@ -56,6 +56,8 @@ const SETTINGS: SettingsView = {
   teamsAudioFallbackEnabled: false,
   toggleShortcut: "CommandOrControl+Shift+Space",
   toggleShortcutActive: true,
+  askShortcut: "CommandOrControl+Alt+Space",
+  askShortcutActive: true,
 };
 
 // Other people's lines arrive as live captions from the call window.

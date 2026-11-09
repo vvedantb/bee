@@ -66,6 +66,8 @@ const SETTINGS: SettingsView = {
   teamsAudioFallbackEnabled: true,
   toggleShortcut: "CommandOrControl+Shift+Space",
   toggleShortcutActive: true,
+  askShortcut: "CommandOrControl+Alt+Space",
+  askShortcutActive: true,
 };
 
 // What Windows reports with the helper installed, in a Teams call.

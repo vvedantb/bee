@@ -3,7 +3,7 @@ import type { ClaudeCodeUpdate } from "./ClaudeCodeSection";
 import { getToken } from "@clerk/electron/react";
 import { useSyncExternalStore } from "react";
 import { echoesOwnLine } from "../../core/agent-desktop-meeting";
-import { IDLE_AUTO, stepAutoMeeting, type AutoEvent, type AutoMeetingState } from "../../core/auto-meeting-detection";
+import { IDLE_AUTO, qualifies, stepAutoMeeting, type AutoEvent, type AutoMeetingState } from "../../core/auto-meeting-detection";
 import { debugLog, errorData } from "../../core/debug-log";
 import { detectLinks, mergeChips, sourceChips, visibleChips, type LinkChip } from "../../core/link-suggest";
 import { MAX_STEERING_TIPS, isFiller, isNewTurn, isQuestion, mergeTips, recentRestarts, runDelayMs, tipCap, tipKey, waitsForRun } from "../../core/steering";
@@ -48,7 +48,7 @@ import { LOGO_DONE_MS } from "./logo";
 import { openMic } from "./mic";
 import { motionReduced } from "./motion";
 import { framePeak, startMicSession, type PhraseOutcome } from "./speech";
-import { MEETING_PROMPT_NOTICE, MEETING_START_NOTICE, MEETING_START_NO_MIC_NOTICE, MEETING_STOP_NOTICE, meetingEndNotice, type MeetingEndOutcome, type MeetingNotice } from "./meeting-notices";
+import { MEETING_PROMPT_NOTICE, MEETING_READY_NOTICE, MEETING_START_NOTICE, MEETING_START_NO_MIC_NOTICE, MEETING_STOP_NOTICE, meetingEndNotice, type MeetingEndOutcome, type MeetingNotice } from "./meeting-notices";
 import { openTeamsAudio } from "./teams-audio";
 import { downloadUpdate, installUpdate, updateNow } from "./update";
 import type { Tab } from "./panel-tabs";
@@ -1261,7 +1261,8 @@ async function autoMeetingStep(event: AutoEvent | null): Promise<void> {
   const signals = read ?? (event ? lastSignals : null);
   if (!signals && !event) return;
   const calendarBoost = state.meeting?.active === true && state.meeting.source === "calendar";
-  const wasPrompted = autoState.phase === "prompted";
+  const autoPhaseBefore = autoState.phase;
+  const wasPrompted = autoPhaseBefore === "prompted";
   const out = stepAutoMeeting(autoState, {
     signals: { ...(signals ?? { meetingAppPresent: false, inCallTitle: false }), calendarBoost },
     enabled,
@@ -1277,9 +1278,27 @@ async function autoMeetingStep(event: AutoEvent | null): Promise<void> {
     autoOverlayOn = active;
     void window.bee.meeting.autoOverlay(active).catch(() => undefined);
   }
-  if (out.effect === "prompt") {
-    debugLog.info("meeting", "auto-prompt", {});
-    autoNotice?.({ kind: "prompt-start", message: MEETING_PROMPT_NOTICE });
+  // One line per detection tick, so a silent miss leaves a trail: booleans and enums only, never a window title.
+  debugLog.debug("meeting", "auto-tick", {
+    meetingAppPresent: signals?.meetingAppPresent ?? false,
+    titleClass: signals?.titleClass ?? (signals?.inCallTitle ? "incall" : signals?.preJoinTitle ? "prejoin" : signals?.meetingAppPresent ? "na" : "none"),
+    micInUseByMeetingApp: signals?.micInUseByMeetingApp ?? null,
+    qualifies: signals ? qualifies(signals) : false,
+    enabled,
+    from: autoPhaseBefore,
+    phase: autoState.phase,
+    effect: out.effect,
+    promptShown: out.effect === "prompt" || out.effect === "ready",
+    suppressed: autoState.suppressed !== null,
+    // Why no prompt: already shown for this meeting, the user said no, still confirming, or nothing qualifies.
+    why: out.effect === "prompt" || out.effect === "ready" ? "shown" : autoState.suppressed ? "suppressed" : autoState.phase === "prompted" || autoState.phase === "ready" ? "already-shown" : autoState.phase === "confirming" ? "confirming" : autoState.phase === "active" ? "active" : "no-signal",
+    event: event ?? null,
+  });
+  if (out.effect === "prompt" || out.effect === "ready") {
+    // Bee may be hidden (tray, shortcut, auto-collapse): show it without taking focus, so the toast is seen.
+    void window.bee.meeting.showInactive().catch(() => undefined);
+    debugLog.info("meeting", out.effect === "prompt" ? "auto-prompt" : "auto-ready", { preJoin: signals?.preJoinTitle === true });
+    autoNotice?.(out.effect === "prompt" ? { kind: "prompt-start", message: MEETING_PROMPT_NOTICE } : { kind: "info", message: MEETING_READY_NOTICE });
   } else if (out.effect === "start") await autoStart(wasPrompted);
   else if (out.effect === "stop") await autoStop();
   else if (out.effect === "dismiss") autoNotice?.({ kind: "clear" });
