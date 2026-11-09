@@ -11,7 +11,7 @@ import { panelPage } from "./panel-shot";
 // The Teams audio fallback on a Mac where Screen Recording is still off for Bee: switched on (it is off by default), with the
 // button that asks.
 const teamsAudio: TeamsAudioView = {
-  status: { platform: "mac", supported: true, reason: null, teamsCall: false, coverage: "unknown", permission: "denied" },
+  status: { platform: "mac", supported: true, reason: null, teamsCall: false, permission: "denied" },
   plan: "waiting",
   listening: false,
   failed: false,

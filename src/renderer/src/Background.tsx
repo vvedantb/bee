@@ -10,7 +10,7 @@ const ICON = { size: 16, stroke: 1.75 };
 
 const running = (jobs: readonly BackgroundJobView[]) => jobs.filter((job) => job.status === "running");
 
-/** The notch chip: how many tasks run, like the Teams sync chip. Opens the Live tab. Nothing when none run. */
+/** The notch chip: how many tasks run. Opens the Live tab. Nothing when none run. */
 export function BackgroundChip(props: { jobs: readonly BackgroundJobView[]; onOpen: () => void }) {
   const count = running(props.jobs).length;
   if (count === 0) return null;

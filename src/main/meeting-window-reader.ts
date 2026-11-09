@@ -24,7 +24,7 @@ import {
   type MeetingWindow,
   type MeetingWindowContext,
 } from "../core/agent-desktop-meeting";
-import type { DetectorReading } from "../core/sync-controller";
+import type { DetectorReading } from "../core/teams-heuristics";
 import type { MeetingWindowStatus } from "../shared/ipc";
 import type { AgentDesktopRun } from "./agent-desktop";
 

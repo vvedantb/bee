@@ -37,13 +37,10 @@ import {
   userReturnedSchema,
   revealGatewayKeyResultSchema,
   settingsViewSchema,
-  teamsActionResultSchema,
   teamsAudioEndedSchema,
   teamsAudioLinesSchema,
   teamsAudioStartResultSchema,
   teamsAudioStatusSchema,
-  teamsPublishResultSchema,
-  teamsTickResultSchema,
   transcribeResultSchema,
   updateActionSchema,
   updateCheckSchema,
@@ -67,10 +64,8 @@ import {
   type PipelineCancel,
   type PipelineRequest,
   type SettingsUpdate,
-  type TeamsAction,
   type TeamsAudioEnded,
   type TeamsAudioLines,
-  type TeamsPublishRequest,
   type TranscribeRequest,
   type WindowSize,
 } from "../shared/ipc";
@@ -317,7 +312,7 @@ const api = {
       z.void().parse(await ipcRenderer.invoke(IPC.openAccessibilitySettings));
     },
   },
-  // Teams audio fallback: platform support, a Teams call and coverage, as codes. The renderer decides to listen; main runs the
+  // Teams audio fallback: platform support, and a Teams call, as codes. The renderer decides to listen; main runs the
   // helper and speech-to-text, and sends back text lines only (never audio).
   teamsAudio: {
     status: async (sessionToken: string) => teamsAudioStatusSchema.parse(await ipcRenderer.invoke(IPC.teamsAudioStatus, { sessionToken })),
@@ -349,12 +344,6 @@ const api = {
     openScreenRecordingSettings: async () => {
       z.void().parse(await ipcRenderer.invoke(IPC.openScreenRecordingSettings));
     },
-  },
-  teams: {
-    tick: async (sessionToken: string) => teamsTickResultSchema.parse(await ipcRenderer.invoke(IPC.teamsTick, { sessionToken })),
-    act: async (action: TeamsAction) => teamsActionResultSchema.parse(await ipcRenderer.invoke(IPC.teamsAction, action)),
-    publish: async (request: TeamsPublishRequest) =>
-      teamsPublishResultSchema.parse(await ipcRenderer.invoke(IPC.teamsPublish, request)),
   },
 };
 

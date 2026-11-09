@@ -15,9 +15,7 @@ import {
   type PipelineRequest,
   type PipelineResult,
   type SettingsView,
-  type TeamsView,
 } from "../../shared/ipc";
-import type { SessionLine } from "../../core/sync-lines";
 import type { startMicSession } from "./speech";
 import { REOPEN_WINDOW_MS } from "../../core/wake-word";
 
@@ -67,36 +65,19 @@ const SETTINGS: SettingsView = {
   toggleShortcutActive: true,
 };
 
-// In a sync, so a shared phrase would reach window.bee.teams.publish.
-const IN_SYNC = {
-  relayConfigured: true,
-  relayError: null,
-  notice: null,
-  me: { userId: "u-me", displayName: "Vedant" },
-  team: null,
-  pendingInvite: null,
-  detection: { inMeeting: true, raw: true, epoch: 1, source: "simulated" },
-  prompt: null,
-  room: { id: "r1", code: "a-b", createdAt: 0, startedByMe: true, members: [], invited: [] },
-  roster: [],
-  merge: null,
-  shareMuted: false,
-} as TeamsView;
-
-const teammate: SessionLine = { id: "r1:1", own: false, speakerId: "u-alice", speakerName: "Alice", text: "Bee, pull up the Q3 roadmap deck", clientTs: 0, serverTs: 1 };
+// Another speaker, heard as a live caption from the call window.
+const teammate = { speaker: "Alice", text: "Bee, pull up the Q3 roadmap deck" };
 
 async function loadStore(
   options: { settings?: Partial<SettingsView>; command?: (request: CommandRequest) => Promise<PipelineResult>; classify?: (request: FollowUpRequest) => Promise<FollowUpResult> } = {},
 ) {
   const pipeline: PipelineRequest[] = [];
   const commands: CommandRequest[] = [];
-  const published: string[] = [];
   const cancelled: Array<string | number> = [];
   const summaries: MeetingSummaryRequest[] = [];
   const stops: Array<string | number> = [];
   const answers: ComputerAnswer[] = [];
   const ended: ConversationEnded[] = [];
-  let tickLines: SessionLine[] = [];
   let captions: (payload: MeetingWindowCaptions) => void = () => undefined;
   let computerUpdate: (update: ComputerUpdate) => void = () => undefined;
   vi.stubGlobal("window", {
@@ -141,17 +122,6 @@ async function loadStore(
         summaries.push(request);
         return { path: "/notes/meeting.md", usedLlm: true, error: null, followUp: [] };
       },
-      teams: {
-        tick: async () => {
-          const lines = tickLines;
-          tickLines = [];
-          return { view: IN_SYNC, lines };
-        },
-        publish: async ({ text }: { text: string }) => {
-          published.push(text);
-          return { sent: true, error: null };
-        },
-      },
       meetingWindow: {
         onCaptions: (listener: typeof captions) => {
           captions = listener;
@@ -161,7 +131,6 @@ async function loadStore(
     },
   });
   const store = await import("./store");
-  // Settings load, then one Teams tick puts the store in the sync.
   await vi.advanceTimersByTimeAsync(2100);
   await store.actions.toggleMic();
   const mic = micSessions.at(-1);
@@ -176,16 +145,16 @@ async function loadStore(
     captions({ lines: [{ speaker: "Priya", text }] });
     await vi.advanceTimersByTimeAsync(1000);
   };
-  const fromTeammate = async (line: SessionLine) => {
-    tickLines = [line];
-    await vi.advanceTimersByTimeAsync(2100);
+  const fromTeammate = async (line: { speaker: string; text: string }) => {
+    captions({ lines: [line] });
+    await vi.advanceTimersByTimeAsync(1000);
   };
   /** Main's computer-use events for the request in flight (core/computer-use.ts via main/meeting-ipc.ts). */
   const fromComputer = async (update: ComputerUpdate) => {
     computerUpdate(update);
     await vi.advanceTimersByTimeAsync(0);
   };
-  return { store, say, caption, fromTeammate, fromComputer, pipeline, commands, published, cancelled, stops, answers, summaries, ended, state: () => store.getBeeState() };
+  return { store, say, caption, fromTeammate, fromComputer, pipeline, commands, cancelled, stops, answers, summaries, ended, state: () => store.getBeeState() };
 }
 
 describe("store: Bee wake word", () => {
@@ -203,12 +172,10 @@ describe("store: Bee wake word", () => {
   });
 
   it("sends a mic phrase that starts with Bee to the AI as a direct request, and shows the reply in the island", async () => {
-    const { store, say, pipeline, commands, published, state } = await loadStore();
-    expect(state().teams?.room).not.toBeNull();
+    const { store, say, pipeline, commands, state } = await loadStore();
     await say("Bee, open Teams");
     expect(commands.map((request) => request.command)).toEqual(["open Teams"]);
     expect(pipeline).toEqual([]);
-    expect(published).toEqual([]);
     expect(state().session.lines).toEqual([]);
     expect(state().result?.tips).toEqual(["Opened Teams"]);
     expect(state().busy).toBe(false);
@@ -232,15 +199,14 @@ describe("store: Bee wake word", () => {
   });
 
   it("keeps other mic phrases on the meeting path, shared with the sync", async () => {
-    const { say, pipeline, commands, published, state } = await loadStore();
+    const { say, pipeline, commands, state } = await loadStore();
     await say("Let's pick up the Acme renewal.");
     expect(commands).toEqual([]);
     expect(pipeline.at(-1)?.transcript).toEqual(["Let's pick up the Acme renewal."]);
-    expect(published).toEqual(["Let's pick up the Acme renewal."]);
     expect(state().session.lines.map((line) => line.text)).toEqual(["Let's pick up the Acme renewal."]);
   });
 
-  it("never wakes on typed lines, captions, Teams audio or teammates' lines", async () => {
+  it("never wakes on typed lines, captions or Teams audio", async () => {
     const { store, caption, fromTeammate, pipeline, commands, state } = await loadStore();
     // Distinct words per source: a caption or Teams audio line that repeats a recent line is dropped as an echo.
     store.actions.simulateLine("Bee open Teams");
@@ -251,7 +217,7 @@ describe("store: Bee wake word", () => {
     await fromTeammate(teammate);
     expect(commands).toEqual([]);
     expect(pipeline.length).toBeGreaterThan(0);
-    // All four are meeting lines (merged by spoken time, so the teammate's earlier line sorts first).
+    // All four are meeting lines.
     expect(state().session.lines.map((line) => line.text).sort()).toEqual([
       "Bee open Teams",
       "Bee, pull up the Q3 roadmap deck",
@@ -399,14 +365,14 @@ describe("store: computer use", () => {
     expect(stops).toEqual([runId]);
   });
 
-  it("never stops or confirms on typed lines, captions, Teams audio or teammates", async () => {
+  it("never stops or confirms on typed lines, captions or Teams audio", async () => {
     const { store, caption, fromTeammate, fromComputer, stops, answers, commands, runId, state } = await running();
     await fromComputer({ runId, ...CONFIRM });
     store.actions.simulateLine("Bee, stop");
     await caption("Bee, stop the task");
     store.actions.teamsAudioLines(["Hey Bee, stop. Yes, confirm, send it"]);
     await vi.advanceTimersByTimeAsync(1000);
-    await fromTeammate({ ...teammate, id: "r1:2", text: "Bee, cancel that, confirm" });
+    await fromTeammate({ ...teammate, text: "Bee, cancel that, confirm" });
     expect(stops).toEqual([]);
     expect(answers).toEqual([]);
     expect(commands).toHaveLength(1);
@@ -543,7 +509,7 @@ describe("store: Bee's history and the conversation window", () => {
   });
 
   it("takes a follow-up without Bee in the window, and keeps it out of the meeting", async () => {
-    const { say, commands, pipeline, published, state } = await loadStore({ command: opened });
+    const { say, commands, pipeline, state } = await loadStore({ command: opened });
     await say("B, open Vercel usage");
     expect(state().conversationOpen).toBe(true);
     const { notchLine, CONVERSATION_LABEL } = await import("./notch");
@@ -552,7 +518,6 @@ describe("store: Bee's history and the conversation window", () => {
     expect(commands.map((request) => request.command)).toEqual(["open Vercel usage", "Why do you not go to the team usage?"]);
     expect(state().session.lines).toEqual([]);
     expect(pipeline).toEqual([]);
-    expect(published).toEqual([]);
   });
 
   it("closes the window after a minute of silence", async () => {
@@ -580,7 +545,7 @@ describe("store: Bee's history and the conversation window", () => {
     const { store, say, caption, fromTeammate, commands, state } = await loadStore();
     await caption("Why did you open that page?");
     store.actions.teamsAudioLines(["No, the team one"]);
-    await fromTeammate({ ...teammate, id: "r1:3", text: "Can you check the billing tab?" });
+    await fromTeammate({ ...teammate, text: "Can you check the billing tab?" });
     expect(commands).toEqual([]);
     expect(state().conversationOpen).toBe(false);
     // In the window too: only the user's own mic reaches Bee.
@@ -728,7 +693,7 @@ describe("store: Talk to Bee (typed)", () => {
   });
 
   it("runs \"Bee, open Chrome\" as a direct request, like the same words from the mic", async () => {
-    const { store, pipeline, commands, published, state } = await loadStore({ command: async () => result(["Opened Chrome"]) });
+    const { store, pipeline, commands, state } = await loadStore({ command: async () => result(["Opened Chrome"]) });
     const { debugLog } = await import("../../core/debug-log");
     const info = vi.spyOn(debugLog, "info");
     expect(store.actions.typeCommand("Bee, open Chrome")).toBe("taken");
@@ -738,18 +703,16 @@ describe("store: Talk to Bee (typed)", () => {
     expect(info).toHaveBeenCalledWith("wake", "typed-command", { text: "Bee, open Chrome" });
     expect(info.mock.calls.some(([area, event, data]) => area === "wake" && event === "command" && (data as { via?: string }).via === "typed-command")).toBe(true);
     expect(pipeline).toEqual([]);
-    expect(published).toEqual([]);
     expect(state().session.lines).toEqual([]);
   });
 
   it("drops a line without the wake word: never a request, a meeting line or a shared line", async () => {
-    const { store, pipeline, commands, published, state } = await loadStore();
+    const { store, pipeline, commands, state } = await loadStore();
     expect(store.actions.typeCommand("open Chrome")).toBe("no-wake");
     expect(store.actions.typeCommand("   ")).toBe("empty");
     await vi.advanceTimersByTimeAsync(1000);
     expect(commands).toEqual([]);
     expect(pipeline).toEqual([]);
-    expect(published).toEqual([]);
     expect(state().session.lines).toEqual([]);
   });
 

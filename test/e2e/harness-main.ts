@@ -1,8 +1,7 @@
 // E2E harness main process: Bee's real preload and meeting IPC (main/meeting-ipc.ts) and one test page.
 // With BEE_E2E_AUDIO, Chromium's fake audio device plays that WAV to the page's mic. BEE_E2E_NOTES_DIR picks the notes
 // folder (default: a new temp folder). Clerk is skipped: the page sends an unsigned token with Bee's issuer, which is
-// all main/auth.ts checks. BEE_E2E_TOKEN replaces that token (the Teams E2E signs real RS256 tokens for its mock
-// relay at BEE_RELAY_URL). Teams detection uses a stub the page drives with the simulateMeeting action.
+// all main/auth.ts checks. BEE_E2E_TOKEN replaces that token.
 // With BEE_E2E_SHOTS (the island screenshot test), the page is loaded once per name (comma-separated, as ?shot=) in a transparent
 // frameless 520 × 360 window, and each capturePage() is written to <BEE_E2E_SHOTS_DIR>/island-<name>.png. Each page's own
 // E2E_RESULT (e.g. measured boxes) is passed on in the report's `pages`.
@@ -32,8 +31,6 @@ import { CLERK_ISSUER } from "../../src/main/auth";
 import { registerMeetingIpc } from "../../src/main/meeting-ipc";
 import { createClaudeCode } from "../../src/main/claude-code";
 import { ensureNotesDir } from "../../src/main/notes";
-import { createStubDetector } from "../../src/main/teams-detector";
-import { registerTeamsIpc, relayUrlFromEnv } from "../../src/main/teams-sync";
 import { NO_GATEWAY_KEY } from "../../src/core/gateway";
 import { IPC, pipelineResultSchema, type CopyGatewayKeyResult } from "../../src/shared/ipc";
 import { REPLAY_KEY, e2eGateway, e2eModeSchema } from "./replay";
@@ -66,8 +63,8 @@ async function captureShots(dir: string, names: string[]): Promise<{ files: stri
   mkdirSync(dir, { recursive: true });
   const files: string[] = [];
   const pages: PageReport[] = [];
-  const tabShot = (name: string) => name.startsWith("mcp-") || name.startsWith("settings-") || name.startsWith("live-") || name.startsWith("gateway-key-");
-  const tall = names.some(tabShot) || /(mcp|meeting)-settings-shots|gateway-key-shots/.test(page as string);
+  const tabShot = (name: string) => name.startsWith("mcp-") || name.startsWith("settings-") || name.startsWith("live-") || name.startsWith("gateway-key-") || name.startsWith("meeting-toast-") || name.startsWith("meeting-notch-");
+  const tall = names.some((name) => tabShot(name) && !name.startsWith("meeting-")) || /(mcp|meeting)-settings-shots|gateway-key-shots/.test(page as string);
   // One window for every shot: closing the only window would quit the app.
   const shotWin = new BrowserWindow({
     show: false,
@@ -76,7 +73,8 @@ async function captureShots(dir: string, names: string[]): Promise<{ files: stri
     frame: false,
     transparent: true,
     backgroundColor: "#00000000",
-    webPreferences: { preload, sandbox: true, contextIsolation: true, nodeIntegration: false },
+    // Sonner mounts its toasts on requestAnimationFrame, which a hidden window would otherwise throttle (meeting-shots).
+    webPreferences: { preload, sandbox: true, contextIsolation: true, nodeIntegration: false, backgroundThrottling: false },
   });
   // A page that throws before reporting would otherwise only show as a timeout.
   shotWin.webContents.on("console-message", ({ level, message }) => {
@@ -220,8 +218,6 @@ void app.whenReady().then(async () => {
     gateway: mode && fixturesDir ? e2eGateway(mode, fixturesDir) : undefined,
     claudeCode: createClaudeCode({ sessionDir: process.env.BEE_E2E_CLAUDE_SESSION_DIR || mkdtempSync(join(tmpdir(), "bee-claude-session-")) }),
   });
-  // Short timings so the popup and the debounced leave happen within the test.
-  registerTeamsIpc({ relayUrl: relayUrlFromEnv(process.env.BEE_RELAY_URL), detector: createStubDetector(), timing: { enterMs: 300, leaveMs: 1000 } });
   session.defaultSession.setPermissionRequestHandler((_contents, permission, callback) => callback(permission === "media"));
   ipcMain.handle(IPC.setWindowSize, () => undefined);
 
@@ -239,7 +235,7 @@ void app.whenReady().then(async () => {
     process.stdout.write(`${message}\n`);
     app.exit(0);
   });
-  void win.loadFile(page, { query: { token: process.env.BEE_E2E_TOKEN || fakeSessionToken(), invite: process.env.BEE_E2E_INVITE ?? "", questions: process.env.BEE_E2E_QUESTIONS ?? "", shots: shotsDir ? "1" : "" } });
+  void win.loadFile(page, { query: { token: process.env.BEE_E2E_TOKEN || fakeSessionToken(), questions: process.env.BEE_E2E_QUESTIONS ?? "", shots: shotsDir ? "1" : "" } });
 }).catch((error: unknown) => {
   // A setup failure (e.g. replay with no fixtures) ends the run at once rather than at the test's timeout.
   process.stderr.write(`Harness failed: ${error instanceof Error ? error.message : String(error)}\n`);

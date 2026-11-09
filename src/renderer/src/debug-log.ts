@@ -101,8 +101,7 @@ export function uiSnapshot(state: BeeState): Record<string, unknown> {
     chips: state.chips.length - state.dismissedChipIds.length,
     mic: { on: state.mic.on, error: state.mic.error },
     teamsAudio: { listening: state.teamsAudio.listening, failure: state.teamsAudio.failure },
-    sync: state.teams?.room?.id ?? null,
-    syncPrompt: state.teams?.prompt?.epoch ?? null,
+    meetingActive: state.meetingActive,
     summary: { saving: state.summary.saving, error: state.summary.error },
     update: state.update.status,
   };

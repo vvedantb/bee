@@ -8,8 +8,8 @@ import { COMMAND_CONTEXT_TOKENS, GUIDE_CONTEXT_TOKENS, guideProviderOptions } fr
 // bee-history.json in the user data folder) and sent whole with each new request, so "open the team usage" after "open Vercel
 // usage" means the team usage on Vercel, and a count the AI already ran is never run or doubted again. No idle expiry and no turn
 // cap: only when the messages near the model's window are the oldest ones folded into one summary message (compactMessages), with
-// the newest kept word for word, like Claude Code. Never the meeting: not in the session, the summary, meeting memory or the
-// Teams sync. Pure apart from the summary call: no window, React, Electron or fs here, so tests can call it.
+// the newest kept word for word, like Claude Code. Never the meeting: not in the session, the summary or meeting memory.
+// Pure apart from the summary call: no window, React, Electron or fs here, so tests can call it.
 
 /** One request to Bee and how it ended, for vmem's conversation transcript (core/session-transcript.ts). Not sent to the AI. */
 export type BeeExchange = {

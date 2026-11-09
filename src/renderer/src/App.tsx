@@ -7,11 +7,9 @@ import {
   IconLoader2,
   IconMicrophone,
   IconMicrophoneOff,
-  IconNotebook,
   IconPlayerPlay,
   IconPlayerStop,
   IconRefresh,
-  IconUsersGroup,
   IconX,
 } from "@tabler/icons-react";
 import { Badge, Button, Input, PillTabs } from "@vvedantb/ui";
@@ -46,8 +44,7 @@ import { focusKeyFieldWhenReady, GATEWAY_KEY_FIELD_ID, statusClick, type StatusC
 import { CONVERSATION_LABEL, NOTCH_BUTTON, NOTCH_UPDATE_BUTTON, logoState, notchLine, workingLabel, type NotchLine } from "./notch";
 import { actions, answerFolded, displayResult, islandOpen, responseOpen, teamsAudioNow, useBee, type BeeState, type ComputerConfirm, type TypedCommandOutcome, type MeetingCard, type SummaryState, type UpdateState } from "./store";
 import { TYPED_COMMAND_HINT, TYPED_COMMAND_PLACEHOLDER, TYPED_COMMAND_TITLE, clearsTypedCommand, typedCommandNote } from "./typed-command";
-import { SyncCard, SyncSection, TeamSection, syncedWith } from "./Teams";
-import { TEAMS_AUDIO_LISTENING } from "./teams-audio-message";
+import { MEETING_IN_PROGRESS } from "./meeting-notices";
 import { updateButton } from "./update";
 
 const ICON = { size: 16, stroke: 1.75 };
@@ -221,19 +218,6 @@ function Island({ state }: { state: BeeState }) {
           </Button>
         ) : null}
         <BackgroundChip jobs={state.background} onOpen={() => void actions.openTab("live")} />
-        {state.teams?.room ? (
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            className="sync-chip rounded-full"
-            title={`${syncedWith(state.teams)}${state.teams.shareMuted ? " · sharing paused" : ""}`}
-            onClick={() => void actions.openTab("live")}
-          >
-            <IconUsersGroup {...ICON} />
-            {state.teams.room.members.length}
-          </Button>
-        ) : null}
         <Show when="signed-in">
           <Button
             type="button"
@@ -277,38 +261,36 @@ function Island({ state }: { state: BeeState }) {
   );
 }
 
-function summaryLabel(summary: SummaryState, lineCount: number): string {
+function summaryLabel(summary: SummaryState, autoDetect: boolean): string | null {
   if (summary.saving) return "Writing the summary…";
   const result = summary.result;
   if (result) {
     const name = result.path.split(/[\\/]/).pop() ?? result.path;
     return result.usedLlm ? `Saved ${name} to your notes.` : `Saved ${name} without AI. ${result.error ?? ""}`.trim();
   }
-  if (lineCount === 0) return "Once the meeting starts, save decisions, action items and notes cited to your notes folder.";
-  return "Saves decisions, action items and notes cited to your notes folder, so Bee can recall them next time.";
+  return autoDetect ? null : "Automatic meeting detection is off, so Bee does not start or save meetings.";
 }
 
-// The spoken lines are sent to main for the summary but never shown here. teamsAudio: Bee hears the Teams app now.
-function MeetingSection({ summary, lineCount, teamsAudio }: { summary: SummaryState; lineCount: number; teamsAudio: boolean }) {
+// Quiet status only: Bee starts and saves meetings by itself (automatic meeting detection), so there is no button. The spoken
+// lines are sent to main for the summary but never shown here.
+function MeetingSection({ summary, active, autoDetect }: { summary: SummaryState; active: boolean; autoDetect: boolean }) {
+  const label = summaryLabel(summary, autoDetect);
   return (
     <section>
       <h2>Meeting</h2>
-      {teamsAudio ? (
+      {active ? (
         <p className="muted" role="status">
-          {TEAMS_AUDIO_LISTENING}
+          {MEETING_IN_PROGRESS}
         </p>
       ) : null}
-      <div className="row actions">
-        <Button type="button" size="sm" disabled={lineCount === 0 || summary.saving} onClick={() => void actions.endMeeting()}>
-          <IconNotebook {...ICON} /> End meeting &amp; save summary
-        </Button>
-        {summary.result ? (
+      {label ? <p className="muted">{label}</p> : null}
+      {summary.result ? (
+        <div className="row actions">
           <Button type="button" variant="link" size="sm" onClick={() => void actions.openSummary()}>
             <IconExternalLink {...ICON} /> Open summary
           </Button>
-        ) : null}
-      </div>
-      <p className="muted">{summaryLabel(summary, lineCount)}</p>
+        </div>
+      ) : null}
       {summary.error ? <p className="error">{summary.error}</p> : null}
     </section>
   );
@@ -353,9 +335,7 @@ function LiveTab({ state }: { state: BeeState }) {
 
       <BackgroundSection jobs={state.background} onStop={(id) => actions.stopBackground(id)} />
 
-      <SyncSection state={state} />
-
-      <MeetingSection summary={state.summary} lineCount={state.session.lines.length} teamsAudio={state.teamsAudio.listening} />
+      <MeetingSection summary={state.summary} active={state.meetingActive} autoDetect={state.settings?.autoMeetingDetection === true} />
 
       <section>
         <h2>
@@ -400,14 +380,6 @@ function LiveTab({ state }: { state: BeeState }) {
             Simulate meeting line
           </Button>
         </form>
-        {state.teams?.team ? (
-          <SettingRow
-            id="simulate-teams"
-            label="Simulate Teams meeting (the sync popup shows after about 10 s)"
-            checked={state.teams.detection.source === "simulated"}
-            onCheckedChange={(on) => void actions.teams({ type: "simulateMeeting", on })}
-          />
-        ) : null}
       </section>
     </div>
   );
@@ -700,11 +672,6 @@ function Panel({ state }: { state: BeeState }) {
           <Connectors servers={state.mcp.servers} tests={state.mcp.tests} error={state.mcp.error} />
         </div>
       ) : null}
-      {state.tab === "teams" ? (
-        <div className="tab-body">
-          <TeamSection state={state} />
-        </div>
-      ) : null}
       {state.tab === "settings" && state.settings ? <SettingsTab state={state} settings={state.settings} /> : null}
     </main>
   );
@@ -770,9 +737,6 @@ export function App() {
       }}
     >
       <Island state={state} />
-      <Show when="signed-in">
-        <SyncCard state={state} />
-      </Show>
       {state.expanded ? (
         <>
           <Show when="signed-in">

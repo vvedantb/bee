@@ -467,6 +467,24 @@ describe("settings: meeting context and the calendar are always on", () => {
   });
 });
 
+describe("settings: no Team settings", () => {
+  it("has no team or sync keys in the view, and drops old ones from a file on load and on the next save", () => {
+    writeFileSync(
+      join(dir, "settings.json"),
+      JSON.stringify({ team: { id: "t1" }, inviteCode: "BEE-7Q4K", pendingInvite: "bee://team/BEE-7Q4K", relayUrl: "https://relay.example", shareMuted: true, autoMeetingDetection: false }),
+    );
+    const store = create();
+    const view = store.view();
+    for (const key of ["team", "inviteCode", "pendingInvite", "relayUrl", "shareMuted"]) expect(view).not.toHaveProperty(key);
+    // Known keys in the same file still load.
+    expect(view.autoMeetingDetection).toBe(false);
+    store.save({ meetingMode: true });
+    const onDisk = JSON.parse(readFileSync(join(dir, "settings.json"), "utf8"));
+    for (const key of ["team", "inviteCode", "pendingInvite", "relayUrl", "shareMuted"]) expect(onDisk).not.toHaveProperty(key);
+    expect(onDisk.autoMeetingDetection).toBe(false);
+  });
+});
+
 describe("settings: the meeting window reader is always on", () => {
   it("has no switch, and ignores one left in an old file", () => {
     writeFileSync(join(dir, "settings.json"), JSON.stringify({ readMeetingWindowEnabled: false, meetingWindowReader: false }));
@@ -553,6 +571,18 @@ describe("settings: automatic meeting detection", () => {
     expect(create().view().autoMeetingDetection).toBe(true);
     writeFileSync(join(dir, "settings.json"), JSON.stringify({ meetingMode: true }));
     expect(create().view().autoMeetingDetection).toBe(true);
+  });
+
+  it("reads a missing key as on and an explicit false as off, from a file written before the toggle", () => {
+    writeFileSync(join(dir, "settings.json"), JSON.stringify({ meetingMode: false, personalisedLinks: true }));
+    expect(create().view().autoMeetingDetection).toBe(true);
+    writeFileSync(join(dir, "settings.json"), JSON.stringify({ meetingMode: false, autoMeetingDetection: false }));
+    expect(create().view().autoMeetingDetection).toBe(false);
+    // Saving something else keeps the explicit false.
+    const store = create();
+    store.save({ meetingMode: true });
+    expect(create().view().autoMeetingDetection).toBe(false);
+    expect(JSON.parse(readFileSync(join(dir, "settings.json"), "utf8")).autoMeetingDetection).toBe(false);
   });
 
   it("saves the choice and keeps it, without touching meeting mode", () => {

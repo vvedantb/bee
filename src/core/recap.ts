@@ -3,7 +3,7 @@ import { withTimeout } from "./abort";
 import { debugLog, errorData, msSince } from "./debug-log";
 import { guideProviderOptions } from "./gateway";
 import { isFiller } from "./steering";
-import type { SessionLine } from "./sync-lines";
+import type { SessionLine } from "./session-lines";
 
 // "What did I miss?": a short card in the island with what happened while the user was away. Two sources: the meeting so far
 // (other people's lines: teammates from the Teams sync, captions, Teams audio) and Bee's own activity (background tasks that

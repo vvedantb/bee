@@ -53,14 +53,11 @@ import { createTeamsAudioCapture } from "./teams-audio-capture";
 import { resolveTeamsAudioHelper } from "./teams-audio-helper";
 import { registerTeamsAudioIpc } from "./teams-audio-ipc";
 import { createTeamsDetector, withMeetingWindow } from "./teams-detector";
-import { inviteFromArgv, registerTeamsIpc, relayUrlFromEnv } from "./teams-sync";
 import { createUpdater } from "./updater";
 
 // One width in every state, so expanding only grows the height and the pill row never moves sideways.
 const SIZES: Record<WindowSize, { width: number; height: number }> = {
   collapsed: { width: 480, height: 64 },
-  // Notch plus the Teams sync popup.
-  prompt: { width: 480, height: 330 },
   // Notch plus the island body (tips and sources).
   response: { width: 480, height: 360 },
   expanded: { width: 480, height: 640 },
@@ -288,17 +285,6 @@ const clerk = createClerkBridge({
   userAgent: `Bee/${app.getVersion()}`,
 });
 
-// Set once IPC is registered; bee://team/… links that arrive earlier wait here.
-let pendingInvite: string | null = inviteFromArgv(process.argv);
-let onInvite: ((link: string) => void) | null = null;
-
-function receiveInvite(link: string | null): void {
-  if (!link) return;
-  if (onInvite) onInvite(link);
-  else pendingInvite = link;
-  win?.show();
-}
-
 if (clerk.isPrimaryInstance) {
   // Social sign-in returns the browser to Bee's page on 127.0.0.1, not to bee://renderer/ (main/clerk-oauth-loopback.ts).
   const stopClerkOAuth = registerClerkOAuthIpc();
@@ -306,18 +292,13 @@ if (clerk.isPrimaryInstance) {
 
   // Also bee://renderer/ from Return to Bee on that page, on Windows and Linux.
   app.on("second-instance", (_event, argv) => {
-    // Invite links carry a team code: only whether one came is logged.
-    debugLog.info("app", "second-instance", { args: argv.length, invite: inviteFromArgv(argv) !== null });
+    debugLog.info("app", "second-instance", { args: argv.length });
     bringToFront(win);
-    receiveInvite(inviteFromArgv(argv));
   });
   // macOS delivers deep links as open-url.
   app.on("open-url", (event, url) => {
-    debugLog.info("app", "open-url", { kind: /^bee:\/\/team\//i.test(url) ? "invite" : /^bee:\/\/renderer/i.test(url) ? "renderer" : "other" });
-    if (/^bee:\/\/team\//i.test(url)) {
-      event.preventDefault();
-      receiveInvite(url);
-    } else if (/^bee:\/\/renderer(?:[/?#]|$)/i.test(url)) {
+    debugLog.info("app", "open-url", { kind: /^bee:\/\/renderer/i.test(url) ? "renderer" : "other" });
+    if (/^bee:\/\/renderer(?:[/?#]|$)/i.test(url)) {
       // Return to Bee on the sign-in page.
       event.preventDefault();
       bringToFront(win);
@@ -469,7 +450,7 @@ if (clerk.isPrimaryInstance) {
     registerOpenUrlIpc();
     registerLinkIpc(settings, vmemSearch);
     registerFaviconIpc();
-    // One detector for the Teams sync popup and for meeting context, so the in-call reading is shared and cached.
+    // One detector for meeting context and the Teams audio status, so the in-call reading is shared and cached.
     const teamsDetector = createTeamsDetector();
     const detector = withMeetingWindow(teamsDetector, meetingWindow);
     // Which meeting the user is in: window titles and the classic Outlook calendar (Windows), saved meetings, connected tools.
@@ -551,11 +532,6 @@ if (clerk.isPrimaryInstance) {
       ...(isMac ? { screenRecording: macScreenRecording } : {}),
     });
 
-    const teams = registerTeamsIpc({ relayUrl: relayUrlFromEnv(process.env.BEE_RELAY_URL || import.meta.env.MAIN_VITE_BEE_RELAY_URL), detector });
-    onInvite = (link) => teams.setPendingInvite(link);
-    if (pendingInvite) teams.setPendingInvite(pendingInvite);
-    pendingInvite = null;
-
     // Teams audio fallback: the native helper hears the Teams app alone (process loopback on Windows, ScreenCaptureKit on
     // macOS); main reads its PCM, runs speech-to-text and sends text lines to the renderer. Status carries codes only; names
     // stay here. A missing helper, an old OS or a denied permission reads as not available, and the mic carries on.
@@ -598,7 +574,6 @@ if (clerk.isPrimaryInstance) {
       enabled: settings.teamsAudioFallback,
       readTeamsDetector: teamsDetector.read,
       reader: meetingWindow,
-      syncView: teams.view,
       host: { osSupported: teamsAudioOsSupported(teamsAudioPlatform(process.platform), release()), helperFound: teamsAudioHelper !== null },
       permission: teamsAudioCapture.permission,
     });

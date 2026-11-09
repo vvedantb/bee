@@ -21,11 +21,11 @@ export const SUMMARY_SYSTEM = [
   "No title, no preamble, no closing remarks.",
 ].join("\n");
 
-// Added to the system prompt when the transcript is speaker-labelled (Teams mode sync).
+// Added to the system prompt when the transcript is speaker-labelled (captions or Teams audio).
 export const SPEAKER_RULES = [
   "Each transcript line starts with the speaker's name and a colon.",
   "Use the names to attribute decisions and action items. When a speaker commits to a task (\"I'll send it\"), that speaker is the owner.",
-  "The transcript only has Bee members who joined the sync. Do not guess what others in the call said.",
+  "The transcript only has what Bee heard or read in the call. Do not guess what others said.",
 ].join("\n");
 
 // A plain line (solo, the speaker is the user) or a speaker-labelled line from a synced meeting.
@@ -86,12 +86,12 @@ export function summaryRequest(prompt: { system: string; prompt: string }): { in
   };
 }
 
-/** Title first, then the given sections, the synced speakers (if any), then the notes and tips from the session. */
+/** Title first, then the given sections, the speakers (if any), then the notes and tips from the session. */
 function assemble(when: Date, body: string, args: SummaryInput): string {
   const parts = [`# Meeting summary — ${summaryStamp(when)}`, body.trim()];
   const speakers = transcriptSpeakers(args.transcript);
   if (speakers.length > 0) {
-    parts.push(`## Speakers\n${bullets([...speakers, "Partial: only Bee members who joined the sync are captured."], "None.")}`);
+    parts.push(`## Speakers\n${bullets([...speakers, "Partial: only what Bee heard or read in the call is captured."], "None.")}`);
   }
   parts.push(`## Notes cited\n${bullets(args.notesCited ?? [], "None.")}`);
   if (args.tips && args.tips.length > 0) parts.push(`## Tips shown\n${bullets(args.tips, "None.")}`);

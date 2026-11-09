@@ -1,5 +1,5 @@
 import type { AdApp, AdNode, AdWindow } from "./agent-desktop-envelope";
-import type { DetectorReading } from "./sync-controller";
+import type { DetectorReading } from "./teams-heuristics";
 import { isMeetingTitle, meetingCandidate, type MeetingCandidate } from "./teams-heuristics";
 import { parseTeamsTitle } from "./teams-title";
 

@@ -7,10 +7,9 @@ import {
   type RecapRequest,
   type RecapResult,
   type SettingsView,
-  type TeamsView,
   type UserReturned,
 } from "../../shared/ipc";
-import type { SessionLine } from "../../core/sync-lines";
+import type { SessionLine } from "../../core/session-lines";
 import type { startMicSession } from "./speech";
 
 // "What did I miss?" in the store (core/recap.ts): the recap card when main says the user is back, when the mic goes on in a
@@ -59,31 +58,12 @@ const SETTINGS: SettingsView = {
   toggleShortcutActive: true,
 };
 
-const VIEW: TeamsView = {
-  relayConfigured: true,
-  relayError: null,
-  notice: null,
-  me: { userId: "u-me", displayName: "Vedant" },
-  team: null,
-  pendingInvite: null,
-  detection: { inMeeting: true, raw: true, epoch: 1, source: "windows" },
-  prompt: null,
-  room: { id: "r1", code: "a-b", createdAt: 0, startedByMe: true, members: [], invited: [] },
-  roster: [],
-  merge: null,
-  shareMuted: false,
-};
-
-let seq = 0;
-const said = (speakerName: string, text: string): SessionLine => {
-  seq += 1;
-  return { id: `r1:${seq}`, own: false, speakerId: `u-${speakerName}`, speakerName, text, clientTs: Date.now(), serverTs: seq };
-};
+// Other people's lines arrive as live captions from the call window.
+const said = (speaker: string, text: string) => ({ speaker, text });
 
 async function loadStore(options: { recap?: RecapResult } = {}) {
   const commands: CommandRequest[] = [];
   const recaps: RecapRequest[] = [];
-  let tickLines: SessionLine[] = [];
   let returned: (payload: UserReturned) => void = () => undefined;
   vi.stubGlobal("window", {
     bee: {
@@ -108,14 +88,6 @@ async function loadStore(options: { recap?: RecapResult } = {}) {
       },
       writeMeetingSummary: async (_request: MeetingSummaryRequest) => ({ path: "/notes/meeting.md", usedLlm: true, error: null, followUp: ['Saved "Weekly sync": 1 action item', "- Sam: send the quote"] }),
       openMeetingSummary: async () => "",
-      teams: {
-        tick: async () => {
-          const lines = tickLines;
-          tickLines = [];
-          return { view: VIEW, lines };
-        },
-        publish: async () => ({ sent: true, error: null }),
-      },
       onUserReturned: (listener: typeof returned) => {
         returned = listener;
         return () => undefined;
@@ -124,8 +96,8 @@ async function loadStore(options: { recap?: RecapResult } = {}) {
   });
   const store = await import("./store");
   await vi.advanceTimersByTimeAsync(2100);
-  const fromTeammates = async (...lines: SessionLine[]) => {
-    tickLines = lines;
+  const fromTeammates = async (...lines: Array<{ speaker: string; text: string }>) => {
+    store.actions.captionLines(lines);
     await vi.advanceTimersByTimeAsync(2100);
   };
   /** Main says the user is back after leaving at `since`. */

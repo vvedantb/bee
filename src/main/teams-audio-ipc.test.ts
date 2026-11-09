@@ -26,7 +26,7 @@ vi.mock("./auth", () => ({
 const { IPC } = await import("../shared/ipc");
 const { registerTeamsAudioIpc } = await import("./teams-audio-ipc");
 
-const LISTEN: TeamsAudioStatus = { platform: "windows", supported: true, reason: null, teamsCall: true, coverage: "uncovered", permission: "not-needed" };
+const LISTEN: TeamsAudioStatus = { platform: "windows", supported: true, reason: null, teamsCall: true, permission: "not-needed" };
 
 function setup(options: { status?: TeamsAudioStatus; enabled?: boolean; isMac?: boolean; permission?: TeamsAudioPermission } = {}) {
   electron.handlers.clear();
@@ -74,7 +74,6 @@ describe("registerTeamsAudioIpc", () => {
 
     for (const blocked of [
       setup({ enabled: false }),
-      setup({ status: { ...LISTEN, coverage: "covered" } }),
       setup({ status: { ...LISTEN, teamsCall: false } }),
       setup({ status: { ...LISTEN, supported: false, reason: "helper-missing" } }),
     ]) {
@@ -97,7 +96,7 @@ describe("registerTeamsAudioIpc", () => {
     expect(await invoke(IPC.teamsAudioStatus, { sessionToken: "signed-in" })).toEqual(LISTEN);
     expect(calls.touch).toBe(1);
     expect(calls.stop).toEqual([]);
-    state.status = { ...LISTEN, coverage: "covered" };
+    state.status = { ...LISTEN, teamsCall: false };
     await invoke(IPC.teamsAudioStatus, { sessionToken: "signed-in" });
     expect(calls.stop).toEqual(["policy"]);
     // Nothing running: nothing to stop.

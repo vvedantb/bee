@@ -135,7 +135,7 @@ describe("generateMeetingSummary", () => {
   });
 });
 
-describe("speaker-labelled summaries (Teams sync)", () => {
+describe("speaker-labelled summaries (captions or Teams audio)", () => {
   const labelled = [
     { speaker: "Alice", text: "Let's pick up the Acme renewal." },
     { speaker: "Bob", text: "I'll send the quote by Friday." },
@@ -152,7 +152,7 @@ describe("speaker-labelled summaries (Teams sync)", () => {
   it("lists labelled lines under Topics and the speakers in the local summary", () => {
     const markdown = buildLocalSummary({ transcript: labelled, notesCited, when });
     expect(markdown).toContain("## Topics\n- Alice: Let's pick up the Acme renewal.\n- Bob: I'll send the quote by Friday.");
-    expect(markdown).toContain("## Speakers\n- Alice\n- Bob\n- Partial: only Bee members who joined the sync are captured.");
+    expect(markdown).toContain("## Speakers\n- Alice\n- Bob\n- Partial: only what Bee heard or read in the call is captured.");
     expect(markdown.indexOf("## Speakers")).toBeLessThan(markdown.indexOf("## Notes cited"));
   });
 

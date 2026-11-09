@@ -7,7 +7,7 @@ import { IDLE_AUTO, stepAutoMeeting, type AutoEvent, type AutoMeetingState } fro
 import { debugLog, errorData } from "../../core/debug-log";
 import { detectLinks, mergeChips, sourceChips, visibleChips, type LinkChip } from "../../core/link-suggest";
 import { MAX_STEERING_TIPS, isFiller, isNewTurn, isQuestion, mergeTips, recentRestarts, runDelayMs, tipCap, tipKey, waitsForRun } from "../../core/steering";
-import { mergeLines, pipelineText, summaryTranscript, type SessionLine } from "../../core/sync-lines";
+import { mergeLines, pipelineText, summaryTranscript, type SessionLine } from "../../core/session-lines";
 import { TEAMS_AUDIO_SPEAKER, TEAMS_AUDIO_SPEAKER_ID, teamsAudioEcho, teamsAudioPlan, teamsAudioReplaced, type TeamsAudioPlan } from "../../core/teams-audio";
 import { RECAP_AI_MIN_LINES, RECAP_LINES_SENT, RECAP_WINDOW_MS, beeLines, isRecapRequest, localMeetingLines, missedLines, recapBody, speakerText, type RecapEvent } from "../../core/recap";
 import { CONVERSATION_IDLE_MS, addExchange, commandFallbackReply, type BeeExchange } from "../../core/bee-history";
@@ -37,9 +37,7 @@ import {
   type PipelineResult,
   type SettingsUpdate,
   type SettingsView,
-  type TeamsActionInput,
   type TeamsAudioStatus,
-  type TeamsView,
   type TranscribeResult,
   type UpdateCheck,
   type WindowSize,
@@ -50,6 +48,7 @@ import { LOGO_DONE_MS } from "./logo";
 import { openMic } from "./mic";
 import { motionReduced } from "./motion";
 import { framePeak, startMicSession, type PhraseOutcome } from "./speech";
+import { MEETING_PROMPT_NOTICE, MEETING_START_NOTICE, MEETING_START_NO_MIC_NOTICE, MEETING_STOP_NOTICE, meetingEndNotice, type MeetingEndOutcome, type MeetingNotice } from "./meeting-notices";
 import { openTeamsAudio } from "./teams-audio";
 import { downloadUpdate, installUpdate, updateNow } from "./update";
 import type { Tab } from "./panel-tabs";
@@ -63,12 +62,9 @@ export type UpdateState = {
   error: string | null;
 };
 
-// Everything since the last saved summary: own and synced teammates' lines, merged by time. Never rendered.
+// Everything since the last saved summary: own, caption and Teams-audio lines, merged by time. Never rendered.
 export type MeetingSession = { lines: SessionLine[]; notesCited: string[]; tips: string[] };
 
-
-// The card under the notch: the join/start popup, the optional invite step after starting, or a merge offer.
-export type SyncCard = "prompt" | "invite" | "merge" | null;
 
 // result: the last saved summary, kept so the Live tab can open it.
 export type SummaryState = { saving: boolean; result: MeetingSummaryResult | null; error: string | null };
@@ -138,13 +134,9 @@ export type BeeState = {
   hint: { id: HintId; text: string } | null;
   hintClosing: boolean;
   update: UpdateState;
-  // Teams mode, from main (null until the first tick after sign-in).
-  teams: TeamsView | null;
-  teamsBusy: boolean;
-  teamsError: string | null;
-  // The invite step shows after starting a sync, until Done.
-  inviteOpen: boolean;
-  // Teams audio fallback (core/teams-audio.ts): main's status (support, Teams call, coverage; codes only, null until the first
+  // An automatic meeting is active (core/auto-meeting-detection.ts). Drives the notch and Live line "Meeting in progress".
+  meetingActive: boolean;
+  // Teams audio fallback (core/teams-audio.ts): main's status (support and a Teams call; codes only, null until the first
   // poll), and whether Bee hears the Teams app now. failed: the capture would not open or ended in this call; Bee carries on
   // with the mic and tries again in the next call. failure: why (core/teams-audio-protocol.ts), for the Settings line.
   teamsAudio: { status: TeamsAudioStatus | null; listening: boolean; failed: boolean; failure: TeamsAudioFailure | null };
@@ -177,7 +169,6 @@ const REDUCED_EXIT_MS = 1;
 const MIC_OFF = { on: false, level: 0 };
 const EMPTY_SESSION: MeetingSession = { lines: [], notesCited: [], tips: [] };
 const SESSION_LIST_MAX = 100;
-const SYNC_TICK_MS = 2000;
 // Main throttles its own title and calendar reads, so this poll only asks for the cached view.
 const MEETING_TICK_MS = 5000;
 // Lines kept, island dismissed and no new line for this long: the meeting is saved without a click.
@@ -227,10 +218,7 @@ let state: BeeState = {
   hint: null,
   hintClosing: false,
   update: { status: "idle", check: null, error: null },
-  teams: null,
-  teamsBusy: false,
-  teamsError: null,
-  inviteOpen: false,
+  meetingActive: false,
   teamsAudio: { status: null, listening: false, failed: false, failure: null },
   computer: null,
   computerAccess: null,
@@ -314,12 +302,11 @@ let parkedLines: SessionLine[] = [];
 // The conversation so far for vmem's transcript (core/bee-history.ts BeeExchange): the requests and what Bee did since it was
 // last sent. Only a session boundary: Bee's history for the AI lives in main (bee-history.json), whole and forever, and this
 // never clears it. Sent after CONVERSATION_IDLE_MS with no exchange, or once it reaches CONVERSATION_EXCHANGES_MAX; dropped when
-// the meeting ends (the meeting's own send covers it). Separate from the meeting session: never in the summary, meeting memory or
-// the Teams sync.
+// the meeting ends (the meeting's own send covers it). Separate from the meeting session: never in the summary or meeting memory.
 let conversation: BeeExchange[] = [];
 let conversationIdleTimer: ReturnType<typeof setTimeout> | undefined;
 // The conversation window after a request (BeeState.conversationOpen): when it ends, Bee's last exchange for the routing and
-// the follow-up check, when the last exchange ended, and when someone else (caption, Teams audio, teammate) was last heard.
+// the follow-up check, when the last exchange ended, and when someone else (caption, Teams audio) was last heard.
 let conversationUntil = 0;
 let conversationTimer: ReturnType<typeof setTimeout> | undefined;
 let lastBee: { request: string; reply: string } | null = null;
@@ -334,7 +321,6 @@ let stopTeamsAudio: (() => void) | null = null;
 let teamsAudioOpening = false;
 let teamsAudioTicking = false;
 let sentSize: WindowSize = "collapsed";
-let ticking = false;
 let islandHovered = false;
 let scrollLoggedAt = 0;
 // Meeting context. The detected meeting the session's lines belong to (null: none was detected, so only a click saves it),
@@ -342,13 +328,15 @@ let scrollLoggedAt = 0;
 let sessionMeetingId: number | null = null;
 let cardShownFor = 0;
 let meetingTicking = false;
-// Automatic meeting detection (core/auto-meeting-detection.ts): the machine, a manual event waiting for its next step, and a
+// Automatic meeting detection (core/auto-meeting-detection.ts): the machine and a
 // notice listener (main.tsx shows a quiet toast; the store stays free of UI).
 let autoState: AutoMeetingState = IDLE_AUTO;
-let autoEvent: AutoEvent | undefined;
 let autoTicking = false;
 let autoOverlayOn = false;
-let autoNotice: ((message: string) => void) | null = null;
+let autoNotice: ((notice: MeetingNotice) => void) | null = null;
+// The user's Start / Stop click, waiting for the machine's next step. The last signals read stand in if a read fails.
+let autoEvent: AutoEvent | null = null;
+let lastSignals: MeetingSignals | null = null;
 let islandActivityAt = 0;
 let islandTimer: ReturnType<typeof setTimeout> | undefined;
 // Mic hints: one detector for the app, so a hint's cooldown outlasts a mic toggle. Fed by each mic frame and phrase outcome.
@@ -451,30 +439,20 @@ async function closeIsland(): Promise<void> {
   await applyWindowSize();
 }
 
-export function syncCard(current: BeeState): SyncCard {
-  const teams = current.teams;
-  if (!teams) return null;
-  if (teams.prompt) return "prompt";
-  if (teams.room && current.inviteOpen) return "invite";
-  if (teams.merge) return "merge";
-  return null;
-}
-
 /**
- * The island body shows a response (tips, link chips, the meeting card): something to show, and no panel or sync card in the
- * way. A Confirm prompt for computer use always shows, over a sync card.
+ * The island body shows a response (tips, link chips, the meeting card): something to show, and no panel in the
+ * way. A Confirm prompt for computer use always shows.
  */
 export function responseOpen(current: BeeState): boolean {
   if (current.expanded) return false;
   if (current.asking) return true;
   if (current.computer?.confirm) return true;
-  if (syncCard(current)) return false;
   return islandShowsBody(islandArgs(current));
 }
 
 /** The island body is open: for a response, or for a mic hint alone (a hint shows even after the response was closed). */
 export function islandOpen(current: BeeState): boolean {
-  if (current.expanded || syncCard(current)) return false;
+  if (current.expanded) return false;
   return current.hint !== null || responseOpen(current);
 }
 
@@ -532,22 +510,17 @@ export function islandArgs(current: BeeState) {
   };
 }
 
-/** Resize the window to fit: full panel, notch plus sync card, notch plus island body, or notch only. */
+/** Resize the window to fit: full panel, notch plus island body, or notch only. */
 async function applyWindowSize(): Promise<void> {
   const size: WindowSize =
-    state.expanded && !state.collapsing ? "expanded" : state.computer?.confirm ? "response" : syncCard(state) ? "prompt" : islandOpen(state) ? "response" : "collapsed";
+    state.expanded && !state.collapsing ? "expanded" : state.computer?.confirm ? "response" : islandOpen(state) ? "response" : "collapsed";
   if (size === sentSize) return;
   sentSize = size;
   await window.bee.setWindowSize(size);
 }
 
-function setTeams(teams: TeamsView): void {
-  set({ teams, inviteOpen: state.inviteOpen && teams.room !== null });
-  void applyWindowSize();
-}
-
 function selfName(): string {
-  return state.teams?.me?.displayName ?? "You";
+  return "You";
 }
 
 /**
@@ -559,7 +532,7 @@ function addLines(lines: SessionLine[]): boolean {
   if (lines.some((line) => !line.own)) lastOtherSpeakerAt = Date.now();
   const current = state.session.lines;
   if (current.length === 0) sessionMeetingId = state.meeting?.active ? state.meeting.id : null;
-  // A teammate's or caption line that repeats a recent Teams-audio line replaces it: it names the speaker. Its words are
+  // A caption line that repeats a recent Teams-audio line replaces it: it names the speaker. Its words are
   // already in, so it starts no turn of its own.
   const replaced = teamsAudioReplaced(current, lines);
   const gone = new Set(replaced.map((entry) => entry.id));
@@ -676,7 +649,7 @@ function fireRun(): void {
 }
 
 /**
- * Retrieve → Jev → Luna on the last 8 lines, teammates' lines labelled "Alice: …". Tips already on screen go to Luna as a keep
+ * Retrieve → Jev → Luna on the last 8 lines, other speakers' lines labelled "Alice: …". Tips already on screen go to Luna as a keep
  * list; the run's tips merge over them (core/steering.ts mergeTips), so a newer line adds to the answer instead of wiping it.
  */
 /** The list less one copy of `item`: a tool call ended, and another call to the same tool may still run. */
@@ -893,11 +866,10 @@ function endCommandHold(): void {
   scheduleRun();
 }
 
-/** Names of other people in this meeting (captions, teammates, the sync's roster): a phrase that names one is for them. */
+/** Names of other people in this meeting (captions): a phrase that names one is for them. */
 function participantNames(): string[] {
   const names = new Set<string>();
   for (const line of state.session.lines) if (!line.own && line.speakerName !== CAPTION_SPEAKER && line.speakerName !== TEAMS_AUDIO_SPEAKER) names.add(line.speakerName);
-  for (const member of state.teams?.roster ?? []) if (member.userId !== state.teams?.me?.userId) names.add(member.displayName);
   return [...names];
 }
 
@@ -973,7 +945,7 @@ export type TypedCommandOutcome = "taken" | "empty" | "no-wake";
 
 /**
  * A mic phrase that starts with the wake word ("Bee, open Teams") is a request to the AI, not a meeting line: it never joins
- * the session, the summary, meeting memory or the Teams sync. "Bee" alone arms the next phrase. In the conversation window, a
+ * the session, the summary, or meeting memory. "Bee" alone arms the next phrase. In the conversation window, a
  * phrase without "Bee" that looks addressed to Bee is a follow-up; an unclear one may get one small AI check (followUpCheck).
  * Returns true when the phrase was taken. Console lines never carry the words; the local debug log does. `via` is "typed-command"
  * for Live → Manual test → Talk to Bee (typed): typed text through this same router, logged as such.
@@ -1202,48 +1174,20 @@ async function runCommand(command: string, via: "mic" | "typed-command" = "mic")
   }
 }
 
-/** The user's own line joins the meeting: the session, the sync (mic only) and, with content words, a run. */
+/** The user's own line joins the meeting: the session and, with content words, a run. */
 function addOwnLine(text: string, source: "typed" | "mic"): void {
   localSeq += 1;
   const own: SessionLine = {
     id: `local-${localSeq}`,
     own: true,
-    speakerId: state.teams?.me?.userId ?? "local",
+    speakerId: "local",
     speakerName: selfName(),
     text,
     clientTs: Date.now(),
     serverTs: null,
   };
   const content = addLines([own]);
-  if (source === "mic" && state.teams?.room) void shareLine(own);
   if (content) scheduleRun();
-}
-
-/** Shares one mic phrase with the sync. Main applies the share gate; failures leave Bee working solo. */
-async function shareLine(line: SessionLine): Promise<void> {
-  try {
-    await window.bee.teams.publish({ text: line.text, clientTs: line.clientTs, source: "mic", sessionToken: await sessionToken() });
-  } catch {
-    // The next tick reports relay trouble.
-  }
-}
-
-/** Detection, presence and teammates' phrases, every 2 s while signed in. */
-async function teamsTick(): Promise<void> {
-  if (ticking) return;
-  ticking = true;
-  try {
-    const token = await getToken().catch(() => null);
-    if (!token) return;
-    const { view, lines } = await window.bee.teams.tick(token);
-    setTeams(view);
-    // Teammates' lines follow the same steering rules as the user's own.
-    if (lines.length > 0 && addLines(lines)) scheduleRun();
-  } catch {
-    // Main or the relay failed this tick; the next one tries again.
-  } finally {
-    ticking = false;
-  }
 }
 
 /**
@@ -1265,13 +1209,13 @@ async function meetingTick(): Promise<void> {
     }
     const lines = state.session.lines.length;
     if (sessionMeetingId === null || state.summary.saving) return;
-    // With automatic detection on, the auto machine owns the call-leave stop (its grace is longer than the context debounce).
-    const autoOwnsEnd = state.settings?.autoMeetingDetection === true;
-    const over = !autoOwnsEnd && (!view.active || view.id !== sessionMeetingId);
-    const quiet = state.dismissed && !state.busy && lines > 0 && Date.now() - lastLineAt >= DISMISS_FINALIZE_MS;
+    // The auto machine owns the call-leave stop (its grace is longer than the context debounce). With auto-confirm off, Bee saves
+    // nothing by itself until the user has started a meeting.
+    const enabled = state.settings?.autoMeetingDetection === true;
+    const quiet = (enabled || state.meetingActive) && state.dismissed && !state.busy && lines > 0 && Date.now() - lastLineAt >= DISMISS_FINALIZE_MS;
     if (lines === 0) {
       if (!view.active || view.id !== sessionMeetingId) sessionMeetingId = null;
-    } else if (over || quiet) {
+    } else if (quiet) {
       void actions.endMeeting({ auto: true });
     }
   } catch {
@@ -1281,69 +1225,85 @@ async function meetingTick(): Promise<void> {
   }
 }
 
-/** The quiet line for an automatic start or stop (a toast). */
-export function onAutoMeetingNotice(listener: ((message: string) => void) | null): void {
+/** The meeting notices (toasts): quiet info lines, and the Start / Stop meeting prompts when auto-confirm is off. */
+export function onAutoMeetingNotice(listener: ((notice: MeetingNotice) => void) | null): void {
   autoNotice = listener;
 }
 
 /**
- * Automatic meeting detection. Reads the signals from main, steps the pure machine and applies its effect: start turns the mic on
- * (and meeting mode for the session); stop saves the summary through endMeeting and turns the mic off. Fails open: a failed read
- * leaves the machine and the mic as they are. Setting off: the machine resets and Bee does nothing more.
+ * Automatic meeting detection. Reads the signals from main and steps the pure machine; detection always runs. The setting is
+ * auto-confirm: on, a confirmed call starts by itself (quiet toast). Off, Bee prompts with a Start meeting button and records
+ * nothing until it is clicked. Start turns the mic on (and meeting mode for the session); stop saves the summary through
+ * endMeeting and turns the mic off. Fails open: a failed read leaves the machine and the mic as they are.
  */
 async function autoMeetingTick(): Promise<void> {
   if (autoTicking) return;
   autoTicking = true;
-  const event = autoEvent;
-  autoEvent = undefined;
   try {
-    const enabled = state.settings?.autoMeetingDetection === true;
-    let signals: MeetingSignals | null = null;
-    if (enabled) {
-      const token = await getToken().catch(() => null);
-      signals = token ? await window.bee.meeting.signals(token).catch(() => null) : null;
-      // No reading: try again next tick, and keep the manual event for it.
-      if (!signals) {
-        autoEvent ??= event;
-        return;
-      }
-    }
-    const calendarBoost = state.meeting?.active === true && state.meeting.source === "calendar";
-    const out = stepAutoMeeting(autoState, {
-      signals: { ...(signals ?? { meetingAppPresent: false, inCallTitle: false }), calendarBoost },
-      enabled,
-      now: Date.now(),
-      event,
-    });
-    autoState = out.state;
-    // Meeting mode for the session follows an automatic start; any other end of it (a manual stop, the setting off) lifts it.
-    const wantOverlay = autoState.phase === "active" && autoState.origin === "auto";
-    if (wantOverlay !== autoOverlayOn) {
-      autoOverlayOn = wantOverlay;
-      void window.bee.meeting.autoOverlay(wantOverlay).catch(() => undefined);
-    }
-    if (out.effect === "start") await autoStart();
-    else if (out.effect === "stop") await autoStop();
+    do {
+      const event = autoEvent;
+      autoEvent = null;
+      await autoMeetingStep(event);
+    } while (autoEvent);
   } catch (error) {
-    autoEvent ??= event;
     debugLog.warn("meeting", "auto-detect-failed", { error: errorData(error) });
   } finally {
     autoTicking = false;
   }
 }
 
-async function autoStart(): Promise<void> {
-  debugLog.info("meeting", "auto-start", { mic: state.mic.on });
+async function autoMeetingStep(event: AutoEvent | null): Promise<void> {
+  const enabled = state.settings?.autoMeetingDetection === true;
+  const token = await getToken().catch(() => null);
+  const read = token ? await window.bee.meeting.signals(token).catch(() => null) : null;
+  // No reading: try again next tick. A click still goes through on the last signals.
+  if (read) lastSignals = read;
+  const signals = read ?? (event ? lastSignals : null);
+  if (!signals && !event) return;
+  const calendarBoost = state.meeting?.active === true && state.meeting.source === "calendar";
+  const wasPrompted = autoState.phase === "prompted";
+  const out = stepAutoMeeting(autoState, {
+    signals: { ...(signals ?? { meetingAppPresent: false, inCallTitle: false }), calendarBoost },
+    enabled,
+    now: Date.now(),
+    ...(event ? { event } : {}),
+  });
+  autoState = out.state;
+  // The meeting is active from the machine's start until its stop. Only then does it drive the notch line, meeting mode for the
+  // session and the mic. A prompt records nothing.
+  const active = autoState.phase === "active";
+  if (active !== state.meetingActive) set({ meetingActive: active });
+  if (active !== autoOverlayOn) {
+    autoOverlayOn = active;
+    void window.bee.meeting.autoOverlay(active).catch(() => undefined);
+  }
+  if (out.effect === "prompt") {
+    debugLog.info("meeting", "auto-prompt", {});
+    autoNotice?.({ kind: "prompt-start", message: MEETING_PROMPT_NOTICE });
+  } else if (out.effect === "start") await autoStart(wasPrompted);
+  else if (out.effect === "stop") await autoStop();
+  else if (out.effect === "dismiss") autoNotice?.({ kind: "clear" });
+}
+
+async function autoStart(withStopControl: boolean): Promise<void> {
+  debugLog.info("meeting", "auto-start", { mic: state.mic.on, prompted: withStopControl });
   if (!stopMic) await startMic({ transcribe: transcribePhrase });
-  autoNotice?.(stopMic ? "Meeting detected. Bee is listening." : "Meeting detected. The microphone is unavailable.");
+  const message = stopMic ? (withStopControl ? MEETING_STOP_NOTICE : MEETING_START_NOTICE) : MEETING_START_NO_MIC_NOTICE;
+  autoNotice?.(withStopControl ? { kind: "prompt-stop", message } : { kind: "info", message });
 }
 
 async function autoStop(): Promise<void> {
-  const hadLines = state.session.lines.length > 0;
   debugLog.info("meeting", "auto-stop", { lines: state.session.lines.length });
-  // The same save as the End meeting button; the mic goes off with it.
-  await actions.endMeeting({ auto: true, stopMic: true });
-  autoNotice?.(!hadLines ? "Meeting ended." : state.summary.error ? "Meeting ended. Could not save the summary." : "Meeting ended. Summary saved.");
+  // The Stop control goes at once; the mic goes off with the save, and the one end toast waits for the save to finish.
+  autoNotice?.({ kind: "clear" });
+  const outcome = await actions.endMeeting({ auto: true, stopMic: true });
+  autoNotice?.({ kind: "info", message: meetingEndNotice(outcome) });
+}
+
+/** The user's Start meeting click (auto-confirm off). The meeting starts at once; a click with no prompt waiting does nothing. */
+function answerMeeting(event: AutoEvent): void {
+  autoEvent = event;
+  void autoMeetingTick();
 }
 
 async function sessionToken(): Promise<string> {
@@ -1502,7 +1462,6 @@ export function teamsAudioNow(current: Pick<BeeState, "settings" | "teamsAudio" 
     supported: status?.supported ?? false,
     teamsCall: status?.teamsCall ?? false,
     micOn: current.mic.on,
-    coverage: status?.coverage ?? "unknown",
   });
 }
 
@@ -1515,8 +1474,8 @@ function endTeamsAudio(): void {
 
 /**
  * Starts or stops Teams audio to match teamsAudioNow. It runs beside the mic, never mixed into it: main runs the Teams-only
- * helper with its own phrase segmenter and speech-to-text, and sends back text. Its lines are never shared with the sync. Any
- * failure leaves the mic, the sync and the pipeline alone.
+ * helper with its own phrase segmenter and speech-to-text, and sends back text. Any
+ * failure leaves the mic and the pipeline alone.
  */
 async function syncTeamsAudio(): Promise<void> {
   if (teamsAudioNow(state) !== "listen") {
@@ -1864,7 +1823,7 @@ export const actions = {
     set({ tab });
   },
 
-  /** Show a tab, opening the panel if it is closed (a tip's full text, the sync status). */
+  /** Show a tab, opening the panel if it is closed (a tip's full text). */
   async openTab(tab: Tab): Promise<void> {
     set({ tab });
     if (!state.expanded || state.collapsing) await actions.setExpanded(true);
@@ -1878,7 +1837,7 @@ export const actions = {
 
   /**
    * Add a meeting line (typed, or a phrase from Grok STT) and, if it has content words, schedule retrieve → Jev → Luna (after a
-   * short debounce). Mic phrases are also shared with the Teams sync, if one is on and sharing is not paused. A mic phrase that
+   * short debounce). A mic phrase that
    * starts with the wake word ("Bee, open Teams") is a direct request instead (takeWakeLine); typed lines never are.
    */
   simulateLine(line: string, source: "typed" | "mic" = "typed"): void {
@@ -1904,8 +1863,8 @@ export const actions = {
   },
 
   /**
-   * New live caption lines from the call window (the meeting window reader). They join the session like teammates'
-   * lines ("Alice: …") and follow the same steering rules. They are never shared with the Teams sync. With the mic on, a caption
+   * New live caption lines from the call window (the meeting window reader). They join the session like other speakers'
+   * lines ("Alice: …") and follow the same steering rules. With the mic on, a caption
    * that repeats the user's own recent line is dropped: the mic already sent it.
    */
   captionLines(lines: MeetingWindowCaptions["lines"]): void {
@@ -1924,8 +1883,8 @@ export const actions = {
 
   /**
    * Phrases heard from the Teams app (Teams audio fallback). They join the session as "Meeting: …" and follow the same steering
-   * rules as captions. They are never shared with the Teams sync. A phrase that repeats a line Bee already has from the last
-   * 20 s (the user's own, a teammate's from their Bee, a caption) is dropped. Console lines carry counts only.
+   * rules as captions. A phrase that repeats a line Bee already has from the last
+   * 20 s (the user's own or a caption) is dropped. Console lines carry counts only.
    */
   teamsAudioLines(texts: string[]): void {
     if (!state.settings?.teamsAudioFallbackEnabled) return;
@@ -2094,21 +2053,29 @@ export const actions = {
     if (state.teamsAudio.failure === "denied") setTeamsAudio({ failed: false, failure: null });
   },
 
+  /** The Start meeting button (auto-confirm off). */
+  acceptMeeting(): void {
+    answerMeeting("accept");
+  },
+
+  /** The Stop meeting button. Saves once and keeps the same meeting from prompting again. */
+  stopMeeting(): void {
+    answerMeeting("reject");
+  },
+
   /**
-   * Stop the mic and write the session's summary to the notes folder. The session starts empty for the next
-   * meeting straight away; on failure it is put back, ahead of any lines that arrived meanwhile.
+   * Write the session's summary to the notes folder. Internal: automatic detection's stop (and the quiet-session save) call it;
+   * the Stop meeting button reaches it through the machine. The session starts empty for the next meeting straight away; on failure it is put back, ahead of any lines
+   * that arrived meanwhile. Resolves how it ended: saved, failed, or none (nothing to save).
    */
-  async endMeeting(options: { auto?: boolean; stopMic?: boolean } = {}): Promise<void> {
-    // A click is a manual stop: the same meeting does not start again by itself.
-    if (!options.auto) autoEvent = "manualStop";
-    const ended = state.session;
+  async endMeeting(options: { auto?: boolean; stopMic?: boolean } = {}): Promise<MeetingEndOutcome> {    const ended = state.session;
     // The conversation window and the conversation for vmem end with the meeting, even one with no lines to save. Bee's history
     // for the AI (main) carries on.
     closeConversation("meeting-end");
     endConversation("meeting-end");
     if (ended.lines.length === 0 || state.summary.saving) {
       if (options.stopMic) actions.stopMic(null);
-      return;
+      return "none";
     }
     debugLog.info("meeting", "end", { auto: options.auto ?? false, lines: ended.lines.length, tips: ended.tips.length, meetingId: sessionMeetingId });
     // An automatic save from the meeting context leaves the mic alone: the next meeting may be starting. Automatic detection's
@@ -2148,6 +2115,7 @@ export const actions = {
         };
         showCard(followCard);
       }
+      return "saved";
     } catch (error) {
       if (!options.auto) sessionMeetingId ??= meetingId;
       const now = state.session;
@@ -2160,6 +2128,7 @@ export const actions = {
       });
       debugLog.warn("meeting", "summary-failed", { auto: options.auto ?? false, error: errorData(error) });
       setSummary({ saving: false, error: error instanceof Error ? error.message : "Could not save the summary" });
+      return "failed";
     }
   },
 
@@ -2191,14 +2160,13 @@ export const actions = {
     }
   },
 
-  /** Mic on: each spoken phrase goes to Grok STT in main, then into simulateLine. The words are not shown. */
+  /** Mic on: each spoken phrase goes to Grok STT in main, then into simulateLine. The words are not shown. Not a meeting control. */
   async toggleMic(): Promise<void> {
+    // The mic is for Talk to Bee and general listening. It never starts or stops a meeting (automatic detection owns that).
     if (stopMic) {
-      autoEvent = "manualStop";
       actions.stopMic(null);
       return;
     }
-    autoEvent = "manualStart";
     await startMic({ transcribe: transcribePhrase });
   },
 
@@ -2235,34 +2203,11 @@ export const actions = {
     await updateNow(state.update.status, window.bee, setUpdate);
   },
 
-  /** Teams mode: team, popup and sync actions. Resolves true on success; errors show in the UI. */
-  async teams(action: TeamsActionInput): Promise<boolean> {
-    set({ teamsBusy: true, teamsError: null });
-    try {
-      const result = await window.bee.teams.act({ ...action, sessionToken: await sessionToken() });
-      // The action type only: names and invite codes stay out of the log.
-      debugLog.info("teams", "action", { type: action.type, error: result.error, room: result.view.room?.id ?? null });
-      set({ teamsBusy: false, teamsError: result.error, inviteOpen: action.type === "startSync" ? !result.error : state.inviteOpen });
-      setTeams(result.view);
-      return result.error === null;
-    } catch (error) {
-      debugLog.warn("teams", "action-failed", { type: action.type, error: errorData(error) });
-      set({ teamsBusy: false, teamsError: error instanceof Error ? error.message : "Teams action failed" });
-      return false;
-    }
-  },
-
   /** Main: the user is back after a while away (core/recap.ts AWAY_MS). The recap shows once per away period, if there is any. */
   userReturned(since: number): void {
     if (since <= recapAwaySince) return;
     recapAwaySince = since;
     void showRecap("away", since);
-  },
-
-  /** Show or hide the invite step (the roster of teammates in a meeting). */
-  setInviteOpen(inviteOpen: boolean): void {
-    set({ inviteOpen });
-    void applyWindowSize();
   },
 };
 
@@ -2270,7 +2215,6 @@ void actions.refreshSettings();
 void actions.refreshMcp();
 // Quiet check at start-up; the notch shows an update button only when one is available.
 void actions.checkForUpdate();
-setInterval(() => void teamsTick(), SYNC_TICK_MS);
 setInterval(() => {
   void meetingTick();
   void autoMeetingTick();
