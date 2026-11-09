@@ -1,17 +1,20 @@
 // First, so the local debug log is listening before anything else runs.
 import "./debug-log-boot";
 import { ClerkProvider } from "@clerk/electron/react";
-import { SonnerToaster } from "@vvedantb/ui";
+import { SonnerToaster, toast } from "@vvedantb/ui";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { CLERK_PUBLISHABLE_KEY } from "../../shared/clerk";
 import { App } from "./App";
 import { logStateChanges } from "./debug-log";
-import { actions, getBeeState, subscribe } from "./store";
+import { actions, getBeeState, onAutoMeetingNotice, subscribe } from "./store";
 import "./styles.css";
 
 // Island and panel state changes for the debug log.
 logStateChanges(subscribe, getBeeState);
+
+// Automatic meeting detection starts and stops quietly: a toast, never a dialog.
+onAutoMeetingNotice((message) => toast(message));
 
 // Focus went to another app: the user clicked outside Bee, so an answer open in full folds back to the pill.
 window.addEventListener("blur", () => actions.clickedOutside());

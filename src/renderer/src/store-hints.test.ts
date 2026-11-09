@@ -30,6 +30,7 @@ const SETTINGS: SettingsView = {
   vmemConnected: false,
   sendSessionsToVmem: false,
   meetingMode: false,
+  autoMeetingDetection: false,
   interfaceScale: 1,
   motionPreference: "on",
   secretStorage: "os",

@@ -28,6 +28,8 @@ import {
 // On disk: secrets are safeStorage ciphertext (base64). Plain secrets never touch disk.
 const fileSchema = z.object({
   meetingMode: z.boolean().default(false),
+  // Automatic meeting detection: on until the user turns it off.
+  autoMeetingDetection: z.boolean().default(true),
   // Interface size factor. Anything unlisted reads as 1 (100%).
   interfaceScale: z.unknown().optional().transform(clampInterfaceScale),
   // Animations: system, on or off. Anything else reads as on.
@@ -114,6 +116,7 @@ export function createSettingsStore(args: {
     }
     return {
       meetingMode: false,
+      autoMeetingDetection: true,
       interfaceScale: 1,
       motionPreference: "on",
       knownNames: [],
@@ -444,6 +447,7 @@ export function createSettingsStore(args: {
       sendSessionsToVmem: sendSessionsToVmem(file),
       gatewayKeySource: saved ? "saved" : args.envGatewayKey?.trim() ? "env" : "none",
       meetingMode: file.meetingMode,
+      autoMeetingDetection: file.autoMeetingDetection,
       interfaceScale: file.interfaceScale,
       motionPreference: file.motionPreference,
       secretStorage: storageMode(),
@@ -466,6 +470,7 @@ export function createSettingsStore(args: {
     let file = read();
     if (update.gatewayApiKey !== undefined) file = setSecret(file, "gatewayApiKey", update.gatewayApiKey);
     if (update.meetingMode !== undefined) file = { ...file, meetingMode: update.meetingMode };
+    if (update.autoMeetingDetection !== undefined) file = { ...file, autoMeetingDetection: update.autoMeetingDetection };
     if (update.interfaceScale !== undefined) file = { ...file, interfaceScale: clampInterfaceScale(update.interfaceScale) };
     if (update.motionPreference !== undefined) file = { ...file, motionPreference: clampMotionPreference(update.motionPreference) };
     if (update.personalisedLinks !== undefined) file = { ...file, personalisedLinks: update.personalisedLinks };

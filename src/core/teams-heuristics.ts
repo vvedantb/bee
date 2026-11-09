@@ -17,11 +17,13 @@ export function parseTasklistCsv(text: string): WindowRow[] {
 }
 
 // Teams' own tabs that mention calls or meetings but are not a live call.
-const NOT_A_CALL = /^(calls|calendar|meetings|activity|chat|teams|meet)\s*\|/i;
+const NOT_A_CALL = /^(calls|calendar|meetings|activity|chat|teams|meet|home|files|apps|people|settings)\s*\|/i;
+// A badge count before the title: "(3) Chat | Microsoft Teams".
+const UNREAD_COUNT = /^\(\d+\)\s*/;
 
 /** A Teams window whose title reads like a meeting or call window, e.g. "Meeting with Alice | Microsoft Teams". */
 export function isMeetingTitle(title: string): boolean {
-  const trimmed = title.trim();
+  const trimmed = title.trim().replace(UNREAD_COUNT, "");
   if (!trimmed || trimmed === "N/A" || NOT_A_CALL.test(trimmed)) return false;
   return /\b(meeting|call|meet now|huddle)\b/i.test(trimmed);
 }
@@ -53,6 +55,20 @@ export function micInUseKeys(text: string): string[] {
   }
   flush();
   return inUse;
+}
+
+export type MicApp = "teams" | "zoom" | "browser";
+
+// The last path part of a ConsentStore key. NonPackaged apps encode their path with "#" for "\\"; packaged ones use the package name.
+const BROWSER_EXE = /^(chrome|msedge|firefox|brave|opera|vivaldi|arc|zen)\.exe$/;
+
+/** Which kind of app a mic registry key is: Teams (new, classic), Zoom, a browser (Google Meet runs there), or something else (null). */
+export function micAppKind(key: string): MicApp | null {
+  const name = (key.trim().split("\\").pop() ?? "").split("#").pop()?.toLowerCase() ?? "";
+  if (/^(ms-?teams(\.exe)?|teams\.exe|msteams_\w+)$/.test(name)) return "teams";
+  if (/^zoom(\.exe)?$/.test(name)) return "zoom";
+  if (BROWSER_EXE.test(name)) return "browser";
+  return null;
 }
 
 // One desktop meeting window. No Microsoft meeting id: the key is only the window's own title, normalised.

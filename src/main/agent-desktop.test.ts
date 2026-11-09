@@ -542,8 +542,8 @@ describe("source scan: agent-desktop stays read-only", () => {
 
   it("never calls an input, clipboard or close command outside the computer tools", () => {
     const allowed = new Set<string | undefined>([...READ_ONLY_COMMANDS, ...DESKTOP_ACTION_COMMANDS]);
-    // main/teams-detector.ts runs reg and tasklist through its own runner, not agent-desktop.
-    for (const { path, text } of sources().filter(({ path }) => !["main/teams-detector.ts", "core/computer-tools.ts"].includes(fromSrc(path)))) {
+    // main/teams-detector.ts and main/meeting-signals.ts run reg and tasklist through their own runner, not agent-desktop.
+    for (const { path, text } of sources().filter(({ path }) => !["main/teams-detector.ts", "main/meeting-signals.ts", "core/computer-tools.ts"].includes(fromSrc(path)))) {
       // computer-use.ts loads agent-desktop's guides (skills get) on the computer-use runner; nothing else runs skills.
       for (const command of commandsIn(text)) expect(allowed.has(command) || (command === "skills" && fromSrc(path) === "core/computer-use.ts"), `${fromSrc(path)}: ${command}`).toBe(true);
     }

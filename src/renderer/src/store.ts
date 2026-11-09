@@ -3,6 +3,7 @@ import type { ClaudeCodeUpdate } from "./ClaudeCodeSection";
 import { getToken } from "@clerk/electron/react";
 import { useSyncExternalStore } from "react";
 import { echoesOwnLine } from "../../core/agent-desktop-meeting";
+import { IDLE_AUTO, stepAutoMeeting, type AutoEvent, type AutoMeetingState } from "../../core/auto-meeting-detection";
 import { debugLog, errorData } from "../../core/debug-log";
 import { detectLinks, mergeChips, sourceChips, visibleChips, type LinkChip } from "../../core/link-suggest";
 import { MAX_STEERING_TIPS, isFiller, isNewTurn, isQuestion, mergeTips, recentRestarts, runDelayMs, tipCap, tipKey, waitsForRun } from "../../core/steering";
@@ -29,6 +30,7 @@ import {
   type McpSetEnabled,
   type McpTestResult,
   type MeetingContextView,
+  type MeetingSignals,
   type MeetingWindowCaptions,
   type MeetingSummaryResult,
   type MemoryFactView,
@@ -340,6 +342,13 @@ let scrollLoggedAt = 0;
 let sessionMeetingId: number | null = null;
 let cardShownFor = 0;
 let meetingTicking = false;
+// Automatic meeting detection (core/auto-meeting-detection.ts): the machine, a manual event waiting for its next step, and a
+// notice listener (main.tsx shows a quiet toast; the store stays free of UI).
+let autoState: AutoMeetingState = IDLE_AUTO;
+let autoEvent: AutoEvent | undefined;
+let autoTicking = false;
+let autoOverlayOn = false;
+let autoNotice: ((message: string) => void) | null = null;
 let islandActivityAt = 0;
 let islandTimer: ReturnType<typeof setTimeout> | undefined;
 // Mic hints: one detector for the app, so a hint's cooldown outlasts a mic toggle. Fed by each mic frame and phrase outcome.
@@ -1256,10 +1265,12 @@ async function meetingTick(): Promise<void> {
     }
     const lines = state.session.lines.length;
     if (sessionMeetingId === null || state.summary.saving) return;
-    const over = !view.active || view.id !== sessionMeetingId;
+    // With automatic detection on, the auto machine owns the call-leave stop (its grace is longer than the context debounce).
+    const autoOwnsEnd = state.settings?.autoMeetingDetection === true;
+    const over = !autoOwnsEnd && (!view.active || view.id !== sessionMeetingId);
     const quiet = state.dismissed && !state.busy && lines > 0 && Date.now() - lastLineAt >= DISMISS_FINALIZE_MS;
     if (lines === 0) {
-      if (over) sessionMeetingId = null;
+      if (!view.active || view.id !== sessionMeetingId) sessionMeetingId = null;
     } else if (over || quiet) {
       void actions.endMeeting({ auto: true });
     }
@@ -1268,6 +1279,71 @@ async function meetingTick(): Promise<void> {
   } finally {
     meetingTicking = false;
   }
+}
+
+/** The quiet line for an automatic start or stop (a toast). */
+export function onAutoMeetingNotice(listener: ((message: string) => void) | null): void {
+  autoNotice = listener;
+}
+
+/**
+ * Automatic meeting detection. Reads the signals from main, steps the pure machine and applies its effect: start turns the mic on
+ * (and meeting mode for the session); stop saves the summary through endMeeting and turns the mic off. Fails open: a failed read
+ * leaves the machine and the mic as they are. Setting off: the machine resets and Bee does nothing more.
+ */
+async function autoMeetingTick(): Promise<void> {
+  if (autoTicking) return;
+  autoTicking = true;
+  const event = autoEvent;
+  autoEvent = undefined;
+  try {
+    const enabled = state.settings?.autoMeetingDetection === true;
+    let signals: MeetingSignals | null = null;
+    if (enabled) {
+      const token = await getToken().catch(() => null);
+      signals = token ? await window.bee.meeting.signals(token).catch(() => null) : null;
+      // No reading: try again next tick, and keep the manual event for it.
+      if (!signals) {
+        autoEvent ??= event;
+        return;
+      }
+    }
+    const calendarBoost = state.meeting?.active === true && state.meeting.source === "calendar";
+    const out = stepAutoMeeting(autoState, {
+      signals: { ...(signals ?? { meetingAppPresent: false, inCallTitle: false }), calendarBoost },
+      enabled,
+      now: Date.now(),
+      event,
+    });
+    autoState = out.state;
+    // Meeting mode for the session follows an automatic start; any other end of it (a manual stop, the setting off) lifts it.
+    const wantOverlay = autoState.phase === "active" && autoState.origin === "auto";
+    if (wantOverlay !== autoOverlayOn) {
+      autoOverlayOn = wantOverlay;
+      void window.bee.meeting.autoOverlay(wantOverlay).catch(() => undefined);
+    }
+    if (out.effect === "start") await autoStart();
+    else if (out.effect === "stop") await autoStop();
+  } catch (error) {
+    autoEvent ??= event;
+    debugLog.warn("meeting", "auto-detect-failed", { error: errorData(error) });
+  } finally {
+    autoTicking = false;
+  }
+}
+
+async function autoStart(): Promise<void> {
+  debugLog.info("meeting", "auto-start", { mic: state.mic.on });
+  if (!stopMic) await startMic({ transcribe: transcribePhrase });
+  autoNotice?.(stopMic ? "Meeting detected. Bee is listening." : "Meeting detected. The microphone is unavailable.");
+}
+
+async function autoStop(): Promise<void> {
+  const hadLines = state.session.lines.length > 0;
+  debugLog.info("meeting", "auto-stop", { lines: state.session.lines.length });
+  // The same save as the End meeting button; the mic goes off with it.
+  await actions.endMeeting({ auto: true, stopMic: true });
+  autoNotice?.(!hadLines ? "Meeting ended." : state.summary.error ? "Meeting ended. Could not save the summary." : "Meeting ended. Summary saved.");
 }
 
 async function sessionToken(): Promise<string> {
@@ -2022,16 +2098,22 @@ export const actions = {
    * Stop the mic and write the session's summary to the notes folder. The session starts empty for the next
    * meeting straight away; on failure it is put back, ahead of any lines that arrived meanwhile.
    */
-  async endMeeting(options: { auto?: boolean } = {}): Promise<void> {
+  async endMeeting(options: { auto?: boolean; stopMic?: boolean } = {}): Promise<void> {
+    // A click is a manual stop: the same meeting does not start again by itself.
+    if (!options.auto) autoEvent = "manualStop";
     const ended = state.session;
     // The conversation window and the conversation for vmem end with the meeting, even one with no lines to save. Bee's history
     // for the AI (main) carries on.
     closeConversation("meeting-end");
     endConversation("meeting-end");
-    if (ended.lines.length === 0 || state.summary.saving) return;
+    if (ended.lines.length === 0 || state.summary.saving) {
+      if (options.stopMic) actions.stopMic(null);
+      return;
+    }
     debugLog.info("meeting", "end", { auto: options.auto ?? false, lines: ended.lines.length, tips: ended.tips.length, meetingId: sessionMeetingId });
-    // An automatic save leaves the mic alone: the next meeting may be starting. It is not retried if it fails.
-    if (stopMic && !options.auto) actions.stopMic(null);
+    // An automatic save from the meeting context leaves the mic alone: the next meeting may be starting. Automatic detection's
+    // end (stopMic) turns it off: the meeting is over. It is not retried if it fails.
+    if (stopMic && (!options.auto || options.stopMic)) actions.stopMic(null);
     const meetingId = sessionMeetingId;
     sessionMeetingId = null;
     clearTimeout(runTimer);
@@ -2112,9 +2194,11 @@ export const actions = {
   /** Mic on: each spoken phrase goes to Grok STT in main, then into simulateLine. The words are not shown. */
   async toggleMic(): Promise<void> {
     if (stopMic) {
+      autoEvent = "manualStop";
       actions.stopMic(null);
       return;
     }
+    autoEvent = "manualStart";
     await startMic({ transcribe: transcribePhrase });
   },
 
@@ -2189,6 +2273,7 @@ void actions.checkForUpdate();
 setInterval(() => void teamsTick(), SYNC_TICK_MS);
 setInterval(() => {
   void meetingTick();
+  void autoMeetingTick();
   void teamsAudioTick();
 }, MEETING_TICK_MS);
 // Live captions from the experimental meeting window reader. Test stubs of window.bee may leave it out.

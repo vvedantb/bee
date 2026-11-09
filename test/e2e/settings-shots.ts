@@ -18,7 +18,7 @@ function Page() {
     Fragment,
     null,
     createElement("form", { className: "settings" }, createElement(KnownNamesField, { names: NAMES, defaultOpen: shot === "settings-names-open" })),
-    createElement(PreferenceRows, { settings: { personalisedLinks: true, sendSessionsToVmem: false, meetingMode: true }, onSave: () => undefined }),
+    createElement(PreferenceRows, { settings: { personalisedLinks: true, sendSessionsToVmem: false, meetingMode: true, autoMeetingDetection: true }, onSave: () => undefined }),
     createElement(MeetingContextSection, { settings: { teamsAudioFallbackEnabled: false }, onChange: () => undefined, onClear: async () => 0 }),
     createElement(MemorySection, { onLoad: async () => [], onClear: async () => 0 }),
   );
