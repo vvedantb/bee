@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import { isZoomCallTitle, parseMeetTitle } from "./agent-desktop-meeting";
 import { qualifies } from "./auto-meeting-detection";
 import { NO_SIGNALS, mergeSignals, readerSignals, windowsSignals } from "./meeting-signals";
-import { isMeetingTitle, micAppKind, micInUseKeys, parseTasklistCsv } from "./teams-heuristics";
+import { isMeetingTitle, isTeamsPreJoinTitle, micAppKind, micInUseKeys, parseTasklistCsv } from "./teams-heuristics";
+import { isTeamsInCallTitle } from "./teams-title";
 
 const MIC = "HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\CapabilityAccessManager\\ConsentStore\\microphone";
 const LIVE = ["    LastUsedTimeStart    REG_QWORD    0x1db0f2a9c3d4e5f", "    LastUsedTimeStop    REG_QWORD    0x0"];
@@ -87,7 +88,7 @@ describe("windowsSignals", () => {
 
   it("Teams call: present, in-call title, mic, and the meeting as identity", () => {
     const signals = windowsSignals({ windows: rows(["ms-teams.exe", "Meeting with Bob | Microsoft Teams"]), micKeys: [teamsKey] });
-    expect(signals).toEqual({ meetingAppPresent: true, inCallTitle: true, micInUseByMeetingApp: true, identity: "meeting with bob" });
+    expect(signals).toEqual({ meetingAppPresent: true, inCallTitle: true, preJoinTitle: false, titleClass: "incall", micInUseByMeetingApp: true, identity: "meeting with bob" });
     expect(qualifies(signals)).toBe(true);
   });
 
@@ -115,7 +116,7 @@ describe("windowsSignals", () => {
     expect(plain.meetingAppPresent).toBe(false);
     expect(qualifies(plain)).toBe(false);
     const meet = windowsSignals({ windows: rows(["chrome.exe", "Meet - abc-defg-hij - Google Chrome"]), micKeys: [chromeKey] });
-    expect(meet).toEqual({ meetingAppPresent: true, inCallTitle: true, micInUseByMeetingApp: true, identity: "google meet abc-defg-hij" });
+    expect(meet).toEqual({ meetingAppPresent: true, inCallTitle: true, preJoinTitle: false, titleClass: "incall", micInUseByMeetingApp: true, identity: "google meet abc-defg-hij" });
   });
 
   it("Zoom: the process is always there, so the home window alone does not qualify", () => {
@@ -132,7 +133,7 @@ describe("windowsSignals", () => {
 describe("readerSignals and mergeSignals", () => {
   it("turns a reader call window into title signals, and nothing into none", () => {
     const meeting = { key: "zoom meeting", title: "Zoom Meeting", label: "Zoom meeting" };
-    expect(readerSignals({ inMeeting: true, source: "windows", meetings: [meeting] })).toEqual({ meetingAppPresent: true, inCallTitle: true, micInUseByMeetingApp: false, identity: "zoom meeting" });
+    expect(readerSignals({ inMeeting: true, source: "windows", meetings: [meeting] })).toEqual({ meetingAppPresent: true, inCallTitle: true, preJoinTitle: false, titleClass: "incall", micInUseByMeetingApp: false, identity: "zoom meeting" });
     expect(readerSignals({ inMeeting: false, source: "none", meetings: [] })).toEqual(NO_SIGNALS);
     expect(readerSignals(null)).toEqual(NO_SIGNALS);
   });
@@ -140,7 +141,70 @@ describe("readerSignals and mergeSignals", () => {
   it("merges with OR and keeps the first known identity", () => {
     const a = { meetingAppPresent: true, inCallTitle: false, micInUseByMeetingApp: true, identity: null };
     const b = { meetingAppPresent: true, inCallTitle: true, micInUseByMeetingApp: false, identity: "x" };
-    expect(mergeSignals(a, b)).toEqual({ meetingAppPresent: true, inCallTitle: true, micInUseByMeetingApp: true, identity: "x" });
+    expect(mergeSignals(a, b)).toEqual({ meetingAppPresent: true, inCallTitle: true, preJoinTitle: false, titleClass: "incall", micInUseByMeetingApp: true, identity: "x" });
     expect(mergeSignals(NO_SIGNALS, NO_SIGNALS)).toEqual(NO_SIGNALS);
+  });
+});
+
+// New Teams (ms-teams.exe), Windows. Titles are fixtures; no real meeting names.
+describe("new Teams: pre-join and compact in-call titles", () => {
+  const teamsKey = `${MIC}\\MSTeams_8wekyb3d8bbwe`;
+  const spotifyKey = `${MIC}\\NonPackaged\\C:#Spotify#Spotify.exe`;
+
+  it("classifies the pre-join title and keeps it out of the in-call test", () => {
+    for (const title of ["Meeting join | PD | Microsoft Teams", "Meeting join | Microsoft Teams", "(2) Meeting join | PD | Microsoft Teams", "Join meeting | Microsoft Teams"]) {
+      expect(isTeamsPreJoinTitle(title), title).toBe(true);
+      expect(isMeetingTitle(title), title).toBe(false);
+      expect(isTeamsInCallTitle(title), title).toBe(false);
+    }
+    for (const title of ["Weekly Sync | Microsoft Teams", "Chat | Alice | Microsoft Teams", "N/A", ""]) expect(isTeamsPreJoinTitle(title), title).toBe(false);
+  });
+
+  it("compact in-call titles: the meeting name alone counts; tabs, channels, chat, home and the bare app do not", () => {
+    for (const title of ["Weekly Sync | Microsoft Teams", "(1) Design review | Microsoft Teams", "Weekly Sync | Microsoft Teams classic", "Call with Alice | Microsoft Teams"]) {
+      expect(isTeamsInCallTitle(title), title).toBe(true);
+    }
+    for (const title of ["Chat | Acme | Microsoft Teams", "General | Acme Team | Microsoft Teams", "Weekly Sync | Chat | Microsoft Teams", "Home | Microsoft Teams", "Settings | Microsoft Teams", "Calendar | Microsoft Teams", "Microsoft Teams", "N/A", "Weekly Sync"]) {
+      expect(isTeamsInCallTitle(title), title).toBe(false);
+    }
+  });
+
+  it("pre-join: present, not in call, no mic; does not qualify", () => {
+    const signals = windowsSignals({ windows: rows(["ms-teams.exe", "Meeting join | PD | Microsoft Teams"]), micKeys: [] });
+    expect(signals).toMatchObject({ meetingAppPresent: true, inCallTitle: false, preJoinTitle: true, titleClass: "prejoin", micInUseByMeetingApp: false });
+    expect(qualifies(signals)).toBe(false);
+  });
+
+  it("in-call compact title with the mic muted (no mic held) qualifies by title alone", () => {
+    const signals = windowsSignals({ windows: rows(["ms-teams.exe", "Weekly Sync | Microsoft Teams"]), micKeys: [] });
+    expect(signals).toMatchObject({ meetingAppPresent: true, inCallTitle: true, preJoinTitle: false, titleClass: "incall", micInUseByMeetingApp: false, identity: "weekly sync" });
+    expect(qualifies(signals)).toBe(true);
+  });
+
+  it("packaged ConsentStore key (MSTeams_...) with a tasklist N/A title still qualifies by mic", () => {
+    const signals = windowsSignals({ windows: rows(["ms-teams.exe", "N/A"]), micKeys: micInUseKeys(reg(["MSTeams_8wekyb3d8bbwe", LIVE])) });
+    expect(signals).toMatchObject({ meetingAppPresent: true, inCallTitle: false, titleClass: "na", micInUseByMeetingApp: true });
+    expect(qualifies(signals)).toBe(true);
+  });
+
+  it("PowerShell titles added to a tasklist N/A row supply the in-call title (muted, no mic)", () => {
+    const windows = [...rows(["ms-teams.exe", "N/A"]), { image: "ms-teams.exe", pid: 0, title: "Weekly Sync | Microsoft Teams" }];
+    const signals = windowsSignals({ windows, micKeys: [] });
+    expect(signals.inCallTitle).toBe(true);
+    expect(qualifies(signals)).toBe(true);
+  });
+
+  it("chat-only still does not qualify; a music app holding the mic does not help", () => {
+    const chat = windowsSignals({ windows: rows(["ms-teams.exe", "Chat | Acme | Microsoft Teams"]), micKeys: [spotifyKey] });
+    expect(chat).toMatchObject({ inCallTitle: false, preJoinTitle: false, titleClass: "chat" });
+    expect(qualifies(chat)).toBe(false);
+    expect(teamsKey).toContain("MSTeams_");
+  });
+
+  it("merge: in-call beats pre-join; pre-join survives when the other source has nothing", () => {
+    const pre = windowsSignals({ windows: rows(["ms-teams.exe", "Meeting join | PD | Microsoft Teams"]), micKeys: [] });
+    expect(mergeSignals(pre, NO_SIGNALS)).toMatchObject({ preJoinTitle: true, inCallTitle: false, titleClass: "prejoin" });
+    const reader = readerSignals({ inMeeting: true, source: "windows", meetings: [{ key: "x", title: "x", label: "x" }] });
+    expect(mergeSignals(pre, reader)).toMatchObject({ preJoinTitle: false, inCallTitle: true, titleClass: "incall" });
   });
 });

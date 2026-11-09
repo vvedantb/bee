@@ -1,4 +1,4 @@
-import { DEFAULT_TOGGLE_SHORTCUT, acceleratorSchema } from "../core/shortcut";
+import { DEFAULT_ASK_SHORTCUT, DEFAULT_TOGGLE_SHORTCUT, acceleratorSchema } from "../core/shortcut";
 import { safeStorage } from "electron";
 import { randomUUID } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
@@ -49,6 +49,8 @@ const fileSchema = z.object({
   teamsAudioFallbackEnabled: z.boolean().default(false).catch(false),
   // The show/hide shortcut. A bad value reads as the default.
   toggleShortcut: acceleratorSchema.default(DEFAULT_TOGGLE_SHORTCUT).catch(DEFAULT_TOGGLE_SHORTCUT),
+  // The type-to-Bee shortcut. A bad value reads as the default.
+  askShortcut: acceleratorSchema.default(DEFAULT_ASK_SHORTCUT).catch(DEFAULT_ASK_SHORTCUT),
   // Non-secret MCP settings. A bad entry drops the list, not the whole file.
   mcpServers: z.array(mcpServerSchema).catch([]).default([]),
   // One safeStorage ciphertext (base64) for every server's secrets, as JSON keyed by server id.
@@ -122,6 +124,7 @@ export function createSettingsStore(args: {
       knownNames: [],
       teamsAudioFallbackEnabled: false,
       toggleShortcut: DEFAULT_TOGGLE_SHORTCUT,
+      askShortcut: DEFAULT_ASK_SHORTCUT,
       mcpServers: [],
     };
   }
@@ -458,6 +461,8 @@ export function createSettingsStore(args: {
       toggleShortcut: file.toggleShortcut,
       // Main fills in whether it holds the shortcut (main/index.ts).
       toggleShortcutActive: true,
+      askShortcut: file.askShortcut,
+      askShortcutActive: true,
     };
   }
 
@@ -477,6 +482,7 @@ export function createSettingsStore(args: {
     if (update.sendSessionsToVmem !== undefined) file = { ...file, sendSessionsToVmem: update.sendSessionsToVmem };
     if (update.teamsAudioFallbackEnabled !== undefined) file = { ...file, teamsAudioFallbackEnabled: update.teamsAudioFallbackEnabled };
     if (update.toggleShortcut !== undefined) file = { ...file, toggleShortcut: update.toggleShortcut };
+    if (update.askShortcut !== undefined) file = { ...file, askShortcut: update.askShortcut };
     if (update.knownNames !== undefined) file = { ...file, knownNames: normalizeNames(update.knownNames) };
     write(file);
     return view();

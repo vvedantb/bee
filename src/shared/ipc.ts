@@ -46,6 +46,8 @@ export const IPC = {
   meetingContext: "bee:meeting:context",
   meetingSignals: "bee:meeting:signals",
   meetingAutoOverlay: "bee:meeting:auto-overlay",
+  // Renderer → main: show Bee without taking focus, so a meeting prompt is seen when Bee was hidden.
+  meetingShow: "bee:meeting:show",
   clearMeetingMemory: "bee:meeting:clear-memory",
   /** Settings → Saved memory: Bee's memory facts for direct requests (main/bee-memory-store.ts), listed and cleared. */
   memoryList: "bee:memory:list",
@@ -110,9 +112,12 @@ export const settingsViewSchema = z.object({
   // Teams audio fallback: with the mic on in a Teams call, hear the Teams app alone (never all
   // system audio). Off by default; only platforms with a Teams-only capture path listen (core/teams-audio.ts).
   teamsAudioFallbackEnabled: z.boolean(),
-  // The show/hide shortcut (core/shortcut.ts), and whether Bee holds it now (false: another app does, or it could not register).
+  // The show/hide shortcut (core/shortcut.ts, shows or hides only), and whether Bee holds it now (false: another app does, or it could not register).
   toggleShortcut: z.string().max(100),
   toggleShortcutActive: z.boolean(),
+  // The type-to-Bee shortcut: shows Bee with focus and opens the typing box. Same fields as above.
+  askShortcut: z.string().max(100),
+  askShortcutActive: z.boolean(),
 });
 export type SettingsView = z.infer<typeof settingsViewSchema>;
 
@@ -129,6 +134,7 @@ export const settingsUpdateSchema = z.object({
   knownNames: z.array(z.string().max(200)).max(400).optional(),
   teamsAudioFallbackEnabled: z.boolean().optional(),
   toggleShortcut: acceleratorSchema.optional(),
+  askShortcut: acceleratorSchema.optional(),
 });
 export type SettingsUpdate = z.infer<typeof settingsUpdateSchema>;
 
@@ -359,6 +365,10 @@ export type MeetingContextView = z.infer<typeof meetingContextViewSchema>;
 export const meetingSignalsSchema = z.object({
   meetingAppPresent: z.boolean(),
   inCallTitle: z.boolean(),
+  // A pre-join window is open (new Teams "Meeting join | …"). Not a call yet.
+  preJoinTitle: z.boolean().optional(),
+  // The class behind the flags, for the debug log only.
+  titleClass: z.enum(["none", "prejoin", "incall", "chat", "na"]).optional(),
   // Absent when the platform cannot say which app holds the mic.
   micInUseByMeetingApp: z.boolean().optional(),
   identity: z.string().max(300).nullable().optional(),

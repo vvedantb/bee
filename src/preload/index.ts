@@ -289,6 +289,8 @@ const api = {
     // Automatic meeting detection: the OS signals now, and the overlay protection an auto session turns on (never saved to settings).
     signals: async (sessionToken: string) => meetingSignalsSchema.parse(await ipcRenderer.invoke(IPC.meetingSignals, { sessionToken })),
     autoOverlay: async (on: boolean) => void (await ipcRenderer.invoke(IPC.meetingAutoOverlay, on)),
+    // Shows Bee without taking focus (a meeting prompt while Bee is hidden).
+    showInactive: async () => void (await ipcRenderer.invoke(IPC.meetingShow)),
     clearMemory: async (sessionToken: string) => clearMeetingMemoryResultSchema.parse(await ipcRenderer.invoke(IPC.clearMeetingMemory, { sessionToken })),
   },
   // Settings → Saved memory: Bee's memory facts for direct requests, oldest first, and the clear. Never history or saved meetings.

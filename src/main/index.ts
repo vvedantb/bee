@@ -47,6 +47,7 @@ import { handleRendererProtocol } from "./renderer-protocol";
 import { createSettingsStore, type SettingsStore } from "./settings";
 import { isPermissionAllowed } from "./system-audio";
 import { createMeetingSignals } from "./meeting-signals";
+import { createShortcuts } from "./shortcuts";
 import { createMeetingWindowReader } from "./meeting-window-reader";
 import { createTeamsAudioStatus } from "./teams-audio";
 import { createTeamsAudioCapture } from "./teams-audio-capture";
@@ -182,10 +183,7 @@ function watchWindow(window: BrowserWindow): void {
   contents.on("did-finish-load", () => debugLog.info("window", "loaded"));
 }
 
-/**
- * The show/hide shortcut. Bee hidden, or showing but not in front: show it, take focus and open the typing box ("Bee, …" by
- * typing). Already in front: hide it. So one press asks, a second press hides.
- */
+/** The show/hide shortcut: shows or hides only. Hidden, or showing but not in front: show it. Already in front: hide it. It never opens the typing box. */
 function toggleWindow(): void {
   if (!win) return;
   const hide = win.isVisible() && win.isFocused();
@@ -196,30 +194,30 @@ function toggleWindow(): void {
   }
   win.show();
   win.focus();
+}
+
+/** The type-to-Bee shortcut: show Bee (hidden or not), take focus and open the typing box ("Bee, …" by typing). */
+function askWindow(): void {
+  if (!win) return;
+  debugLog.info("window", "ask-open", { wasVisible: win.isVisible() });
+  win.show();
+  win.focus();
   win.webContents.send(IPC.askOpen);
 }
 
-// The show/hide shortcut Bee holds now, or null when it holds none (another app has it, or it could not register).
-let toggleShortcut: string | null = null;
-
-/** Holds `accelerator` as the show/hide shortcut instead of the current one. False (and the old one kept) when it cannot. */
-function registerToggleShortcut(accelerator: string): boolean {
-  const old = toggleShortcut;
-  if (old === accelerator) return true;
-  if (old) globalShortcut.unregister(old);
-  let ok = false;
-  try {
-    ok = globalShortcut.register(accelerator, toggleWindow);
-  } catch (error) {
-    debugLog.warn("window", "shortcut-failed", { accelerator, error: errorData(error) });
-  }
-  if (ok) toggleShortcut = accelerator;
-  else {
-    console.warn(`Bee: could not register ${accelerator}`);
-    toggleShortcut = old && globalShortcut.register(old, toggleWindow) ? old : null;
-  }
-  return ok;
+/** A meeting prompt while Bee is hidden: show it where it is, without taking focus from the call or opening the typing box. */
+function showWindowInactive(): void {
+  if (!win || win.isDestroyed()) return;
+  debugLog.info("window", "show-inactive", { wasVisible: win.isVisible() });
+  win.showInactive();
 }
+
+// The two shortcuts Bee holds now (a slot is null when another app has its accelerator or it could not register).
+const shortcuts = createShortcuts({
+  api: globalShortcut,
+  handlers: { toggle: toggleWindow, ask: askWindow },
+  onError: (accelerator, error) => debugLog.warn("window", "shortcut-failed", { accelerator, error: errorData(error) }),
+});
 
 function createTray(notesDir: string, logsDir: string): void {
   try {
@@ -231,6 +229,7 @@ function createTray(notesDir: string, logsDir: string): void {
     tray.setContextMenu(
       Menu.buildFromTemplate([
         { label: "Show / hide Bee", click: toggleWindow },
+        { label: "Type to Bee", click: askWindow },
         { label: "Open notes folder", click: () => void shell.openPath(notesDir) },
         { label: "Open logs folder", click: () => void shell.openPath(logsDir) },
         { type: "separator" },
@@ -408,7 +407,7 @@ if (clerk.isPrimaryInstance) {
     // The settings, with whether Bee holds the show/hide shortcut (only main knows).
     const settingsView = () => {
       const view = settings.view();
-      return { ...view, toggleShortcutActive: toggleShortcut === view.toggleShortcut };
+      return { ...view, toggleShortcutActive: shortcuts.held("toggle") === view.toggleShortcut, askShortcutActive: shortcuts.held("ask") === view.askShortcut };
     };
     ipcMain.handle(IPC.getSettings, () => settingsView());
 
@@ -416,9 +415,12 @@ if (clerk.isPrimaryInstance) {
       const update = settingsUpdateSchema.parse(payload);
       const before = settingsView();
       // A new shortcut is only saved when Bee can hold it.
-      if (update.toggleShortcut !== undefined && !registerToggleShortcut(update.toggleShortcut)) {
-        const label = shortcutLabel(update.toggleShortcut, isMac ? "mac" : "other");
-        throw new Error(`${label} is in use by another app or the system. Bee kept ${toggleShortcut ? shortcutLabel(toggleShortcut, isMac ? "mac" : "other") : "no shortcut"}.`);
+      const platform = isMac ? "mac" : "other";
+      for (const slot of ["toggle", "ask"] as const) {
+        const accelerator = slot === "toggle" ? update.toggleShortcut : update.askShortcut;
+        if (accelerator === undefined || shortcuts.set(slot, accelerator)) continue;
+        const kept = shortcuts.held(slot);
+        throw new Error(`${shortcutLabel(accelerator, platform)} is in use by another app, the system or the other Bee shortcut. Bee kept ${kept ? shortcutLabel(kept, platform) : "no shortcut"}.`);
       }
       settings.save(update);
       const view = settingsView();
@@ -435,6 +437,9 @@ if (clerk.isPrimaryInstance) {
       autoOverlay = z.boolean().parse(payload);
       if (win && !win.isDestroyed()) applyMeetingMode(win, settings.view().meetingMode || autoOverlay);
     });
+
+    // A meeting prompt (pre-join or Start meeting) while Bee is hidden: show without focus. Never opens the typing box.
+    ipcMain.handle(IPC.meetingShow, () => showWindowInactive());
 
     // Settings' eye and copy buttons. Only the overlay may ask, and only for the saved key.
     registerGatewayKeyIpc({ savedKey: settings.savedGatewayApiKey, windowId: () => (win && !win.isDestroyed() ? win.webContents.id : undefined) });
@@ -519,7 +524,7 @@ if (clerk.isPrimaryInstance) {
       mcpPool,
       meeting,
       meetingWindow,
-      meetingSignals: createMeetingSignals({ reader: meetingWindow }),
+      meetingSignals: createMeetingSignals({ reader: meetingWindow, titles: teamsTitles }),
       gatewayApiKey: settings.gatewayApiKey,
       claudeCode,
       browse,
@@ -599,7 +604,8 @@ if (clerk.isPrimaryInstance) {
 
     win = createWindow(settings.view().meetingMode || autoOverlay, settings.view().interfaceScale);
     createTray(notesDir, logsDir);
-    registerToggleShortcut(settings.view().toggleShortcut);
+    shortcuts.set("toggle", settings.view().toggleShortcut);
+    shortcuts.set("ask", settings.view().askShortcut);
     // Last of the will-quit handlers, so what the others log is written too.
     app.on("will-quit", () => {
       debugLog.info("app", "will-quit");

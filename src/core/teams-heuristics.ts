@@ -21,10 +21,18 @@ const NOT_A_CALL = /^(calls|calendar|meetings|activity|chat|teams|meet|home|file
 // A badge count before the title: "(3) Chat | Microsoft Teams".
 const UNREAD_COUNT = /^\(\d+\)\s*/;
 
-/** A Teams window whose title reads like a meeting or call window, e.g. "Meeting with Alice | Microsoft Teams". */
+// New Teams' pre-join screen: "Meeting join | PD | Microsoft Teams". The user has not joined yet, so it is not a live call.
+const PRE_JOIN = /^(?:meeting join|join (?:the )?meeting|join now)\b/i;
+
+/** The Teams pre-join (lobby or device check) window, e.g. "Meeting join | PD". Not a live call: the user has not joined. */
+export function isTeamsPreJoinTitle(title: string): boolean {
+  return PRE_JOIN.test(title.trim().replace(UNREAD_COUNT, ""));
+}
+
+/** A Teams window whose title reads like a meeting or call window, e.g. "Meeting with Alice | Microsoft Teams". Pre-join is not one. */
 export function isMeetingTitle(title: string): boolean {
   const trimmed = title.trim().replace(UNREAD_COUNT, "");
-  if (!trimmed || trimmed === "N/A" || NOT_A_CALL.test(trimmed)) return false;
+  if (!trimmed || trimmed === "N/A" || NOT_A_CALL.test(trimmed) || isTeamsPreJoinTitle(trimmed)) return false;
   return /\b(meeting|call|meet now|huddle)\b/i.test(trimmed);
 }
 

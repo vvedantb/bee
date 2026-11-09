@@ -6,11 +6,15 @@ import { ShortcutRow } from "../../src/renderer/src/ShortcutRow";
 import "../../src/renderer/src/styles.css";
 import { panelPage } from "./panel-shot";
 
-const row = (shortcut: string, active: boolean) => renderToStaticMarkup(createElement(ShortcutRow, { shortcut, active, platform: "mac", onSave: () => undefined }));
+const row = (title: string, shortcut: string, defaultShortcut: string, active: boolean) =>
+  renderToStaticMarkup(createElement(ShortcutRow, { title, shortcut, defaultShortcut, active, platform: "mac", onSave: () => undefined }));
+const both = (toggleActive: boolean) =>
+  row("Show or hide Bee", toggleActive ? "CommandOrControl+Shift+Space" : "Alt+Space", "CommandOrControl+Shift+Space", toggleActive) +
+  row("Type to Bee", "CommandOrControl+Alt+Space", "CommandOrControl+Alt+Space", true);
 const shot = new URLSearchParams(location.search).get("shot") ?? "settings-shortcut";
 const states: Record<string, string> = {
-  "settings-shortcut": panelPage("settings", row("CommandOrControl+Shift+Space", true)),
-  "settings-shortcut-taken": panelPage("settings", row("Alt+Space", false)),
+  "settings-shortcut": panelPage("settings", both(true)),
+  "settings-shortcut-taken": panelPage("settings", both(false)),
 };
 const html = states[shot];
 if (!html) throw new Error(`Unknown shot: ${shot}`);

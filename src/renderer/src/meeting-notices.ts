@@ -6,6 +6,9 @@ export const MEETING_IN_PROGRESS = "Meeting in progress";
 export const MEETING_START_NOTICE = "Meeting in progress, Bee is active";
 export const MEETING_START_NO_MIC_NOTICE = "Meeting in progress, but the microphone is unavailable.";
 
+/** Auto-confirm on, pre-join seen: Bee shows itself and waits for the call to begin before it records. */
+export const MEETING_READY_NOTICE = "Meeting starting, Bee is getting ready";
+
 /** Auto-confirm off: Bee has detected a call and asks first. The toast button starts the meeting. */
 export const MEETING_PROMPT_NOTICE = "Meeting detected";
 export const MEETING_START_BUTTON = "Start meeting";

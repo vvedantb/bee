@@ -1,7 +1,7 @@
 // Meeting flow shots: the real Sonner toaster and the real toast mapping (meeting-toast.ts, the code main.tsx uses) showing the start and end toasts (auto-confirm on) and the Start / Stop meeting button toasts (off), and the real notch pill saying
 // "Meeting in progress". The words come from the app's own code: meeting-notices.ts (the strings the store sends to toast()) and
 // notch.ts notchLine() (the pill's text for a state). harness-main.ts loads this page once per ?shot=meeting-toast-start|
-// meeting-toast-end|meeting-toast-start-prompt|meeting-toast-stop-prompt|meeting-notch-in-progress and captures it as <shot>.png. No store, no Clerk, no AI call.
+// meeting-toast-end|meeting-toast-start-prompt|meeting-toast-stop-prompt|meeting-toast-prejoin-ready|meeting-toast-prejoin-prompt|meeting-notch-in-progress and captures it as <shot>.png. No store, no Clerk, no AI call.
 import { createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -9,7 +9,7 @@ import { IconChevronDown, IconMicrophone, IconMicrophoneOff } from "@tabler/icon
 import { Button, SonnerToaster } from "@vvedantb/ui";
 import { BeeLogo } from "../../src/renderer/src/BeeLogo";
 import { NOTCH_LOGO_PX } from "../../src/renderer/src/logo";
-import { MEETING_PROMPT_NOTICE, MEETING_START_NOTICE, MEETING_STOP_NOTICE, meetingEndNotice, type MeetingNotice } from "../../src/renderer/src/meeting-notices";
+import { MEETING_PROMPT_NOTICE, MEETING_READY_NOTICE, MEETING_START_NOTICE, MEETING_STOP_NOTICE, meetingEndNotice, type MeetingNotice } from "../../src/renderer/src/meeting-notices";
 import { showMeetingNotice } from "../../src/renderer/src/meeting-toast";
 import { NOTCH_BUTTON, notchLine } from "../../src/renderer/src/notch";
 import "../../src/renderer/src/styles.css";
@@ -63,6 +63,9 @@ const SHOTS: Record<string, { state: Inputs; notice: MeetingNotice | null }> = {
   "meeting-toast-end": { state: QUIET, notice: { kind: "info", message: meetingEndNotice("saved") } },
   "meeting-toast-start-prompt": { state: QUIET, notice: { kind: "prompt-start", message: MEETING_PROMPT_NOTICE } },
   "meeting-toast-stop-prompt": { state: IN_MEETING, notice: { kind: "prompt-stop", message: MEETING_STOP_NOTICE } },
+  // Pre-join: Bee shows itself (showInactive) with the toast, and records nothing. Auto-confirm on: getting ready. Off: Start meeting.
+  "meeting-toast-prejoin-ready": { state: QUIET, notice: { kind: "info", message: MEETING_READY_NOTICE } },
+  "meeting-toast-prejoin-prompt": { state: QUIET, notice: { kind: "prompt-start", message: MEETING_PROMPT_NOTICE } },
   "meeting-notch-in-progress": { state: IN_MEETING, notice: null },
 };
 const plan = SHOTS[shot];

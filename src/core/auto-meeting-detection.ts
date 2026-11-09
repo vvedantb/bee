@@ -1,5 +1,5 @@
 // Automatic meeting detection, pure. Each tick takes the latest signals and returns the next state plus at most one effect:
-// "prompt" (ask the user to start), "start" (mic on, meeting mode for the session), "stop" (save the summary, mic off) or
+// "prompt" (ask the user to start), "ready" (auto-confirm on, pre-join seen: show Bee, record nothing yet), "start" (mic on, meeting mode for the session), "stop" (save the summary, mic off) or
 // "dismiss" (the prompt was ignored and the call ended). `enabled` means auto-confirm: on, a confirmed call starts by itself; off,
 // it prompts and waits for the user's accept event. Detection always runs. No OS, Electron or IPC here;
 // main/meeting-signals.ts reads the signals and the renderer store applies the effects.
@@ -21,6 +21,10 @@ export type AutoSignals = {
   meetingAppPresent: boolean;
   /** A meeting window title reads like a live call (not chat, home or calendar). */
   inCallTitle: boolean;
+  /** A pre-join window is open ("Meeting join | …" in new Teams). Not a call yet: Bee shows itself and may prompt, but records nothing. */
+  preJoinTitle?: boolean;
+  /** The title class behind the two flags above. Debug log only; the machine does not read it. */
+  titleClass?: TitleClass;
   /** A meeting app holds the microphone now (OS probe). Undefined when the platform cannot say. */
   micInUseByMeetingApp?: boolean;
   /** Bee's own calendar data says a meeting is on now. Weak: shortens the confirmation only. */
@@ -29,8 +33,11 @@ export type AutoSignals = {
   identity?: string | null;
 };
 
-/** prompted: confirmed with auto-confirm off, waiting for the user. Nothing records until they accept. */
-export type AutoPhase = "idle" | "confirming" | "prompted" | "active";
+/** prompted: with auto-confirm off, waiting for the user. Nothing records until they accept. ready: auto-confirm on, pre-join seen, waiting for the call itself. */
+export type AutoPhase = "idle" | "confirming" | "prompted" | "ready" | "active";
+
+/** What the Teams window titles say now, for the debug log: none (no window), prejoin, incall, chat (tabs and chat only) or na (windows with no readable title). */
+export type TitleClass = "none" | "prejoin" | "incall" | "chat" | "na";
 
 export type AutoMeetingState = {
   phase: AutoPhase;
@@ -48,7 +55,7 @@ export type AutoMeetingState = {
   quietSince: number | null;
 };
 
-export type AutoEffect = "prompt" | "start" | "stop" | "dismiss" | "none";
+export type AutoEffect = "prompt" | "ready" | "start" | "stop" | "dismiss" | "none";
 
 /** The user's answer from a toast button: accept starts a prompted meeting; reject stops an active one (or declines a prompt). */
 export type AutoEvent = "accept" | "reject";
@@ -71,6 +78,9 @@ export function stepAutoMeeting(
 ): { state: AutoMeetingState; effect: AutoEffect } {
   const { signals, enabled, now, event } = input;
   const qualifying = qualifies(signals);
+  // Pre-join only: the app is open on its join screen and nothing says the call has begun.
+  const preJoin = !qualifying && signals.meetingAppPresent && signals.preJoinTitle === true;
+  const present = qualifying || preJoin;
   const identity = signals.identity ?? null;
 
   // The user's answer comes first. A reject is a quiet no: the same meeting is not offered again.
@@ -95,9 +105,16 @@ export function stepAutoMeeting(
 
   // Prompted: the call going away for the full grace dismisses the prompt. Nothing was recorded, so nothing is saved.
   if (state.phase === "prompted") {
-    // Turning auto-confirm on while a prompt waits accepts it.
+    // Turning auto-confirm on while a prompt waits accepts it, once the call itself is on (not on the pre-join screen).
     if (qualifying && enabled) return { state: { ...IDLE_AUTO, phase: "active", startedAt: now, identity: identity ?? state.identity }, effect: "start" };
-    if (qualifying) return { state: { ...state, endSince: null, identity: identity ?? state.identity }, effect: "none" };
+    if (present) return { state: { ...state, endSince: null, identity: identity ?? state.identity }, effect: "none" };
+    const endSince = state.endSince ?? now;
+    if (now - endSince >= END_GRACE_MS) return { state: { ...IDLE_AUTO, quietSince: now }, effect: "dismiss" };
+    return { state: { ...state, endSince }, effect: "none" };
+  }
+
+  // Ready (pre-join seen, auto-confirm on): leaving the join screen without a call for the full grace clears it.
+  if (state.phase === "ready" && !present) {
     const endSince = state.endSince ?? now;
     if (now - endSince >= END_GRACE_MS) return { state: { ...IDLE_AUTO, quietSince: now }, effect: "dismiss" };
     return { state: { ...state, endSince }, effect: "none" };
@@ -108,7 +125,7 @@ export function stepAutoMeeting(
   let quietSince = state.quietSince;
   if (suppressed) {
     if (qualifying && !sameMeeting(suppressed.identity, identity)) suppressed = null;
-    else if (qualifying) quietSince = null;
+    else if (present) quietSince = null;
     else {
       quietSince ??= now;
       if (now - quietSince >= END_GRACE_MS) suppressed = null;
@@ -117,7 +134,14 @@ export function stepAutoMeeting(
     quietSince = null;
   }
 
-  if (!qualifying) return { state: { ...IDLE_AUTO, suppressed, quietSince }, effect: "none" };
+  if (!present) return { state: { ...IDLE_AUTO, suppressed, quietSince }, effect: "none" };
+  // Pre-join only: show Bee once. Auto-confirm off offers Start (recording still waits for the click); on, Bee gets ready and
+  // records nothing until the call itself shows (mic or an in-call title).
+  if (!qualifying) {
+    if (state.phase === "ready") return { state: { ...state, endSince: null }, effect: "none" };
+    if (enabled) return { state: { ...IDLE_AUTO, phase: "ready", identity }, effect: "ready" };
+    return { state: { ...IDLE_AUTO, phase: "prompted", identity }, effect: "prompt" };
+  }
   // A different meeting appearing mid-confirmation restarts the count.
   const qualSince = state.phase === "confirming" && state.qualSince !== null && sameMeeting(state.identity, identity) ? state.qualSince : now;
   const confirmMs = signals.calendarBoost ? CONFIRM_CALENDAR_MS : CONFIRM_MS;

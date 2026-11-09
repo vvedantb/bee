@@ -44,8 +44,13 @@ const SETTINGS: SettingsView = {
   teamsAudioFallbackEnabled: false,
   toggleShortcut: "CommandOrControl+Shift+Space",
   toggleShortcutActive: true,
+  askShortcut: "CommandOrControl+Alt+Space",
+  askShortcutActive: true,
 };
 
+const PRE_JOIN: AutoSignals = { meetingAppPresent: true, inCallTitle: false, preJoinTitle: true, titleClass: "prejoin", micInUseByMeetingApp: false, identity: null };
+// In the call with the mic muted: new Teams holds no mic, so only the compact in-call title says so.
+const MUTED_CALL: AutoSignals = { meetingAppPresent: true, inCallTitle: true, preJoinTitle: false, titleClass: "incall", micInUseByMeetingApp: false, identity: "weekly sync" };
 const CALL: AutoSignals = { meetingAppPresent: true, inCallTitle: true, micInUseByMeetingApp: true, identity: "weekly sync" };
 const NONE: AutoSignals = { meetingAppPresent: false, inCallTitle: false, micInUseByMeetingApp: false, identity: null };
 const RESULT: PipelineResult = {
@@ -62,6 +67,8 @@ const RESULT: PipelineResult = {
 async function loadStore(options: { enabled?: boolean; summary?: "ok" | "fail" | "slow" } = {}) {
   const saved: MeetingSummaryRequest[] = [];
   const overlay: boolean[] = [];
+  const shown = { inactive: 0, probes: 0 };
+  const events: Array<{ level: string; category: string; event: string; data?: Record<string, unknown> }> = [];
   const notices: string[] = [];
   const all: MeetingNotice[] = [];
   let signals: AutoSignals | "fail" = NONE;
@@ -91,14 +98,18 @@ async function loadStore(options: { enabled?: boolean; summary?: "ok" | "fail" |
       meeting: {
         context: async () => ({ active: callActive, id: 1, subject: null, source: "none", card: [] }),
         signals: async () => {
+          shown.probes += 1;
           if (signals === "fail") throw new Error("main failed");
           return signals;
         },
         autoOverlay: async (on: boolean) => void overlay.push(on),
+        showInactive: async () => void (shown.inactive += 1),
       },
     },
   });
   const store = await import("./store");
+  const log = await import("../../core/debug-log");
+  log.setDebugSink({ write: (event) => void events.push(event), wants: () => true });
   store.onAutoMeetingNotice((notice) => {
     all.push(notice);
     if (notice.kind === "info") notices.push(notice.message);
@@ -113,7 +124,7 @@ async function loadStore(options: { enabled?: boolean; summary?: "ok" | "fail" |
     mic.onSettled?.("words");
     await vi.advanceTimersByTimeAsync(100);
   };
-  return { store, saved, overlay, notices, all, run, say, set: (next: AutoSignals | "fail") => void (signals = next), setContext: (active: boolean) => void (callActive = active) };
+  return { store, saved, overlay, shown, events, notices, all, run, say, set: (next: AutoSignals | "fail") => void (signals = next), setContext: (active: boolean) => void (callActive = active) };
 }
 
 const TICK = 5000;
@@ -487,6 +498,109 @@ describe("store: automatic meeting detection", () => {
       expect(all).toEqual([]);
       expect(saved).toHaveLength(0);
       expect(store.getBeeState().meetingActive).toBe(false);
+    });
+  });
+  describe("manual mode: Bee is shown for the prompt (it may be hidden)", () => {
+    const OFF = { enabled: false };
+
+    it("shows Bee without focus when the Start prompt appears, even for a muted call with no mic", async () => {
+      const { shown, all, run, set } = await loadStore(OFF);
+      set(MUTED_CALL);
+      await run(TICK);
+      expect(shown.inactive).toBe(0);
+      await run(CONFIRM_RUN);
+      expect(all).toEqual([{ kind: "prompt-start", message: "Meeting detected" }]);
+      expect(shown.inactive).toBe(1);
+      await run(5 * 60_000);
+      expect(shown.inactive).toBe(1);
+    });
+
+    it("still probes every tick with the setting OFF", async () => {
+      const { shown, run, set } = await loadStore(OFF);
+      set(NONE);
+      const before = shown.probes;
+      await run(TICK * 6);
+      expect(shown.probes - before).toBeGreaterThanOrEqual(5);
+    });
+
+    it("pre-join: shows Bee and the Start prompt at once, records nothing, and the call confirming does not show it again", async () => {
+      const { store, saved, shown, all, run, set } = await loadStore(OFF);
+      set(PRE_JOIN);
+      await run(TICK * 2);
+      expect(all).toEqual([{ kind: "prompt-start", message: "Meeting detected" }]);
+      expect(shown.inactive).toBe(1);
+      expect(store.getBeeState().mic.on).toBe(false);
+      expect(store.getBeeState().meetingActive).toBe(false);
+      set(MUTED_CALL);
+      await run(CONFIRM_RUN * 2);
+      expect(all.filter((notice) => notice.kind === "prompt-start")).toHaveLength(1);
+      expect(shown.inactive).toBe(1);
+      expect(store.getBeeState().mic.on).toBe(false);
+      expect(saved).toHaveLength(0);
+      // Start still begins the meeting.
+      store.actions.acceptMeeting();
+      await run(TICK);
+      expect(store.getBeeState().mic.on).toBe(true);
+      expect(all.at(-1)).toEqual({ kind: "prompt-stop", message: "Meeting in progress" });
+    });
+
+    it("never shows Bee for chat only", async () => {
+      const { shown, all, run, set } = await loadStore(OFF);
+      set({ meetingAppPresent: true, inCallTitle: false, preJoinTitle: false, titleClass: "chat", micInUseByMeetingApp: false, identity: null });
+      await run(120_000);
+      expect(all).toEqual([]);
+      expect(shown.inactive).toBe(0);
+    });
+  });
+
+  describe("auto-confirm on: pre-join is getting ready, recording waits for the call", () => {
+    it("shows Bee and a quiet getting-ready toast on pre-join, and does not record or lift meeting mode", async () => {
+      const { store, shown, overlay, notices, run, set } = await loadStore();
+      set(PRE_JOIN);
+      await run(TICK * 2);
+      expect(notices).toEqual(["Meeting starting, Bee is getting ready"]);
+      expect(shown.inactive).toBe(1);
+      await run(5 * 60_000);
+      expect(notices).toHaveLength(1);
+      expect(shown.inactive).toBe(1);
+      expect(store.getBeeState().mic.on).toBe(false);
+      expect(micSessions).toHaveLength(0);
+      expect(store.getBeeState().meetingActive).toBe(false);
+      expect(overlay).toEqual([]);
+    });
+
+    it("starts only once the in-call title is confirmed (muted, no mic)", async () => {
+      const { store, overlay, notices, run, set } = await loadStore();
+      set(PRE_JOIN);
+      await run(TICK * 2);
+      set(MUTED_CALL);
+      await run(TICK);
+      expect(store.getBeeState().mic.on).toBe(false);
+      await run(CONFIRM_RUN);
+      expect(store.getBeeState().mic.on).toBe(true);
+      expect(overlay).toEqual([true]);
+      expect(notices).toEqual(["Meeting starting, Bee is getting ready", "Meeting in progress, Bee is active"]);
+    });
+  });
+
+  describe("per-tick debug log", () => {
+    it("logs one auto-tick line per tick with booleans and enums only", async () => {
+      const { events, run, set } = await loadStore({ enabled: false });
+      set({ ...PRE_JOIN, identity: "secret meeting name" });
+      await run(TICK * 3);
+      const ticks = events.filter((event) => event.event === "auto-tick");
+      expect(ticks.length).toBeGreaterThanOrEqual(3);
+      expect(ticks.every((event) => event.level === "debug" && event.category === "meeting")).toBe(true);
+      expect(ticks[0]?.data).toMatchObject({ meetingAppPresent: true, titleClass: "prejoin", micInUseByMeetingApp: false, qualifies: false, enabled: false, effect: "prompt", phase: "prompted", promptShown: true, suppressed: false, why: "shown" });
+      expect(ticks[1]?.data).toMatchObject({ effect: "none", promptShown: false, why: "already-shown" });
+      expect(JSON.stringify(events)).not.toContain("secret meeting name");
+    });
+
+    it("says why nothing was shown for chat only", async () => {
+      const { events, run, set } = await loadStore({ enabled: false });
+      set({ meetingAppPresent: true, inCallTitle: false, titleClass: "chat", micInUseByMeetingApp: false, identity: null });
+      await run(TICK * 2);
+      expect(events.filter((event) => event.event === "auto-tick").at(-1)?.data).toMatchObject({ titleClass: "chat", phase: "idle", effect: "none", promptShown: false, why: "no-signal" });
     });
   });
 });

@@ -10,7 +10,7 @@ import { runHarness } from "./e2e/run";
 
 const dir = process.env.BEE_E2E_SHOTS_DIR || mkdtempSync(join(tmpdir(), "bee-meeting-shots-"));
 const PNG_MAGIC = "89504e470d0a1a0a";
-const SHOTS = ["meeting-toast-start", "meeting-toast-end", "meeting-toast-start-prompt", "meeting-toast-stop-prompt", "meeting-notch-in-progress"];
+const SHOTS = ["meeting-toast-start", "meeting-toast-end", "meeting-toast-start-prompt", "meeting-toast-stop-prompt", "meeting-toast-prejoin-ready", "meeting-toast-prejoin-prompt", "meeting-notch-in-progress"];
 const page = z.object({ shot: z.string(), notch: z.string().nullable(), toast: z.string().nullable(), button: z.string().nullable() });
 
 describe("quiet meeting screenshots (Electron E2E)", () => {
@@ -26,6 +26,10 @@ describe("quiet meeting screenshots (Electron E2E)", () => {
     expect(byShot["meeting-toast-start"]?.toast).toBe("Meeting in progress, Bee is active");
     expect(byShot["meeting-toast-start"]?.notch).toBe("Meeting in progress");
     expect(byShot["meeting-toast-end"]?.toast).toBe("Meeting ended, notes have been saved");
+    expect(byShot["meeting-toast-prejoin-ready"]?.toast).toBe("Meeting starting, Bee is getting ready");
+    expect(byShot["meeting-toast-prejoin-ready"]?.button).toBeNull();
+    expect(byShot["meeting-toast-prejoin-prompt"]?.toast).toBe("Meeting detected");
+    expect(byShot["meeting-toast-prejoin-prompt"]?.button).toBe("Start meeting");
     // Auto-confirm on: no buttons. Off: the real Start / Stop meeting labels.
     expect(byShot["meeting-toast-start"]?.button).toBeNull();
     expect(byShot["meeting-toast-end"]?.button).toBeNull();

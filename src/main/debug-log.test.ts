@@ -275,6 +275,8 @@ describe("settingsChange", () => {
     teamsAudioFallbackEnabled: false,
     toggleShortcut: "CommandOrControl+Shift+Space",
     toggleShortcutActive: true,
+    askShortcut: "CommandOrControl+Alt+Space",
+    askShortcutActive: true,
   };
 
   it("lists the keys sent and what changed, with non-secret values", () => {
