@@ -4,7 +4,7 @@ import type { DetectorReading } from "../core/teams-heuristics";
 import { TEAMS_IMAGES, meetingWindows, micInUseKeys, parseTasklistCsv, teamsInMeeting } from "../core/teams-heuristics";
 
 // Desktop Teams meeting detector. Windows only, best-effort (see core/teams-heuristics.ts). Other platforms read
-// "not in a meeting"; use Live → Manual test → Simulate Teams meeting there. Tests inject their own detector.
+// "not in a meeting": there the meeting window reader finds the call. Tests inject their own detector.
 
 export type TeamsDetector = { read: () => Promise<DetectorReading> };
 

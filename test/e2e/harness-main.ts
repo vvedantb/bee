@@ -5,7 +5,7 @@
 // With BEE_E2E_SHOTS (the island screenshot test), the page is loaded once per name (comma-separated, as ?shot=) in a transparent
 // frameless 520 × 360 window, and each capturePage() is written to <BEE_E2E_SHOTS_DIR>/island-<name>.png. Each page's own
 // E2E_RESULT (e.g. measured boxes) is passed on in the report's `pages`.
-// Names starting with mcp-, settings-, live- or gateway-key- (the tab shots) use a taller 480 × 640 window and are written as <name>.png.
+// Names starting with mcp-, settings-, live-, memory- or gateway-key- (the tab shots) use a taller 480 × 640 window and are written as <name>.png.
 // Shot runs answer Settings' reveal and copy IPC with a fake Gateway key and leave the clipboard alone.
 // BEE_E2E_SHOTS_DIR alone does not change the run.
 // With BEE_E2E_MCP_FILE (the live MCP test), Luna gets the MCP servers in that JSON file, re-read on every run so tokens can
@@ -66,8 +66,8 @@ async function captureShots(dir: string, names: string[]): Promise<{ files: stri
   mkdirSync(dir, { recursive: true });
   const files: string[] = [];
   const pages: PageReport[] = [];
-  const tabShot = (name: string) => name.startsWith("mcp-") || name.startsWith("settings-") || name.startsWith("live-") || name.startsWith("gateway-key-") || name.startsWith("meeting-notice-") || name.startsWith("meeting-bar-") || name.startsWith("meeting-notch-");
-  const tall = names.some((name) => tabShot(name) && !name.startsWith("meeting-")) || /(mcp|meeting)-settings-shots|gateway-key-shots/.test(page as string);
+  const tabShot = (name: string) => name.startsWith("mcp-") || name.startsWith("settings-") || name.startsWith("live-") || name.startsWith("memory-") || name.startsWith("gateway-key-") || name.startsWith("meeting-notice-") || name.startsWith("meeting-bar-") || name.startsWith("meeting-notch-");
+  const tall = names.some((name) => tabShot(name) && !name.startsWith("meeting-")) || /mcp-settings-shots|gateway-key-shots/.test(page as string);
   // One window for every shot: closing the only window would quit the app.
   const shotWin = new BrowserWindow({
     show: false,

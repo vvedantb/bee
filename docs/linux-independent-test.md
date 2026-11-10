@@ -83,7 +83,7 @@ Rules:
 
 If Bee exits at once with a message about the SUID sandbox helper, either make `linux-unpacked/chrome-sandbox` owned by root with mode 4755 (preferred), or, on a throwaway test machine only, add `--no-sandbox`. The AppImage needs FUSE (`libfuse2`); the unpacked folder does not.
 
-## 3. Four ways to give Bee a request
+## 3. Three ways to give Bee a request
 
 Keep these apart in every report. A pass in one does not prove another.
 
@@ -91,12 +91,11 @@ Keep these apart in every report. A pass in one does not prove another.
 |---|---|---|---|
 | A. Real microphone audio | Mic capture, phrase detection, speech-to-text, wake word routing, the request | Nothing is skipped | Turn the mic on and speak |
 | B. E2E mic injection (`startTestMic`) | Wake word routing and the request, with text injected as a mic phrase | Audio, speech-to-text accuracy, false wakes from noise | Repository E2E tests only; not in this build's UI |
-| C. Manual test: **Simulate meeting line** | The meeting tip pipeline. A typed meeting line never wakes Bee, even if it starts with "Bee" | The wake word path and any request. Text typed here that asks for an action ("Bee, open Chrome") gets only a meeting tip, which never acts on the computer | Live tab, Manual test |
-| D. Manual test: **Talk to Bee (typed)** | The same wake word router a mic phrase takes after speech-to-text: "Bee, open Chrome" becomes a request; "Bee, stop" stops the request in flight. The field is above **Simulate meeting line** and stays usable while a request runs | Audio, speech-to-text, false wakes | Live tab, Manual test |
+| C. **Type to Bee** box | The request itself, typed: "open Chrome" runs like the words after "Bee". It opens in the island with the Type to Bee shortcut | Audio, speech-to-text, the wake word router, false wakes | The island, after the Type to Bee shortcut (Settings shows it) |
 
-Use D for the scenarios below unless a step says otherwise. Start every typed request with "Bee,". A line without it is dropped with a note; it never becomes a meeting line. Typed tests never prove speech-to-text; only A does.
+Use C for the scenarios below unless a step says otherwise. A leading "Bee," is fine and is not needed. Typed tests never prove speech-to-text or the wake word router; only A does.
 
-Do not type a request into **Simulate meeting line** (path C). It goes to the meeting tip pipeline, never to Bee's request path, and it never wakes Bee. The Ask box from the island shortcut also sends a request, but it skips the wake word router, so it does not replace path D.
+The Live tab no longer has **Manual test** (**Simulate meeting line** and **Talk to Bee (typed)** were removed), so no typed path goes through the wake word router. To stop a task that uses the computer, press **Stop** in the island.
 
 ## 4. Fixture page
 
@@ -137,7 +136,7 @@ Expected: Bee waits for LibreOffice (it lists as `soffice` and can take ten seco
 
 **I. Other checks (as before).**
 
-1. **Stop and cancel.** Start a longer task (D), then press **Stop** in the island or type `Bee, stop`. Expected: "Stopped." and no further action. Start one typed request, then another before it finishes: the first is cancelled and only the second runs.
+1. **Stop and cancel.** Start a longer task (D), then press **Stop** in the island (or say "Bee, stop" on path A). Expected: "Stopped." and no further action. Start one typed request, then another before it finishes: the first is cancelled and only the second runs.
 2. **No accessibility bus.** Start Bee from a shell with no session D-Bus (for example an SSH session without the desktop's variables). Expected: Settings says Bee cannot reach the Linux accessibility bus; `Bee, click Help in Chrome` replies "Bee cannot reach the Linux accessibility bus (AT-SPI). Start Bee in your desktop session."; `Bee, open Chrome` replies that it cannot reach the accessibility bus. Bee must not crash.
 3. **False completion check.** In any run where the status line does not say Sent, the reply must not say sent, delivered or posted. In any run where the box does not hold the text, the reply must not say Bee typed it. If the AI claims an action that no tool result proved, Bee replaces the line (log event `claim-rewritten`). Record both what the fixture shows and what Bee says.
 4. **Cold app.** Quit Chrome. Type `Bee, open Chrome`. Expected: Bee waits while the browser starts and finds it under the name the system lists (for example `google-chrome`). It must not loop on "app not found". No reply may name an internal tool (`open_app`, `list_apps`).
@@ -173,9 +172,9 @@ jq -c 'select(.event=="command-result") | {ts, ms: .data.ms, stt: .data.sttMs, c
 jq -c 'select(.event=="claim-rewritten" or .event=="name-ambiguous" or .event=="name-recent" or .event=="send-blocked" or .event=="field-differs" or .event=="keyboard-type") | {ts, category, event}' "$LOG"/bee-*.jsonl
 ```
 
-To report a median, collect the `ms` values for one scenario over several runs and take the middle value, for example `jq -s 'map(.ms) | sort | .[length/2|floor]'` over the output of one of the commands above. State how many runs it covers. Do not report a median from fewer than five runs, and do not mix paths A and D in one figure.
+To report a median, collect the `ms` values for one scenario over several runs and take the middle value, for example `jq -s 'map(.ms) | sort | .[length/2|floor]'` over the output of one of the commands above. State how many runs it covers. Do not report a median from fewer than five runs, and do not mix paths A and C in one figure.
 
-A typed request writes a `wake` / `typed-command` line, and its `wake` / `command` line carries `"via":"typed-command"`. A mic request's `wake` / `command` line carries `"via":"mic"`. Use these to confirm which path a timing came from.
+A mic request writes a `wake` / `command` line before its `ai` / `command-start` line. A request typed in the Type to Bee box writes `ai` / `command-start` alone. Use these to confirm which path a timing came from.
 
 ## 7. What to send back
 

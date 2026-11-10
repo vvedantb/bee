@@ -4,7 +4,7 @@ import { debugLog } from "../core/debug-log";
 import { IPC, memoryRequestSchema, type MemoryFactView } from "../shared/ipc";
 import { assertSignedIn } from "./auth";
 
-// Settings → Saved memory: lists and clears Bee's memory facts (main/bee-memory-store.ts). It holds the same store that
+// Memory → Saved memory: lists and clears Bee's memory facts (main/bee-memory-store.ts). It holds the same store that
 // registerMeetingIpc passes to each direct request, so after a clear the next request's summary is empty without a restart.
 // Clearing touches the memory file only: never Bee's history, saved meetings, known names, connectors, sign-in or the logs.
 

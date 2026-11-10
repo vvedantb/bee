@@ -3,7 +3,6 @@ import {
   IconAlertTriangle,
   IconChevronDown,
   IconDownload,
-  IconExternalLink,
   IconLoader2,
   IconMicrophone,
   IconMicrophoneOff,
@@ -12,7 +11,7 @@ import {
   IconRefresh,
   IconX,
 } from "@tabler/icons-react";
-import { Badge, Button, Input, PillTabs } from "@vvedantb/ui";
+import { Button, PillTabs } from "@vvedantb/ui";
 import { useEffect, useState, type FormEvent } from "react";
 import { AskBox } from "./AskBox";
 import { IslandCard } from "./IslandCard";
@@ -21,18 +20,17 @@ import { BeeLogo } from "./BeeLogo";
 import { Favicon } from "./Favicon";
 import { Connectors } from "./Connectors";
 import { logSignIn } from "./debug-log";
-import { MeetingContextSection } from "./MeetingContextSection";
 import { ClaudeCodeSection } from "./ClaudeCodeSection";
 import { BrowseSection } from "./BrowseSection";
 import { MeetingButton } from "./MeetingButton";
+import { MeetingSection } from "./MeetingSection";
+import { ClearMeetingNotes, KnownNamesField } from "./MemoryFields";
 import { MemorySection } from "./MemorySection";
 import { NotchStatus } from "./NotchStatus";
 import { PANEL_TABS } from "./panel-tabs";
 import { watchNaturalWidth } from "./pill-measure";
 import { MicHint } from "./MicHint";
 import { SecretField } from "./SecretField";
-import { SettingRow } from "./SettingRow";
-import { KnownNamesField, PreferenceRows } from "./SettingsFields";
 import { DEFAULT_ASK_SHORTCUT, DEFAULT_TOGGLE_SHORTCUT } from "../../core/shortcut";
 import { ShortcutRow } from "./ShortcutRow";
 import { computerAccessMessage, screenRecordingMessage } from "./computer-access";
@@ -41,13 +39,11 @@ import { DEFAULT_MOTION_PREFERENCE, MOTION_PREFERENCES, resolveReducedMotion, ty
 import { visibleChips, type LinkChip } from "../../core/link-suggest";
 import { tipKey } from "../../core/steering";
 import type { PipelineResult, SettingsView } from "../../shared/ipc";
-import { displayTip, islandClick, mcpErrorNote, timingsLabel, timingsTitle } from "./island";
+import { displayTip, islandClick, mcpErrorNote } from "./island";
 import { NOTCH_LOGO_PX } from "./logo";
 import { focusKeyFieldWhenReady, GATEWAY_KEY_FIELD_ID, statusClick, type StatusClick } from "./island-click";
 import { CONVERSATION_LABEL, NOTCH_BUTTON, NOTCH_UPDATE_BUTTON, logoState, notchLine, workingLabel, type NotchLine } from "./notch";
-import { actions, answerFolded, displayResult, islandOpen, responseOpen, teamsAudioNow, useBee, type BeeState, type ComputerConfirm, type TypedCommandOutcome, type MeetingCard, type SummaryState, type UpdateState } from "./store";
-import { TYPED_COMMAND_HINT, TYPED_COMMAND_PLACEHOLDER, TYPED_COMMAND_TITLE, clearsTypedCommand, typedCommandNote } from "./typed-command";
-import { MEETING_IN_PROGRESS } from "./meeting-notices";
+import { actions, answerFolded, displayResult, islandOpen, responseOpen, teamsAudioNow, useBee, type BeeState, type ComputerConfirm, type MeetingCard, type UpdateState } from "./store";
 import { updateButton } from "./update";
 
 const ICON = { size: 16, stroke: 1.75 };
@@ -274,55 +270,10 @@ function Island({ state }: { state: BeeState }) {
   );
 }
 
-function summaryLabel(summary: SummaryState, autoDetect: boolean): string | null {
-  if (summary.saving) return "Writing the summary…";
-  const result = summary.result;
-  if (result) {
-    const name = result.path.split(/[\\/]/).pop() ?? result.path;
-    return result.usedLlm ? `Saved ${name} to your notes.` : `Saved ${name} without AI. ${result.error ?? ""}`.trim();
-  }
-  return autoDetect ? null : "Automatic meeting detection is off, so Bee does not start or save meetings.";
-}
-
-// Quiet status only: Bee starts and saves meetings by itself (automatic meeting detection), so there is no button. The spoken
-// lines are sent to main for the summary but never shown here.
-function MeetingSection({ summary, active, autoDetect }: { summary: SummaryState; active: boolean; autoDetect: boolean }) {
-  const label = summaryLabel(summary, autoDetect);
-  return (
-    <section>
-      <h2>Meeting</h2>
-      {active ? (
-        <p className="muted" role="status">
-          {MEETING_IN_PROGRESS}
-        </p>
-      ) : null}
-      {label ? <p className="muted">{label}</p> : null}
-      {summary.result ? (
-        <div className="row actions">
-          <Button type="button" variant="link" size="sm" onClick={() => void actions.openSummary()}>
-            <IconExternalLink {...ICON} /> Open summary
-          </Button>
-        </div>
-      ) : null}
-      {summary.error ? <p className="error">{summary.error}</p> : null}
-    </section>
-  );
-}
-
 function LiveTab({ state }: { state: BeeState }) {
   const result = displayResult(state);
-  // The notes list and its timings belong to the last finished run, not to streamed tips.
-  const done = state.result;
   const chips = visibleChips(state.chips, state.dismissedChipIds);
   const mcpNote = mcpErrorNote(result?.mcpErrors);
-
-  function onSubmit(event: FormEvent<HTMLFormElement>): void {
-    event.preventDefault();
-    const form = event.currentTarget;
-    const line = formString(form, "line") || actions.nextSampleLine();
-    form.reset();
-    void actions.simulateLine(line);
-  }
 
   return (
     <div className="tab-body">
@@ -348,97 +299,40 @@ function LiveTab({ state }: { state: BeeState }) {
 
       <BackgroundSection jobs={state.background} onStop={(id) => actions.stopBackground(id)} />
 
-      <MeetingSection summary={state.summary} active={state.meetingActive} autoDetect={state.settings?.autoMeetingDetection === true} />
-
-      <section>
-        <h2>
-          Notes
-          {done ? (
-            <Badge className="ml-auto border-0 p-0 text-[11px] font-normal normal-case text-muted" title={timingsTitle(done.timingsMs)}>
-              {done.rankSource === "jev" ? "ranked by Jev" : "retrieval order"} · {timingsLabel(done.timingsMs)}
-            </Badge>
-          ) : null}
-        </h2>
-        {done?.rankError ? <p className="error">{done.rankError}</p> : null}
-        {done && done.notes.length > 0 ? (
-          <ul className="notes">
-            {done.notes.map((note) => (
-              <li key={note.id}>
-                <div className="note-head">
-                  <strong>
-                    {note.cite ? <span className="cite">[{note.cite}]</span> : null}
-                    {note.title}
-                  </strong>
-                  <span className="muted">
-                    {note.jevScore === null ? "–" : `Jev ${note.jevScore.toFixed(2)}/3`} · kw{" "}
-                    {note.retrieveScore.toFixed(2)}
-                  </span>
-                </div>
-                <p>{note.text}</p>
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <p className="muted">{done ? "No matching notes." : "Matching notes appear here."}</p>
-        )}
-      </section>
-
-      {/* Manual test: runs the same pipeline as a spoken phrase. The line is not kept on screen. */}
-      <section>
-        <h2>Manual test</h2>
-        <TypedCommandForm />
-        <form className="simulate" onSubmit={onSubmit}>
-          <Input className="h-9" name="line" placeholder="Type a line, or leave blank for a sample" autoComplete="off" />
-          <Button type="submit" variant="secondary" size="sm" disabled={state.busy}>
-            Simulate meeting line
-          </Button>
-        </form>
-      </section>
+      <MeetingSection
+        summary={state.summary}
+        active={state.meetingActive}
+        settings={state.settings}
+        onChange={(update) => void actions.saveSettings(update)}
+        onOpenSummary={() => void actions.openSummary()}
+        reader={state.meeting?.reader}
+        onOpenAccessibility={() => void actions.openAccessibilitySettings()}
+        teamsAudio={{ ...state.teamsAudio, plan: teamsAudioNow(state) }}
+        onOpenScreenRecording={() => void actions.openScreenRecordingSettings()}
+      />
     </div>
   );
 }
 
-/**
- * Manual test → Talk to Bee (typed): a request through the wake word router, like a mic phrase after speech-to-text, for testing
- * without a microphone. Not a meeting line (that is the form below it), and not a test of audio or speech-to-text. The field
- * empties once Bee takes the request and stays usable while one runs: a newer request replaces it, and "Bee, stop" stops it.
- */
-function TypedCommandForm() {
-  const [outcome, setOutcome] = useState<TypedCommandOutcome | null>(null);
-  const [line, setLine] = useState("");
-  const note = typedCommandNote(outcome);
-
-  function onSubmit(event: FormEvent<HTMLFormElement>): void {
-    event.preventDefault();
-    const result = actions.typeCommand(line);
-    setOutcome(result);
-    if (clearsTypedCommand(result)) setLine("");
-  }
-
+// Names, what Bee remembers, and the notes: each saves or clears by itself.
+function MemoryTab({ state, settings }: { state: BeeState; settings: SettingsView }) {
   return (
-    <div className="flex flex-col gap-1">
-      <form className="simulate" onSubmit={onSubmit} aria-label={TYPED_COMMAND_TITLE}>
-        <Input
-          className="h-9"
-          name="command"
-          placeholder={TYPED_COMMAND_PLACEHOLDER}
-          autoComplete="off"
-          aria-describedby="typed-command-hint"
-          value={line}
-          onChange={(event) => setLine(event.currentTarget.value)}
-        />
-        <Button type="submit" size="sm">
-          {TYPED_COMMAND_TITLE}
-        </Button>
-      </form>
-      <p id="typed-command-hint" className="muted">
-        {TYPED_COMMAND_HINT}
-      </p>
-      {note ? (
-        <p className="error" role="status">
-          {note}
+    <div className="tab-body">
+      <div>
+        <KnownNamesField names={settings.knownNames} onSave={(knownNames) => actions.saveSettings({ knownNames })} />
+        {state.error ? <p className="error">{state.error}</p> : null}
+      </div>
+      <MemorySection onLoad={() => actions.listMemory()} onClear={() => actions.clearMemory()} />
+      <section>
+        <h2>Notes</h2>
+        <p className="muted">
+          Notes folder: <code>{settings.notesDir}</code>{" "}
+          <Button type="button" variant="link" size="sm" className="h-auto p-0" onClick={() => void window.bee.openNotesFolder()}>
+            Open
+          </Button>
         </p>
-      ) : null}
+        <ClearMeetingNotes onClear={() => actions.clearMeetingMemory()} />
+      </section>
     </div>
   );
 }
@@ -560,17 +454,13 @@ function ComputerAccessSection({ access }: { access: BeeState["computerAccess"] 
 
 function SettingsTab({ state, settings }: { state: BeeState; settings: SettingsView }) {
   const { update, error } = state;
-  // Remounting the form after a save clears typed secrets and returns saved fields to their masked state.
+  // Remounting the form after a save clears the typed key and returns the field to its masked state.
   const [formKey, setFormKey] = useState(0);
+  const platform = navigator.userAgent.includes("Mac") ? "mac" : "other";
 
   async function onSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
-    const form = event.currentTarget;
-    const gatewayApiKey = formString(form, "gatewayApiKey");
-    const saved = await actions.saveSettings({
-      gatewayApiKey: gatewayApiKey || undefined,
-      knownNames: formString(form, "knownNames").split(/\r?\n/),
-    });
+    const saved = await actions.saveSettings({ gatewayApiKey: formString(event.currentTarget, "gatewayApiKey") || undefined });
     if (saved) setFormKey(formKey + 1);
   }
 
@@ -587,19 +477,6 @@ function SettingsTab({ state, settings }: { state: BeeState; settings: SettingsV
           reveal={window.bee.revealGatewayKey}
           copy={window.bee.copyGatewayKey}
         />
-        <KnownNamesField names={settings.knownNames} />
-        <p className="muted">
-          Notes folder: <code>{settings.notesDir}</code>{" "}
-          <Button type="button" variant="link" size="sm" className="h-auto p-0" onClick={() => void window.bee.openNotesFolder()}>
-            Open
-          </Button>
-        </p>
-        <p className="muted">
-          Debug logs: <code>{settings.logsDir}</code>{" "}
-          <Button type="button" variant="link" size="sm" className="h-auto p-0" onClick={() => void window.bee.openLogsFolder()}>
-            Open
-          </Button>
-        </p>
         {error ? <p className="error">{error}</p> : null}
         <div className="row">
           <Button type="submit" size="sm">
@@ -612,12 +489,15 @@ function SettingsTab({ state, settings }: { state: BeeState; settings: SettingsV
           ) : null}
         </div>
       </form>
+      <ClaudeCodeStatus state={state} />
+      <BrowseStatus state={state} />
+      <ComputerAccessSection access={state.computerAccess} />
       <ShortcutRow
         title="Show or hide Bee"
         shortcut={settings.toggleShortcut}
         defaultShortcut={DEFAULT_TOGGLE_SHORTCUT}
         active={settings.toggleShortcutActive}
-        platform={navigator.userAgent.includes("Mac") ? "mac" : "other"}
+        platform={platform}
         onSave={(toggleShortcut) => void actions.saveSettings({ toggleShortcut })}
       />
       <ShortcutRow
@@ -625,13 +505,9 @@ function SettingsTab({ state, settings }: { state: BeeState; settings: SettingsV
         shortcut={settings.askShortcut}
         defaultShortcut={DEFAULT_ASK_SHORTCUT}
         active={settings.askShortcutActive}
-        platform={navigator.userAgent.includes("Mac") ? "mac" : "other"}
+        platform={platform}
         onSave={(askShortcut) => void actions.saveSettings({ askShortcut })}
       />
-      <PreferenceRows settings={settings} onSave={(update) => void actions.saveSettings(update)} />
-      <ClaudeCodeStatus state={state} />
-      <BrowseStatus state={state} />
-      <ComputerAccessSection access={state.computerAccess} />
       <div className="flex flex-col gap-1">
         Interface size
         <PillTabs
@@ -657,20 +533,14 @@ function SettingsTab({ state, settings }: { state: BeeState; settings: SettingsV
         <p className="muted">On ignores the OS reduced-motion setting.</p>
       </div>
 
-      <MeetingContextSection
-        settings={settings}
-        onChange={(update) => void actions.saveSettings(update)}
-        onClear={() => actions.clearMeetingMemory()}
-        reader={state.meeting?.reader}
-        onOpenAccessibility={() => void actions.openAccessibilitySettings()}
-        teamsAudio={{ ...state.teamsAudio, plan: teamsAudioNow(state) }}
-        onOpenScreenRecording={() => void actions.openScreenRecordingSettings()}
-      />
-
-      <MemorySection onLoad={() => actions.listMemory()} onClear={() => actions.clearMemory()} />
-
       <UpdateSection update={update} />
 
+      <p className="muted">
+        Debug logs: <code>{settings.logsDir}</code>{" "}
+        <Button type="button" variant="link" size="sm" className="h-auto p-0" onClick={() => void window.bee.openLogsFolder()}>
+          Open
+        </Button>
+      </p>
       <p className="muted">{STORAGE_LABEL[settings.secretStorage]}</p>
     </div>
   );
@@ -683,7 +553,10 @@ function Panel({ state }: { state: BeeState }) {
         <PillTabs
           tabs={[...PANEL_TABS]}
           value={state.tab}
-          onValueChange={(tab) => actions.setTab(tab as BeeState["tab"])}
+          onValueChange={(value) => {
+            const tab = PANEL_TABS.find((item) => item.value === value);
+            if (tab) actions.setTab(tab.value);
+          }}
         />
         <span className="tabs-account">
           <UserButton />
@@ -692,9 +565,10 @@ function Panel({ state }: { state: BeeState }) {
       {state.tab === "live" ? <LiveTab state={state} /> : null}
       {state.tab === "connectors" ? (
         <div className="tab-body">
-          <Connectors servers={state.mcp.servers} tests={state.mcp.tests} error={state.mcp.error} />
+          <Connectors servers={state.mcp.servers} tests={state.mcp.tests} error={state.mcp.error} settings={state.settings} />
         </div>
       ) : null}
+      {state.tab === "memory" && state.settings ? <MemoryTab state={state} settings={state.settings} /> : null}
       {state.tab === "settings" && state.settings ? <SettingsTab state={state} settings={state.settings} /> : null}
     </main>
   );

@@ -1,8 +1,14 @@
 // Static Connectors tab states for screenshots, styled by the real styles.css (no Clerk, no store, no window.bee).
 // harness-main.ts loads this page once per ?shot=mcp-settings-empty|mcp-settings-connected and captures it.
-// The markup mirrors App.tsx (Panel tabs) and Connectors.tsx. Shot ids keep the mcp-settings name.
+// The markup mirrors App.tsx (Panel tabs) and Connectors.tsx; the switches under the list are the real ConnectorSwitches. Shot ids keep the mcp-settings name.
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { ConnectorSwitches } from "../../src/renderer/src/ConnectorSwitches";
 import "../../src/renderer/src/styles.css";
 import { panelPage, smallButton } from "./panel-shot";
+
+// The app's own switches, as Connectors.tsx puts them under the list.
+const SWITCHES = renderToStaticMarkup(createElement(ConnectorSwitches, { settings: { personalisedLinks: true, sendSessionsToVmem: false }, onSave: () => undefined }));
 
 // The globe Favicon.tsx shows until a site icon arrives (the harness has no window.bee to fetch one).
 const GLOBE = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3.6 9h16.8M3.6 15h16.8M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg>`;
@@ -16,7 +22,7 @@ function connectors(action: "Connect" | "Disconnect"): string {
   return `<section><h2>Connectors</h2>
     <ul class="connector-list">${row("vmem", action)}</ul>
     <div class="actions row">${smallButton("Add custom", "link")}</div>
-  </section>`;
+  </section>${SWITCHES}`;
 }
 
 const shot = new URLSearchParams(location.search).get("shot") ?? "mcp-settings-empty";

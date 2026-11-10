@@ -53,7 +53,7 @@ export const IPC = {
   // Renderer → main: show Bee without taking focus, so a meeting prompt is seen when Bee was hidden.
   meetingShow: "bee:meeting:show",
   clearMeetingMemory: "bee:meeting:clear-memory",
-  /** Settings → Saved memory: Bee's memory facts for direct requests (main/bee-memory-store.ts), listed and cleared. */
+  /** Memory → Saved memory: Bee's memory facts for direct requests (main/bee-memory-store.ts), listed and cleared. */
   memoryList: "bee:memory:list",
   memoryClear: "bee:memory:clear",
   meetingWindowCaptions: "bee:meeting-window:captions",
@@ -437,7 +437,7 @@ export type TeamsAudioEnded = z.infer<typeof teamsAudioEndedSchema>;
 
 export const clearMeetingMemoryResultSchema = z.object({ cleared: z.number().int().nonnegative() });
 
-// Settings → Saved memory: Bee's own memory facts (core/bee-memory.ts), not saved meetings. Both channels need a session.
+// Memory → Saved memory: Bee's own memory facts (core/bee-memory.ts), not saved meetings. Both channels need a session.
 // The fact shape is repeated here so the preload never loads core/bee-memory.ts (and the AI SDK with it); ipc.test.ts keeps the
 // two in step. Oldest first, as main keeps them.
 export const MEMORY_FACT_KINDS = ["person", "preference", "app", "other"] as const;

@@ -151,16 +151,3 @@ export function islandClick(target: "status" | "chevron", args: { panelOpen: boo
   if (target === "chevron") return args.panelOpen ? "close-panel" : "open-panel";
   return !args.panelOpen && !args.bodyShown && args.hasResponse ? "full-text" : null;
 }
-
-export type PipelineTimings = { retrieve: number; rank: number; guide: number; mcp: number };
-
-/** Wall time of a run in ms: retrieval, then Jev beside MCP and Luna. Jev and Luna overlap, so the sum would overstate it. */
-export function timingsLabel(timings: PipelineTimings): string {
-  return `${Math.round(timings.retrieve + Math.max(timings.rank, timings.mcp + timings.guide))} ms`;
-}
-
-/** Each stage in ms, so MCP is never hidden inside Luna's time. */
-export function timingsTitle(timings: PipelineTimings): string {
-  const ms = (value: number) => `${Math.round(value)} ms`;
-  return `retrieve ${ms(timings.retrieve)} · Jev ${ms(timings.rank)} · MCP ${ms(timings.mcp)} · AI ${ms(timings.guide)} (Jev runs beside MCP and the AI)`;
-}

@@ -5,8 +5,8 @@ import type { MemoryFactView } from "../../shared/ipc";
 import { MemoryFactList, memoryClearMessage } from "./MemoryFactList";
 import { InfoTip } from "./SettingRow";
 
-// Settings → Saved memory: what Bee remembers for direct requests (core/bee-memory.ts), not saved meeting notes (those are under
-// Meeting context). Presentational: it takes load and clear callbacks, so a test or screenshot page can render it without the
+// Memory → Saved memory: what Bee remembers for direct requests (core/bee-memory.ts), not saved meeting notes (those are under
+// Notes on the same tab). Presentational: it takes load and clear callbacks, so a test or screenshot page can render it without the
 // store or Electron. Clearing asks first in a dialog.
 
 type Load = { state: "loading" } | { state: "ready"; facts: MemoryFactView[] } | { state: "error" };
@@ -35,7 +35,7 @@ export function MemorySection({
 
   useEffect(() => {
     void refresh();
-    // Once when Settings opens; a clear refreshes it after.
+    // Once when the Memory tab opens; a clear refreshes it after.
   }, []);
 
   async function clear(): Promise<void> {
