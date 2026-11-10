@@ -1,3 +1,5 @@
+import { isTeamsAudioLine } from "./teams-audio";
+
 // Meeting lines (mic, typed, captions, Teams audio), merged by time for the pipeline and the summary.
 
 export type SessionLine = {
@@ -38,4 +40,22 @@ export function pipelineText(line: SessionLine): string {
 export function summaryTranscript(lines: SessionLine[], selfName: string): Array<string | { speaker: string; text: string }> {
   if (lines.every((line) => line.own)) return lines.map((line) => line.text);
   return lines.map((line) => ({ speaker: line.own ? selfName : line.speakerName, text: line.text }));
+}
+
+export type SessionLineCounts = { teamsAudioLines: number; captionLines: number; micLines: number };
+
+/** How many lines came from Teams audio, captions and this device's mic. Counts only, never text. */
+export function sessionLineCounts(lines: readonly SessionLine[]): SessionLineCounts {
+  const counts: SessionLineCounts = { teamsAudioLines: 0, captionLines: 0, micLines: 0 };
+  for (const line of lines) {
+    if (line.own) counts.micLines += 1;
+    else if (isTeamsAudioLine(line)) counts.teamsAudioLines += 1;
+    else counts.captionLines += 1;
+  }
+  return counts;
+}
+
+/** True when a meeting or call produced only own (mic or typed) lines, so who spoke is unknown. Solo dictation is false. */
+export function isAttributionUnknown(lines: readonly SessionLine[], inMeeting: boolean): boolean {
+  return inMeeting && lines.length > 0 && lines.every((line) => line.own);
 }

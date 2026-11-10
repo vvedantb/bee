@@ -67,3 +67,16 @@ describe("parseMemory", () => {
     expect(parseMemory(JSON.stringify({ version: 1, records: [record(1), { id: 5 }] })).map((item) => item.id)).toEqual(["r1"]);
   });
 });
+
+describe("attribution flag", () => {
+  it("round-trips through the store and tolerates records without it", () => {
+    const fs = inMemoryFs();
+    const store = createMeetingMemoryStore({ path: "m.json", fs });
+    store.add(record(1, { attributionUnknown: true }));
+    store.add(record(2));
+    const reread = parseMemory(fs.read("m.json"));
+    expect(reread[0]?.attributionUnknown).toBe(true);
+    expect(reread[1]?.attributionUnknown).toBeUndefined();
+    expect(boundRecord(record(3, { attributionUnknown: false }))).not.toHaveProperty("attributionUnknown");
+  });
+});

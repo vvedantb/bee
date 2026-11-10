@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import { ANTHROPIC_CACHE } from "./gateway";
 import { chunkNote } from "./notes";
 import {
+  ATTRIBUTION_UNAVAILABLE,
+  ATTRIBUTION_UNKNOWN_RULES,
   SPEAKER_RULES,
   SUMMARY_SYSTEM,
   buildLocalSummary,
@@ -10,6 +12,7 @@ import {
   extractSummaryFields,
   generateMeetingSummary,
   parseSummaryMarkdown,
+  scrubPlaceholderOwner,
   summaryFileName,
 } from "./summary";
 
@@ -188,5 +191,49 @@ describe("extractSummaryFields", () => {
 
   it("returns empty lists for text without sections", () => {
     expect(extractSummaryFields("nothing here")).toEqual({ decisions: [], actionItems: [], topics: [] });
+  });
+});
+
+describe("mic-only meetings (attribution unknown)", () => {
+  it("adds the attribution rule to the prompt and never the speaker rules", () => {
+    const prompt = buildSummaryPrompt({ transcript, attributionUnknown: true });
+    expect(prompt.system).toContain(ATTRIBUTION_UNKNOWN_RULES);
+    expect(ATTRIBUTION_UNKNOWN_RULES).toContain("Owner unknown");
+    expect(ATTRIBUTION_UNKNOWN_RULES).toContain("do not invent names");
+    expect(prompt.system).not.toContain(SPEAKER_RULES);
+    expect(prompt.prompt).not.toContain("Speakers:");
+  });
+
+  it("leaves true solo dictation unchanged", () => {
+    for (const attributionUnknown of [undefined, false]) {
+      expect(buildSummaryPrompt({ transcript, attributionUnknown }).system).toBe(SUMMARY_SYSTEM);
+      const note = buildLocalSummary({ transcript, attributionUnknown, when });
+      expect(note).not.toContain("## Speakers");
+      expect(note).not.toContain(ATTRIBUTION_UNAVAILABLE);
+    }
+  });
+
+  it("writes the Speakers caveat in the local and the model summary", async () => {
+    expect(buildLocalSummary({ transcript, attributionUnknown: true, when })).toContain(`## Speakers\n- ${ATTRIBUTION_UNAVAILABLE}`);
+    const result = await generateMeetingSummary({ transcript, attributionUnknown: true, model: mockModel(MODEL_REPLY), when });
+    expect(result.usedLlm).toBe(true);
+    expect(result.markdown).toContain(`## Speakers\n- ${ATTRIBUTION_UNAVAILABLE}`);
+  });
+});
+
+describe("invented Speaker owners", () => {
+  it("replaces Speaker and Speaker N owners and keeps real names", () => {
+    expect(scrubPlaceholderOwner("Speaker: send the quote")).toBe("Owner unknown: send the quote");
+    expect(scrubPlaceholderOwner("Speaker 2: book the room")).toBe("Owner unknown: book the room");
+    expect(scrubPlaceholderOwner("Sam: send the quote")).toBe("Sam: send the quote");
+  });
+
+  it("scrubs them from extracted fields and from the assembled note", async () => {
+    const reply = "## Decisions\n- None recorded.\n\n## Action items\n- Speaker 1: send the quote\n- Speaker: call Acme\n\n## Topics\n- Speaker 1: said hello";
+    expect(extractSummaryFields(reply).actionItems).toEqual(["Owner unknown: send the quote", "Owner unknown: call Acme"]);
+    const result = await generateMeetingSummary({ transcript, model: mockModel(reply), when });
+    expect(result.markdown).toContain("- Owner unknown: send the quote");
+    expect(result.markdown).not.toMatch(/- Speaker( \d+)?: send/);
+    expect(result.markdown).toContain("- Speaker 1: said hello");
   });
 });

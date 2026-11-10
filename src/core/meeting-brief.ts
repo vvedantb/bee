@@ -87,7 +87,8 @@ function pastBlock(entry: { record: MeetingRecord; reason: "same" | "people" }):
     record.actionItems.length > 0 ? `actions: ${record.actionItems.slice(0, PAST_ITEMS).join("; ")}` : "",
     record.decisions.length === 0 && record.actionItems.length === 0 && record.summary ? `topics: ${clip(record.summary, 240)}` : "",
   ].filter((part) => part.length > 0);
-  return parts.length > 0 ? `${head}: ${parts.join(". ")}` : head;
+  const caveat = record.attributionUnknown ? " (mic only: saved lines may not all be the user's)" : "";
+  return parts.length > 0 ? `${head}: ${parts.join(". ")}${caveat}` : `${head}${caveat}`;
 }
 
 /** Up to two island lines: when you last met and what was open. Empty with no earlier meeting. */

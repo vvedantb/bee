@@ -41,6 +41,16 @@ describe("lunaActivitySchema", () => {
   });
 });
 
+describe("meeting summary request", () => {
+  it("carries the attribution flag and line counts, and still accepts old requests", () => {
+    const base = { transcript: ["hello"], notesCited: [], tips: [], sessionToken: "t" };
+    const parsed = meetingSummaryRequestSchema.parse({ ...base, attributionUnknown: true, teamsAudioLines: 0, captionLines: 0, micLines: 58 });
+    expect(parsed).toMatchObject({ attributionUnknown: true, teamsAudioLines: 0, captionLines: 0, micLines: 58 });
+    expect(meetingSummaryRequestSchema.parse(base).attributionUnknown).toBeUndefined();
+    expect(meetingSummaryRequestSchema.safeParse({ ...base, micLines: -1 }).success).toBe(false);
+  });
+});
+
 describe("tip limits", () => {
   // A full-text answer: longer than the old 500-character limit that failed the next turn's IPC.
   const long = "The District line closure is planned engineering work. ".repeat(14);
