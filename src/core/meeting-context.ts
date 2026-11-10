@@ -4,7 +4,7 @@ import { buildBrief, pastMeetings, searchQuery, type MeetingBrief } from "./meet
 import { normaliseSubject } from "./meeting-key";
 import { matchMeeting, type MeetingIdentity } from "./meeting-match";
 import type { MeetingMemoryStore, MeetingRecord } from "./meeting-memory";
-import { IDLE_TRACKER, stepTracker, type MeetingTracker } from "./meeting-tracker";
+import { IDLE_TRACKER, LEAVE_DEBOUNCE_MS, stepTracker, type MeetingTracker } from "./meeting-tracker";
 import { extractSummaryFields } from "./summary";
 import { currentTeamsTitle, isTeamsMeetingRow, type WindowTitleReader, type WindowTitleRow } from "./teams-title";
 
@@ -28,7 +28,7 @@ export type MeetingContextDeps = {
 
 export const DEFAULT_TIMING = {
   enterMs: 10_000,
-  leaveMs: 15_000,
+  leaveMs: LEAVE_DEBOUNCE_MS,
   /** Window titles are read at most this often. */
   titleMs: 30_000,
   /** The calendar is read at most this often, or after CALENDAR_CHANGE_MS when the window title changed. */

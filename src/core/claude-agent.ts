@@ -75,7 +75,10 @@ export type AgentResult = {
   looped: boolean;
   /** Web pages the SDK's WebSearch returned, as { url, title }, for tools.ts sourcesFromGenerateResult. */
   sources: { url: string; title: string }[];
+  /** This run's cost in USD: the SDK's session total minus the total before the run. Null when unknown (a resumed session's first run). */
   costUsd: number | null;
+  /** The session's cumulative cost in USD as the SDK last reported it. Null when the run reported none. */
+  sessionCostUsd?: number | null;
 };
 
 /**
@@ -315,15 +318,28 @@ type Turn = {
   modelTurns: number;
   finish: AgentFinish;
   costUsd: number | null;
+  sessionCostUsd: number | null;
+  /** The session's total before this run; shared with the session so a later run sees this run's total. Null: unknown. */
+  cost: { previous: number | null };
   failure: string | null;
   done: (error?: Error) => void;
   /** Stops the turn's model run (Stop, the loop guard, a turn limit). */
   interrupt: () => void;
 };
 
-/** A new turn for a request, and the promise its result (or failure) settles. */
-function newTurn(request: AgentRequest, interrupt: () => void): { t: Turn; finished: Promise<void> } {
-  const t: Turn = { request, messages: [], toolNames: new Map(), steps: [], sources: [], lastId: "", turnText: "", looped: false, overTurns: false, modelTurns: 0, finish: "stop", costUsd: null, failure: null, done: () => undefined, interrupt };
+/**
+ * One run's cost from the SDK's `total_cost_usd`, which is cumulative for a (resumed) session. previous 0: a fresh session, so the
+ * run costs the whole total. previous null: a resumed session whose earlier total is unknown, so the run's own cost is unknown too.
+ */
+export function runCostUsd(total: number | null | undefined, previous: number | null): { costUsd: number | null; sessionCostUsd: number | null; nextPrevious: number | null } {
+  if (typeof total !== "number" || !Number.isFinite(total)) return { costUsd: null, sessionCostUsd: null, nextPrevious: previous };
+  const delta = previous === null ? null : total - previous;
+  return { costUsd: delta !== null && delta >= 0 ? delta : null, sessionCostUsd: total, nextPrevious: total };
+}
+
+/** A new turn for a request, and the promise its result (or failure) settles. `cost.previous`: see runCostUsd. */
+function newTurn(request: AgentRequest, interrupt: () => void, cost: { previous: number | null }): { t: Turn; finished: Promise<void> } {
+  const t: Turn = { request, messages: [], toolNames: new Map(), steps: [], sources: [], lastId: "", turnText: "", looped: false, overTurns: false, modelTurns: 0, finish: "stop", costUsd: null, sessionCostUsd: null, cost, failure: null, done: () => undefined, interrupt };
   const finished = new Promise<void>((resolve, reject) => {
     t.done = (error) => (error ? reject(error) : resolve());
   });
@@ -333,10 +349,10 @@ function newTurn(request: AgentRequest, interrupt: () => void): { t: Turn; finis
 /** A finished turn as the request's result, or the error it ended on. */
 function turnResult(t: Turn, started: number, kind: string): AgentResult {
   const request = t.request;
-  debugLog.info("ai", "agent-done", { kind, tier: request.tier, ms: msSince(started), finish: t.finish, looped: t.looped, costUsd: t.costUsd, tools: t.steps.length });
+  debugLog.info("ai", "agent-done", { kind, tier: request.tier, ms: msSince(started), finish: t.finish, looped: t.looped, costUsd: t.costUsd, sessionCostUsd: t.sessionCostUsd, tools: t.steps.length });
   if (request.signal.aborted) throw request.signal.reason instanceof Error ? request.signal.reason : new Error("aborted");
   if (t.failure !== null) throw new Error(SIGNED_OUT.test(t.failure) ? CLAUDE_CODE_SIGNED_OUT : t.failure);
-  return { text: t.turnText.trim() ? t.turnText : lastText(t.messages), messages: t.messages, finish: t.finish, looped: t.looped, sources: t.sources, costUsd: t.costUsd };
+  return { text: t.turnText.trim() ? t.turnText : lastText(t.messages), messages: t.messages, finish: t.finish, looped: t.looped, sources: t.sources, costUsd: t.costUsd, sessionCostUsd: t.sessionCostUsd };
 }
 
 /**
@@ -347,7 +363,7 @@ function turnResult(t: Turn, started: number, kind: string): AgentResult {
  */
 export function claudeSession(options: { executable: string; cwd: string; store: SessionStore; browse?: string | null }): CommandAgent & { close: () => void } {
   const router = toolRouter();
-  let live: { query: Query; push: (message: SDKUserMessage) => void; end: () => void; model: AgentTier; fresh: boolean } | null = null;
+  let live: { query: Query; push: (message: SDKUserMessage) => void; end: () => void; model: AgentTier; fresh: boolean; cost: { previous: number | null } } | null = null;
   let turn: Turn | null = null;
   let chain: Promise<unknown> = Promise.resolve();
   let notes: ModelMessage[] = [];
@@ -409,6 +425,8 @@ export function claudeSession(options: { executable: string; cwd: string; store:
       },
       model: "plan" as AgentTier,
       fresh: !resume,
+      // A resumed session's earlier total is unknown; a new one starts at 0.
+      cost: { previous: resume ? null : 0 },
     };
     debugLog.info("ai", "session-start", { resume: Boolean(resume) });
     void pump(session, Boolean(resume));
@@ -497,7 +515,10 @@ export function claudeSession(options: { executable: string; cwd: string; store:
         t.interrupt();
       }
     } else if (message.type === "result") {
-      t.costUsd = message.total_cost_usd;
+      const cost = runCostUsd(message.total_cost_usd, t.cost.previous);
+      t.costUsd = cost.costUsd;
+      t.sessionCostUsd = cost.sessionCostUsd;
+      t.cost.previous = cost.nextPrevious;
       if (t.overTurns) t.finish = "tool-calls";
       else if (message.subtype === "error_max_turns") t.finish = "tool-calls";
       else if ((message.subtype !== "success" || message.is_error) && !t.looped && !request.signal.aborted) {
@@ -525,7 +546,7 @@ export function claudeSession(options: { executable: string; cwd: string; store:
     const parts = sessionParts({ system: request.system, sentRules: sentRules.has(id), notes, history, content: request.content });
     const pendingNotes = notes;
     notes = [];
-    const { t, finished } = newTurn(request, () => void session.query.interrupt());
+    const { t, finished } = newTurn(request, () => void session.query.interrupt(), session.cost);
     const stop = () => t.interrupt();
     request.signal.addEventListener("abort", stop, { once: true });
     turn = t;
@@ -559,7 +580,7 @@ export function claudeSession(options: { executable: string; cwd: string; store:
     const parts = sessionParts({ system: request.system, sentRules: false, notes: [], history: resume ? [] : request.history, content: request.content });
     let current: Turn | null = null;
     const q = query({ prompt: single(parts), options: { ...baseOptions(own.server, () => current), persistSession: false, ...(resume ? { resume, forkSession: true } : {}) } });
-    const { t, finished } = newTurn(request, () => void q.interrupt());
+    const { t, finished } = newTurn(request, () => void q.interrupt(), { previous: resume ? null : 0 });
     current = t;
     const stop = () => t.interrupt();
     request.signal.addEventListener("abort", stop, { once: true });

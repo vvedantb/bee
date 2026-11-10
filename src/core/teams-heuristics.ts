@@ -29,10 +29,23 @@ export function isTeamsPreJoinTitle(title: string): boolean {
   return PRE_JOIN.test(title.trim().replace(UNREAD_COUNT, ""));
 }
 
+// Teams' own chrome windows: share and meeting control bars, toasts and pop-ups. They carry the app's process but are never the
+// meeting's name, so they must not replace a good one.
+const CHROME_NAME = /^(?:sharing control bar|sharing toolbar|meeting controls?(?: bar)?|control bar|call controls?(?: bar)?|floating (?:toolbar|control bar)|screen sharing(?: toolbar)?|you(?:'|’)re sharing.*|stop sharing|incoming call|(?:microsoft )?teams (?:call |meeting )?notifications?|(?:new )?notifications?|(?:toast|notification toast).*)$/i;
+const APP_NAME = /^Microsoft Teams(?:\s+classic|\s*\([^)]*\))?$/i;
+const APP_TAIL = /\s*[|–—-]\s*Microsoft Teams(?:\s+classic|\s*\([^)]*\))?\s*$/i;
+
+/** A Teams chrome window title (control bar, toast, bare app name, empty, "N/A"): never a meeting name. */
+export function isTeamsChromeTitle(title: string): boolean {
+  const cleaned = title.replace(/[‎‏]/g, "").trim().replace(UNREAD_COUNT, "");
+  if (!cleaned || cleaned === "N/A" || APP_NAME.test(cleaned)) return true;
+  return CHROME_NAME.test(cleaned.replace(APP_TAIL, "").split("|")[0]?.trim() ?? "");
+}
+
 /** A Teams window whose title reads like a meeting or call window, e.g. "Meeting with Alice | Microsoft Teams". Pre-join is not one. */
 export function isMeetingTitle(title: string): boolean {
   const trimmed = title.trim().replace(UNREAD_COUNT, "");
-  if (!trimmed || trimmed === "N/A" || NOT_A_CALL.test(trimmed) || isTeamsPreJoinTitle(trimmed)) return false;
+  if (!trimmed || trimmed === "N/A" || NOT_A_CALL.test(trimmed) || isTeamsPreJoinTitle(trimmed) || isTeamsChromeTitle(trimmed)) return false;
   return /\b(meeting|call|meet now|huddle)\b/i.test(trimmed);
 }
 

@@ -1,5 +1,6 @@
 import type { DetectorReading } from "../core/teams-heuristics";
 import { teamsAudioPlan, teamsAudioPlatform, teamsAudioSupport, type TeamsAudioHost, type TeamsAudioSupport } from "../core/teams-audio";
+import { TEAMS_CALL_LEAVE_MS } from "../core/meeting-tracker";
 import type { MeetingWindowStatus, TeamsAudioStatus } from "../shared/ipc";
 import type { TeamsAudioPermission } from "./teams-audio-capture";
 
@@ -20,24 +21,40 @@ export function createTeamsAudioStatus(deps: {
   host?: TeamsAudioHost;
   /** macOS Screen Recording, as the last capture found it (main/teams-audio-capture.ts). */
   permission?: () => TeamsAudioPermission;
+  now?: () => number;
 }): () => Promise<TeamsAudioStatus> {
   const platform = teamsAudioPlatform(deps.platform ?? process.platform);
   const support: TeamsAudioSupport = teamsAudioSupport(platform, deps.appAudio, deps.host);
+  const now = deps.now ?? Date.now;
+  // A call stays on through brief gaps in the signal: it ends only after TEAMS_CALL_LEAVE_MS of continuous absence, so a flap
+  // neither stops the capture nor starts a new session.
+  let inCallSince: number | null = null;
+  let lastSeen = 0;
   return async () => {
     // Only macOS asks for a permission (Screen Recording); Windows process loopback needs none.
     const permission = platform === "mac" && support.supported ? (deps.permission?.() ?? "unknown") : "not-needed";
     const base: TeamsAudioStatus = { platform, ...support, teamsCall: false, permission };
     // Off, or no Teams-only capture here: nothing to detect, so nothing runs.
-    if (!deps.enabled() || !support.supported) return base;
+    if (!deps.enabled() || !support.supported) {
+      // Turning it off is the user's call: no grace.
+      inCallSince = null;
+      return base;
+    }
+    // Fail open: a failed read is no signal this time, so no new call starts; a call already on keeps its grace.
+    let seen = false;
     try {
       const builtIn = await deps.readTeamsDetector().catch(() => null);
       // Only Teams: a Zoom or Google Meet call never turns this on.
-      const teamsCall = Boolean(builtIn?.inMeeting) || deps.reader.status().app === "teams";
-      return { ...base, teamsCall };
+      seen = Boolean(builtIn?.inMeeting) || deps.reader.status().app === "teams";
     } catch {
-      // Fail open: no call seen, so no listening; the mic carries on.
-      return base;
+      seen = false;
     }
+    const at = now();
+    if (seen) {
+      inCallSince = inCallSince ?? at;
+      lastSeen = at;
+    } else if (inCallSince !== null && at - lastSeen >= TEAMS_CALL_LEAVE_MS) inCallSince = null;
+    return { ...base, teamsCall: inCallSince !== null };
   };
 }
 

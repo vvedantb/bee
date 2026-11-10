@@ -2,7 +2,7 @@ import type { HookInput } from "@anthropic-ai/claude-agent-sdk";
 import { describe, expect, it } from "vitest";
 import type { IrreversibleKind } from "./computer-control";
 import type { ConfirmRequest } from "./computer-tools";
-import { browseGateHook } from "./claude-agent";
+import { browseGateHook, runCostUsd } from "./claude-agent";
 import { BROWSE_DECLINED, BROWSE_NO_CONFIRM } from "./browse-gate";
 
 // The hook Claude Code runs before each browse execute (core/claude-agent.ts browseGateHook), called as Claude Code calls it.
@@ -55,5 +55,33 @@ describe("browseGateHook", () => {
 
   it("leaves other tools alone", async () => {
     expect(await runHook(preToolUse("mcp__browse__status", SEND), {})).toEqual({});
+  });
+});
+
+describe("runCostUsd", () => {
+  it("charges a fresh session's first run the whole total", () => {
+    expect(runCostUsd(0.25, 0)).toEqual({ costUsd: 0.25, sessionCostUsd: 0.25, nextPrevious: 0.25 });
+  });
+
+  it("charges a later run the difference from the session total, and keeps the cumulative apart", () => {
+    const second = runCostUsd(0.75, 0.25);
+    expect(second.costUsd).toBeCloseTo(0.5);
+    expect(second.sessionCostUsd).toBe(0.75);
+    expect(second.nextPrevious).toBe(0.75);
+  });
+
+  it("calls a resumed session's first run unknown, then measures from its total", () => {
+    const first = runCostUsd(3, null);
+    expect(first).toEqual({ costUsd: null, sessionCostUsd: 3, nextPrevious: 3 });
+    expect(runCostUsd(3.5, first.nextPrevious).costUsd).toBeCloseTo(0.5);
+  });
+
+  it("gives null and keeps the previous total when the result has no usable total", () => {
+    expect(runCostUsd(undefined, 1)).toEqual({ costUsd: null, sessionCostUsd: null, nextPrevious: 1 });
+    expect(runCostUsd(Number.NaN, null)).toEqual({ costUsd: null, sessionCostUsd: null, nextPrevious: null });
+  });
+
+  it("gives null when the total fell below the previous one", () => {
+    expect(runCostUsd(1, 2).costUsd).toBeNull();
   });
 });

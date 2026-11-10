@@ -1,4 +1,4 @@
-import { TEAMS_IMAGES, isMeetingTitle, isTeamsPreJoinTitle } from "./teams-heuristics";
+import { TEAMS_IMAGES, isMeetingTitle, isTeamsChromeTitle, isTeamsPreJoinTitle } from "./teams-heuristics";
 
 // The meeting NAME from Teams window titles, for new Teams (ms-teams.exe) and classic Teams (teams.exe). Pure text work:
 // the readers that list window titles (PowerShell on Windows, System Events on macOS) live in main/local-readers.ts.
@@ -30,7 +30,6 @@ const CHAT_TABS = new Set(["chat"]);
 const GENERIC_NAME = /^(meet now|meeting|call|new meeting|teams meeting|microsoft teams meeting|huddle)$/i;
 const PERSON = /^(?:meeting|call|chat)\s+with\s+(.+)$/i;
 const MAX_NAME = 200;
-
 /** A window title Teams wrote: the bare app name, or anything ending in "| Microsoft Teams" (classic and work or school too). */
 export function isTeamsWindowTitle(title: string): boolean {
   const cleaned = title.replace(/[‎‏]/g, "").trim();
@@ -40,7 +39,7 @@ export function isTeamsWindowTitle(title: string): boolean {
 /** The meeting name in one Teams window title, or null for tabs, the bare app title and empty titles. */
 export function parseTeamsTitle(title: string): TeamsTitle | null {
   const cleaned = title.replace(/[‎‏]/g, "").trim();
-  if (!cleaned || cleaned === "N/A" || APP_ONLY.test(cleaned)) return null;
+  if (isTeamsChromeTitle(cleaned)) return null;
   const rest = cleaned.replace(APP_SUFFIX, "").trim();
   if (!rest) return null;
   const parts = rest.split("|").map((part) => part.trim()).filter((part) => part.length > 0);
