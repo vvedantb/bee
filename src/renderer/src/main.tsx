@@ -6,6 +6,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { CLERK_PUBLISHABLE_KEY } from "../../shared/clerk";
 import { App } from "./App";
+import { watchClickThrough } from "./click-through";
 import { logStateChanges } from "./debug-log";
 import { actions, getBeeState, subscribe } from "./store";
 import "./styles.css";
@@ -15,6 +16,9 @@ logStateChanges(subscribe, getBeeState);
 
 // Focus went to another app: the user clicked outside Bee, so an answer open in full folds back to the pill.
 window.addEventListener("blur", () => actions.clickedOutside());
+
+// The clear window area lets clicks through to the app below; Bee's surfaces take them (click-through.ts).
+watchClickThrough((interactive) => window.bee.setWindowInteractive(interactive));
 
 const root = document.getElementById("root");
 if (root) {

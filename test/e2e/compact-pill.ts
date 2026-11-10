@@ -1,6 +1,6 @@
 // The screenshot pages render static markup, so they size the pill as the store does in every state: the header's natural
-// width, snapped and clamped (core/overlay-size.ts pillWidth), set as the pill's width. Collapsed, the real app then narrows the
-// window to it; the body or panel under the pill stays full width.
+// width, snapped and clamped (core/overlay-size.ts pillWidth), set as the pill's width. The window, and the body or panel
+// under the pill, stay full width.
 import { pillWidth } from "../../src/core/overlay-size";
 import { naturalWidth } from "../../src/renderer/src/pill-measure";
 

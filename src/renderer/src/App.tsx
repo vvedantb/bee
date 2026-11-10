@@ -187,7 +187,7 @@ function openStatus(click: StatusClick): void {
   else if (click) void actions.openTab(click);
 }
 
-// The pill's header reports its natural width to the store, which sizes the compact pill and the window (applyWindowSize).
+// The pill's header reports its natural width to the store, which sizes the compact pill (CSS only; the window stays full width).
 const watchPill = (header: HTMLElement) => watchNaturalWidth(header, (natural) => actions.measurePill(natural));
 
 // The pill, and under it the response body, like the pill over the panel. The pill hugs its header like a Dynamic Island in
