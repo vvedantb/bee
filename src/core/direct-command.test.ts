@@ -223,12 +223,14 @@ describe("runDirectCommand: computer use", () => {
   function bothModel(args: { stream?: Chunk[][]; turns?: Turn[] }) {
     const streamCalls: Array<{ tools: string[]; prompt: string }> = [];
     let generateCalls = 0;
+    const generatePrompts: string[] = [];
     const model = new MockLanguageModelV4({
       doStream: async (options) => {
         streamCalls.push({ tools: (options.tools ?? []).map((item) => item.name), prompt: JSON.stringify(options.prompt) });
         return { stream: simulateReadableStream({ chunks: args.stream?.[streamCalls.length - 1] ?? text("NONE") }) as never };
       },
-      doGenerate: async () => {
+      doGenerate: async (options) => {
+        generatePrompts.push(JSON.stringify(options.prompt));
         const turn = args.turns?.[generateCalls] ?? { text: "Done." };
         generateCalls += 1;
         return "tool" in turn
@@ -236,7 +238,7 @@ describe("runDirectCommand: computer use", () => {
           : { content: [{ type: "text", text: turn.text }], finishReason: { unified: "stop", raw: undefined }, usage, warnings: [] };
       },
     });
-    return { gateway: { languageModel: () => model } as unknown as BeeGateway, streamCalls, generateCalls: () => generateCalls };
+    return { gateway: { languageModel: () => model } as unknown as BeeGateway, streamCalls, generateCalls: () => generateCalls, generatePrompts };
   }
 
   function host(options: { accessibility?: "granted" | "denied"; onRun?: (command: string, control: RunControl | null) => void } = {}) {
@@ -282,6 +284,15 @@ describe("runDirectCommand: computer use", () => {
     expect(streamCalls[0]?.tools).toContain("use_computer");
     expect(streamCalls[0]?.prompt).toContain("call use_computer once");
     expect(generateCalls()).toBe(1);
+  });
+
+  it("hands the loop what the answer already found, and shows each line of a list it reports", async () => {
+    const brief = "Send George Dowling the Q3 deck on Teams: https://drive.example.com/file/q3";
+    const { gateway, generatePrompts } = bothModel({ stream: [toolCall("use_computer", { task: brief })], turns: [{ text: "- Sam asked for a PR review.\n- Priya asked for the contract.\n- Ended: Teams" }] });
+    const { computer } = host();
+    const result = await run({ command: "do what I promised in my last meeting", snippets, gateway, actions: fakeActions().actions, computer });
+    expect(generatePrompts[0]).toContain(`What Bee already found: ${brief}`);
+    expect(result.tips).toEqual(["Sam asked for a PR review.", "Priya asked for the contract."]);
   });
 
   it("reads the window at the front for a question about the screen, and never acts", async () => {

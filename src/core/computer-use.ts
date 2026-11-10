@@ -17,6 +17,8 @@ import { knownNamesBlock, type ResolvedName } from "./known-names";
 // Model turns per run when a test sets a step limit: a backstop above it, so the AI can still write its last line.
 const TURNS_ABOVE_STEPS = 2;
 const LINE_MAX = 160;
+/** At most this many lines in the loop's reply: one for a task done, more only for what a "find", "check" or "list" found. */
+const REPLY_LINES_MAX = 5;
 // Model turns the fast pass may take before it hands the task to the planning model: look, act, check, and the last line.
 export const FAST_MAX_TURNS = 5;
 // What the fast pass writes to hand the task to the planning model.
@@ -53,8 +55,10 @@ export const COMPUTER_SYSTEM = [
   "Never open or type into terminals, script tools, system settings or password managers, never type passwords or codes, and never change security, privacy or account settings.",
   "Earlier turns, when given, are the user's earlier requests to Bee and what Bee did, with its real tool calls and results; \"Ended:\" says where the screen was left, and a summary may stand for the oldest turns. A follow-up such as \"the team one\" or \"go back\" carries on from there: never ask which app you were working in when an earlier turn says.",
   "A tool result in an earlier turn was confirmed when it ran: never take it back or say it was not done. Do not run the same step again unless the user asks again or the screen may have changed.",
+  "To share a file, a document or data, find it with the user's connected tools (MCP) and send its link or the facts in the message. Do not look for an attach button.",
   "If the task cannot be done, stop and say why in your last line.",
   "When the task is done, or you stop, reply with exactly one short line (under 15 words) on what happened, for example: Sent the message and closed the tab.",
+  `When the user asked Bee to find, check, read or list something, reply with what Bee found instead: up to ${REPLY_LINES_MAX} short lines, one fact each.`,
   "Then, when you know it, add a second line starting with \"Ended: \" that says where the screen is now: the page's address, or the app and window, and any error it shows, for example: Ended: vercel.com/acme/~/usage, 404.",
   "Those lines are plain text: no markdown, no list marker, no quotes. Write \"Bee\" where you would write \"I\".",
 ].join("\n");
@@ -194,20 +198,26 @@ export async function computerAccess(run: ComputerRun, signal?: AbortSignal): Pr
   return { accessibility: parsePermission(result.data, "accessibility"), screenRecording: parsePermission(result.data, "screen_recording") };
 }
 
-/** The AI's last line as the island shows it: the first real line, without a list marker, quotes or Bee's own notes. */
-export function finalLine(text: string): string {
-  const line =
-    text
-      .split(/\r?\n/)
-      .map((item) => item.trim())
-      .find((item) => item.length > 0 && !item.startsWith("~ ") && item.toUpperCase() !== "NONE" && !ENDED.test(item)) ?? "";
-  const clean = line
-    .replace(/^[-*•]\s+/, "")
-    .replace(/^["'“‘]+|["'”’]+$/gu, "")
-    .replace(/\*\*/g, "")
-    .trim();
-  return clean.length > LINE_MAX ? `${clean.slice(0, LINE_MAX - 1).trimEnd()}…` : clean;
+/** The AI's reply as the island shows it: its real lines (at most REPLY_LINES_MAX), without list markers, quotes or Bee's own notes. */
+export function finalLines(text: string): string[] {
+  return text
+    .split(/\r?\n/)
+    .map((item) => item.trim())
+    .filter((item) => !item.startsWith("~ "))
+    .map((item) =>
+      item
+        .replace(/^[-*•]\s+/, "")
+        .replace(/^["'“‘]+|["'”’]+$/gu, "")
+        .replace(/\*\*/g, "")
+        .trim(),
+    )
+    .filter((item) => item.length > 0 && item.toUpperCase() !== "NONE" && !ENDED.test(item))
+    .slice(0, REPLY_LINES_MAX)
+    .map((line) => (line.length > LINE_MAX ? `${line.slice(0, LINE_MAX - 1).trimEnd()}…` : line));
 }
+
+/** The reply's first line: what happened. */
+export const finalLine = (text: string): string => finalLines(text)[0] ?? "";
 
 /** Where the run left the screen, from the AI's "Ended: …" line ("vercel.com/acme/~/usage, 404"), or "" when it gave none. */
 export function endedWhere(text: string): string {
@@ -341,7 +351,8 @@ export async function runComputerUse(args: {
     });
     debugLog.info("computer", "ai-response", { ms: msSince(started), finish: result.finish, looped: result.looped, text: result.text, costUsd: result.costUsd });
     const { looped, messages } = result;
-    const line = finalLine(result.text);
+    // Lines past the first are what Bee found (a list asked for); they reach the island as separate tips.
+    const line = finalLines(result.text).join("\n");
     // The fast pass hands over, the control still running, when the AI asks to or stops without a last line (its turns ran
     // out, or it went round in circles).
     if (args.fast && !control.reason() && (ESCALATE.test(result.text.trim()) || ESCALATE.test(line) || looped || (!line && result.finish === "tool-calls"))) {

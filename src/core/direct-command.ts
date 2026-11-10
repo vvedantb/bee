@@ -53,6 +53,8 @@ const MCP_ERRORS_MAX = 20;
 const MCP_ERROR_CHARS = 300;
 // Streamed lines over IPC (shared/ipc.ts lunaPartialSchema).
 const PARTIAL_MAX = 5;
+/** The longest brief the answer hands the loop with use_computer: what to do and the facts it found. */
+const BRIEF_MAX = 1500;
 
 // A request that does something to or for a person: sending, messaging, calling, inviting, deleting, or finding or opening their
 // chat ("open chris's chat", "find krzys"). A name in it must be the right person. Any case: speech-to-text may write "send chris".
@@ -141,8 +143,9 @@ const lineResult = (line: string, patch: Partial<PipelineResult["timingsMs"]> = 
   notes: [],
   rankSource: "fallback",
   rankError: null,
-  tips: [line],
-  tipSources: [null],
+  // The loop's reply may hold several lines (what a "list" or "check" found): one tip each.
+  tips: line.split("\n"),
+  tipSources: line.split("\n").map(() => null),
   sources: [],
   guideError: null,
   timingsMs: timings(patch),
@@ -475,9 +478,11 @@ export async function runDirectCommand(args: {
   };
   // The window at the front, read while the route is chosen: "summarise this" needs no "can you see".
   const screenRead = computer ? frontWindowLine(computer.host.run) : Promise.resolve(null);
-  const loop = async (fast = false, recipe?: TeamsMessage & { name: string }) => {
+  const loop = async (fast = false, recipe?: TeamsMessage & { name: string }, brief?: string) => {
     if (!computer) throw new Error("no computer use");
-    const result = await runComputerCommand({ ...computer, command, transcript: args.transcript, history, signal: args.signal, onActivity: args.onActivity, summarise, knownNames: args.knownNames, ...names, onMessages: record, memory, onMemory, screen: await screenRead, fast, browseConfirmed, ...(recipe ? { recipe } : {}) });
+    // A handover from the answer (use_computer) brings what it already found, so the loop need not look again.
+    const task = brief ? `${command}\n\nWhat Bee already found: ${brief}` : command;
+    const result = await runComputerCommand({ ...computer, command: task, transcript: args.transcript, history, signal: args.signal, onActivity: args.onActivity, summarise, knownNames: args.knownNames, ...names, onMessages: record, memory, onMemory, screen: await screenRead, fast, browseConfirmed, ...(recipe ? { recipe } : {}) });
     return memoryNote && !result.guideNote ? { ...result, guideNote: memoryNote } : result;
   };
   // "Message Sam on Teams saying hi": Bee's own Teams recipe runs first, before any AI call (Teams on Windows and macOS only).
@@ -516,6 +521,7 @@ export async function runDirectCommand(args: {
   };
   // use_computer hands a task on screen over to the loop: this answer stops at once, and the loop runs instead.
   const handOver = new AbortController();
+  let brief: string | undefined;
   // Read-only window tools for questions about the screen, with their own control (no step line, no Stop: they only read).
   const readControl = computer ? createRunControl({ ...(args.signal ? { signal: args.signal } : {}) }) : null;
   const readTools =
@@ -536,10 +542,11 @@ export async function runDirectCommand(args: {
         ...(computer
           ? {
               use_computer: tool({
-                description: "Do the request on screen, step by step: click, type, send, close or change things in other apps. Call it once, with nothing else.",
-                inputSchema: z.object({}),
-                execute: async () => {
-                  debugLog.info("ai", "computer-handover", { command });
+                description: "Do the request on screen, step by step: click, type, send, close or change things in other apps, or read other chats, emails or pages. Call it once, with nothing else.",
+                inputSchema: z.object({ task: z.string().max(BRIEF_MAX).optional().describe("What to do, with every fact already found: names, links, times, what was promised.") }),
+                execute: async ({ task }) => {
+                  brief = task?.trim() || undefined;
+                  debugLog.info("ai", "computer-handover", { command, brief: brief?.length ?? 0 });
                   handOver.abort();
                   return "Bee is doing it on screen.";
                 },
@@ -599,7 +606,7 @@ export async function runDirectCommand(args: {
   if (handOver.signal.aborted && !args.signal?.aborted) {
     void mcp?.close().catch(() => undefined);
     console.debug("perf command computer handover");
-    return loop();
+    return loop(false, undefined, brief);
   }
   const guideMs = performance.now() - started;
   const closeStarted = performance.now();

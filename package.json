@@ -26,6 +26,7 @@
     "test:claude": "vitest run --config vitest.claude.config.ts",
     "test:e2e": "electron-vite build && vitest run --config vitest.e2e.config.ts",
     "test:replay": "electron-vite build && BEE_E2E_MODE=replay vitest run --config vitest.e2e.config.ts test/conversation-live.e2e.test.ts",
+    "test:lab": "electron-vite build && vitest run --config vitest.lab.config.ts",
     "relay:mock": "esbuild relay/src/dev.ts --bundle --platform=node --format=esm --outfile=out/relay-dev.mjs --log-level=warning && node out/relay-dev.mjs",
     "dist:win": "npm run build && electron-builder --win",
     "dist:mac": "npm run build && electron-builder --mac",
