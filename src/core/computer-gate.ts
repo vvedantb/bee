@@ -272,6 +272,18 @@ const QUESTION: Record<IrreversibleKind, string> = {
 /** The Confirm prompt's question ("Send this?"). */
 export const confirmQuestion = (kind: IrreversibleKind): string => QUESTION[kind];
 
+/**
+ * What a Confirm is about: a send, delete, buy or submit, or a click or drag at a spot in a picture where Bee could not read what is
+ * there (core/computer-tools.ts click_at and drag_at). An unknown spot always asks.
+ */
+export type ConfirmKind = IrreversibleKind | "click";
+
+/** The question for a spot Bee cannot read: "Click here?", "Drag here?". */
+export const spotQuestion = (gesture: "click" | "drag"): string => (gesture === "drag" ? "Drag here?" : "Click here?");
+
+/** The detail for a spot Bee cannot read, for example "A spot in Microsoft Teams Bee cannot read". */
+export const spotDetail = (app: string | null): string => `A spot in ${app ? shortName(app, 24) : "this app"} Bee cannot read`;
+
 const NAME_MAX = 40;
 // The most of a message the Confirm shows.
 const MESSAGE_SHOWN = 120;

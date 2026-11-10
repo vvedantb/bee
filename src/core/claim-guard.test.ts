@@ -64,6 +64,20 @@ describe("runEvidence", () => {
     expect([...runEvidence(call("click", { ref: "@s1:e3", effect: "send" }, "Done (delivered).")).proven]).toEqual(["send"]);
   });
 
+  it("counts a point action as proof only with its effect, and a paste as typing; neither counts as a read or puts the guard aside", () => {
+    const unasked = runEvidence([
+      ...call("look", { app: "Microsoft Teams" }, "A picture of Teams window w-1, 1568x980 pixels."),
+      ...call("click_at", { app: "Microsoft Teams", x: 10, y: 20, effect: "none" }, "Done. Bee clicked at 300,220 on the screen."),
+      ...call("paste_text", { app: "Microsoft Teams", text: "running late", effect: "none" }, "Done: pasted 12 characters."),
+    ]);
+    expect([...unasked.proven]).toEqual([]);
+    expect(unasked.typed).toEqual(["running late"]);
+    expect(unasked).toMatchObject({ okReads: 1, outside: false });
+    expect(guardLine("Sent running late to Sam.", unasked).rewritten).toBe(true);
+    // A send at a point always asked first (effect send), so a Done proves it.
+    expect([...runEvidence(call("click_at", { app: "Microsoft Teams", x: 10, y: 20, effect: "send" }, "Done.")).proven]).toEqual(["send"]);
+  });
+
   it("reads each action of a batch, and the kinds the confirm gate counted", () => {
     const batch = call(
       "act",

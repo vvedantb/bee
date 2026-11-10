@@ -62,23 +62,29 @@ export function assertDesktopAction(command: string, args: readonly string[]): a
 /**
  * Computer use for a direct request ("Bee, send Sam a message in Slack", core/computer-use.ts): the commands the AI's computer
  * tools run, on their own runner (main/agent-desktop.ts createAgentDesktopComputerRunner). The meeting window reader never gets
- * it. Accessibility snapshots, refs and keys only: no screenshots, mouse, clipboard, notifications, drag, hover, batch, sessions,
- * traces or launch (apps open through the desktop actions). skills reads agent-desktop's own guides, once per session.
+ * it. Accessibility snapshots, refs and keys first; then a picture of one window (screenshot, base64 only, never to disk), a real
+ * click, drag or wheel at a point in it (always --headed), right and double clicks on a ref, and the clipboard's text (read, and
+ * set from stdin only, for a paste). No notifications, hover, batch, sessions, traces or launch (apps open through the desktop
+ * actions). skills reads agent-desktop's own guides, once per session.
  */
 export const COMPUTER_USE_COMMANDS = [
   "snapshot", "find", "get", "is", "list-apps", "list-windows", "permissions",
   "click", "type", "set-value", "clear", "focus", "select", "check", "uncheck", "expand", "collapse", "scroll", "scroll-to", "press",
   "close-app", "wait", "skills",
+  "screenshot", "mouse-click", "drag", "mouse-wheel", "right-click", "double-click", "clipboard-get", "clipboard-set",
 ] as const;
 export type ComputerUseCommand = (typeof COMPUTER_USE_COMMANDS)[number];
 
-/** agent-desktop's flag for physical input. Only click, press, type and focus may take it (assertComputerUse), when the AI asks. */
+/**
+ * agent-desktop's flag for physical input. Only click, press, type, focus and right-click may take it, and mouse-click, drag,
+ * mouse-wheel and double-click must (assertComputerUse).
+ */
 export const HEADED_FLAG = "--headed";
 /** type and set-value read their text from stdin with this flag, so it never appears in argv. */
 export const STDIN_FLAG = "--stdin";
 
 // What a flag value or positional may be. Value flags are always "--flag=value", so a value can never read as a flag.
-type ValueKind = "ref" | "app" | "window" | "text" | "role" | "ms" | "count" | "keys" | readonly string[];
+type ValueKind = "ref" | "app" | "window" | "text" | "role" | "ms" | "count" | "keys" | "xy" | "coord" | "lines" | readonly string[];
 type CommandSpec = {
   /** Value flags (a kind) and bare switches (true). */
   flags: Record<string, ValueKind | true>;
@@ -92,8 +98,8 @@ type CommandSpec = {
    * argv, a process list or a log.
    */
   stdin?: true;
-  /** May take HEADED_FLAG. */
-  headed?: true;
+  /** May take HEADED_FLAG; "always": must (a real mouse at a point, a double click). */
+  headed?: true | "always";
 };
 
 const SURFACES = ["window", "focused", "menu", "menubar", "sheet", "popover", "alert"] as const;
@@ -107,7 +113,8 @@ const SCOPE = { "--app": "app", "--window-id": "window", "--root": "ref", "--sur
 const onRef = (extra: Partial<CommandSpec> = {}): CommandSpec => ({ flags: ACTION, positionals: ["ref"], ...extra });
 
 const COMPUTER_SPECS: Record<ComputerUseCommand, CommandSpec> = {
-  snapshot: { flags: { ...SCOPE, "--max-depth": "count", "--interactive-only": true, "--compact": true, "--skeleton": true }, positionals: [] },
+  // --include-bounds: only for Bee's own hit test of a point before a click there (core/computer-vision.ts).
+  snapshot: { flags: { ...SCOPE, "--max-depth": "count", "--interactive-only": true, "--compact": true, "--skeleton": true, "--include-bounds": true }, positionals: [] },
   find: {
     flags: { ...SCOPE, "--role": "role", "--name": "text", "--text": "text", "--value": "text", "--description": "text", "--exact": true, "--first": true, "--limit": "count" },
     positionals: [],
@@ -144,7 +151,24 @@ const COMPUTER_SPECS: Record<ComputerUseCommand, CommandSpec> = {
   },
   // Read-only: the version-matched guides, checked first in assertComputerUse. Never list, path, --full or another skill.
   skills: { flags: {}, positionals: [] },
+  // One window's picture, as base64 in the reply: never a PATH, --screen or a debug file.
+  screenshot: { flags: { "--app": "app", "--window-id": "window" }, positionals: [] },
+  // A real click, drag or wheel at a screen point: always physical. Left or right, one or two clicks, no held modifiers.
+  "mouse-click": { flags: { "--xy": "xy", "--button": ["left", "right"], "--count": ["1", "2"] }, positionals: [], headed: "always" },
+  drag: { flags: { "--from-xy": "xy", "--to-xy": "xy" }, positionals: [], headed: "always" },
+  "mouse-wheel": { flags: { "--x": "coord", "--y": "coord", "--dy": "lines" }, positionals: [], headed: "always" },
+  "right-click": onRef({ headed: true }),
+  "double-click": onRef({ headed: "always" }),
+  // The clipboard's text only: never --format, --out, --image or --file-url. Text to set goes on stdin.
+  "clipboard-get": { flags: {}, positionals: [] },
+  "clipboard-set": { flags: {}, positionals: [], stdin: true },
 };
+
+/**
+ * A window id as list-windows prints it: w- then letters, digits, dots, dashes and underscores (Linux's AT-SPI ids read like
+ * w-1.2-org-a11y-atspi-accessible-1). Never a slash, a space or a leading dash.
+ */
+export const WINDOW_ID_PATTERN = /^w-[A-Za-z0-9._-]{1,80}$/;
 
 /** A ref as agent-desktop prints it: @<snapshot id>:e<N>. A bare @e8 is refused by agent-desktop too. */
 export const REF_PATTERN = /^@[A-Za-z0-9]{1,40}:e\d{1,6}$/;
@@ -160,7 +184,7 @@ function validValue(kind: ValueKind, value: string): boolean {
     case "app":
       return value.length > 0 && value.length <= 120 && !value.startsWith("-") && !/[\u0000-\u001f\u007f]/.test(value);
     case "window":
-      return /^w-[A-Za-z0-9-]{1,40}$/.test(value);
+      return WINDOW_ID_PATTERN.test(value);
     case "text":
       return value.length <= 4000 && !CONTROL.test(value);
     case "role":
@@ -172,6 +196,14 @@ function validValue(kind: ValueKind, value: string): boolean {
     case "keys":
       // return, cmd+w, ctrl+shift+tab: letters and digits joined by "+". Punctuation goes by name (comma, period).
       return value.length <= 40 && /^[A-Za-z0-9]{1,12}(?:\+[A-Za-z0-9]{1,12}){0,4}$/.test(value);
+    case "xy":
+      // A screen point, whole units: 640,812 (negative on a display left of or above the primary one).
+      return /^-?\d{1,5},-?\d{1,5}$/.test(value);
+    case "coord":
+      return /^-?\d{1,5}$/.test(value);
+    case "lines":
+      // Wheel lines: at most 20 either way, never 0.
+      return /^-?\d{1,2}$/.test(value) && Math.abs(Number(value)) <= 20 && Number(value) !== 0;
   }
   return false;
 }
@@ -202,7 +234,7 @@ export function assertComputerUse(command: string, args: readonly string[]): ass
     const value = rest.length > 0 ? rest.join("=") : null;
     if (seen.has(flag)) throw new Error(`agent-desktop flag repeated: ${flag}`);
     seen.add(flag);
-    if (flag === HEADED_FLAG && spec.headed && value === null) continue;
+    if (flag === HEADED_FLAG && spec.headed !== undefined && value === null) continue;
     if (flag === STDIN_FLAG && spec.stdin && value === null) continue;
     const kind = Object.hasOwn(spec.flags, flag) ? spec.flags[flag] : undefined;
     if (kind === undefined) throw new Error(`agent-desktop flag not allowed: ${flag}`);
@@ -219,6 +251,7 @@ export function assertComputerUse(command: string, args: readonly string[]): ass
     if (!kind || !validValue(kind, value)) throw new Error(`agent-desktop argument not allowed for ${command}`);
   });
   if (spec.stdin && !seen.has(STDIN_FLAG)) throw new Error(`agent-desktop text for ${command} goes on stdin: ${STDIN_FLAG}`);
+  if (spec.headed === "always" && !seen.has(HEADED_FLAG)) throw new Error(`agent-desktop ${command} needs ${HEADED_FLAG}`);
   if (spec.text ? dash < 0 || after.length !== 1 || !validValue("text", after[0] ?? "") : dash >= 0) throw new Error(`agent-desktop text not allowed for ${command}`);
   if (command === "wait") assertWaitElement(before);
 }
@@ -251,6 +284,8 @@ export type AgentDesktopFailure = { ok: false; code: string; message?: string; r
 
 /** ok: the command's data. */
 export type AgentDesktopResult = { ok: true; data: unknown } | AgentDesktopFailure;
+/** A command's data as it came: parse it (Zod) before use. */
+export type AgentDesktopData = Extract<AgentDesktopResult, { ok: true }>["data"];
 
 /**
  * A computer-use command on its own runner (main/agent-desktop.ts). signal: Stop or a newer request kills the command in

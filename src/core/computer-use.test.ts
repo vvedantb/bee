@@ -3,7 +3,7 @@ import { MockLanguageModelV4 } from "ai/test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentDesktopResult, ComputerRun } from "./agent-desktop-envelope";
 import { createRunControl, type RunControl } from "./computer-control";
-import { CANNOT_CONTROL, computerTools } from "./computer-tools";
+import { CANNOT_CONTROL, LOOK_THEN_STOP, computerTools } from "./computer-tools";
 import { COMPUTER_SYSTEM, FAST_MAX_TURNS, computerAccess, computerSkills, endedWhere, finalLine, runComputerUse, simpleComputerTask, trimSkill, wantsComputerUse } from "./computer-use";
 import type { DesktopActions } from "./desktop-actions";
 import { modelAgent } from "../../test/helpers/model-agent";
@@ -181,14 +181,15 @@ describe("runComputerUse", () => {
     expect(COMPUTER_SYSTEM).not.toMatch(/claude|haiku|anthropic|clerk|gpt/i);
   });
 
-  it("tells the AI to work through the tree, find first, and stop plainly when the tree gives it nothing to act on", () => {
+  it("tells the AI to work through the tree first, then look and act at a point, and stop plainly only when that fails too", () => {
     expect(COMPUTER_SYSTEM).toMatch(/Work through the app's accessibility tree/);
     expect(COMPUTER_SYSTEM).toMatch(/When you know an element's role or name, find it first/);
     expect(COMPUTER_SYSTEM).toMatch(/Bee already waits for a slow app/);
-    expect(COMPUTER_SYSTEM).toMatch(/The accessibility tree is the only way you can see or act/);
-    expect(COMPUTER_SYSTEM).toMatch(/still show no usable control for the step .* stop and say Bee cannot control that app/);
-    expect(COMPUTER_SYSTEM).toMatch(/identical twins, stop and say Bee cannot tell which one to use/);
-    expect(COMPUTER_SYSTEM).not.toMatch(/screenshot|click_at|picture|image/i);
+    expect(COMPUTER_SYSTEM).toMatch(/Use the accessibility tree first/);
+    expect(COMPUTER_SYSTEM).toMatch(/refuses its ref after Bee's own retries \(POLICY_DENIED\).* call look .* click_at/);
+    expect(COMPUTER_SYSTEM).toMatch(/Never guess a point without a fresh look, and after every point action check what it did/);
+    expect(COMPUTER_SYSTEM).toMatch(/Only when the picture does not help either, stop and say Bee cannot control that app/);
+    expect(COMPUTER_SYSTEM).toMatch(/identical twins, click the right one in a look with click_at, or stop and say Bee cannot tell which one to use/);
   });
 
   it("tells the AI to verify with a wait on the ref, and to check a field's value, not its text", () => {
@@ -251,7 +252,7 @@ describe("runComputerUse: snapshots and refs only", () => {
     expect(system).toMatch(/Prefer set_value: type_text and focus always need physical here, so set it on them/);
   });
 
-  it("stops with a plain line when Teams' tree stays empty once Bee has waited: no picture, no click at a point", async () => {
+  it("stops with a plain line when Teams' tree stays empty and the AI stops: Bee takes no picture it was not asked for", async () => {
     const empty = { app: TEAMS, window: { id: "w-7", title: "Microsoft Teams" }, snapshot_id: "s7", complete: true, tree: { role: "window", name: TEAMS, children: [] } };
     const commands: string[] = [];
     const run: ComputerRun = async (command) => {
@@ -271,10 +272,10 @@ describe("runComputerUse: snapshots and refs only", () => {
     expect(result).toMatchObject({ line: "Bee cannot control Microsoft Teams: it shows no controls.", stopped: false, steps: 3, error: false, endedWhere: "Microsoft Teams" });
     // The tree only: each whole-window read ran twice (Bee waited for the app), and nothing was clicked or typed.
     expect(commands).toEqual(["snapshot", "snapshot", "find", "snapshot", "snapshot"]);
-    // What the AI read: stop and say so. Never a picture, and never a hint to take one.
+    // What the AI read: look first, and only then stop. No picture went to the AI unasked.
     const seen = JSON.stringify(prompts.at(-1));
-    expect(seen).toContain(`If those show nothing usable either, ${CANNOT_CONTROL}.`);
-    expect(seen).not.toMatch(/screenshot|click_at/i);
+    expect(seen).toContain(`If those show nothing usable either, ${LOOK_THEN_STOP}.`);
+    expect(seen).toContain(CANNOT_CONTROL);
     expect(prompts.map(pictures)).toEqual([0, 0, 0, 0]);
   });
 });

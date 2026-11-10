@@ -1,5 +1,6 @@
-import { BrowserWindow, desktopCapturer, screen, systemPreferences, type NativeImage } from "electron";
+import { BrowserWindow, desktopCapturer, nativeImage, screen, systemPreferences, type NativeImage } from "electron";
 import type { AccessState } from "../core/agent-desktop-envelope";
+import type { ShotImage } from "../core/computer-vision";
 import { debugLog, errorData } from "../core/debug-log";
 import { LOOK_JPEG_QUALITY, LOOK_MAX_SIDE, lookSize, pickScreenSource, pickWindowSource, type CaptureOutcome, type FrontWindow, type ScreenCapture } from "../core/screen-look";
 
@@ -17,6 +18,21 @@ function encode(image: NativeImage, source: "window" | "screen"): CaptureOutcome
   const size = lookSize(now.width, now.height);
   const scaled = size.width === now.width && size.height === now.height ? image : image.resize({ ...size, quality: "good" });
   return { ok: true, shot: { data: scaled.toJPEG(LOOK_JPEG_QUALITY).toString("base64"), mediaType: "image/jpeg", ...size, source } };
+}
+
+/**
+ * computer use's look (core/computer-tools.ts): agent-desktop's PNG of one window as JPEG, its long side at most LOOK_MAX_SIDE, so
+ * the picture the AI reads is the one its points are in. In memory only. Null when the PNG cannot be read.
+ */
+export function shrinkShot(png: string): ShotImage | null {
+  try {
+    const image = nativeImage.createFromBuffer(Buffer.from(png, "base64"));
+    const encoded = encode(image, "window");
+    return encoded.ok ? { data: encoded.shot.data, mediaType: encoded.shot.mediaType, width: encoded.shot.width, height: encoded.shot.height } : null;
+  } catch (error) {
+    debugLog.warn("screen", "shrink-failed", { error: errorData(error) });
+    return null;
+  }
 }
 
 /** The display the window is on (by its bounds), else the one under the pointer. */

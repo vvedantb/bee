@@ -454,11 +454,17 @@ describe("createAgentDesktopComputerRunner", () => {
     expect(calls.map((call) => [call.args[0], call.killed])).toEqual([["snapshot", true]]);
   });
 
-  it("refuses screenshots, clipboard, launch, mouse, batch and forced commands before any process starts", () => {
+  it("refuses screenshots to disk, clipboard text without stdin, a mouse without --headed, launch, batch and forced commands before any process starts", () => {
     const { runner, calls } = make();
-    for (const command of ["screenshot", "clipboard-get", "clipboard-set", "launch", "mouse-click", "drag", "batch", "session", "notification-action"]) {
+    for (const command of ["clipboard-clear", "launch", "hover", "batch", "session", "notification-action"]) {
       expect(() => runner.run(command as never, []), command).toThrow(/not allowed/);
     }
+    expect(() => runner.run("screenshot", ["--window-id=w-1", "/tmp/out.png"])).toThrow(/not allowed/);
+    expect(() => runner.run("mouse-click", ["--xy=10,10"])).toThrow(/needs --headed/);
+    expect(() => runner.run("drag", ["--from-xy=1,1", "--to-xy=2,2"])).toThrow(/needs --headed/);
+    // clipboard-set takes its text on stdin, and only with --stdin.
+    expect(() => runner.run("clipboard-set", ["--stdin"])).toThrow(/needs stdin/);
+    expect(() => runner.run("clipboard-set", [], { stdin: "hi" })).toThrow(/goes on stdin/);
     expect(() => runner.run("press", ["cmd+q", "--app=Discord", "--force"])).toThrow(/not allowed/);
     expect(() => runner.run("click", ["@s8f3k2p9:e2", "--headed=yes"])).toThrow(/not allowed|no value/);
     expect(calls).toEqual([]);

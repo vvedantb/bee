@@ -27,6 +27,8 @@ import { frontOf, lookTools, readFocusedWindows, type ScreenCapture } from "./sc
 import type { BackgroundJobs } from "./background";
 import { answerEvidence, guardLine, replaceLastText, runEvidence, upgradeLine, withoutToolNames } from "./claim-guard";
 import { BROWSE_RULES } from "./browse";
+import type { ComputerVision } from "./computer-vision";
+import { parseTeamsMessage, recipientName, runTeamsRecipe, type TeamsMessage } from "./teams-recipe";
 
 // A direct request to Bee: a mic phrase that started with the wake word ("Bee, open Teams", core/wake-word.ts). Bee answers
 // the user, not the meeting. Every AI step here runs on the user's own Claude Code and its login (core/claude-agent.ts); without
@@ -126,6 +128,8 @@ export type ComputerHost = {
   onStep?: (label: string) => void;
   /** Lowers Bee's overlay for a headed command; returns the restore (core/computer-tools.ts yieldFocus). */
   yieldFocus?: () => () => void;
+  /** Pictures of a window for look and the point actions (core/computer-vision.ts). Absent: look says Bee cannot look here. */
+  vision?: ComputerVision;
   /** The run's controls, so main can stop it (the Stop button, "Bee, stop"). */
   onControl?: (control: RunControl) => void;
   /** A step limit, for tests. None by default: the loop guard, Stop and the clock end a run. */
@@ -170,6 +174,8 @@ async function runComputerCommand(args: {
   fast?: boolean;
   /** Browse executes the user confirmed, by tool call id: proof for the last line (core/claim-guard.ts). */
   browseConfirmed: ReadonlyMap<string, IrreversibleKind>;
+  /** A Teams message Bee sends with its own recipe first (core/teams-recipe.ts); the AI carries on only when the recipe hands over. */
+  recipe?: TeamsMessage & { name: string };
 }): Promise<PipelineResult> {
   const { host } = args;
   const maxSteps = host.maxSteps;
@@ -197,6 +203,36 @@ async function runComputerCommand(args: {
     }
     // Sends, deletes, purchases and submits the confirm gate counted as done: proof for the last line (core/claim-guard.ts).
     const committed = new Set<IrreversibleKind>();
+    // A Teams message: the recipe's own steps first. Its line is the answer, unless it could not be sure of a step before any
+    // text was written; then the AI carries on from what it did.
+    let prior: string | null = null;
+    if (args.recipe) {
+      const recipe = args.recipe;
+      const outcome = await runTeamsRecipe(recipe, {
+        run: host.run,
+        desktop: args.actions,
+        control,
+        platform: host.platform,
+        confirm: host.confirm,
+        onStep: host.onStep,
+        yieldFocus: host.yieldFocus,
+        onEffect: (kind) => committed.add(kind),
+      });
+      debugLog.info("computer", "teams-recipe-end", { outcome: outcome.kind, reason: control.reason(), ms: Math.round(performance.now() - started) });
+      if (outcome.kind === "fallback") prior = outcome.done;
+      else {
+        const line = outcome.kind === "stopped" ? stopLine(control.reason() ?? "user", { platform: host.platform }) : outcome.line;
+        // The recipe as a tool call and its result, like the AI's own, so the next request knows what was done.
+        const toolCallId = `bee_teams_${Date.now().toString(36)}`;
+        args.onMessages?.([
+          { role: "assistant", content: [{ type: "tool-call", toolCallId, toolName: "teams_message", input: { to: recipe.name, send: recipe.send } }] },
+          { role: "tool", content: [{ type: "tool-result", toolCallId, toolName: "teams_message", output: { type: "text", value: line } }] },
+          assistantMessage(line),
+        ]);
+        const guide = performance.now() - started;
+        return lineResult(line, { guide, lunaTotal: guide });
+      }
+    }
     const tools = {
       ...computerTools({
         run: host.run,
@@ -207,6 +243,7 @@ async function runComputerCommand(args: {
         onEffect: (kind) => committed.add(kind),
         onStep: host.onStep,
         ...(host.yieldFocus ? { yieldFocus: host.yieldFocus } : {}),
+        ...(host.vision ? { vision: host.vision } : {}),
         onActivity: args.onActivity,
       }),
       // Memory changes nothing on screen, so its calls take no step of the run's budget.
@@ -227,6 +264,7 @@ async function runComputerCommand(args: {
       platform: host.platform,
       ...(maxSteps !== undefined ? { maxSteps } : {}),
       ...(host.skills ? { skills: host.skills } : {}),
+      ...(prior ? { prior } : {}),
     };
     // The fast model tries a simple task first. When it hands over, the planning model carries on from its steps, with the same
     // control (the same refs, budget, clock and Stop).
@@ -437,11 +475,17 @@ export async function runDirectCommand(args: {
   };
   // The window at the front, read while the route is chosen: "summarise this" needs no "can you see".
   const screenRead = computer ? frontWindowLine(computer.host.run) : Promise.resolve(null);
-  const loop = async (fast = false) => {
+  const loop = async (fast = false, recipe?: TeamsMessage & { name: string }) => {
     if (!computer) throw new Error("no computer use");
-    const result = await runComputerCommand({ ...computer, command, transcript: args.transcript, history, signal: args.signal, onActivity: args.onActivity, summarise, knownNames: args.knownNames, ...names, onMessages: record, memory, onMemory, screen: await screenRead, fast, browseConfirmed });
+    const result = await runComputerCommand({ ...computer, command, transcript: args.transcript, history, signal: args.signal, onActivity: args.onActivity, summarise, knownNames: args.knownNames, ...names, onMessages: record, memory, onMemory, screen: await screenRead, fast, browseConfirmed, ...(recipe ? { recipe } : {}) });
     return memoryNote && !result.guideNote ? { ...result, guideNote: memoryNote } : result;
   };
+  // "Message Sam on Teams saying hi": Bee's own Teams recipe runs first, before any AI call (Teams on Windows and macOS only).
+  const teams = computer && computer.host.platform !== "linux" ? parseTeamsMessage(command) : null;
+  if (teams) {
+    debugLog.info("ai", "command-path", { teamsRecipe: true, send: teams.send });
+    return loop(false, { ...teams, name: recipientName(teams.to, args.knownNames ?? [], resolvedNames) });
+  }
   if (computer && (await wantsLoop(command, gateway, args.signal))) {
     console.debug("perf command computer");
     return loop(simpleComputerTask(command));
