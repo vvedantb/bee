@@ -305,6 +305,23 @@ The live mic latency E2E (`test/mic-latency.e2e.test.ts`) costs money, so it is 
 
 Unit tests cover the relay (JWT signature, issuer, expiry and `azp` checks; team invite and join; room ids, word codes and membership; phrase stamping; stale members and the 4-hour limit; two-tap merge). They also cover room ranking, the detection debounce, the Windows heuristics against sample `tasklist` and registry output, and the share gate. The last group covers the sync controller with two or three devices on one relay, including concurrent meetings, the "Which meeting?" pick, equally ranked syncs, leaving when the chosen meeting closes, merging, leaving without rejoining, and fail-open.
 
+### Teams control check (developer only)
+
+`scripts/teams-control-check.mjs` finds which step of controlling Microsoft Teams fails on one machine. Run it from a repo checkout on Windows or macOS, with Teams signed in:
+
+```powershell
+npm install
+npm run check:teams                     # or: node scripts/teams-control-check.mjs
+npm run check:teams -- --json           # only the summary JSON
+```
+
+It drives Teams through the bundled `agent-desktop` CLI (set `AGENT_DESKTOP_PATH` to use another binary). It prints one `PASS`, `FAIL` or `SKIP` line per step: version, status and permissions; Teams running (it starts Teams if not, unless `--skip-launch`); window; focus; accessibility snapshot; click on a chat list item (headless, then headed); `Ctrl+E` (`Cmd+E` on macOS) into search; the compose box (set-value, headed type and paste of the text `bee-check`, then clear); screenshot; mouse move; and, on Windows, whether the console had the foreground at start. It ends with a summary table and one JSON line to paste back to the developer. Exit code 0 means every critical step passed.
+
+- **It never sends a message.** It never presses Return or Enter and never clicks a control named Send. A guard refuses those commands, and the guard tests itself before the first command. It writes only `bee-check`, only into an empty compose box, and clears it. It puts your clipboard back after the paste test.
+- **Default output has no names.** It shows counts, roles, error codes and process names, not message text, chat names or window titles. `--verbose` adds them.
+- Other flags: `--keep` (keep the screenshot PNG), `--timeout-ms N` (per command, default 30000), `--app NAME` (Teams process name, if detection misses it).
+- **It is not part of the release.** `build.files` packs only `out/**`, `resources/**` and `package.json`, so `scripts/` never ships.
+
 ## Manual steps and known limits
 
 - **Gateway key.** Create one in the Vercel dashboard (AI Gateway → API keys).
