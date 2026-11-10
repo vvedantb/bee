@@ -94,7 +94,8 @@ export type BeeState = {
   expanded: boolean;
   // True while the panel plays its exit animation, before the window shrinks.
   collapsing: boolean;
-  // The island's width in CSS px: the compact pill while collapsed, PILL_MAX otherwise. styles.css eases it (applyWindowSize).
+  // The pill's width in CSS px: the measured compact pill in every mode (the body and panel under it are full width). styles.css
+  // eases it (applyWindowSize).
   pillWidth: number;
   tab: Tab;
   result: PipelineResult | null;
@@ -537,9 +538,10 @@ async function sendWindow(request: WindowRequest): Promise<void> {
 }
 
 /**
- * Resize the window to fit: full panel, notch plus island body, or the notch alone as a compact pill. Growing, the window
- * widens first and the island then eases out to fill it; narrowing, the island eases in first (the height changes at once)
- * and the window follows once the morph is done, so the pill never clips.
+ * Resize the window to fit: full panel, notch plus island body, or the notch alone as a compact pill. The pill keeps its
+ * measured width in every mode; the window is full width for the body or panel under it. Growing, the window widens first and
+ * the pill then eases out; narrowing, the pill eases in first (the height changes at once) and the window follows once the
+ * morph is done, so the pill never clips. With no morph to wait for, the window narrows at once.
  */
 async function applyWindowSize(): Promise<void> {
   const size: WindowSize =
@@ -549,10 +551,14 @@ async function applyWindowSize(): Promise<void> {
   clearTimeout(narrowTimer);
   if (width >= sentWindow.width) {
     await sendWindow({ size, width });
-    if (seq === windowSeq && state.pillWidth !== width) set({ pillWidth: width });
+    if (seq === windowSeq && state.pillWidth !== measuredPill) set({ pillWidth: measuredPill });
     return;
   }
-  set({ pillWidth: width });
+  if (state.pillWidth === measuredPill) {
+    await sendWindow({ size, width });
+    return;
+  }
+  set({ pillWidth: measuredPill });
   narrowTimer = setTimeout(() => void sendWindow({ size, width }), motionReduced() ? REDUCED_EXIT_MS : PILL_MORPH_MS);
   await sendWindow({ size, width: sentWindow.width });
 }

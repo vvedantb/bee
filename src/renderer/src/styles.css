@@ -90,37 +90,109 @@ body {
   font-size: 13px;
 }
 
+/* A size container, so the pill's fillets can read the full width (cqw). */
 .shell {
   display: flex;
   flex-direction: column;
   height: 100%;
   padding: 4px;
-  gap: 6px;
+  container-type: inline-size;
 }
 
-/* The pill and, when an answer is open, the body under it: one surface that grows downward. */
-
-/* Collapsed, App.tsx sets the width to the compact pill (core/overlay-size.ts) and it stays centred; open, it is full width.
-   The width eases like the body's spring (store.ts PILL_MORPH_MS); the window is never narrower than the island. */
+/* The pill: centred at the top in every state. App.tsx sets the width to the compact pill (core/overlay-size.ts); without it
+   (the screenshot pages) the pill hugs its header. A new width eases like the body's spring (store.ts PILL_MORPH_MS); the
+   window is never narrower than the pill. The header clips the content, so the fillets below can sit outside the pill. */
 .island {
+  position: relative;
   display: flex;
   flex-direction: column;
   flex: none;
   align-self: center;
-  width: 100%;
   max-width: 100%;
   min-height: 0;
   max-height: 100%;
   border-radius: 26px;
   background: var(--surface);
-  overflow: hidden;
   transition:
-    border-radius 360ms var(--spring),
-    width 380ms var(--spring);
+    width 380ms var(--spring),
+    border-radius 200ms ease-in;
 }
 
-.island.open {
-  border-radius: 26px 26px 30px 30px;
+/* With the response body or the panel open, the pill and the full-width card under it are one shape, like a notch growing
+   into a card: the pill's bottom corners go square, it overlaps the card by 1px (no seam at any scale), and a concave fillet
+   on each side curves the pill's side into the card's top edge. The corners and fillets follow the card's own open and close
+   timing. */
+.island:has(+ .island-body, + .panel) {
+  margin-bottom: -1px;
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+  transition:
+    width 380ms var(--spring),
+    border-radius 420ms var(--spring);
+}
+
+.island:has(+ .panel) {
+  transition:
+    width 380ms var(--spring),
+    border-radius var(--medium) var(--ease-out);
+}
+
+/* A square of the fillet's radius beside each bottom corner: the surface with a quarter circle cut out. The radius is 14px,
+   less when the pill nears the card's rounded corners (the card's 18px radius plus the fillet must fit beside the pill). */
+.island:has(+ .island-body, + .panel)::before,
+.island:has(+ .island-body, + .panel)::after {
+  content: "";
+  position: absolute;
+  bottom: 0;
+  box-sizing: content-box;
+  width: clamp(0px, calc((100cqw - 100%) / 2 - 18px), 14px);
+  aspect-ratio: 1;
+  /* The curve ends level with the card's top edge; this 1px strip covers the pill's overlap into the card. */
+  border-bottom: 1px solid var(--surface);
+  background-clip: padding-box;
+  pointer-events: none;
+  animation: fade-in 420ms var(--spring);
+}
+
+.island:has(+ .panel)::before,
+.island:has(+ .panel)::after {
+  animation: fade-in var(--medium) var(--ease-out);
+}
+
+.island:has(+ .island-body, + .panel)::before {
+  right: 100%;
+  background: radial-gradient(circle farthest-side at 0 0, transparent calc(100% - 0.5px), var(--surface) 100%);
+}
+
+.island:has(+ .island-body, + .panel)::after {
+  left: 100%;
+  background: radial-gradient(circle farthest-side at 100% 0, transparent calc(100% - 0.5px), var(--surface) 100%);
+}
+
+/* Closing: the corners round again and the fillets fade with the card. */
+.island:has(+ .island-body.closing),
+.shell.collapsing .island {
+  border-bottom-left-radius: 26px;
+  border-bottom-right-radius: 26px;
+  transition:
+    width 380ms var(--spring),
+    border-radius 200ms ease-in;
+}
+
+.shell.collapsing .island {
+  transition:
+    width 380ms var(--spring),
+    border-radius 160ms ease-in;
+}
+
+.island:has(+ .island-body.closing)::before,
+.island:has(+ .island-body.closing)::after {
+  animation: fade-out 200ms ease-in forwards;
+}
+
+.shell.collapsing .island::before,
+.shell.collapsing .island::after {
+  animation: fade-out 160ms ease-in forwards;
 }
 
 .notch {
@@ -129,6 +201,8 @@ body {
   gap: 10px;
   height: var(--notch-height);
   flex: none;
+  border-radius: inherit;
+  overflow: hidden;
   padding: 0 10px 0 16px;
   -webkit-app-region: drag;
 }
@@ -520,12 +594,15 @@ body {
   transition: transform 100ms linear;
 }
 
-/* Island body: height grows from the pill (0fr to 1fr), content rises in with a spring. */
+/* Island body: a full-width card joined to the pill (.island above), with the panel's radius. Its height grows (0fr to 1fr), content rises in with
+   a spring. */
 
 .island-body {
   display: grid;
   grid-template-rows: 1fr;
   min-height: 0;
+  border-radius: 18px;
+  background: var(--surface);
   animation: island-open 420ms var(--spring);
 }
 
@@ -538,20 +615,20 @@ body {
   position: relative;
   min-height: 0;
   overflow: hidden;
-  padding: 2px 4px 18px 0;
+  padding: 14px 4px 18px 0;
 }
 
 .island-close {
   position: absolute;
-  top: 0;
-  right: 16px;
+  top: 8px;
+  right: 8px;
   z-index: 1;
 }
 
-/* Content-sized up to what the window leaves under the notch (shell padding, notch, inner padding), then it scrolls.
+/* Content-sized up to what the window leaves under the pill (shell padding, notch less the 1px overlap, inner padding), then it scrolls.
    The scrollbar sits near the island's edge, clear of the dismiss button and the rounded corner. */
 .island-scroll {
-  max-height: calc(100vh - 8px - var(--notch-height) - 20px);
+  max-height: calc(100vh - 8px - var(--notch-height) + 1px - 32px);
   overflow-y: auto;
   /* Never sideways: a long address or word wraps instead (island-content). */
   overflow-x: hidden;
@@ -901,6 +978,12 @@ code {
 
 @keyframes fade-in {
   from {
+    opacity: 0;
+  }
+}
+
+@keyframes fade-out {
+  to {
     opacity: 0;
   }
 }

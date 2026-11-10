@@ -7,6 +7,7 @@ import { MeetingContextSection } from "../../src/renderer/src/MeetingContextSect
 import { MemorySection } from "../../src/renderer/src/MemorySection";
 import { KnownNamesField, PreferenceRows } from "../../src/renderer/src/SettingsFields";
 import "../../src/renderer/src/styles.css";
+import { bodyWidth, compactPill } from "./compact-pill";
 import { panelPage } from "./panel-shot";
 
 const NAMES = ["Zuzanna Szczepaniak-Moody", "Priya Shah", "Krzysztof Nowak", "Aoife Byrne", "Siobhan Kelly"];
@@ -35,6 +36,7 @@ window.addEventListener("DOMContentLoaded", () => {
     // A mouse moving onto the Meeting mode row's info icon opens its tooltip, as in the app.
     const tip = document.querySelector("#meeting-mode")?.closest(".setting-row")?.querySelector(".info-tip");
     if (shot === "settings-tooltip") tip?.dispatchEvent(new PointerEvent("pointermove", { pointerType: "mouse", bubbles: true }));
-    setTimeout(() => console.log(`E2E_RESULT ${JSON.stringify({ ok: true, shot })}`), 600);
+    // The pill over the panel is sized as the store sizes it (compact-pill.ts); the panel is full width.
+    setTimeout(async () => console.log(`E2E_RESULT ${JSON.stringify({ ok: true, shot, compact: await compactPill(), panel: bodyWidth() })}`), 600);
   }, 300);
 });
