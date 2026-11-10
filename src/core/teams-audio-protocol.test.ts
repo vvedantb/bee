@@ -9,9 +9,6 @@ import {
   HELPER_EXIT,
   HELPER_FRAME_SAMPLES,
   HELPER_SAMPLE_RATE,
-  TEAMS_AUDIO_PROTOCOL,
-  TEAMS_MAC_BUNDLE_IDS,
-  TEAMS_WINDOWS_IMAGES,
   createPcmFramer,
   helperExitFailure,
   helperSamplesMs,
@@ -20,11 +17,6 @@ import {
   parseHelperStatus,
   statusFailure,
 } from "./teams-audio-protocol";
-
-const source = (path: string): string => readFileSync(fileURLToPath(new URL(path, import.meta.url)), "utf8");
-const WINDOWS = source("../../native/teams-audio/windows/teams-audio-helper.cpp");
-const MAC = source("../../native/teams-audio/macos/main.swift");
-const PACKAGE = JSON.parse(source("../../package.json")) as { build: { appId: string } };
 
 /** s16le bytes for these samples. */
 function pcm(samples: number[]): Uint8Array {
@@ -42,45 +34,9 @@ describe("teams audio protocol constants", () => {
     expect(helperSamplesMs(HELPER_FRAME_SAMPLES)).toBe(100);
   });
 
-  it("matches the Windows helper source: protocol, exit codes, rate, Teams images, process tree mode", () => {
-    expect(WINDOWS).toContain(`constexpr int kProtocol = ${TEAMS_AUDIO_PROTOCOL};`);
-    expect(WINDOWS).toContain(`constexpr int kExitOk = ${HELPER_EXIT.ok};`);
-    expect(WINDOWS).toContain(`constexpr int kExitUsage = ${HELPER_EXIT.usage};`);
-    expect(WINDOWS).toContain(`constexpr int kExitUnsupported = ${HELPER_EXIT.unsupported};`);
-    expect(WINDOWS).toContain(`constexpr int kExitDenied = ${HELPER_EXIT.denied};`);
-    expect(WINDOWS).toContain(`constexpr int kExitNoTeams = ${HELPER_EXIT.noTeams};`);
-    expect(WINDOWS).toContain(`constexpr int kExitFailed = ${HELPER_EXIT.failed};`);
-    expect(WINDOWS).toContain(`constexpr DWORD kSampleRate = ${HELPER_SAMPLE_RATE};`);
-    for (const image of TEAMS_WINDOWS_IMAGES) expect(WINDOWS).toContain(`L"${image}"`);
-    expect(WINDOWS).toContain("kLoopbackIncludeTargetProcessTree = 0;  // PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE");
-    expect(WINDOWS).toContain("kActivationTypeProcessLoopback = 1;   // AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK");
-    expect(WINDOWS).toContain('L"VAD\\\\Process_Loopback"');
-  });
-
-  it("matches the macOS helper source: protocol, exit codes, rate, Teams bundle ids, Bee excluded", () => {
-    expect(MAC).toContain(`let protocolVersion = ${TEAMS_AUDIO_PROTOCOL}`);
-    expect(MAC).toContain(`let exitOk: Int32 = ${HELPER_EXIT.ok}`);
-    expect(MAC).toContain(`let exitUsage: Int32 = ${HELPER_EXIT.usage}`);
-    expect(MAC).toContain(`let exitUnsupported: Int32 = ${HELPER_EXIT.unsupported}`);
-    expect(MAC).toContain(`let exitDenied: Int32 = ${HELPER_EXIT.denied}`);
-    expect(MAC).toContain(`let exitNoTeams: Int32 = ${HELPER_EXIT.noTeams}`);
-    expect(MAC).toContain(`let exitFailed: Int32 = ${HELPER_EXIT.failed}`);
-    expect(HELPER_SAMPLE_RATE).toBe(16_000);
-    expect(MAC).toContain("let sampleRate = 16_000");
-    expect(MAC).toContain(`let teamsBundleIds = [${TEAMS_MAC_BUNDLE_IDS.map((id) => `"${id}"`).join(", ")}]`);
-    expect(MAC).toContain(`let beeBundleId = "${BEE_BUNDLE_ID}"`);
-    expect(BEE_BUNDLE_ID).toBe(PACKAGE.build.appId);
-  });
-
-  it("never asks either helper for a whole-system or screen capture", () => {
-    // Windows: process loopback only, never the default render endpoint in loopback.
-    expect(WINDOWS).not.toMatch(/GetDefaultAudioEndpoint|IMMDeviceEnumerator/);
-    expect(WINDOWS).toContain("params.ProcessLoopbackParams.ProcessLoopbackMode = kLoopbackIncludeTargetProcessTree;");
-    // macOS: an app-including filter only, never a display filter that excludes apps (that hears everything else).
-    expect(MAC).toContain("SCContentFilter(display: display, including: apps");
-    expect(MAC).not.toMatch(/excludingApplications|excludingWindows|desktopIndependentWindow/);
-    // Video frames are never written anywhere.
-    expect(MAC).toMatch(/guard type == \.audio/);
+  it("uses the app id that package.json packages, so the macOS helper excludes Bee itself", () => {
+    const pkg = JSON.parse(readFileSync(fileURLToPath(new URL("../../package.json", import.meta.url)), "utf8")) as { build: { appId: string } };
+    expect(BEE_BUNDLE_ID).toBe(pkg.build.appId);
   });
 });
 

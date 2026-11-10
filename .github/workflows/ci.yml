@@ -5,6 +5,19 @@ on:
   push:
 
 jobs:
+  # Fast feedback on Linux: typecheck, test-rule lint and the unit tests. Windows and macOS below also build and package.
+  ubuntu:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test
   # Catches Windows-only test failures (path separators, POSIX mode bits) on PRs, not only in the release run. Also builds the
   # Teams audio helper (native/teams-audio/windows) and checks the unpacked app carries it.
   windows:
