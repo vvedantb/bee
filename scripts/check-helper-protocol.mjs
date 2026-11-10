@@ -1,4 +1,4 @@
-// Runs a built Teams audio helper with --protocol and compares its JSON with the exports of src/core/teams-audio-protocol.ts.
+// Runs a built call audio helper with --protocol and compares its JSON with the exports of src/core/teams-audio-protocol.ts.
 // Usage: node scripts/check-helper-protocol.mjs <helper-path>. Platform comes from process.platform (win32 or darwin), or BEE_HELPER_PROTOCOL_PLATFORM.
 // The TypeScript module is bundled with esbuild to a temp file and imported, so the real values are compared.
 import { spawnSync } from "node:child_process";
@@ -19,6 +19,8 @@ export function expectedFor(platform, ts) {
     return {
       ...base,
       teamsImages: [...ts.TEAMS_WINDOWS_IMAGES],
+      // The --image allowlist: Teams, Zoom and the Meet browsers.
+      targetImages: [...ts.CALL_AUDIO_WINDOWS_IMAGES],
       // Windows API constants: AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK and PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE.
       capture: { activationTypeProcessLoopback: 1, loopbackIncludeTargetProcessTree: 0, processLoopbackDevice: "VAD\\Process_Loopback" },
     };
@@ -27,6 +29,8 @@ export function expectedFor(platform, ts) {
     return {
       ...base,
       teamsBundleIds: [...ts.TEAMS_MAC_BUNDLE_IDS],
+      // The --bundle-id allowlist: Teams, Zoom and the Meet browsers.
+      targetBundleIds: [...ts.CALL_AUDIO_MAC_BUNDLE_IDS],
       beeBundleId: ts.BEE_BUNDLE_ID,
       capture: { contentFilter: "including-apps", excludesBee: true },
     };

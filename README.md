@@ -9,7 +9,7 @@
 **From source:**
 ```powershell
 npm install
-npm run build:teams-audio:win   # Teams audio helper; needs Visual Studio 2022 (C++ workload) and CMake
+npm run build:teams-audio:win   # call audio helper; needs Visual Studio 2022 (C++ workload) and CMake
 npm run dist:win
 # outputs under release/
 ```
@@ -19,7 +19,7 @@ npm run dist:win
 Download `Bee-x.y.z-arm64.dmg` (Apple Silicon) or `Bee-x.y.z.dmg` (Intel), or the matching `-mac.zip` from [Releases](https://github.com/vvedantb/bee/releases). Open the dmg and drag Bee to Applications. Builds are not signed or notarised yet, so Gatekeeper will warn: right-click Bee, choose **Open**, then confirm.
 
 - **Microphone.** macOS asks the first time Bee starts. If you decline, allow Bee under System Settings → Privacy & Security → Microphone.
-- **Screen Recording.** For two things only. **Live → Meeting → Hear Teams when not everyone has Bee** (off by default): macOS counts any app's sound as screen recording; Bee hears the Teams app alone and never records the screen or other apps, and never asks during a call (see [Teams audio fallback](#teams-audio-fallback)). And a picture of a window when a "Bee, …" request needs one (see [Talk to Bee](#talk-to-bee)): to answer about the front window, or to see an app it is using for you and click in it. The first time, macOS shows its own prompt. **Live** (for Teams audio) and **Settings** (for pictures of windows) show **Open Screen Recording settings** when Bee does not have it. Without it, Bee uses your mic only and reads windows as text.
+- **Screen Recording.** For two things only. **Live → Meeting → Hear other people in calls** (off by default): macOS counts any app's sound as screen recording; Bee hears the call app alone (Teams, Zoom, or the browser running Google Meet) and never records the screen or other apps, and never asks during a call (see [Call audio](#call-audio)). And a picture of a window when a "Bee, …" request needs one (see [Talk to Bee](#talk-to-bee)): to answer about the front window, or to see an app it is using for you and click in it. The first time, macOS shows its own prompt. **Live** (for call audio) and **Settings** (for pictures of windows) show **Open Screen Recording settings** when Bee does not have it. Without it, Bee uses your mic only and reads windows as text.
 - **Menu bar.** Bee has no Dock icon. The tray icon is a menu bar extra: click it for Show / hide, Open notes folder, Open logs folder and Quit.
 - **Shortcuts.** Two global shortcuts, each with `Cmd` on a Mac and `Ctrl` on Windows and Linux. `Cmd+Shift+Space` shows or hides Bee and never opens the typing box. `Cmd+Option+Space` (`Ctrl+Alt+Space` on Windows and Linux) shows Bee with focus and opens the typing box: type a request ("open Figma", "summarise this") and press Enter, the same as saying it after "Bee". Esc closes the box. Change either in **Settings → Show or hide Bee** and **Settings → Type to Bee**: click Change and press the new keys. Bee saves a shortcut only if it can hold it, and Settings says when another app holds the current one. The two shortcuts cannot be the same.
 - **Notes folder.** `~/Library/Application Support/Bee/notes`.
@@ -30,7 +30,7 @@ Download `Bee-x.y.z-arm64.dmg` (Apple Silicon) or `Bee-x.y.z.dmg` (Intel), or th
 **From source:**
 ```bash
 npm install
-npm run build:teams-audio:mac   # Teams audio helper for arm64 and x64; needs Xcode with the macOS 13 SDK or later
+npm run build:teams-audio:mac   # call audio helper for arm64 and x64; needs Xcode with the macOS 13 SDK or later
 npm run dist:mac
 # outputs under release/ (dmg and zip, one each for arm64 and x64)
 ```
@@ -88,7 +88,7 @@ The installer is not code-signed. Windows SmartScreen will warn on first run unt
 1. Click **▾** on the notch to open the panel, then sign in (or sign up). Bee does not run guidance until you are signed in.
 2. Open **Settings** and paste your AI Gateway key, then click **Save**. To talk to Bee by name ("Bee, …"), install Claude Code and sign in; Settings says when Bee has found it.
 3. Click the **microphone** on the notch and talk. The bar in the mic button shows the input level. Each phrase you say runs the pipeline. Bee does not show what was said; only tips and notes appear. Click the microphone again to stop.
-4. To ask without speaking, press the **Type to Bee** shortcut and type a request in the box that opens in the notch. There is no typed meeting line: meeting lines come from the mic, live captions or Teams audio.
+4. To ask without speaking, press the **Type to Bee** shortcut and type a request in the box that opens in the notch. There is no typed meeting line: meeting lines come from the mic, live captions or call audio.
 5. Bee retrieves matching notes, ranks them with Jev, and shows up to two tips. The panel shows the tips, not the notes or their ranking. While the AI works, the notch shows what it is doing (for example "Searching the web"). When the answer arrives, a card opens under the notch with the tips and any source links. Click **×** to dismiss it. If you leave the pointer off it, it folds back to one line in the notch after at least 30 seconds (longer for longer answers), and the same tips stay on **Live**. Click that line to read the answer in full in the island again; click outside to fold it. The chevron opens the full panel. A new question after an answer has finished shows only the new answer; speaking while Bee is still answering updates the answer on screen.
 6. Meetings start and end by themselves (**Live → Meeting → Automatic meeting detection**, on by default). When a Teams, Zoom or Google Meet call begins, Bee turns the mic on and the notch says "Meeting in progress, Bee is active" for a few seconds. While it runs, the notch says "Meeting in progress". When the call ends, Bee writes `meeting-YYYY-MM-DD-HHmm.md` to the notes folder, with decisions, action items (with owners), topics and the notes cited, and the notch says "Meeting ended, notes have been saved" for a few seconds. Click **Open summary** on **Live** to view it. When a Teams call is about to start, Bee shows itself without taking focus: on Teams' join screen (**Meeting join**) it says so in the notch and records nothing. With the setting on, Bee starts recording only once the call itself is on; with the setting off, the notch says "Meeting detected" and shows a **Start meeting** button, which becomes **Stop meeting** once the meeting starts. There is no other button to start or end a meeting. With the setting off, Bee starts no meetings and saves no summaries by itself; the microphone still works for Talk to Bee. A meeting that runs for 4 hours is stopped and saved. Next time, Bee finds the file like any other note. Without a key, or if the AI call fails, Bee saves a plain summary with the meeting lines instead.
 
@@ -122,13 +122,13 @@ It fails open. The whole step has a 2 second limit. With the switch off or the G
 
 - **Briefing.** Two minutes before a meeting with other people on it, the island shows who is on it, when you last met and what was left open (from saved meetings). **Dig deeper** starts a background task that searches your connected tools, read only. Bee reads today's calendar from classic Outlook on Windows; otherwise it asks your Claude Code once an hour, through your own calendar tools (MCP). With no calendar tool, it stops asking until the next day. Always on.
 - **Follow-up.** When a meeting's summary is saved (by hand, or by itself when the call ends), the island lists its action items with **Draft follow-up email** and **Create tasks**. Each is a background task on your Claude Code, which uses the email and task tools you have connected. Emails are saved as drafts, never sent.
-- **What did I miss?** Back after 15 minutes with no keyboard or mouse input (or a locked screen, or sleep), the island shows a short **Recap**: what others said in the meeting meanwhile (teammates, captions, Teams audio), background tasks that ended, briefings shown and summaries saved, with the follow-up buttons or **Open summary**. Three or more missed lines are summed up by the AI in up to 3 bullets; without a Gateway key, Bee lists the latest lines. Nothing happened: no card (when you ask, Bee says so). Turn the mic on in a meeting others have started and Bee offers the same recap once ("Before you joined"). Ask any time: "Bee, what did I miss?" (or "catch me up") recaps since you last used Bee, but not before the meeting began.
+- **What did I miss?** Back after 15 minutes with no keyboard or mouse input (or a locked screen, or sleep), the island shows a short **Recap**: what others said in the meeting meanwhile (teammates, captions, call audio), background tasks that ended, briefings shown and summaries saved, with the follow-up buttons or **Open summary**. Three or more missed lines are summed up by the AI in up to 3 bullets; without a Gateway key, Bee lists the latest lines. Nothing happened: no card (when you ask, Bee says so). Turn the mic on in a meeting others have started and Bee offers the same recap once ("Before you joined"). Ask any time: "Bee, what did I miss?" (or "catch me up") recaps since you last used Bee, but not before the meeting began.
 
 ### Talk to Bee
 
 With the mic on, start a phrase with **"Bee"** (or "Hey Bee") and the rest is a request to the AI, not part of the meeting: "Bee, what's 15% of 18000?", "Bee, open Teams", "Hey Bee, open bbc.co.uk". The answer shows in the island straight away, written to you, not as words to say in the meeting. If you pause after "Bee", your next phrase is the request.
 
-- **Your own mic only.** Typed lines, live captions, Teams audio and teammates' lines never count, even when they start with "Bee". Speech-to-text often writes "Bee" as "B", "Be" or "Bea"; at the very start of a phrase those count too, when a pause or a request follows ("Be, open Teams", "B what's the time in Tokyo"). "Be careful…", "maybe later" and "the bee flew" do not. "Bea, can you share your screen?" to a colleague called Bea does count.
+- **Your own mic only.** Typed lines, live captions, call audio and teammates' lines never count, even when they start with "Bee". Speech-to-text often writes "Bee" as "B", "Be" or "Bea"; at the very start of a phrase those count too, when a pause or a request follows ("Be, open Teams", "B what's the time in Tokyo"). "Be careful…", "maybe later" and "the bee flew" do not. "Bea, can you share your screen?" to a colleague called Bea does count.
 - **Not meeting conversation.** The request and its answer stay out of the meeting summary, and meeting memory. Meeting tips wait while the answer is on screen (8 s, or until you close it), then catch up.
 - **Desktop actions.** The AI can open an app or bring it to the front ("open Teams", "switch to Outlook"), bring one window forward, and open a web page. "Open" or "switch to" a common app, and "open" a web address, run at once without the AI. Each action shows a short line, such as "Opened Teams". Bee never opens terminals or script tools. Opening apps works on Windows and macOS.
 - **Background tasks.** A long job that needs no screen ("Bee, draft the release notes from the merged PRs and tell me when it's done") runs in the background while you carry on. A chip in the notch shows how many run; the Live tab lists each with what it is doing and a Stop button. When one ends, the island shows its result, and Bee remembers it ("what did it find?"). Up to 3 at once; they never use the screen.
@@ -148,7 +148,7 @@ With the mic on, start a phrase with **"Bee"** (or "Hey Bee") and the rest is a 
 
 Bee transcribes with **Voxtral Small** (`mistral/voxtral-small-transcribe-3`) through Vercel AI Gateway, using the same Gateway key as the AI and Jev. Each call lists the words to listen for: "Bee", Jev, vmem and the names in **Memory → Names Bee should know**. This fixes most misheard names.
 
-1. The mic is captured with Web Audio. A simple level detector cuts the audio into phrases: speech, then 0.8 s of silence, up to 15 s per phrase. Blips under 0.3 s are dropped without a Gateway call. Bee never mixes system audio into the mic. The [Teams audio fallback](#teams-audio-fallback) is a separate stream of the Teams app alone.
+1. The mic is captured with Web Audio. A simple level detector cuts the audio into phrases: speech, then 0.8 s of silence, up to 15 s per phrase. Blips under 0.3 s are dropped without a Gateway call. Bee never mixes system audio into the mic. [Call audio](#call-audio) is a separate stream of the call app alone.
 2. Each phrase is sent to the main process as a 16 kHz mono WAV. Main calls Voxtral (Gateway default tier) and returns the text.
 3. The text joins a short internal buffer (the last 8 lines), and the pipeline runs. The words are never shown on screen.
 
@@ -187,39 +187,45 @@ Relay environment variables (server side only):
 | `CLERK_JWKS_URL` | Relay (optional) | JWKS for RS256 checks. Default `<issuer>/.well-known/jwks.json`. |
 | `CLERK_AUTHORIZED_PARTIES` | Relay (optional) | Comma-separated `azp` allowlist. |
 
-### Teams audio fallback
+### Call audio
 
-**Live → Meeting → Hear Teams when not everyone has Bee** (off by default). The idea: when some people in a Teams call have no Bee, Bee hears the Teams app itself, so their words reach the AI too. It listens when all of these hold:
+**Live → Meeting → Hear other people in calls** ("Call audio only.", off by default). With your mic on in a call, Bee hears the call app itself, so other people's words reach the AI and the summary as theirs, not yours. It listens when all of these hold:
 
-- you are in a Teams call (never Zoom or Google Meet) and your Bee mic is on.
+- the switch is on, your Bee mic is on, and Bee sees a call in Teams, Zoom or Google Meet (from the call window, or on Windows the built-in Teams detector).
 
-Bee cannot tell who in the call has Bee (sync was removed), so it always treats the call as not covered.
+Bee hears the app of the call it sees. If you move to a call in another app, Bee stops and starts again on the new app.
 
-What it hears joins your transcript as "Meeting: …". A phrase that repeats one of your lines or a caption from the last 20 seconds is dropped.
+What it hears joins your transcript as "Meeting: …" (someone other than you; the app does not say who). A phrase that repeats a caption from the last 20 seconds is dropped, as the caption names the speaker.
 
-Bee does not say that it is listening to Teams. While a meeting is active, the notch and **Live → Meeting** say "Meeting in progress".
+**Echo.** Without headphones, your mic also hears the call through your speakers. A mic phrase that repeats what call audio heard in the last 10 seconds is dropped, so it never counts as yours (and a "Bee, …" from someone else never wakes your Bee). When the mic's copy arrives first, the call-audio phrase replaces it. Phrases match when they share most words (0.6 word overlap).
 
-**Teams only, never all system audio.** A small helper program that ships inside Bee captures the Teams desktop app alone (source in `native/teams-audio`). If it cannot keep to Teams, it does not start.
+Bee does not say that it is listening. While a meeting is active, the notch and **Live → Meeting** say "Meeting in progress"; the switch's status line says "Listening to call audio.".
+
+**The call app only, never all system audio.** A small helper program that ships inside Bee captures one app alone (source in `native/teams-audio`). If it cannot keep to that app, it does not start.
 
 | | Windows | macOS |
 | --- | --- | --- |
-| Needs | Windows 10 version 2004 (build 19041) or later. Microsoft documents the API from build 20348 (Windows 11 and Windows Server 2022). If an older Windows 10 build refuses, Settings says so. | macOS 13 or later |
+| Needs | Windows 10 version 2004 (build 19041) or later. Microsoft documents the API from build 20348 (Windows 11 and Windows Server 2022). If an older Windows 10 build refuses, Live says so. | macOS 13 or later |
 | Permission | None | Screen Recording ("Screen & System Audio Recording" on macOS 15) |
-| Hears | The Teams app (`ms-teams.exe` or `Teams.exe`) and the programs it runs, such as its web view. If Teams has started anything else, such as a browser opened from a link, Bee stops listening rather than hear it. | The Teams app and its helper apps |
-| Never | Other apps, the rest of the system, Teams in a browser | Other apps, the screen, Teams in a browser |
+| Teams | The Teams app (`ms-teams.exe` or `Teams.exe`) and the programs it runs, such as its web view | The Teams app and its helper apps |
+| Zoom | The Zoom app (`Zoom.exe`) and its helper programs | The Zoom app (`us.zoom.xos`) and its helper apps |
+| Google Meet | The browser that shows the Meet window (Chrome, Edge, Brave, Arc, Firefox, Vivaldi or Opera) and its processes | The same browsers and their helper apps. Not Safari: Safari's sound comes from shared system processes, so Bee cannot keep to it |
+| Never | Other apps, the rest of the system, music or video players. If the app has started a program that is not part of it, Bee stops listening rather than hear it. | Other apps, the screen |
 
-**macOS permission.** macOS files any app's sound under Screen Recording. Bee never asks during a call. When it needs access, **Live → Meeting** says so and shows **Open Screen Recording settings**. That button asks macOS once (its own prompt), then opens System Settings → Privacy & Security → Screen Recording. Turn on Bee. If Bee still cannot hear Teams, quit and reopen Bee. Unsigned builds may need this again after an update, because macOS ties the permission to the app's signature. On macOS 15, macOS may also ask from time to time whether Bee may keep access.
+**A browser is heard whole.** For Google Meet, Bee hears the whole browser that runs the call: **every tab** of that browser, not only the Meet tab. A video or music in another tab of the same browser is heard too. Use a different browser for other media during a call, or turn the switch off.
 
-**Fails open.** A missing helper, an old OS, no permission, Teams not running or any helper error: **Live → Meeting** says why, Bee carries on with your mic, and it tries again in the next call.
+**macOS permission.** macOS files any app's sound under Screen Recording. Bee never asks during a call. When it needs access, **Live → Meeting** says so and shows **Open Screen Recording settings**. That button asks macOS once (its own prompt), then opens System Settings → Privacy & Security → Screen Recording. Turn on Bee. If Bee still cannot hear the call, quit and reopen Bee. Unsigned builds may need this again after an update, because macOS ties the permission to the app's signature. On macOS 15, macOS may also ask from time to time whether Bee may keep access.
 
-**Privacy.** Teams audio stays in memory in Bee's main process. Each phrase goes to speech-to-text like a mic phrase, and only the text reaches the window. Console logs carry codes and counts, never audio or words. With verbose debug logs on, the text is also kept in the local [debug log](#debug-logs); audio never is.
+**Fails open.** A missing helper, an old OS, no permission, the call app not running or any helper error: **Live → Meeting** says why, Bee carries on with your mic, and it tries again in the next call (or when the call moves to another app).
 
-Before this release, Bee mixed all system audio into the mic. That is gone. See [ARCHITECTURE.md](ARCHITECTURE.md#teams-audio-fallback) and [native/teams-audio/README.md](native/teams-audio/README.md).
+**Privacy.** Call audio stays in memory in Bee's main process. Each phrase goes to speech-to-text like a mic phrase, and only the text reaches the window. Console logs carry codes and counts (and which kind of app: teams, zoom or meet), never audio, words, process names or window titles. With verbose debug logs on, the text is also kept in the local [debug log](#debug-logs); audio never is.
+
+Before this release, Bee mixed all system audio into the mic. That is gone. See [ARCHITECTURE.md](ARCHITECTURE.md#call-audio) and [native/teams-audio/README.md](native/teams-audio/README.md).
 
 ### Risks and limits
 
 - **Detection false positives and misses.** The Windows heuristic can fire on a Teams call that is not a meeting, or on another app's title that mentions a call inside Teams. It can miss new Teams builds with different window titles. On Windows, Bee reads window titles with both `tasklist` and PowerShell, because `tasklist` often shows no title for new Teams. Automatic detection also reads the microphone privacy record of Windows to see which meeting app holds the mic.
-- **Consent.** The summary contains colleagues' words, stored on your device. Tell participants, and get a privacy or legal review before wide use. The Teams audio fallback sends the words of people without Bee to speech-to-text.
+- **Consent.** The summary contains colleagues' words, stored on your device. Tell participants, and get a privacy or legal review before wide use. Call audio sends other people's words to speech-to-text.
 - **Unsigned installer.** Windows SmartScreen warns on first run.
 
 ## Sign-in (Clerk)
@@ -274,8 +280,8 @@ npm run test:gateway   # live smoke test against Vercel AI Gateway (needs BEE_AI
 npm run test:e2e       # Electron E2E: fake mic → Grok STT → Jev → AI, meeting summary files, screenshots (needs BEE_AI_GATEWAY_API_KEY; xvfb-run on Linux)
 npm run relay:mock     # in-memory relay on http://127.0.0.1:8787 (the app no longer uses it; relay tests only)
 npm run typecheck
-npm run build:teams-audio:win   # Teams audio helper (Windows only; needs Visual Studio 2022 C++ and CMake)
-npm run build:teams-audio:mac   # Teams audio helpers (macOS only; needs Xcode)
+npm run build:teams-audio:win   # call audio helper (Windows only; needs Visual Studio 2022 C++ and CMake)
+npm run build:teams-audio:mac   # call audio helpers (macOS only; needs Xcode)
 ```
 
 `test:gateway` makes eight calls:
@@ -327,7 +333,7 @@ It drives Teams through the bundled `agent-desktop` CLI (set `AGENT_DESKTOP_PATH
 - **Gateway key.** Create one in the Vercel dashboard (AI Gateway → API keys).
 - **Clerk.** Enable Native API and allowlist `bee://renderer` / `bee://renderer/*`. See [Sign-in (Clerk)](#sign-in-clerk).
 - **Electron binary.** `npm install` does not download Electron itself. It downloads on first `npm run dev` or `npm start`. On a restricted network, allow `github.com` downloads or set `ELECTRON_MIRROR`.
-- **Teams audio fallback.** Not yet tested on a real Teams call. CI builds both helpers and checks they are packaged and answer `--version`; it cannot join a call. Before release, check on a packaged build on Windows 11, Windows 10 22H2 and macOS 13 or later: the other side of a Teams call is heard; music from another app is not; your own voice is dropped or deduped; and on macOS the Screen Recording steps work.
+- **Call audio.** Not yet tested on a real call in any app. CI builds both helpers and checks they are packaged and answer `--version` and `--protocol`; it cannot join a call. Before release, check on a packaged build on Windows 11, Windows 10 22H2 and macOS 13 or later, in Teams, Zoom, and Google Meet in Chrome, Edge and Firefox: the other side is heard; music from another app is not; your own voice is not labelled as someone else; with speakers instead of headphones, the far end is not labelled as you; moving from one app to another restarts capture; and on macOS the Screen Recording steps work.
 - **Speech-to-text on Windows.** Not yet tested on a real Windows machine with a microphone. The full path was checked in Electron on Linux with a fake microphone and live Grok STT. The speech threshold (about −40 dBFS) is fixed and not tuned; a very quiet mic may never start a phrase.
 - **Talk to Bee desktop actions.** Not yet tested on a real Windows or macOS desktop. Unit tests fake every OS call. Before release, check on packaged builds: "Bee, open Teams" opens or brings forward Teams (Windows `msteams:`, macOS `open -a "Microsoft Teams"`); "Bee, switch to Outlook" with Outlook running; "Bee, open Slack" from the Windows Start menu; "Bee, open bbc.co.uk". agent-desktop `focus-window` may need macOS Accessibility; without it Bee falls back to `open -a`.
 - **Computer use.** Not yet tested on a real desktop: unit tests mock the AI and agent-desktop, with no live AI calls. Before release, check on packaged builds: the Discord example above (a Confirm appears before the message goes); Stop and "Bee, stop" mid-task; a Mac without Accessibility (one line, no loop).

@@ -1,11 +1,12 @@
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { callAudioTarget, type CallAudioTarget } from "../core/teams-audio";
 import { HELPER_SAMPLE_RATE } from "../core/teams-audio-protocol";
 import type { TranscribeOutcome } from "../core/transcribe";
 import { HEARTBEAT_MS, LEASE_MS, READY_TIMEOUT_MS, STOP_GRACE_MS, createTeamsAudioCapture, type HelperProcess, type SpawnHelper } from "./teams-audio-capture";
 
-// The main side of the Teams audio fallback with a fake helper process: start and stop, PCM to phrases to text, failures as
+// The main side of call audio with a fake helper process: start and stop, PCM to phrases to text, failures as
 // codes, and logs that never hold words or samples. Timers are fake; streams and setImmediate are real.
 
 class FakeHelper extends EventEmitter implements HelperProcess {
@@ -51,7 +52,15 @@ const silence = (ms: number) => pcm(ms, 0);
 
 const WORDS = "Can you send the signed contract to Priya today";
 
-function setup(over: { helper?: string | null; spawn?: SpawnHelper; transcribe?: (wav: Uint8Array) => Promise<TranscribeOutcome> } = {}) {
+function target(found: CallAudioTarget | null): CallAudioTarget {
+  if (!found) throw new Error("no target");
+  return found;
+}
+const TEAMS = target(callAudioTarget({ window: null, teamsDetector: true }));
+const ZOOM = target(callAudioTarget({ window: { app: "zoom", appName: "Zoom", pid: 5, bundleId: null }, teamsDetector: false }));
+const CHROME = target(callAudioTarget({ window: { app: "meet", appName: "Google Chrome", pid: 900, bundleId: "com.google.Chrome" }, teamsDetector: false }));
+
+function setup(over: { helper?: string | null; spawn?: SpawnHelper; transcribe?: (wav: Uint8Array) => Promise<TranscribeOutcome>; platform?: string } = {}) {
   const helpers: FakeHelper[] = [];
   const spawns: Array<{ file: string; args: string[]; env: NodeJS.ProcessEnv; stdio: unknown }> = [];
   const lines: Array<{ id: number; lines: string[] }> = [];
@@ -70,6 +79,7 @@ function setup(over: { helper?: string | null; spawn?: SpawnHelper; transcribe?:
     spawn,
     env: { PATH: "/usr/bin", BEE_AI_GATEWAY_API_KEY: "sk-secret", CLERK_SECRET_KEY: "s", LANG: "en_GB.UTF-8" },
     now: () => Date.now(),
+    platform: over.platform ?? "win32",
     transcribe:
       over.transcribe ??
       (async (wav) => {
@@ -85,8 +95,8 @@ function setup(over: { helper?: string | null; spawn?: SpawnHelper; transcribe?:
     return found;
   };
   /** Starts a capture and has the helper report ready. */
-  const ready = async () => {
-    const started = capture.start();
+  const ready = async (on: CallAudioTarget = TEAMS) => {
+    const started = capture.start(on);
     await flush();
     helper(helpers.length - 1).status("status=ready");
     await flush();
@@ -118,18 +128,18 @@ describe("createTeamsAudioCapture", () => {
     await flush();
     await vi.advanceTimersByTimeAsync(HEARTBEAT_MS);
     const first = logs.find((line) => line.startsWith("teams-audio beat"));
-    expect(first).toMatch(/bytes=16000 frames=\d+ rms=0\.2[01]\d+ peak=0\.30\d+ phrases=\d+/);
+    expect(first).toMatch(/kind=teams bytes=16000 frames=\d+ rms=0\.2[01]\d+ peak=0\.30\d+ phrases=\d+/);
     logs.length = 0;
     await vi.advanceTimersByTimeAsync(HEARTBEAT_MS);
-    expect(logs.find((line) => line.startsWith("teams-audio beat"))).toMatch(/^teams-audio beat bytes=0 frames=0 rms=0\.0000 peak=0\.0000 phrases=\d+$/);
+    expect(logs.find((line) => line.startsWith("teams-audio beat"))).toMatch(/^teams-audio beat kind=teams bytes=0 frames=0 rms=0\.0000 peak=0\.0000 phrases=\d+$/);
   });
 
-  it("starts the helper with no arguments, pipes and an environment without secrets, and resolves once it is ready", async () => {
+  it("starts the helper on the target, with pipes and an environment without secrets, and resolves once it is ready", async () => {
     const { capture, spawns, ready } = setup();
     expect(await ready()).toEqual({ ok: true, id: 1 });
     expect(spawns).toHaveLength(1);
     expect(spawns[0]?.file).toBe("/Bee/Resources/teams-audio/teams-audio-helper");
-    expect(spawns[0]?.args).toEqual([]);
+    expect(spawns[0]?.args).toEqual(["--image", "ms-teams.exe", "--image", "teams.exe"]);
     expect(spawns[0]?.stdio).toEqual(["pipe", "pipe", "pipe"]);
     expect(spawns[0]?.env).toEqual({ PATH: "/usr/bin", LANG: "en_GB.UTF-8" });
     expect(capture.running()).toBe(true);
@@ -169,7 +179,7 @@ describe("createTeamsAudioCapture", () => {
 
   it("drops audio sent before ready", async () => {
     const { capture, helper, wavs } = setup();
-    void capture.start();
+    void capture.start(TEAMS);
     await flush();
     helper().stdout.write(Buffer.concat([speech(600), silence(1000)]));
     await flush();
@@ -181,7 +191,7 @@ describe("createTeamsAudioCapture", () => {
 
   it("reports a missing helper without starting anything", async () => {
     const { capture, spawns } = setup({ helper: null });
-    expect(await capture.start()).toEqual({ ok: false, failure: "missing" });
+    expect(await capture.start(TEAMS)).toEqual({ ok: false, failure: "missing" });
     expect(spawns).toHaveLength(0);
     expect(capture.running()).toBe(false);
   });
@@ -192,14 +202,14 @@ describe("createTeamsAudioCapture", () => {
       [[], 4, "denied"],
       [["status=no-teams"], 5, "no-teams"],
       [["status=unsupported hr=0x80004001"], 3, "unsupported"],
-      [["status=failed tree=not-teams"], 6, "failed"],
+      [["status=failed tree=not-target"], 6, "failed"],
       // The status line wins: the helper said why before it exited.
       [["status=denied err=-3801"], 6, "denied"],
       [[], 139, "failed"],
       [[], 0, "failed"],
     ] as const) {
       const { capture, helper, ended } = setup();
-      const started = capture.start();
+      const started = capture.start(TEAMS);
       await flush();
       for (const line of lines) helper().status(line);
       await flush();
@@ -218,17 +228,17 @@ describe("createTeamsAudioCapture", () => {
         throw new Error("EACCES");
       },
     });
-    expect(await thrown.capture.start()).toEqual({ ok: false, failure: "failed" });
+    expect(await thrown.capture.start(TEAMS)).toEqual({ ok: false, failure: "failed" });
     expect(thrown.capture.running()).toBe(false);
 
     const enoent = setup();
-    const started = enoent.capture.start();
+    const started = enoent.capture.start(TEAMS);
     await flush();
     enoent.helper().emit("error", new Error("spawn ENOENT"));
     expect(await started).toEqual({ ok: false, failure: "failed" });
 
     const slow = setup();
-    const waiting = slow.capture.start();
+    const waiting = slow.capture.start(TEAMS);
     await vi.advanceTimersByTimeAsync(READY_TIMEOUT_MS);
     expect(await waiting).toEqual({ ok: false, failure: "failed" });
     await flush();
@@ -264,7 +274,7 @@ describe("createTeamsAudioCapture", () => {
 
   it("resolves a start that is stopped before ready as refused", async () => {
     const { capture, helper } = setup();
-    const started = capture.start();
+    const started = capture.start(TEAMS);
     await flush();
     capture.stop();
     expect(await started).toEqual({ ok: false, failure: "refused" });
@@ -310,15 +320,39 @@ describe("createTeamsAudioCapture", () => {
 
   it("reuses a capture that is starting or running", async () => {
     const { capture, helper, helpers } = setup();
-    const first = capture.start();
-    const second = capture.start();
+    const first = capture.start(TEAMS);
+    const second = capture.start(TEAMS);
     await flush();
     helper().status("status=ready");
     await flush();
     expect(await first).toEqual({ ok: true, id: 1 });
     expect(await second).toEqual({ ok: true, id: 1 });
-    expect(await capture.start()).toEqual({ ok: true, id: 1 });
+    expect(await capture.start(TEAMS)).toEqual({ ok: true, id: 1 });
     expect(helpers).toHaveLength(1);
+  });
+
+  it("names Zoom or the Meet browser to the helper: image and pid on Windows, bundle id on macOS; no names in the log", async () => {
+    const windows = setup();
+    await windows.ready(CHROME);
+    expect(windows.spawns[0]?.args).toEqual(["--image", "chrome.exe", "--pid", "900"]);
+    expect(windows.capture.target()).toEqual(CHROME);
+    const mac = setup({ platform: "darwin" });
+    await mac.ready(ZOOM);
+    expect(mac.spawns[0]?.args).toEqual(["--bundle-id", "us.zoom.xos"]);
+    const logged = logs.join("\n");
+    expect(logged).toContain("teams-audio helper kind=meet");
+    expect(logged).not.toMatch(/chrome|zoom\.|900/i);
+  });
+
+  it("restarts on another app: the old capture ends with no failure and a new helper starts on the new target", async () => {
+    const { capture, helpers, ended, ready } = setup();
+    await ready(TEAMS);
+    expect(await ready(ZOOM)).toEqual({ ok: true, id: 2 });
+    expect(ended).toEqual([{ id: 1, failure: null }]);
+    expect(helpers).toHaveLength(2);
+    await flush();
+    expect(helpers[0]?.stdinClosed).toBe(true);
+    expect(capture.target()).toEqual(ZOOM);
   });
 
   it("keeps speech-to-text errors to a code in the log", async () => {

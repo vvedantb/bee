@@ -1,16 +1,18 @@
-// Bee Teams audio helper for Windows. Hears the Microsoft Teams desktop app alone, never all system audio, and writes it to
-// stdout as raw 16 kHz mono signed 16-bit little-endian PCM. Protocol: native/teams-audio/README.md.
+// Bee call audio helper for Windows. Hears one call app alone (Teams by default; Zoom or a browser running Google Meet when Bee
+// names it with --image), never all system audio, and writes it to stdout as raw 16 kHz mono signed 16-bit little-endian PCM.
+// Protocol: native/teams-audio/README.md.
 //
 // How: WASAPI process loopback (ActivateAudioInterfaceAsync on VAD\Process_Loopback with
-// AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK and PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE) on the top Teams process
-// (ms-teams.exe or Teams.exe). Only that process and its children are heard. The helper refuses to start, and stops, if the
-// Teams process tree holds a program that is not Teams (a browser Teams launched, say), because it would be heard too.
+// AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK and PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE) on the top process of the
+// target app (ms-teams.exe or Teams.exe by default). Only that process and its children are heard. The helper refuses to start,
+// and stops, if the tree holds a program that is not the target app (a browser Teams launched, say), because it would be heard
+// too. --image accepts call apps only (kTargetImages): never a music or video app.
 //
 // Floor: Windows 10 build 19041 (version 2004). Microsoft documents process loopback from build 20348; it is used from 19041
 // elsewhere, and below a build that supports it activation fails and the helper reports "unsupported".
 //
 // stderr carries status codes only (`status=<code>`, maybe ` hr=0x…`): never audio, names or titles. Exit codes: 0 clean stop,
-// 2 usage, 3 unsupported, 4 denied, 5 no Teams, 6 failed.
+// 2 usage, 3 unsupported, 4 denied, 5 target app not running ("no-teams", the code's old name), 6 failed.
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -34,12 +36,13 @@
 #include <cstdio>
 #include <cstring>
 #include <cwchar>
+#include <cwctype>
 #include <string>
 #include <vector>
 
 namespace {
 
-constexpr int kProtocol = 1;
+constexpr int kProtocol = 2;
 constexpr int kExitOk = 0;
 constexpr int kExitUsage = 2;
 constexpr int kExitUnsupported = 3;
@@ -57,12 +60,43 @@ constexpr REFERENCE_TIME kBufferDuration = 1000000;
 constexpr DWORD kActivateTimeoutMs = 10000;
 constexpr ULONGLONG kTreeCheckMs = 2000;
 
-// Teams desktop apps by image name. Their process trees are what Bee hears.
+// Teams desktop apps by image name: the default target. Their process trees are what Bee hears.
 const wchar_t* const kTeamsImages[] = {L"ms-teams.exe", L"teams.exe"};
-// Programs that may run inside a Teams process tree: Teams' own (ms-teams*, teams*), its WebView2 runtime and crash or
-// console helpers. Anything else in the tree (a browser Teams started, a media player) stops the capture.
-const wchar_t* const kTreePrefixes[] = {L"ms-teams", L"teams"};
+// Every image --image accepts: Teams, Zoom and the browsers that may run a Google Meet call. Same list and order as
+// src/core/teams-audio-protocol.ts CALL_AUDIO_WINDOWS_IMAGES (CI compares --protocol).
+const wchar_t* const kTargetImages[] = {L"ms-teams.exe", L"teams.exe", L"zoom.exe",    L"chrome.exe",  L"msedge.exe",
+                                        L"brave.exe",    L"arc.exe",   L"firefox.exe", L"vivaldi.exe", L"opera.exe"};
+// Programs that may run inside the target's process tree: the target's own (an image that starts with its name, such as
+// ms-teams*, zoom*, chrome*), the extra helpers below for that target, WebView2 and crash or console helpers. Anything else in
+// the tree (a browser Teams started, a media player) stops the capture.
 const wchar_t* const kTreeImages[] = {L"msedgewebview2.exe", L"crashpad_handler.exe", L"conhost.exe", L"werfault.exe"};
+struct TreeExtra {
+  const wchar_t* target;
+  const wchar_t* prefix;
+};
+const TreeExtra kTreeExtras[] = {
+    {L"zoom.exe", L"cpthost"},
+    {L"zoom.exe", L"zwebview2"},
+    {L"zoom.exe", L"aomhost"},
+    {L"zoom.exe", L"airhost"},
+    {L"zoom.exe", L"zcrash"},
+    {L"zoom.exe", L"ztscoder"},
+    {L"chrome.exe", L"notification_helper"},
+    {L"chrome.exe", L"software_reporter_tool"},
+    {L"msedge.exe", L"identity_helper"},
+    {L"msedge.exe", L"notification_helper"},
+    {L"msedge.exe", L"cookie_exporter"},
+    {L"msedge.exe", L"pwahelper"},
+    {L"brave.exe", L"notification_helper"},
+    {L"vivaldi.exe", L"notification_helper"},
+    {L"firefox.exe", L"crashreporter"},
+    {L"firefox.exe", L"pingsender"},
+    {L"firefox.exe", L"minidump-analyzer"},
+};
+
+// The target: the images Bee asked for (Teams when none), and the tree prefixes they allow. Set once in wmain.
+std::vector<std::wstring> g_images;
+std::vector<std::wstring> g_treePrefixes;
 
 // AUDIOCLIENT_ACTIVATION_PARAMS and AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS (audioclientactivationparams.h), declared here so
 // the file builds with older SDKs and MinGW. Enums are 32-bit, so the layout matches.
@@ -136,7 +170,7 @@ DWORD WindowsBuild() {
   return info.dwMajorVersion == 10 ? info.dwBuildNumber : 0;
 }
 
-// ---- Finding Teams ----
+// ---- Finding the target ----
 
 struct Process {
   DWORD pid;
@@ -159,28 +193,60 @@ std::vector<Process> Processes() {
 
 bool SameImage(const std::wstring& image, const wchar_t* name) { return _wcsicmp(image.c_str(), name) == 0; }
 
-int TeamsRank(const std::wstring& image) {
-  for (int rank = 0; rank < static_cast<int>(sizeof kTeamsImages / sizeof kTeamsImages[0]); ++rank) {
-    if (SameImage(image, kTeamsImages[rank])) return rank;
-  }
-  return -1;
-}
-
-bool IsTeamsPid(const std::vector<Process>& list, DWORD pid) {
-  for (const auto& process : list) {
-    if (process.pid == pid) return TeamsRank(process.image) >= 0;
+bool IsAllowedTarget(const std::wstring& image) {
+  for (const wchar_t* name : kTargetImages) {
+    if (SameImage(image, name)) return true;
   }
   return false;
 }
 
-// The top of a Teams process tree: a Teams process whose parent is not Teams. New Teams (ms-teams.exe) before classic.
-DWORD FindTeamsRoot(const std::vector<Process>& list) {
+// Sets the target: the images Bee named (already checked against kTargetImages), or Teams. Each image allows its own name
+// (without ".exe") and its extras as prefixes in the tree.
+void SetTarget(const std::vector<std::wstring>& requested) {
+  g_images.clear();
+  if (requested.empty()) {
+    for (const wchar_t* name : kTeamsImages) g_images.push_back(name);
+  } else {
+    g_images = requested;
+  }
+  g_treePrefixes.clear();
+  for (const auto& image : g_images) {
+    const size_t dot = image.rfind(L'.');
+    g_treePrefixes.push_back(dot == std::wstring::npos ? image : image.substr(0, dot));
+    for (const auto& extra : kTreeExtras) {
+      if (SameImage(image, extra.target)) g_treePrefixes.push_back(extra.prefix);
+    }
+  }
+}
+
+int TargetRank(const std::wstring& image) {
+  for (int rank = 0; rank < static_cast<int>(g_images.size()); ++rank) {
+    if (SameImage(image, g_images[rank].c_str())) return rank;
+  }
+  return -1;
+}
+
+const Process* FindPid(const std::vector<Process>& list, DWORD pid) {
+  for (const auto& process : list) {
+    if (process.pid == pid) return &process;
+  }
+  return nullptr;
+}
+
+bool IsTargetPid(const std::vector<Process>& list, DWORD pid) {
+  const Process* process = FindPid(list, pid);
+  return process && TargetRank(process->image) >= 0;
+}
+
+// The top of the target's process tree: a target process whose parent is not the target. Earlier images first (new Teams
+// before classic).
+DWORD FindTargetRoot(const std::vector<Process>& list) {
   DWORD best = 0;
   int bestRank = 1000;
   for (const auto& process : list) {
-    const int rank = TeamsRank(process.image);
+    const int rank = TargetRank(process.image);
     if (rank < 0 || process.pid == 0) continue;
-    if (IsTeamsPid(list, process.parent)) continue;
+    if (IsTargetPid(list, process.parent)) continue;
     if (rank < bestRank) {
       best = process.pid;
       bestRank = rank;
@@ -189,9 +255,21 @@ DWORD FindTeamsRoot(const std::vector<Process>& list) {
   return best;
 }
 
+// From a process Bee named (the call window's): up to the top of its tree while the parent is the target too, so a browser
+// is heard from its main process down. 0 if pid is not the target.
+DWORD RootOf(const std::vector<Process>& list, DWORD pid) {
+  if (!IsTargetPid(list, pid)) return 0;
+  for (int depth = 0; depth < 64; ++depth) {
+    const Process* process = FindPid(list, pid);
+    if (!process || process->parent == 0 || process->parent == pid || !IsTargetPid(list, process->parent)) break;
+    pid = process->parent;
+  }
+  return pid;
+}
+
 bool AllowedInTree(const std::wstring& image) {
-  for (const wchar_t* prefix : kTreePrefixes) {
-    if (_wcsnicmp(image.c_str(), prefix, std::wcslen(prefix)) == 0) return true;
+  for (const auto& prefix : g_treePrefixes) {
+    if (_wcsnicmp(image.c_str(), prefix.c_str(), prefix.size()) == 0) return true;
   }
   for (const wchar_t* name : kTreeImages) {
     if (SameImage(image, name)) return true;
@@ -211,9 +289,9 @@ ULONGLONG CreationTime(DWORD pid) {
   return value;
 }
 
-// Whether every process in root's tree is Teams or one of its helpers. A child must start after its parent, so a reused
+// Whether every process in root's tree is the target or one of its helpers. A child must start after its parent, so a reused
 // parent id does not pull an unrelated process in. A process whose start time cannot be read counts as a child.
-bool TreeIsTeamsOnly(const std::vector<Process>& list, DWORD root) {
+bool TreeIsTargetOnly(const std::vector<Process>& list, DWORD root) {
   std::vector<DWORD> tree{root};
   for (size_t index = 0; index < tree.size(); ++index) {
     const DWORD parent = tree[index];
@@ -334,7 +412,7 @@ WAVEFORMATEX Format(DWORD rate, WORD channels) {
   return format;
 }
 
-// Activates and initialises a capture client in format. Windows converts the Teams mix to it (AUTOCONVERTPCM).
+// Activates and initialises a capture client in format. Windows converts the target's mix to it (AUTOCONVERTPCM).
 HRESULT OpenClient(DWORD pid, const WAVEFORMATEX& format, IAudioClient** client) {
   HRESULT hr = ActivateProcessLoopback(pid, client);
   if (FAILED(hr)) return hr;
@@ -448,8 +526,9 @@ DWORD WINAPI WatchStdin(LPVOID) {
 
 void Usage(bool error) {
   const char* text =
-      "Usage: teams-audio-helper [--pid <teams process id>] [--request-permission] [--protocol] [--version] [--help]\n"
-      "Writes the Microsoft Teams app's audio alone to stdout as raw 16 kHz mono s16le PCM. Status codes go to stderr.\n";
+      "Usage: teams-audio-helper [--image <call app image>]... [--pid <process id>] [--request-permission] [--protocol] [--version] [--help]\n"
+      "Writes one call app's audio alone (Microsoft Teams unless --image names Zoom or a browser) to stdout as raw 16 kHz mono\n"
+      "s16le PCM. Status codes go to stderr.\n";
   if (error) {
     DWORD written = 0;
     WriteFile(GetStdHandle(STD_ERROR_HANDLE), text, static_cast<DWORD>(std::strlen(text)), &written, nullptr);
@@ -487,6 +566,12 @@ void PrintProtocol() {
   for (int rank = 0; rank < count; ++rank) {
     if (rank > 0) out += ',';
     AppendJsonString(out, kTeamsImages[rank]);
+  }
+  out += "],\"targetImages\":[";
+  const int targets = static_cast<int>(sizeof kTargetImages / sizeof kTargetImages[0]);
+  for (int index = 0; index < targets; ++index) {
+    if (index > 0) out += ',';
+    AppendJsonString(out, kTargetImages[index]);
   }
   out += "]}\n";
   Print(out.c_str());
@@ -564,8 +649,8 @@ int Capture(DWORD pid) {
     }
     if (GetTickCount64() - lastTreeCheck >= kTreeCheckMs) {
       lastTreeCheck = GetTickCount64();
-      if (!TreeIsTeamsOnly(Processes(), pid)) {
-        Status("failed", S_OK, "tree=not-teams");
+      if (!TreeIsTargetOnly(Processes(), pid)) {
+        Status("failed", S_OK, "tree=not-target");
         exitCode = kExitFailed;
         break;
       }
@@ -584,6 +669,7 @@ int Capture(DWORD pid) {
 
 int wmain(int argc, wchar_t** argv) {
   DWORD requested = 0;
+  std::vector<std::wstring> images;
   for (int index = 1; index < argc; ++index) {
     const wchar_t* arg = argv[index];
     if (std::wcscmp(arg, L"--version") == 0) {
@@ -605,6 +691,17 @@ int wmain(int argc, wchar_t** argv) {
       Status("granted");
       return kExitOk;
     }
+    if (std::wcscmp(arg, L"--image") == 0 && index + 1 < argc) {
+      // Call apps only: an image outside kTargetImages is a usage error, so Bee can never point the helper elsewhere.
+      std::wstring image = argv[++index];
+      if (!IsAllowedTarget(image)) {
+        Usage(true);
+        return kExitUsage;
+      }
+      for (auto& c : image) c = static_cast<wchar_t>(towlower(c));
+      images.push_back(image);
+      continue;
+    }
     if (std::wcscmp(arg, L"--pid") == 0 && index + 1 < argc) {
       requested = static_cast<DWORD>(std::wcstoul(argv[++index], nullptr, 10));
       continue;
@@ -618,15 +715,16 @@ int wmain(int argc, wchar_t** argv) {
     return kExitUnsupported;
   }
 
+  SetTarget(images);
   const std::vector<Process> list = Processes();
-  // An id from Bee must still be Teams: the helper never hears anything else.
-  const DWORD pid = requested != 0 ? (IsTeamsPid(list, requested) ? requested : 0) : FindTeamsRoot(list);
+  // An id from Bee must still be the target: the helper never hears anything else.
+  const DWORD pid = requested != 0 ? RootOf(list, requested) : FindTargetRoot(list);
   if (pid == 0) {
     Status("no-teams");
     return kExitNoTeams;
   }
-  if (!TreeIsTeamsOnly(list, pid)) {
-    Status("failed", S_OK, "tree=not-teams");
+  if (!TreeIsTargetOnly(list, pid)) {
+    Status("failed", S_OK, "tree=not-target");
     return kExitFailed;
   }
 

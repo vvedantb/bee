@@ -3,11 +3,11 @@ import type { TeamsAudioStatus } from "../../shared/ipc";
 import { MEETING_IN_PROGRESS } from "./meeting-notices";
 import { TEAMS_AUDIO_SCREEN_RECORDING, teamsAudioMessage, teamsAudioNeedsScreenRecording, type TeamsAudioView } from "./teams-audio-message";
 
-const SUPPORTED: TeamsAudioStatus = { platform: "windows", supported: true, reason: null, teamsCall: true, permission: "not-needed" };
+const SUPPORTED: TeamsAudioStatus = { platform: "windows", supported: true, reason: null, call: "teams", permission: "not-needed" };
 const MAC: TeamsAudioStatus = { ...SUPPORTED, platform: "mac", permission: "unknown" };
 const view = (patch: Partial<TeamsAudioView> = {}): TeamsAudioView => ({ status: SUPPORTED, plan: "listen", listening: false, failed: false, failure: null, ...patch });
 const unsupported = (platform: TeamsAudioStatus["platform"], reason: NonNullable<TeamsAudioStatus["reason"]>): TeamsAudioView =>
-  view({ plan: "unavailable", status: { platform, supported: false, reason, teamsCall: false, permission: "not-needed" } });
+  view({ plan: "unavailable", status: { platform, supported: false, reason, call: null, permission: "not-needed" } });
 
 describe("teamsAudioMessage", () => {
   it("says nothing while off or before the first status", () => {
@@ -16,13 +16,13 @@ describe("teamsAudioMessage", () => {
     expect(teamsAudioMessage(view({ plan: "off" }))).toBeNull();
   });
 
-  it("says why Bee cannot hear Teams here: Linux, an old OS, a missing helper", () => {
-    expect(teamsAudioMessage(unsupported("linux", "unsupported-platform"))).toBe("Teams audio fallback is not available on Linux. Bee uses your mic only.");
+  it("says why Bee cannot hear calls here: Linux, an old OS, a missing helper", () => {
+    expect(teamsAudioMessage(unsupported("linux", "unsupported-platform"))).toBe("Call audio is not available on Linux. Bee uses your mic only.");
     expect(teamsAudioMessage(unsupported("other", "unsupported-platform"))).toMatch(/not available on this device/);
-    expect(teamsAudioMessage(unsupported("windows", "os-too-old"))).toBe("Teams audio needs Windows 10 version 2004 or later. Bee uses your mic only.");
-    expect(teamsAudioMessage(unsupported("mac", "os-too-old"))).toBe("Teams audio needs macOS 13 or later. Bee uses your mic only.");
+    expect(teamsAudioMessage(unsupported("windows", "os-too-old"))).toBe("Call audio needs Windows 10 version 2004 or later. Bee uses your mic only.");
+    expect(teamsAudioMessage(unsupported("mac", "os-too-old"))).toBe("Call audio needs macOS 13 or later. Bee uses your mic only.");
     for (const platform of ["windows", "mac"] as const) {
-      expect(teamsAudioMessage(unsupported(platform, "helper-missing"))).toMatch(/^The Teams audio helper is missing\. Reinstall Bee/);
+      expect(teamsAudioMessage(unsupported(platform, "helper-missing"))).toMatch(/^The call audio helper is missing\. Reinstall Bee/);
       expect(teamsAudioMessage(unsupported(platform, "needs-app-audio"))).toMatch(/never records all system audio/);
     }
     for (const reason of ["unsupported-platform", "os-too-old", "helper-missing", "needs-app-audio"] as const) {
@@ -30,8 +30,9 @@ describe("teamsAudioMessage", () => {
     }
   });
 
-  it("says Bee hears Teams while listening, never that a meeting is in progress, and says nothing while waiting", () => {
-    expect(teamsAudioMessage(view({ listening: true }))).toBe("Listening to Teams audio.");
+  it("says Bee hears the call while listening, never that a meeting is in progress, and says nothing while waiting", () => {
+    expect(teamsAudioMessage(view({ listening: true }))).toBe("Listening to call audio.");
+    expect(teamsAudioMessage(view({ listening: true, status: { ...SUPPORTED, call: "zoom" } }))).toBe("Listening to call audio.");
     expect(teamsAudioMessage(view({ listening: true }))).not.toBe(MEETING_IN_PROGRESS);
     // Waiting for a call says nothing: the switch already says what it does.
     expect(teamsAudioMessage(view({ plan: "waiting" }))).toBeNull();
@@ -39,13 +40,16 @@ describe("teamsAudioMessage", () => {
 
   it("says why a capture failed in this call", () => {
     const failed = (failure: TeamsAudioView["failure"], status: TeamsAudioStatus = SUPPORTED) => teamsAudioMessage(view({ status, failed: true, failure }));
-    expect(failed("failed")).toBe("Could not hear Teams in this call. Bee carries on with your mic.");
-    expect(failed(null)).toBe("Could not hear Teams in this call. Bee carries on with your mic.");
+    expect(failed("failed")).toBe("Could not hear the call app in this call. Bee carries on with your mic.");
+    expect(failed(null)).toBe("Could not hear the call app in this call. Bee carries on with your mic.");
     expect(failed("no-teams")).toMatch(/^Could not find the Teams desktop app\..*not Teams in a browser/);
-    expect(failed("unsupported")).toBe("This version of Windows cannot share the Teams app's sound on its own, so Bee uses your mic only.");
-    expect(failed("unsupported", MAC)).toBe("This Mac cannot share the Teams app's sound on its own, so Bee uses your mic only.");
+    expect(failed("no-teams", { ...SUPPORTED, call: "zoom" })).toBe("Could not find the Zoom app. Bee carries on with your mic.");
+    expect(failed("no-teams", { ...SUPPORTED, call: "meet" })).toBe("Could not find the browser that runs Google Meet. Bee carries on with your mic.");
+    expect(failed("no-teams", { ...SUPPORTED, call: null })).toBe("Could not find the call app. Bee carries on with your mic.");
+    expect(failed("unsupported")).toBe("This version of Windows cannot share one app's sound on its own, so Bee uses your mic only.");
+    expect(failed("unsupported", MAC)).toBe("This Mac cannot share one app's sound on its own, so Bee uses your mic only.");
     expect(failed("missing")).toMatch(/helper is missing/);
-    expect(failed("denied")).toBe("Windows would not let Bee hear Teams. Bee carries on with your mic.");
+    expect(failed("denied")).toBe("Windows would not let Bee hear the call app. Bee carries on with your mic.");
     expect(failed("denied", MAC)).toBe(TEAMS_AUDIO_SCREEN_RECORDING);
   });
 

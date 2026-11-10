@@ -9,8 +9,20 @@ import { parseTeamsTitle } from "./teams-title";
 
 export type MeetingApp = "teams" | "zoom" | "meet";
 
-/** A window that reads like a call. name: the meeting's own name when the title carries one (never for Zoom). */
-export type MeetingWindow = { app: MeetingApp; appName: string; windowId: string; title: string; name: string | null; focused: boolean };
+/**
+ * A window that reads like a call. name: the meeting's own name when the title carries one (never for Zoom). pid and bundleId:
+ * the owning process and its macOS bundle id when agent-desktop reports them, so call audio can hear that app alone.
+ */
+export type MeetingWindow = {
+  app: MeetingApp;
+  appName: string;
+  windowId: string;
+  title: string;
+  name: string | null;
+  focused: boolean;
+  pid: number | null;
+  bundleId: string | null;
+};
 
 export const APP_LABEL: Record<MeetingApp, string> = { teams: "Teams", zoom: "Zoom", meet: "Google Meet" };
 
@@ -78,8 +90,9 @@ export function detectMeetings(args: { windows: readonly AdWindow[]; apps?: read
   const bundles = new Map((args.apps ?? []).flatMap((app) => (app.pid !== null && app.bundleId ? [[app.pid, app.bundleId] as const] : [])));
   const found: MeetingWindow[] = [];
   for (const window of args.windows) {
-    const kind = appKind(window.app, window.pid === null ? null : (bundles.get(window.pid) ?? null));
-    const base = { appName: window.app, windowId: window.id, title: window.title, focused: window.focused };
+    const bundleId = window.pid === null ? null : (bundles.get(window.pid) ?? null);
+    const kind = appKind(window.app, bundleId);
+    const base = { appName: window.app, windowId: window.id, title: window.title, focused: window.focused, pid: window.pid, bundleId };
     if (kind === "teams" && (isMeetingTitle(window.title) || args.confirmed?.has(window.id))) {
       const parsed = parseTeamsTitle(window.title);
       found.push({ ...base, app: "teams", name: parsed && !parsed.generic ? parsed.name : null });

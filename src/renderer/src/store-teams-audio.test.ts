@@ -10,9 +10,9 @@ import {
 import type { startMicSession } from "./speech";
 import type { TeamsAudioCapture, TeamsAudioOpen } from "./teams-audio";
 
-// The Teams audio fallback in the store: lines from the Teams app join the session like captions, are deduped against speech
-// Bee already has, and are never shared. The capture runs beside the mic, never in it. Preload (window.bee), Clerk, the mic,
-// speech-to-text and the Teams audio capture are stubbed, as in store.test.ts.
+// Call audio in the store: lines from the call app join the session like captions as another person, are deduped against
+// speech Bee already has (captions, and the mic's echo of the speakers), and are never shared. The capture runs beside the
+// mic, never in it. Preload (window.bee), Clerk, the mic, speech-to-text and the capture are stubbed, as in store.test.ts.
 type MicArgs = Parameters<typeof startMicSession>[0];
 
 const sessions: MicArgs[] = [];
@@ -71,9 +71,9 @@ const SETTINGS: SettingsView = {
 };
 
 // What Windows reports with the helper installed, in a Teams call.
-const LISTEN: TeamsAudioStatus = { platform: "windows", supported: true, reason: null, teamsCall: true, permission: "not-needed" };
+const LISTEN: TeamsAudioStatus = { platform: "windows", supported: true, reason: null, call: "teams", permission: "not-needed" };
 // What a copy of Bee without the helper reports: no Teams-only capture here.
-const NO_HELPER: TeamsAudioStatus = { platform: "windows", supported: false, reason: "helper-missing", teamsCall: false, permission: "not-needed" };
+const NO_HELPER: TeamsAudioStatus = { platform: "windows", supported: false, reason: "helper-missing", call: null, permission: "not-needed" };
 
 /** A capture main started: lines() delivers text as main would, end() stops it from main's side. */
 function fakeCapture() {
@@ -171,20 +171,52 @@ describe("store: Teams audio lines", () => {
     expect(store.getBeeState().session.lines).toEqual([]);
   });
 
-  it("drops Teams audio that repeats the user's own line or a caption", async () => {
-    const { store, heard, caption, said } = await loadStore({ status: NO_HELPER });
-    await store.actions.toggleMic();
-    sessions.at(-1)?.onLine("we can offer fifteen percent off this quarter");
-    await vi.advanceTimersByTimeAsync(1000);
+  it("drops call audio that repeats a caption", async () => {
+    const { heard, caption, said } = await loadStore({ status: NO_HELPER });
     await caption([{ speaker: "Priya Patel", text: "Can we get it signed by Friday?" }]);
-    await heard("We can offer fifteen percent off this quarter.");
     await heard("Can we get it signed by Friday?");
     await heard("What about pricing next year?");
-    expect(said()).toEqual([
-      "we can offer fifteen percent off this quarter",
-      "Priya Patel: Can we get it signed by Friday?",
-      "Meeting: What about pricing next year?",
-    ]);
+    expect(said()).toEqual(["Priya Patel: Can we get it signed by Friday?", "Meeting: What about pricing next year?"]);
+  });
+
+  it("echo guard: drops a mic phrase that repeats call audio from the last few seconds, wake word included", async () => {
+    const { store, requests, heard, said } = await loadStore({ status: NO_HELPER });
+    await store.actions.toggleMic();
+    await heard("Bee, what is our refund policy?");
+    const runs = requests.length;
+    // The mic hears the far end through the speakers a moment later.
+    sessions.at(-1)?.onLine("Bee what is our refund policy");
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(said()).toEqual(["Meeting: Bee, what is our refund policy?"]);
+    expect(store.getBeeState().busy).toBe(false);
+    expect(requests.length).toBe(runs);
+    // The user's own words still count.
+    sessions.at(-1)?.onLine("we can offer fifteen percent off this quarter");
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(said().at(-1)).toBe("we can offer fifteen percent off this quarter");
+  });
+
+  it("echo guard: call audio that repeats the user's mic line from the last few seconds replaces it, without a second run", async () => {
+    const { store, requests, heard, said } = await loadStore({ status: NO_HELPER });
+    await store.actions.toggleMic();
+    // The mic's copy of the far end arrives first.
+    sessions.at(-1)?.onLine("can you send the contract today");
+    await vi.advanceTimersByTimeAsync(1000);
+    const runs = requests.length;
+    await heard("Can you send the contract today?");
+    expect(said()).toEqual(["Meeting: Can you send the contract today?"]);
+    expect(requests.length).toBe(runs);
+  });
+
+  it("marks attribution known once call audio is in the session", async () => {
+    const { isAttributionUnknown } = await import("../../core/session-lines");
+    const { store, heard } = await loadStore({ status: NO_HELPER });
+    await store.actions.toggleMic();
+    sessions.at(-1)?.onLine("let me share my screen");
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(isAttributionUnknown(store.getBeeState().session.lines, true)).toBe(true);
+    await heard("Sure, go ahead.");
+    expect(isAttributionUnknown(store.getBeeState().session.lines, true)).toBe(false);
   });
 
   it("lets a later caption line replace a Teams audio line, without a second run", async () => {
@@ -212,7 +244,7 @@ describe("store: Teams audio capture", () => {
     vi.unstubAllGlobals();
   });
 
-  it("never opens a capture where Bee cannot hear Teams alone (here: no helper installed)", async () => {
+  it("never opens a capture where Bee cannot hear the call app alone (here: no helper installed)", async () => {
     const { store, poll } = await loadStore({ status: NO_HELPER });
     await store.actions.toggleMic();
     await poll();
@@ -270,7 +302,7 @@ describe("store: Teams audio capture", () => {
     expect(capture.opened).toBe(1);
     expect(store.getBeeState().mic.on).toBe(true);
     expect(store.getBeeState().teamsAudio).toMatchObject({ listening: false, failed: true, failure: "failed" });
-    audio.status = { ...LISTEN, teamsCall: false };
+    audio.status = { ...LISTEN, call: null };
     await poll();
     expect(store.getBeeState().teamsAudio).toMatchObject({ failed: false, failure: null });
     audio.status = LISTEN;
@@ -305,10 +337,10 @@ describe("store: Teams audio capture", () => {
     expect(capture.opened).toBe(2);
   });
 
-  it("stops and does not reopen in this call when the helper fails (Teams closed)", async () => {
+  it("does not reopen in this call when the helper fails (Teams closed), but tries again when the call moves to another app", async () => {
     const fake = fakeCapture();
     capture.open = async () => fake.opened;
-    const { store, poll } = await loadStore();
+    const { store, poll, audio } = await loadStore();
     await store.actions.toggleMic();
     await poll();
     fake.end("no-teams");
@@ -317,6 +349,10 @@ describe("store: Teams audio capture", () => {
     await poll();
     expect(capture.opened).toBe(1);
     expect(store.getBeeState().mic.on).toBe(true);
+    audio.status = { ...LISTEN, call: "zoom" };
+    await poll();
+    expect(capture.opened).toBe(2);
+    expect(store.getBeeState().teamsAudio).toMatchObject({ listening: true, failed: false });
   });
 
   it("may start again after main stops it without a failure", async () => {
