@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { APP_PLAYBOOKS, playbookBlock, playbooksFor } from "./app-playbooks";
+import { APP_PLAYBOOKS, isTeamsApp, playbookBlock, playbooksFor, teamsTip } from "./app-playbooks";
 
 const apps = (text: string) => playbooksFor(text).map((book) => book.app);
 
@@ -43,5 +43,17 @@ describe("playbookBlock on Linux", () => {
     const block = playbookBlock("open Slack", "linux");
     expect(block).toMatch(/ctrl\+k/);
     expect(block).not.toMatch(/cmd\+/);
+  });
+});
+
+describe("Teams tip", () => {
+  it("knows Teams by any process or display name, and no other app", () => {
+    for (const name of ["Teams", "Microsoft Teams", "ms-teams.exe", "Teams.exe", "MS Teams"]) expect(isTeamsApp(name), name).toBe(true);
+    for (const name of ["Slack", "teams-helper.exe", "Steams", "Outlook"]) expect(isTeamsApp(name), name).toBe(false);
+  });
+
+  it("gives the playbook's Teams hint for the OS", () => {
+    expect(teamsTip("windows")).toBe("Teams tip: ctrl+e goes to the search box: press it, set_value the person's or chat's name, then pick the match from the results. ctrl+n starts a new chat.");
+    expect(teamsTip("mac")).toMatch(/^Teams tip: cmd\+e goes to the search box/);
   });
 });

@@ -72,7 +72,7 @@ export const COMPUTER_USE_COMMANDS = [
 ] as const;
 export type ComputerUseCommand = (typeof COMPUTER_USE_COMMANDS)[number];
 
-/** agent-desktop's flag for physical input. Only press, type and focus may take it (assertComputerUse), when the AI asks. */
+/** agent-desktop's flag for physical input. Only click, press, type and focus may take it (assertComputerUse), when the AI asks. */
 export const HEADED_FLAG = "--headed";
 /** type and set-value read their text from stdin with this flag, so it never appears in argv. */
 export const STDIN_FLAG = "--stdin";
@@ -117,7 +117,7 @@ const COMPUTER_SPECS: Record<ComputerUseCommand, CommandSpec> = {
   "list-apps": { flags: { "--app": "app", "--timeout-ms": "ms" }, positionals: [] },
   "list-windows": { flags: { "--app": "app", "--timeout-ms": "ms" }, positionals: [] },
   permissions: { flags: {}, positionals: [] },
-  click: onRef(),
+  click: onRef({ headed: true }),
   type: onRef({ stdin: true, headed: true }),
   "set-value": onRef({ stdin: true }),
   clear: onRef(),
@@ -178,8 +178,8 @@ function validValue(kind: ValueKind, value: string): boolean {
 
 /**
  * Throws for any command, flag or argument outside the computer-use set. Called before every spawn on that runner. Value flags
- * must be "--flag=value"; free text must follow "--" (select), or go on stdin with --stdin (type, set-value); only press, type
- * and focus may take HEADED_FLAG. skills only as `get desktop` or `get platform`.
+ * must be "--flag=value"; free text must follow "--" (select), or go on stdin with --stdin (type, set-value); only click, press,
+ * type and focus may take HEADED_FLAG. skills only as `get desktop` or `get platform`.
  */
 export function assertComputerUse(command: string, args: readonly string[]): asserts command is ComputerUseCommand {
   if (!(COMPUTER_USE_COMMANDS as readonly string[]).includes(command)) throw new Error(`agent-desktop command not allowed: ${command}`);

@@ -78,6 +78,15 @@ export function playbooksFor(text: string): AppPlaybook[] {
     .slice(0, PLAYBOOKS_MAX);
 }
 
+/** Whether an app name from the AI or list-apps is Microsoft Teams (new ms-teams.exe or classic Teams.exe). */
+export const isTeamsApp = (name: string): boolean => /^(?:microsoft\s+|ms[\s-]?)?teams(?:\.exe)?$/i.test(name.trim());
+
+/** The Teams hint for this OS, for a tool result that targets Teams whatever words the request used. */
+export function teamsTip(platform: ComputerPlatform): string {
+  const book = APP_PLAYBOOKS.find((item) => item.app === "Microsoft Teams");
+  return book ? `Teams tip: ${book.hints[platform === "mac" ? "mac" : "windows"]}` : "";
+}
+
 /** The hints block for the prompt, for the apps the text names. "" when it names none. */
 export function playbookBlock(text: string, platform: ComputerPlatform): string {
   const books = playbooksFor(text);
