@@ -1,6 +1,6 @@
 // The Teams audio helper protocol (native/teams-audio/README.md): what the in-repo native helpers write and how Bee reads it.
 // Pure: no Electron, no child processes, so tests drive it with bytes. The helpers (C++ on Windows, Swift on macOS) carry
-// their own copies of these values; core/teams-audio-protocol.test.ts checks the sources agree with this file.
+// their own copies of these values; CI runs scripts/check-helper-protocol.mjs against the helpers' --protocol output instead.
 
 /** Bumped when the stdout, stderr or exit-code contract changes. The helpers print it for --version. */
 export const TEAMS_AUDIO_PROTOCOL = 1;

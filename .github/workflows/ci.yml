@@ -37,6 +37,8 @@ jobs:
         run: |
           $helper = "native/teams-audio/dist/win32-x64/teams-audio-helper.exe"
           if (-not (Test-Path $helper)) { throw "Teams audio helper missing: $helper" }
+      - name: Check Teams audio helper protocol
+        run: node scripts/check-helper-protocol.mjs native/teams-audio/dist/win32-x64/teams-audio-helper.exe
       - run: npm run typecheck
       - run: npm test
       - run: npx electron-vite build
@@ -69,6 +71,11 @@ jobs:
           for arch in arm64 x64; do
             test -f "native/teams-audio/dist/darwin-$arch/teams-audio-helper" || { echo "Teams audio helper missing: $arch"; exit 1; }
           done
+      # The helper's --protocol output must match src/core/teams-audio-protocol.ts (host architecture only: it has to run).
+      - name: Check Teams audio helper protocol
+        run: |
+          arch="$(uname -m)"; [ "$arch" = "arm64" ] || arch=x64
+          node scripts/check-helper-protocol.mjs "native/teams-audio/dist/darwin-$arch/teams-audio-helper"
       - run: npm test
       # Typecheck runs inside build.
       - run: npm run build

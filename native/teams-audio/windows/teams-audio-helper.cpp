@@ -448,7 +448,7 @@ DWORD WINAPI WatchStdin(LPVOID) {
 
 void Usage(bool error) {
   const char* text =
-      "Usage: teams-audio-helper [--pid <teams process id>] [--request-permission] [--version] [--help]\n"
+      "Usage: teams-audio-helper [--pid <teams process id>] [--request-permission] [--protocol] [--version] [--help]\n"
       "Writes the Microsoft Teams app's audio alone to stdout as raw 16 kHz mono s16le PCM. Status codes go to stderr.\n";
   if (error) {
     DWORD written = 0;
@@ -456,6 +456,40 @@ void Usage(bool error) {
   } else {
     Print(text);
   }
+}
+
+// Appends an ASCII wide string as a JSON string (escaping backslash and quote). Image names and the device name are ASCII.
+void AppendJsonString(std::string& out, const wchar_t* text) {
+  out += '"';
+  for (; *text; ++text) {
+    if (*text == L'\\' || *text == L'"') out += '\\';
+    out += static_cast<char>(*text);
+  }
+  out += '"';
+}
+
+// --protocol: the protocol constants as one JSON object, so CI can compare them with core/teams-audio-protocol.ts.
+// Never opens audio.
+void PrintProtocol() {
+  char head[512];
+  std::snprintf(head, sizeof head,
+                "{\"protocol\":%d,\"sampleRate\":%lu,"
+                "\"exit\":{\"ok\":%d,\"usage\":%d,\"unsupported\":%d,\"denied\":%d,\"noTeams\":%d,\"failed\":%d},"
+                "\"capture\":{\"activationTypeProcessLoopback\":%lu,\"loopbackIncludeTargetProcessTree\":%lu,"
+                "\"processLoopbackDevice\":",
+                kProtocol, static_cast<unsigned long>(kSampleRate), kExitOk, kExitUsage, kExitUnsupported, kExitDenied,
+                kExitNoTeams, kExitFailed, static_cast<unsigned long>(kActivationTypeProcessLoopback),
+                static_cast<unsigned long>(kLoopbackIncludeTargetProcessTree));
+  std::string out = head;
+  AppendJsonString(out, kProcessLoopbackDevice);
+  out += "},\"teamsImages\":[";
+  const int count = static_cast<int>(sizeof kTeamsImages / sizeof kTeamsImages[0]);
+  for (int rank = 0; rank < count; ++rank) {
+    if (rank > 0) out += ',';
+    AppendJsonString(out, kTeamsImages[rank]);
+  }
+  out += "]}\n";
+  Print(out.c_str());
 }
 
 int Capture(DWORD pid) {
@@ -556,6 +590,10 @@ int wmain(int argc, wchar_t** argv) {
       char line[64];
       std::snprintf(line, sizeof line, "teams-audio-helper protocol=%d\n", kProtocol);
       Print(line);
+      return kExitOk;
+    }
+    if (std::wcscmp(arg, L"--protocol") == 0) {
+      PrintProtocol();
       return kExitOk;
     }
     if (std::wcscmp(arg, L"--help") == 0) {
