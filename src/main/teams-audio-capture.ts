@@ -1,5 +1,5 @@
 import { spawn as nodeSpawn } from "node:child_process";
-import { startMicSession } from "../core/speech";
+import { frameLevel, framePeak, startMicSession } from "../core/speech";
 import {
   HELPER_SAMPLE_RATE,
   createPcmFramer,
@@ -40,6 +40,8 @@ export const STOP_GRACE_MS = 2_000;
 export const IDLE_TICK_MS = 250;
 /** With no status poll from a signed-in renderer for this long, the capture stops (the window went away or signed out). */
 export const LEASE_MS = 30_000;
+/** How often a running capture logs a heartbeat: bytes, level and counts of the audio since the last one. */
+export const HEARTBEAT_MS = 5_000;
 /** The longest stderr line kept while looking for a status code. Longer lines are dropped. */
 const STDERR_LINE_MAX = 200;
 
@@ -71,6 +73,7 @@ export function createTeamsAudioCapture(deps: {
   stopGraceMs?: number;
   idleTickMs?: number;
   leaseMs?: number;
+  heartbeatMs?: number;
 }): TeamsAudioCapture {
   const spawn = deps.spawn ?? defaultSpawn;
   const now = deps.now ?? Date.now;
@@ -78,6 +81,7 @@ export function createTeamsAudioCapture(deps: {
   const stopGraceMs = deps.stopGraceMs ?? STOP_GRACE_MS;
   const idleTickMs = deps.idleTickMs ?? IDLE_TICK_MS;
   const leaseMs = deps.leaseMs ?? LEASE_MS;
+  const heartbeatMs = deps.heartbeatMs ?? HEARTBEAT_MS;
   let nextId = 0;
   let lastTouch = now();
   let permission: TeamsAudioPermission = "unknown";
@@ -155,6 +159,8 @@ export function createTeamsAudioCapture(deps: {
     const framer = createPcmFramer();
     let lastAudioAt = now();
     let phrases = 0;
+    // Audio seen since the last heartbeat. Tells no PCM (bytes=0) from silent PCM (rms=0) from quiet PCM (rms below SPEECH_RMS).
+    let beat = { bytes: 0, frames: 0, sumSquares: 0, samples: 0, peak: 0 };
     // The segmenter and speech-to-text queue: the mic's own (core/speech.ts), at the helper's 16 kHz.
     const speech = startMicSession({
       sampleRate: HELPER_SAMPLE_RATE,
@@ -176,7 +182,15 @@ export function createTeamsAudioCapture(deps: {
     child.stdout?.on("data", (chunk: Buffer) => {
       if (!session.ready || session.stopped) return;
       lastAudioAt = now();
-      for (const frame of framer.push(chunk)) speech.push(frame);
+      beat.bytes += chunk.byteLength;
+      for (const frame of framer.push(chunk)) {
+        const level = frameLevel(frame);
+        beat.frames += 1;
+        beat.sumSquares += level * level * frame.length;
+        beat.samples += frame.length;
+        beat.peak = Math.max(beat.peak, framePeak(frame));
+        speech.push(frame);
+      }
     });
 
     onLines(child.stderr, (line) => {
@@ -203,6 +217,15 @@ export function createTeamsAudioCapture(deps: {
           lastAudioAt = now();
           speech.push(new Float32Array(Math.round((HELPER_SAMPLE_RATE * idleTickMs) / 1000)));
         }, idleTickMs),
+      );
+      // Codes and counts only: never samples or words.
+      session.timers.push(
+        setInterval(() => {
+          if (session.stopped) return;
+          const rms = beat.samples === 0 ? 0 : Math.sqrt(beat.sumSquares / beat.samples);
+          console.debug(`teams-audio beat bytes=${beat.bytes} frames=${beat.frames} rms=${rms.toFixed(4)} peak=${beat.peak.toFixed(4)} phrases=${phrases}`);
+          beat = { bytes: 0, frames: 0, sumSquares: 0, samples: 0, peak: 0 };
+        }, heartbeatMs),
       );
       settle({ ok: true, id });
     });

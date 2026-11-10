@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { DetectorReading } from "../core/teams-heuristics";
 import { teamsAudioStatusSchema, type MeetingWindowStatus, type TeamsAudioStatus } from "../shared/ipc";
+import { TEAMS_CALL_LEAVE_MS } from "../core/meeting-tracker";
 import { createTeamsAudioStatus, teamsAudioAllowed } from "./teams-audio";
 
 const inCall: DetectorReading = { inMeeting: true, source: "windows", meetings: [] };
@@ -102,6 +103,49 @@ describe("createTeamsAudioStatus", () => {
 
   it("fails open: a detector failure reads as no call", async () => {
     expect((await setup({ detector: async () => { throw new Error("tasklist failed"); } }).status()).teamsCall).toBe(false);
+  });
+});
+
+describe("teamsCall grace", () => {
+  function graceSetup() {
+    let at = 0;
+    let enabled = true;
+    let reading = inCall;
+    const status = createTeamsAudioStatus({
+      enabled: () => enabled,
+      platform: "win32",
+      appAudio: { windows: true, mac: true },
+      readTeamsDetector: async () => reading,
+      reader: { status: () => readerOff },
+      now: () => at,
+    });
+    return {
+      call: async (over: { at?: number; reading?: DetectorReading; enabled?: boolean }) => {
+        at = over.at ?? at;
+        reading = over.reading ?? reading;
+        enabled = over.enabled ?? enabled;
+        return (await status()).teamsCall;
+      },
+    };
+  }
+
+  it("keeps the call on through a gap shorter than the grace, and ends it after a sustained one", async () => {
+    const { call } = graceSetup();
+    expect(await call({ at: 0 })).toBe(true);
+    expect(await call({ at: 10_000, reading: notInCall })).toBe(true);
+    expect(await call({ at: TEAMS_CALL_LEAVE_MS - 1 })).toBe(true);
+    // The signal returns: the gap clock starts over.
+    expect(await call({ at: 44_999, reading: inCall })).toBe(true);
+    expect(await call({ at: 60_000, reading: notInCall })).toBe(true);
+    expect(await call({ at: 44_999 + TEAMS_CALL_LEAVE_MS - 1 })).toBe(true);
+    expect(await call({ at: 44_999 + TEAMS_CALL_LEAVE_MS })).toBe(false);
+  });
+
+  it("stops at once when the setting goes off, with no grace", async () => {
+    const { call } = graceSetup();
+    expect(await call({ at: 0 })).toBe(true);
+    expect(await call({ at: 1_000, enabled: false })).toBe(false);
+    expect(await call({ at: 2_000, enabled: true, reading: notInCall })).toBe(false);
   });
 });
 

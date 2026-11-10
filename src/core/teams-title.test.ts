@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { isMeetingTitle, meetingWindows } from "./teams-heuristics";
 import { currentTeamsTitle, isTeamsMeetingRow, isTeamsWindowTitle, parseTeamsTitle, parseWindowNameLines, parseWindowTitleJson } from "./teams-title";
 
 describe("parseTeamsTitle", () => {
@@ -28,6 +29,29 @@ describe("parseTeamsTitle", () => {
     for (const title of ["Chat | Alice | Microsoft Teams", "Calendar | Microsoft Teams", "Calls | Microsoft Teams", "Activity | Microsoft Teams", "Microsoft Teams", "", "N/A", "  "]) {
       expect(parseTeamsTitle(title), title).toBeNull();
     }
+  });
+});
+
+const CHROME = ["Sharing control bar | Microsoft Teams", "Sharing control bar", "Meeting controls", "Incoming call", "Microsoft Teams notification", "Microsoft Teams", "N/A", ""];
+
+describe("Teams chrome titles", () => {
+  it("are never a meeting name", () => {
+    for (const title of CHROME) expect(parseTeamsTitle(title), title).toBeNull();
+  });
+
+  it("are not meeting windows either", () => {
+    for (const title of CHROME) {
+      expect(isMeetingTitle(title), title).toBe(false);
+      expect(isTeamsMeetingRow({ image: "ms-teams.exe", title }), title).toBe(false);
+    }
+    expect(meetingWindows([{ image: "ms-teams.exe", pid: 1, title: "Incoming call" }, { image: "ms-teams.exe", pid: 1, title: "Meeting controls" }])).toEqual([]);
+  });
+
+  it("give no current title in a call, and never replace a real one", () => {
+    const chrome = CHROME.map((title) => ({ image: "ms-teams.exe", title }));
+    expect(currentTeamsTitle(chrome, true)).toBeNull();
+    expect(currentTeamsTitle([...chrome, { image: "ms-teams.exe", title: "Weekly Sync | Microsoft Teams" }], true)?.name).toBe("Weekly Sync");
+    expect(currentTeamsTitle([{ image: "ms-teams.exe", title: "Weekly Sync | Microsoft Teams" }, ...chrome], true)?.name).toBe("Weekly Sync");
   });
 });
 

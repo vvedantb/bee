@@ -2,7 +2,13 @@
 // gaps. Each new stable detection gets a new epoch, so a gap never silently rejoins an old sync.
 
 export const ENTER_STABLE_MS = 10_000;
-export const LEAVE_DEBOUNCE_MS = 15_000;
+/**
+ * How long the in-call signal must stay absent before the call counts as over (the meeting ends, Teams audio stops). 45 s:
+ * the window and mic readings flap for several seconds when Teams swaps windows (a share bar opens, a pop-out moves), and 15 s
+ * cut a live capture mid-call. A real hang-up is still caught within a minute.
+ */
+export const TEAMS_CALL_LEAVE_MS = 45_000;
+export const LEAVE_DEBOUNCE_MS = TEAMS_CALL_LEAVE_MS;
 
 export type MeetingTracker = {
   raw: boolean;

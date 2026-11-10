@@ -19,9 +19,15 @@ describe("stepTracker", () => {
 
   it("debounces leaving and keeps the same epoch across a short gap", () => {
     const inMeeting: Array<[number, boolean]> = [[0, true], [ENTER_STABLE_MS, true]];
-    const gap = feed([...inMeeting, [20_000, false], [20_000 + LEAVE_DEBOUNCE_MS - 1, false], [40_000, true]]);
+    const gap = feed([...inMeeting, [20_000, false], [20_000 + LEAVE_DEBOUNCE_MS - 1, false], [20_000 + LEAVE_DEBOUNCE_MS, true]]);
     expect(gap).toMatchObject({ stable: true, epoch: 1 });
     expect(feed([...inMeeting, [20_000, false], [20_000 + LEAVE_DEBOUNCE_MS, false]])).toMatchObject({ stable: false, since: null, epoch: 1 });
+  });
+
+  it("holds a meeting through a 30 s gap and leaves after 45 s", () => {
+    const inMeeting: Array<[number, boolean]> = [[0, true], [ENTER_STABLE_MS, true]];
+    expect(feed([...inMeeting, [20_000, false], [50_000, false]])).toMatchObject({ stable: true, epoch: 1 });
+    expect(feed([...inMeeting, [20_000, false], [65_000, false]])).toMatchObject({ stable: false, epoch: 1 });
   });
 
   it("gives a new meeting after a real gap a new epoch", () => {

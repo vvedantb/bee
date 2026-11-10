@@ -3,7 +3,7 @@ import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HELPER_SAMPLE_RATE } from "../core/teams-audio-protocol";
 import type { TranscribeOutcome } from "../core/transcribe";
-import { LEASE_MS, READY_TIMEOUT_MS, STOP_GRACE_MS, createTeamsAudioCapture, type HelperProcess, type SpawnHelper } from "./teams-audio-capture";
+import { HEARTBEAT_MS, LEASE_MS, READY_TIMEOUT_MS, STOP_GRACE_MS, createTeamsAudioCapture, type HelperProcess, type SpawnHelper } from "./teams-audio-capture";
 
 // The main side of the Teams audio fallback with a fake helper process: start and stop, PCM to phrases to text, failures as
 // codes, and logs that never hold words or samples. Timers are fake; streams and setImmediate are real.
@@ -109,6 +109,19 @@ describe("createTeamsAudioCapture", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
+  });
+
+  it("logs a heartbeat of bytes, level and counts, and resets it each beat", async () => {
+    const { helper, ready } = setup();
+    await ready();
+    helper().stdout.write(speech(500));
+    await flush();
+    await vi.advanceTimersByTimeAsync(HEARTBEAT_MS);
+    const first = logs.find((line) => line.startsWith("teams-audio beat"));
+    expect(first).toMatch(/bytes=16000 frames=\d+ rms=0\.2[01]\d+ peak=0\.30\d+ phrases=\d+/);
+    logs.length = 0;
+    await vi.advanceTimersByTimeAsync(HEARTBEAT_MS);
+    expect(logs.find((line) => line.startsWith("teams-audio beat"))).toMatch(/^teams-audio beat bytes=0 frames=0 rms=0\.0000 peak=0\.0000 phrases=\d+$/);
   });
 
   it("starts the helper with no arguments, pipes and an environment without secrets, and resolves once it is ready", async () => {
