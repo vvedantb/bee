@@ -47,7 +47,7 @@ const page = z.object({
   hint: z.string().nullable(),
   error: z.boolean(),
   compact: z.object({ natural: z.number(), pill: z.number(), island: z.number(), truncated: z.boolean() }).nullable(),
-  island: z.number().nullable(),
+  body: z.number().nullable(),
 });
 
 describe("island screenshots (Electron E2E)", () => {
@@ -70,18 +70,21 @@ describe("island screenshots (Electron E2E)", () => {
 
     const pageFor = (shot: string) => report.pages.find((item) => item.shot === shot);
 
-    // Collapsed, the island hugs its header: never narrower than the content, never wider than full. Open, it is full width.
-    console.log(`compact pill widths: ${JSON.stringify(Object.fromEntries(report.pages.map((item) => [item.shot, item.compact ?? item.island])))}`);
-    for (const { shot, compact, open, island } of report.pages) {
-      if (open) expect(island, shot).toBe(PILL_MAX);
-      else {
-        expect(compact, shot).not.toBeNull();
-        if (!compact) continue;
-        expect(compact.island, shot).toBe(compact.pill);
-        expect(compact.pill, shot).toBeGreaterThanOrEqual(Math.max(PILL_MIN, compact.natural));
-      }
+    // The pill hugs its header in every state: never narrower than the content, always short of full width. Only the body under
+    // it is full width, and the body does not change the header's measured width.
+    console.log(`pill and body widths: ${JSON.stringify(Object.fromEntries(report.pages.map((item) => [item.shot, { pill: item.compact?.pill, body: item.body }])))}`);
+    for (const { shot, compact, open, body } of report.pages) {
+      expect(compact, shot).not.toBeNull();
+      if (!compact) continue;
+      expect(compact.island, shot).toBe(compact.pill);
+      expect(compact.pill, shot).toBeGreaterThanOrEqual(Math.max(PILL_MIN, compact.natural));
+      expect(compact.pill, shot).toBeLessThan(PILL_MAX);
+      expect(body, shot).toBe(open ? PILL_MAX : null);
     }
-    expect(pageFor("collapsed")?.compact?.pill).toBeLessThan(PILL_MAX);
+    // Same header, with and without the body under it: the same pill. The typing box opens under "Bee is ready", and every
+    // answer under "Tips".
+    expect(pageFor("ask")?.compact).toEqual(pageFor("collapsed")?.compact);
+    for (const shot of ["response-full-text", "long-tip-top", "long-url"]) expect(pageFor(shot)?.compact, shot).toEqual(pageFor("expanded")?.compact);
     // A status past the cap truncates: the long status gives the same pill as the folded answer, still short of full width.
     expect(pageFor("long-status")?.compact?.pill).toBe(pageFor("response-folded")?.compact?.pill);
     expect(pageFor("long-status")?.compact?.pill).toBeLessThan(PILL_MAX);

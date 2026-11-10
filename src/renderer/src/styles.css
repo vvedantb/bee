@@ -98,29 +98,22 @@ body {
   gap: 6px;
 }
 
-/* The pill and, when an answer is open, the body under it: one surface that grows downward. */
-
-/* Collapsed, App.tsx sets the width to the compact pill (core/overlay-size.ts) and it stays centred; open, it is full width.
-   The width eases like the body's spring (store.ts PILL_MORPH_MS); the window is never narrower than the island. */
+/* The pill: its own surface, centred at the top in every state. The response body and the panel are separate full-width
+   surfaces under it, one shell gap below. App.tsx sets the width to the compact pill (core/overlay-size.ts); without it (the
+   screenshot pages) the pill hugs its header. A new width eases like the body's spring (store.ts PILL_MORPH_MS); the window
+   is never narrower than the pill. */
 .island {
   display: flex;
   flex-direction: column;
   flex: none;
   align-self: center;
-  width: 100%;
   max-width: 100%;
   min-height: 0;
   max-height: 100%;
   border-radius: 26px;
   background: var(--surface);
   overflow: hidden;
-  transition:
-    border-radius 360ms var(--spring),
-    width 380ms var(--spring);
-}
-
-.island.open {
-  border-radius: 26px 26px 30px 30px;
+  transition: width 380ms var(--spring);
 }
 
 .notch {
@@ -520,12 +513,15 @@ body {
   transition: transform 100ms linear;
 }
 
-/* Island body: height grows from the pill (0fr to 1fr), content rises in with a spring. */
+/* Island body: a full-width card under the pill, with the panel's radius. Its height grows (0fr to 1fr), content rises in with
+   a spring. */
 
 .island-body {
   display: grid;
   grid-template-rows: 1fr;
   min-height: 0;
+  border-radius: 18px;
+  background: var(--surface);
   animation: island-open 420ms var(--spring);
 }
 
@@ -538,20 +534,20 @@ body {
   position: relative;
   min-height: 0;
   overflow: hidden;
-  padding: 2px 4px 18px 0;
+  padding: 14px 4px 18px 0;
 }
 
 .island-close {
   position: absolute;
-  top: 0;
-  right: 16px;
+  top: 8px;
+  right: 8px;
   z-index: 1;
 }
 
-/* Content-sized up to what the window leaves under the notch (shell padding, notch, inner padding), then it scrolls.
+/* Content-sized up to what the window leaves under the pill (shell padding, notch, shell gap, inner padding), then it scrolls.
    The scrollbar sits near the island's edge, clear of the dismiss button and the rounded corner. */
 .island-scroll {
-  max-height: calc(100vh - 8px - var(--notch-height) - 20px);
+  max-height: calc(100vh - 8px - var(--notch-height) - 6px - 32px);
   overflow-y: auto;
   /* Never sideways: a long address or word wraps instead (island-content). */
   overflow-x: hidden;

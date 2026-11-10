@@ -5,78 +5,29 @@
 // island.ts islandClick decides what opens. The hint shots show each mic hint (hints.ts) alone in the body, with the mic on.
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { IconChevronDown, IconDownload, IconMicrophone, IconMicrophoneOff, IconX } from "@tabler/icons-react";
+import { IconX } from "@tabler/icons-react";
 import { Button } from "@vvedantb/ui";
 import { sourceChips, type LinkChip } from "../../src/core/link-suggest";
 import { isNewTurn } from "../../src/core/steering";
 import { AskBox } from "../../src/renderer/src/AskBox";
 import { IslandCard } from "../../src/renderer/src/IslandCard";
-import { BeeLogo } from "../../src/renderer/src/BeeLogo";
 import { Favicon } from "../../src/renderer/src/Favicon";
 import { HINT_TEXT, type HintId } from "../../src/renderer/src/hints";
 import { displayTip, islandClick } from "../../src/renderer/src/island";
-import { NOTCH_LOGO_PX } from "../../src/renderer/src/logo";
 import { MicHint } from "../../src/renderer/src/MicHint";
-import { NOTCH_BUTTON, NOTCH_UPDATE_BUTTON } from "../../src/renderer/src/notch";
-import { NotchStatus } from "../../src/renderer/src/NotchStatus";
-import type { MeetingCard, UpdateState } from "../../src/renderer/src/store";
-import { updateButton } from "../../src/renderer/src/update";
+import type { MeetingCard } from "../../src/renderer/src/store";
 import "../../src/renderer/src/styles.css";
-import { compactPill, islandWidth } from "./compact-pill";
-
-const ICON = { size: 16, stroke: 1.75 };
+import { bodyWidth, compactPill } from "./compact-pill";
+import { ICON, pill } from "./pill-markup";
 
 const TIPS = ["Offer 15% off for a two-year term, as in the Acme pricing note [n1].", "SSO ships for enterprise in Q4 (roadmap, 12 October)."];
 const SOURCE = { title: "Acme enterprise pricing – example.com", url: "https://example.com/pricing" };
 // Fake streamed tips, long enough to overflow the body several times over.
 const LONG_TIPS = Array.from({ length: 12 }, (_, i) => `Tip ${i + 1}: confirm the renewal date and the seat count before quoting the two-year discount.`);
 
-// A static update check (no network): a newer release is out, nothing downloaded yet.
-const UPDATE: UpdateState = { status: "idle", check: { currentVersion: "0.3.14", latestVersion: "0.3.15", available: true, releaseUrl: null, error: null }, error: null };
-
-// App.tsx UpdateButton at rest: the download icon, titled with what a click does.
-function updateButtonMarkup(): string {
-  const { title } = updateButton(UPDATE);
-  return renderToStaticMarkup(
-    createElement(Button, { type: "button", variant: "ghost", size: "icon-sm", className: NOTCH_UPDATE_BUTTON, title, "aria-label": title }, createElement(IconDownload, ICON)),
-  );
-}
-
-// App.tsx Island's status (NotchStatus): a text button that opens a folded answer in full in the island, inert otherwise.
-function statusButton(status: string, folded: boolean): string {
-  return renderToStaticMarkup(createElement(NotchStatus, { status, click: folded ? "full-text" : null, error: false, onOpen: () => undefined }));
-}
-
-// App.tsx Island's mic button. On: the accent button with the level meter (store.ts: the frame's RMS × 4, capped at 1).
-function micButton(level: number | null) {
-  if (level === null) {
-    return createElement(
-      Button,
-      { type: "button", variant: "ghost", size: "sm", className: NOTCH_BUTTON, title: "Start microphone" },
-      createElement(IconMicrophoneOff, ICON),
-      createElement("span", { className: "mic-level", style: { transform: "scaleY(0.2)" } }),
-    );
-  }
-  return createElement(
-    Button,
-    { type: "button", variant: "default", size: "sm", className: "rounded-full bg-[var(--accent)] text-[var(--surface)] hover:bg-[var(--accent)]", title: "Stop microphone" },
-    createElement(IconMicrophone, ICON),
-    createElement("span", { className: "mic-level", style: { transform: `scaleY(${0.2 + level * 0.8})` } }),
-  );
-}
-
-// The real pill (App.tsx Island): the logo at NOTCH_LOGO_PX, the update button when one is available, then the mic and collapse
-// buttons as size="sm" Buttons. folded: the status is an answer folded to one line, so it is a button. mic: the meter level with
-// the mic on (the logo listens), or null for off.
-function pill(status: string, busy: boolean, { update = false, folded = false, mic = null }: { update?: boolean; folded?: boolean; mic?: number | null } = {}): string {
-  const chevron = createElement(Button, { type: "button", variant: "ghost", size: "sm", className: `chevron ${NOTCH_BUTTON}`, title: "Expand" }, createElement(IconChevronDown, ICON));
-  const logo = mic === null ? { size: NOTCH_LOGO_PX, busy } : { size: NOTCH_LOGO_PX, state: "listening" as const, level: mic };
-  return `<header class="notch">
-    ${renderToStaticMarkup(createElement(BeeLogo, logo))}
-    ${statusButton(status, folded)}
-    ${update ? updateButtonMarkup() : ""}${renderToStaticMarkup(micButton(mic))}${renderToStaticMarkup(chevron)}
-  </header>`;
-}
+// The pill alone, and the pill with the body as its own card under it (App.tsx Island).
+const pillOnly = (header: string, thinking = false) => `<div class="${thinking ? "island thinking" : "island"}">${header}</div>`;
+const withBody = (header: string, body: string, thinking = false) => `${pillOnly(header, thinking)}${islandBody(body)}`;
 
 // The island's cards (store.ts MeetingCard), as App.tsx renders them: at meeting start, before a meeting, after one, and the
 // recap after time away (core/recap.ts).
@@ -154,36 +105,36 @@ function tipsContent(): string {
 // The owner's case: one answer, long enough to be cut off on the pill's one line.
 const ANSWER =
   "Convex does support local deployments, per the remote docs: run npx convex dev --local to start a local backend, and keep it beside your cloud dev deployment while you test schema changes.";
-const folded = `<div class="island">${pill(ANSWER, false, { folded: true })}</div>`;
-const fullText = `<div class="island open">${pill("Tips", false)}${islandBody(tipList([ANSWER]))}</div>`;
+const folded = pillOnly(pill(ANSWER, false, { folded: true }));
+const fullText = withBody(pill("Tips", false), tipList([ANSWER]));
 
 // A new question after the last answer settled: a fresh turn keeps nothing, so only the new answer streams in.
 const NEW_TIP = "SSO ships for enterprise in Q4 (roadmap, 12 October).";
 const freshTurn = isNewTurn({ open: true, busy: false, spokenDuringRun: false });
 const freshTips = freshTurn ? [NEW_TIP] : [ANSWER, NEW_TIP];
-const freshUtterance = `<div class="island open thinking">${pill("Thinking…", true)}${islandBody(tipList(freshTips))}</div>`;
+const freshUtterance = withBody(pill("Thinking…", true), tipList(freshTips), true);
 
-const longTip = `<div class="island open">${pill("Tips", false)}${islandBody(`${card("meeting")}${tipList(LONG_TIPS)}`)}</div>`;
+const longTip = withBody(pill("Tips", false), `${card("meeting")}${tipList(LONG_TIPS)}`);
 
 // A mic hint alone in the body (App.tsx IslandBody with MicHint): the pill keeps its listening text, and the meter shows the
 // level that brought the hint (store.ts meter: RMS × 4).
 const HINT_METER: Record<HintId, number> = { "no-input": 0, quiet: 0.08, clipping: 1, noisy: 0.4 };
 const hintShot = (id: HintId) =>
-  `<div class="island open">${pill("Listening for something useful…", false, { mic: HINT_METER[id] })}${islandBody(renderToStaticMarkup(createElement(MicHint, { text: HINT_TEXT[id] })))}</div>`;
+  withBody(pill("Listening for something useful…", false, { mic: HINT_METER[id] }), renderToStaticMarkup(createElement(MicHint, { text: HINT_TEXT[id] })));
 const shot = new URLSearchParams(location.search).get("shot") ?? "collapsed";
 const states: Record<string, string> = {
-  collapsed: `<div class="island">${pill("Bee is ready", false)}</div>`,
-  thinking: `<div class="island thinking">${pill("The AI is searching the web…", true)}</div>`,
+  collapsed: pillOnly(pill("Bee is ready", false)),
+  thinking: pillOnly(pill("The AI is searching the web…", true), true),
   // A status longer than the pill's cap ends in "…"; the pill stays compact.
-  "long-status": `<div class="island">${pill("Reading the Acme renewal thread, the pricing note and last week's call summary…", false)}</div>`,
-  expanded: `<div class="island open">${pill("Tips", false)}${islandBody(tipsContent())}</div>`,
-  "meeting-card": `<div class="island open">${pill(CARDS.meeting.label, false)}${islandBody(card("meeting"))}</div>`,
-  "briefing-card": `<div class="island open">${pill(CARDS.briefing.label, false)}${islandBody(card("briefing"))}</div>`,
-  "follow-up-card": `<div class="island open">${pill(CARDS["follow-up"].label, false)}${islandBody(card("follow-up"))}</div>`,
-  "recap-card": `<div class="island open">${pill(CARDS.recap.label, false)}${islandBody(card("recap"))}</div>`,
+  "long-status": pillOnly(pill("Reading the Acme renewal thread, the pricing note and last week's call summary…", false)),
+  expanded: withBody(pill("Tips", false), tipsContent()),
+  "meeting-card": withBody(pill(CARDS.meeting.label, false), card("meeting")),
+  "briefing-card": withBody(pill(CARDS.briefing.label, false), card("briefing")),
+  "follow-up-card": withBody(pill(CARDS["follow-up"].label, false), card("follow-up")),
+  "recap-card": withBody(pill(CARDS.recap.label, false), card("recap")),
   "long-tip-top": longTip,
   "long-tip-scrolled": longTip,
-  "update-available": `<div class="island">${pill("Bee is ready", false, { update: true })}</div>`,
+  "update-available": pillOnly(pill("Bee is ready", false, { update: true })),
   "response-folded": folded,
   // Starts folded; the page clicks the answer below.
   "response-full-text": folded,
@@ -193,9 +144,9 @@ const states: Record<string, string> = {
   "hint-clipping": hintShot("clipping"),
   "hint-noisy": hintShot("noisy"),
   // A tip with one long unbroken address: it wraps, and the island never scrolls sideways.
-  "long-url": `<div class="island open">${pill("Tips", false)}${islandBody(tipList(["The address is eva.carepulse.co.uk/vvedantb/eva/web/sessions/415/preview?tab=documents&panel=log in the vvedantb/eva repo.", "Bee read the window title and controls only, not the page content."]))}</div>`,
+  "long-url": withBody(pill("Tips", false), tipList(["The address is eva.carepulse.co.uk/vvedantb/eva/web/sessions/415/preview?tab=documents&panel=log in the vvedantb/eva repo.", "Bee read the window title and controls only, not the page content."])),
   // The show/hide shortcut brought Bee forward: the typing box, empty and ready.
-  ask: `<div class="island open">${pill("Bee is ready", false)}${islandBody(renderToStaticMarkup(createElement(AskBox, { onSubmit: () => undefined, onClose: () => undefined })))}</div>`,
+  ask: withBody(pill("Bee is ready", false), renderToStaticMarkup(createElement(AskBox, { onSubmit: () => undefined, onClose: () => undefined }))),
 };
 const html = states[shot];
 if (!html) throw new Error(`Unknown shot: ${shot}`);
@@ -232,7 +183,7 @@ window.addEventListener("DOMContentLoaded", () => {
   const notch = logo ? { logo: box(logo), buttons: buttons.map(box) } : undefined;
   // Let the open animation and the scroll settle before the harness captures.
   setTimeout(async () => {
-    // A collapsed island hugs its header (compact-pill.ts); an open one stays full width.
+    // The pill hugs its header in every state (compact-pill.ts); the body under it is full width.
     const compact = await compactPill();
     const scroll = scroller
       ? { scrollTop: scroller.scrollTop, scrollHeight: scroller.scrollHeight, clientHeight: scroller.clientHeight, scrollWidth: scroller.scrollWidth, clientWidth: scroller.clientWidth }
@@ -240,7 +191,7 @@ window.addEventListener("DOMContentLoaded", () => {
     const open = document.querySelector(".island-body") !== null;
     // The hint line, and whether anything on the island is styled as an error.
     const hint = document.querySelector(".island-hint")?.textContent ?? null;
-    const error = document.querySelector(".island .island-error, .island .error-text") !== null;
-    console.log(`E2E_RESULT ${JSON.stringify({ ok: true, shot, notch, scroll, clicked, open, tips, hint, error, compact, island: islandWidth() })}`);
+    const error = document.querySelector(".island-error, .island .error-text") !== null;
+    console.log(`E2E_RESULT ${JSON.stringify({ ok: true, shot, notch, scroll, clicked, open, tips, hint, error, compact, body: bodyWidth() })}`);
   }, 1200);
 });

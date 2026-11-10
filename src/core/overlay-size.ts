@@ -1,5 +1,6 @@
-// The overlay window's size per mode, and the compact pill: collapsed, the window hugs the pill's content like a Dynamic
-// Island; with a response or the panel open it is the full width. All widths here are CSS px at 100% (main scales them).
+// The overlay window's size per mode, and the compact pill: the pill hugs its content like a Dynamic Island in every mode.
+// Collapsed, the window hugs the pill; with a response or the panel open under it, the window is full width. All widths here
+// are CSS px at 100% (main scales them).
 import { placeInWorkArea, type Rect, type Size } from "./interface-scale";
 
 export const WINDOW_SIZES = ["collapsed", "response", "expanded"] as const;
@@ -15,7 +16,7 @@ export const OVERLAY_SIZES: Record<WindowMode, Size> = {
 
 // .shell padding in styles.css: the clear margin round the island on each side.
 export const SHELL_PADDING = 4;
-// The island at full width, and the narrowest compact pill (logo, a short status, mic and chevron fit).
+// Full width inside the shell (the body and panel, and the widest pill), and the narrowest compact pill (logo, a short status, mic and chevron fit).
 export const PILL_MAX = OVERLAY_SIZES.collapsed.width - 2 * SHELL_PADDING;
 export const PILL_MIN = 264;
 // Widths snap to this step, so a status that changes by a few pixels does not resize the window.

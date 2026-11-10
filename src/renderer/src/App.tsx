@@ -105,8 +105,10 @@ function IslandBody({
   hintClosing,
   confirm,
   asking,
+  hover,
 }: {
   asking: boolean;
+  hover: { onPointerEnter: () => void; onPointerLeave: () => void };
   result: PipelineResult | null;
   chips: LinkChip[];
   closing: boolean;
@@ -120,7 +122,7 @@ function IslandBody({
   const tipSources = result?.tipSources ?? [];
   const kept = new Set(keptTips.map(tipKey));
   return (
-    <section className={closing ? "island-body closing" : "island-body"} aria-live="polite">
+    <section className={closing ? "island-body closing" : "island-body"} aria-live="polite" {...hover}>
       <div className="island-inner">
         <Button type="button" variant="ghost" size="icon-sm" className="island-close" title="Dismiss" aria-label="Dismiss" onClick={() => void actions.dismissIsland()}>
           <IconX {...ICON} />
@@ -188,8 +190,8 @@ function openStatus(click: StatusClick): void {
 // The pill's header reports its natural width to the store, which sizes the compact pill and the window (applyWindowSize).
 const watchPill = (header: HTMLElement) => watchNaturalWidth(header, (natural) => actions.measurePill(natural));
 
-// The pill, and under it the response body: one dark surface that grows downward when an answer arrives. Collapsed, it hugs
-// its header like a Dynamic Island; its width eases between that and full width (styles.css .island).
+// The pill, and under it the response body: two surfaces, like the pill over the panel. The pill hugs its header like a Dynamic
+// Island in every state (styles.css .island); the body under it is full width.
 function Island({ state }: { state: BeeState }) {
   const { isSignedIn } = useAuth();
   const open = state.expanded && !state.collapsing;
@@ -208,51 +210,50 @@ function Island({ state }: { state: BeeState }) {
   // A folded answer opens in full in the island, even under a hint; status that asks for action opens its place in the panel (island-click.ts).
   const click = statusClick({ kind: line.kind, panelOpen: state.expanded, bodyShown: showResponse, answerFolded: answerFolded(state) });
   const newVersion = state.update.check?.available ? state.update.check.latestVersion : null;
+  // The pointer on the pill or the body holds the body open.
+  const hover = { onPointerEnter: () => actions.setIslandHover(true), onPointerLeave: () => actions.setIslandHover(false) };
   return (
-    <div
-      className={["island", state.busy && "thinking", showBody && "open"].filter(Boolean).join(" ")}
-      style={{ width: state.pillWidth }}
-      onPointerEnter={() => actions.setIslandHover(true)}
-      onPointerLeave={() => actions.setIslandHover(false)}
-    >
-      <header className="notch" ref={watchPill}>
-        <BeeLogo size={NOTCH_LOGO_PX} state={logoState(state)} level={state.mic.level} />
-        {/* Keyed so each new status fades in. One component either way, so the panel opening or closing does not remount it. */}
-        <NotchStatus key={status} status={status} click={click} error={Boolean(state.mic.error)} onOpen={openStatus} />
-        {newVersion ? <UpdateButton update={state.update} /> : null}
-        {/* Computer use in progress: one tap stops it, like saying "Bee, stop". */}
-        {state.computer ? (
-          <Button type="button" variant="secondary" size="sm" className="rounded-full" title="Stop" onClick={() => void actions.stopCommand()}>
-            <IconPlayerStop {...ICON} /> Stop
-          </Button>
-        ) : null}
-        {/* Auto-confirm off: Start meeting for a detected call, then Stop meeting for the meeting the user started. */}
-        <MeetingButton prompt={state.meetingPrompt} onStart={() => actions.acceptMeeting()} onStop={() => actions.stopMeeting()} />
-        <BackgroundChip jobs={state.background} onOpen={() => void actions.openTab("live")} />
-        <Show when="signed-in">
+    <>
+      <div className={state.busy ? "island thinking" : "island"} style={{ width: state.pillWidth }} {...hover}>
+        <header className="notch" ref={watchPill}>
+          <BeeLogo size={NOTCH_LOGO_PX} state={logoState(state)} level={state.mic.level} />
+          {/* Keyed so each new status fades in. One component either way, so the panel opening or closing does not remount it. */}
+          <NotchStatus key={status} status={status} click={click} error={Boolean(state.mic.error)} onOpen={openStatus} />
+          {newVersion ? <UpdateButton update={state.update} /> : null}
+          {/* Computer use in progress: one tap stops it, like saying "Bee, stop". */}
+          {state.computer ? (
+            <Button type="button" variant="secondary" size="sm" className="rounded-full" title="Stop" onClick={() => void actions.stopCommand()}>
+              <IconPlayerStop {...ICON} /> Stop
+            </Button>
+          ) : null}
+          {/* Auto-confirm off: Start meeting for a detected call, then Stop meeting for the meeting the user started. */}
+          <MeetingButton prompt={state.meetingPrompt} onStart={() => actions.acceptMeeting()} onStop={() => actions.stopMeeting()} />
+          <BackgroundChip jobs={state.background} onOpen={() => void actions.openTab("live")} />
+          <Show when="signed-in">
+            <Button
+              type="button"
+              variant={state.mic.on ? "default" : "ghost"}
+              size="sm"
+              className={state.mic.on ? "rounded-full bg-[var(--accent)] text-[var(--surface)] hover:bg-[var(--accent)]" : NOTCH_BUTTON}
+              title={state.mic.error ?? (state.mic.on ? "Stop microphone" : "Start microphone")}
+              onClick={() => void actions.toggleMic()}
+            >
+              {state.mic.on ? <IconMicrophone {...ICON} /> : <IconMicrophoneOff {...ICON} />}
+              <span className="mic-level" style={{ transform: `scaleY(${0.2 + state.mic.level * 0.8})` }} />
+            </Button>
+          </Show>
           <Button
             type="button"
-            variant={state.mic.on ? "default" : "ghost"}
+            variant="ghost"
             size="sm"
-            className={state.mic.on ? "rounded-full bg-[var(--accent)] text-[var(--surface)] hover:bg-[var(--accent)]" : NOTCH_BUTTON}
-            title={state.mic.error ?? (state.mic.on ? "Stop microphone" : "Start microphone")}
-            onClick={() => void actions.toggleMic()}
+            className={open ? `chevron open ${NOTCH_BUTTON}` : `chevron ${NOTCH_BUTTON}`}
+            title={open ? "Collapse" : "Expand"}
+            onClick={() => void actions.setExpanded(islandClick("chevron", { panelOpen: open, bodyShown: showBody, hasResponse: false }) === "open-panel")}
           >
-            {state.mic.on ? <IconMicrophone {...ICON} /> : <IconMicrophoneOff {...ICON} />}
-            <span className="mic-level" style={{ transform: `scaleY(${0.2 + state.mic.level * 0.8})` }} />
+            <IconChevronDown {...ICON} />
           </Button>
-        </Show>
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          className={open ? `chevron open ${NOTCH_BUTTON}` : `chevron ${NOTCH_BUTTON}`}
-          title={open ? "Collapse" : "Expand"}
-          onClick={() => void actions.setExpanded(islandClick("chevron", { panelOpen: open, bodyShown: showBody, hasResponse: false }) === "open-panel")}
-        >
-          <IconChevronDown {...ICON} />
-        </Button>
-      </header>
+        </header>
+      </div>
       {/* While busy the previous tips stay (and streamed tips replace them); displayResult drops the old error. A hint alone shows
           none of a closed response, and closing it closes the body. */}
       {showBody ? (
@@ -266,9 +267,10 @@ function Island({ state }: { state: BeeState }) {
           hintClosing={state.hintClosing}
           confirm={showResponse ? (state.computer?.confirm ?? null) : null}
           asking={state.asking}
+          hover={hover}
         />
       ) : null}
-    </div>
+    </>
   );
 }
 
