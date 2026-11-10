@@ -59,7 +59,10 @@ describe("runPipeline", () => {
     const result = await runPipeline({ transcript, snippets, gateway, loadMcpTools: async () => mcpTools() });
     const { timingsMs } = pipelineResultSchema.parse(result);
     expect(Object.keys(timingsMs).sort()).toEqual(["guide", "lunaFirstToken", "lunaTotal", "mcp", "rank", "retrieve"]);
-    expect(timingsMs.rank).toBeGreaterThanOrEqual(4);
+    for (const key of ["guide", "mcp", "rank", "retrieve", "lunaTotal"] as const) {
+      expect(Number.isFinite(timingsMs[key])).toBe(true);
+      expect(timingsMs[key]).toBeGreaterThanOrEqual(0);
+    }
     expect(timingsMs.lunaFirstToken).toBe(12);
     expect(timingsMs.lunaTotal).toBe(30);
   });

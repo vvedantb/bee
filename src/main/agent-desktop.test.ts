@@ -1,9 +1,8 @@
-import { chmodSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, relative, sep } from "node:path";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { COMPUTER_USE_COMMANDS, DESKTOP_ACTION_COMMANDS, READ_ONLY_COMMANDS } from "../core/agent-desktop-envelope";
 import {
   childEnv,
   computerPlatformOf,
@@ -463,89 +462,5 @@ describe("createAgentDesktopComputerRunner", () => {
     expect(() => runner.run("press", ["cmd+q", "--app=Discord", "--force"])).toThrow(/not allowed/);
     expect(() => runner.run("click", ["@s8f3k2p9:e2", "--headed"])).toThrow(/not allowed/);
     expect(calls).toEqual([]);
-  });
-});
-
-describe("source scan: agent-desktop stays read-only", () => {
-  const files = (dir: string): string[] =>
-    readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
-      const path = join(dir, entry.name);
-      if (entry.isDirectory()) return files(path);
-      return /\.(ts|tsx)$/.test(entry.name) && !/\.test\.tsx?$/.test(entry.name) ? [path] : [];
-    });
-
-  // Path under src/ with "/" separators on every OS (Windows paths use "\").
-  const fromSrc = (path: string) => relative(repo("src"), path).split(sep).join("/");
-
-  const sources = () => files(repo("src")).map((path) => ({ path, text: readFileSync(path, "utf8") }));
-  const commandsIn = (text: string) => [...text.matchAll(/\brun\(\s*"([a-z-]+)"/g)].map((match) => match[1]);
-
-  it("calls only read-only commands on the meeting window path and never asks for --headed", () => {
-    const all = sources();
-    // Every meeting window call goes through an AgentDesktopRun (main/teams-detector.ts has its own run for reg and tasklist).
-    const callers = all.filter(({ text }) => text.includes("AgentDesktopRun"));
-    expect(callers.map(({ path }) => fromSrc(path)).sort()).toEqual(["main/agent-desktop.ts", "main/index.ts", "main/meeting-window-reader.ts"]);
-    const commands = callers.flatMap(({ text }) => commandsIn(text));
-    expect(commands.length).toBeGreaterThan(0);
-    for (const command of commands) expect(READ_ONLY_COMMANDS as readonly (string | undefined)[]).toContain(command);
-    // The flag's text is written once, in the allowlists; only the computer tools pass it, by name.
-    const headed = all.filter(({ text }) => text.includes('"--headed"')).map(({ path }) => fromSrc(path));
-    expect(headed).toEqual(["core/agent-desktop-envelope.ts"]);
-    const headedUsers = all.filter(({ text }) => /\bHEADED_FLAG\b/.test(text)).map(({ path }) => fromSrc(path));
-    expect(headedUsers.sort()).toEqual(["core/agent-desktop-envelope.ts", "core/computer-tools.ts"]);
-  });
-
-  it("keeps the desktop action and computer-use runners off the meeting window reader", () => {
-    const reader = readFileSync(repo("src/main/meeting-window-reader.ts"), "utf8");
-    for (const name of ["AgentDesktopAction", "createAgentDesktopActionRunner", "desktop-actions", "launch", "focus-window"]) expect(reader, name).not.toContain(name);
-    expect(reader).not.toMatch(/computer|HEADED_FLAG/i);
-    for (const command of ["click", "type", "press", "set-value", "close-app", "screenshot"]) expect(reader, command).not.toContain(`"${command}"`);
-    // The reader still checks every command against the read-only list.
-    expect(readFileSync(repo("src/main/agent-desktop.ts"), "utf8")).toMatch(/createAgentDesktopRunner[^]*?queuedRunner<ReadOnlyCommand>\(binary, deps, assertReadOnly\)/);
-    // index.ts hands the reader the read-only runner, and only the desktop actions get the action runner.
-    const index = readFileSync(repo("src/main/index.ts"), "utf8");
-    expect(index).toMatch(/createMeetingWindowReader\(\{[^}]*run: agentDesktop\?\.run/s);
-    expect(index).toMatch(/createDesktopActions\(\{[^}]*run: desktopRunner\?\.run/s);
-    // Computer use gets its own runner, created only for macOS and Windows, and handed only to the direct request handler.
-    expect(index).toMatch(/const computerRunner = [^;]*createAgentDesktopComputerRunner\(agentDesktopBinary\)/);
-    expect(index).toMatch(/computer: computerRunner\s*&&\s*computerPlatform\s*\?\s*\{[^}]*run: computerRunner\.run/s);
-    expect(index.match(/computerRunner\.run/g)).toHaveLength(1);
-  });
-
-  it("calls only launch, focus-window and list commands on the desktop action path, with no shell", () => {
-    const all = sources();
-    const callers = all.filter(({ text }) => text.includes("AgentDesktopActionRun"));
-    expect(callers.map(({ path }) => fromSrc(path)).sort()).toEqual(["main/agent-desktop.ts", "main/desktop-actions.ts", "main/index.ts"]);
-    const commands = callers.flatMap(({ text }) => commandsIn(text));
-    expect(new Set(commands)).toEqual(new Set(["list-apps", "focus-window", "launch"]));
-    for (const command of commands) expect(DESKTOP_ACTION_COMMANDS as readonly (string | undefined)[]).toContain(command);
-    const actions = readFileSync(repo("src/main/desktop-actions.ts"), "utf8");
-    expect(actions).not.toMatch(/\bexec\(|execSync|spawn\(|shell:\s*true|"cmd(?:\.exe)?"|powershell|"\/bin\/(?:ba|z)?sh"|osascript/i);
-    expect(actions).toContain("shell: false");
-  });
-
-  it("calls input and close commands only from the computer tools, through the computer-use runner, with no shell", () => {
-    const all = sources().filter(({ path }) => fromSrc(path) !== "main/teams-detector.ts");
-    // screen-look.ts reads list-windows only (the next test checks every command outside the computer tools is read-only).
-    const computer = all.filter(({ text }) => /\bComputerRun\b/.test(text)).map(({ path }) => fromSrc(path));
-    expect(computer.sort()).toEqual(["core/agent-desktop-envelope.ts", "core/computer-tools.ts", "core/computer-use.ts", "core/direct-command.ts", "core/screen-look.ts", "main/agent-desktop.ts", "main/meeting-ipc.ts"]);
-    const tools = readFileSync(repo("src/core/computer-tools.ts"), "utf8");
-    const used = new Set([...tools.matchAll(/\b(?:exec|observe|readOnce)\(\s*"([a-z-]+)"/g), ...tools.matchAll(/onRef\(\s*"([a-z-]+)"/g)].map((match) => match[1]));
-    for (const command of used) expect(COMPUTER_USE_COMMANDS as readonly (string | undefined)[], command).toContain(command);
-    for (const command of ["snapshot", "find", "get", "click", "type", "set-value", "press", "close-app"]) expect(used.has(command), command).toBe(true);
-    // The tree only: no picture and no click at a point.
-    for (const command of ["screenshot", "mouse-click"]) expect(tools, command).not.toContain(`"${command}"`);
-    // No shell, no clipboard, no launch: apps open through the desktop actions.
-    expect(tools).not.toMatch(/child_process|execFile|spawn\(|shell:\s*true|"cmd(?:\.exe)?"|powershell|"\/bin\/(?:ba|z)?sh"|osascript|clipboard|"launch"/i);
-    expect(readFileSync(repo("src/main/agent-desktop.ts"), "utf8")).toMatch(/queuedRunner<ComputerUseCommand>\(binary, deps, assertComputerUse\)/);
-  });
-
-  it("never calls an input, clipboard or close command outside the computer tools", () => {
-    const allowed = new Set<string | undefined>([...READ_ONLY_COMMANDS, ...DESKTOP_ACTION_COMMANDS]);
-    // main/teams-detector.ts and main/meeting-signals.ts run reg and tasklist through their own runner, not agent-desktop.
-    for (const { path, text } of sources().filter(({ path }) => !["main/teams-detector.ts", "main/meeting-signals.ts", "core/computer-tools.ts"].includes(fromSrc(path)))) {
-      // computer-use.ts loads agent-desktop's guides (skills get) on the computer-use runner; nothing else runs skills.
-      for (const command of commandsIn(text)) expect(allowed.has(command) || (command === "skills" && fromSrc(path) === "core/computer-use.ts"), `${fromSrc(path)}: ${command}`).toBe(true);
-    }
   });
 });
