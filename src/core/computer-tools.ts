@@ -605,6 +605,9 @@ const ROLE_ALIASES: Record<string, string | readonly string[]> = {
 /** A role word as find takes it: lower case, no spaces, dashes or underscores ("List Item" is listitem). */
 const roleWord = (role: string) => role.toLowerCase().replace(/[\s_-]+/g, "");
 
+/** Roles of a navigation click that Windows may refuse and that is retried once with real input (--headed). */
+const HEADED_ROLES: ReadonlySet<string> = new Set(["treeitem", "listitem", "tab"]);
+
 /**
  * The role to pass find for the AI's word: a role agent-desktop has (or this run has seen), a common name mapped to one, or a
  * word with several roles mapped to one this run has seen. Else an error line naming the roles to use, with no command run.
@@ -1103,7 +1106,7 @@ export function computerTools(deps: ComputerToolDeps) {
   const clickAction = ({ ref, effect, physical }: { ref: string; effect: Effect; physical?: boolean | undefined }): Action => ({
     name: "click",
     label: label(ref, "Clicking", "Clicking…"),
-    work: onRef("click", ref, physical ? [HEADED_FLAG] : [], ACT_MS, undefined, (to) => gateFor("click", to, { effect })(), () => deps.platform === "windows" && !physical && effect === "none" && !irreversibleKind(gateFor("click", ref, { effect })())),
+    work: onRef("click", ref, physical ? [HEADED_FLAG] : [], ACT_MS, undefined, (to) => gateFor("click", to, { effect })(), () => deps.platform === "windows" && !physical && effect === "none" && HEADED_ROLES.has(roleWord(refs.get(ref)?.role ?? "")) && !irreversibleKind(gateFor("click", ref, { effect })())),
     gate: gateFor("click", ref, { effect }),
     refuse: refuseRef("click", ref),
   });

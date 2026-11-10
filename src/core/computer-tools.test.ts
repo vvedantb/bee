@@ -1160,6 +1160,12 @@ describe("computerTools: Teams on Windows (app names, focus for keys, ambiguous 
     expect(await sending.call("click", { ref: "@s7:e3", effect: "send" })).toMatch(/POLICY_DENIED/);
     expect(sending.asked).toHaveLength(1);
     expect(lines(send.calls).slice(1)).toEqual(["click @s7:e3"]);
+    // Only a tree item, list item or tab: a button is not clicked again.
+    const button = recorded(({ command, args }) => (command === "snapshot" ? { ok: true, data: window("s7", [{ role: "button", name: "Open", ref_id: "@s7:e1" }]) } : reply({ command, args })));
+    const buttonTools = setup({ run: button.run, platform: "windows" });
+    await buttonTools.call("snapshot", { app: "ms-teams.exe" });
+    expect(await buttonTools.call("click", { ref: "@s7:e1", effect: "none" })).toMatch(/POLICY_DENIED/);
+    expect(lines(button.calls).filter((line) => line.startsWith("click"))).toEqual(["click @s7:e1"]);
     // Not on a Mac, and not for another refusal.
     const mac = recorded(reply);
     const macTools = setup({ run: mac.run, platform: "mac" });

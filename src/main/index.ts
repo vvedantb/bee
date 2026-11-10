@@ -112,7 +112,10 @@ function applyInterfaceScale(scale: number): void {
  * turns it off while the pointer is over one of Bee's surfaces (renderer/src/click-through.ts). Forwarded mouse moves keep
  * the renderer's pointer events coming while clicks pass through. Keyboard focus is not affected.
  */
+let overlayInteractive = false;
+
 function setInteractive(window: BrowserWindow, interactive: boolean): void {
+  overlayInteractive = interactive;
   window.setIgnoreMouseEvents(ignoresMouse(process.platform, interactive), { forward: true });
 }
 
@@ -138,9 +141,12 @@ function yieldOverlay(): () => void {
   debugLog.debug("window", "yield-for-headed");
   window.setAlwaysOnTop(false);
   window.blur();
+  const wasInteractive = overlayInteractive;
   setInteractive(window, false);
   return () => {
-    if (!window.isDestroyed()) applyMeetingMode(window, settings.view().meetingMode || autoOverlay);
+    if (window.isDestroyed()) return;
+    applyMeetingMode(window, settings.view().meetingMode || autoOverlay);
+    setInteractive(window, wasInteractive);
   };
 }
 
