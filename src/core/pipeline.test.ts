@@ -6,6 +6,7 @@ import { guideWithLuna, type LunaResult } from "./luna";
 import type { McpTools } from "./mcp";
 import { SEED_NOTES, chunkNotes } from "./notes";
 import { runPipeline } from "./pipeline";
+import { SCREEN_PICTURE_MS, type ScreenGlance } from "./screen-context";
 
 vi.mock("./jev", () => ({ rankWithJev: vi.fn() }));
 vi.mock("./luna", async (importOriginal) => ({ ...(await importOriginal<typeof import("./luna")>()), guideWithLuna: vi.fn() }));
@@ -277,5 +278,34 @@ describe("runPipeline", () => {
     expect(logged).toMatch(/perf retrieve \d+ms/);
     expect(logged).toMatch(/perf jev \d+ms mcp \d+ms guide \d+ms/);
     expect(logged).not.toMatch(/zebra|roadmap|SSO ships/i);
+  });
+
+  it("passes the screen to Luna, and none when the run has no screen reader", async () => {
+    rank.mockResolvedValue({ ranked: [], source: "jev", error: null });
+    guide.mockResolvedValue(lunaOk());
+    const glance: ScreenGlance = { app: "Keynote", title: "Q3 review", text: "Revenue grew 18%.", picture: null };
+    await runPipeline({ transcript, snippets, gateway, screen: async () => glance });
+    expect(guide.mock.calls[0]?.[0].screenGlance).toEqual(glance);
+    await runPipeline({ transcript, snippets, gateway });
+    expect(guide.mock.calls[1]?.[0].screenGlance).toBeNull();
+  });
+
+  it("never holds Luna longer than the screen budget when the screen read hangs", async () => {
+    vi.useFakeTimers();
+    try {
+      rank.mockResolvedValue({ ranked: [], source: "jev", error: null });
+      guide.mockResolvedValue(lunaOk());
+      let done = false;
+      const run = runPipeline({ transcript, snippets, gateway, screen: () => new Promise(() => undefined) }).then((result) => ((done = true), result));
+      await vi.advanceTimersByTimeAsync(SCREEN_PICTURE_MS - 1);
+      expect(guide).not.toHaveBeenCalled();
+      expect(done).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(guide).toHaveBeenCalledTimes(1);
+      expect(guide.mock.calls[0]?.[0].screenGlance).toBeNull();
+      expect((await run).tips).toEqual(["SSO ships in Q4 [n1]"]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

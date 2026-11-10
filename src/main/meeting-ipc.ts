@@ -22,6 +22,7 @@ const claudeCodeView = (status: ClaudeCodeStatus): ClaudeCodeView => ({ state: s
 import type { CommandAgent } from "../core/claude-agent";
 import { runDirectCommand, type ComputerHost } from "../core/direct-command";
 import type { ScreenCapture } from "../core/screen-look";
+import type { ScreenGlance } from "../core/screen-context";
 import type { ComputerVision } from "../core/computer-vision";
 import { classifyFollowUp } from "../core/follow-up";
 import { summariseRecap } from "../core/recap";
@@ -113,7 +114,11 @@ export function registerMeetingIpc(args: { notesDir: string;
   /** look_at_screen's picture of the front window (main/screen-capture.ts). Absent: no look_at_screen tool. */
   look?: ScreenCapture;
   /** macOS Screen Recording for Bee itself, for Settings (look_at_screen). Absent: as agent-desktop reports it. */
-  screenRecording?: () => AccessState }): void {
+  screenRecording?: () => AccessState;
+  /** The user's screen for meeting tips (core/screen-context.ts createScreenReader). Absent: tips never see the screen. */
+  screen?: { read: () => Promise<ScreenGlance | null> };
+  /** A meeting is active now (the renderer's auto-meeting machine, IPC.meetingAutoOverlay). Only then do tips read the screen. */
+  meetingActive?: () => boolean }): void {
   const createGateway = args.gateway ?? createBeeGateway;
   // One controller per run in flight. The renderer cancels a run when a newer line supersedes it.
   const runs = new Map<string, AbortController>();
@@ -311,6 +316,8 @@ export function registerMeetingIpc(args: { notesDir: string;
     const windowContext = args.meetingWindow?.context() ?? null;
     if (windowContext) console.debug(`perf meeting-window title=${windowContext.title ? 1 : 0} people=${windowContext.participants.length}`);
     const meetingBrief = [args.meeting.brief(), meetingWindowBrief(windowContext)].filter((part) => part && part.trim()).join("\n") || undefined;
+    // The screen only while a meeting is active: never for the mic on its own.
+    const screen = args.screen && args.meetingActive?.() ? args.screen.read : undefined;
     const started = performance.now();
     debugLog.info("ai", "pipeline-start", {
       runId: request.runId,
@@ -323,6 +330,7 @@ export function registerMeetingIpc(args: { notesDir: string;
       loadNotesMs: Math.round(loadNotes * 10) / 10,
       meetingBrief: meetingBrief ?? null,
       meetingWindow: windowContext,
+      screen: screen !== undefined,
       hasKey: Boolean(apiKey),
     });
     try {
@@ -336,6 +344,7 @@ export function registerMeetingIpc(args: { notesDir: string;
         searchLocation: searchLocation({ timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone, locale: app.getSystemLocale() }),
         meetingBrief,
         meetingTerms: meetingTerms(windowContext) || undefined,
+        ...(screen ? { screen } : {}),
         snippets,
         gateway: apiKey ? createGateway(apiKey) : null,
         notesDir: args.notesDir,
