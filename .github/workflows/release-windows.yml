@@ -43,7 +43,7 @@ jobs:
           $helper = "release/win-unpacked/resources/teams-audio/teams-audio-helper.exe"
           if (-not (Test-Path $helper)) { throw "Teams audio helper not packaged: $helper" }
           $version = & $helper --version
-          if ($LASTEXITCODE -ne 0 -or "$version" -ne "teams-audio-helper protocol=1") { throw "Packaged Teams audio helper --version failed: $version" }
+          if ($LASTEXITCODE -ne 0 -or "$version" -ne "teams-audio-helper protocol=2") { throw "Packaged Teams audio helper --version failed: $version" }
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:

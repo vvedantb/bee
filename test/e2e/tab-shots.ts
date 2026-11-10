@@ -29,9 +29,9 @@ let savedNames: string[] | null = null;
 const muted = (...children: ReactNode[]) => createElement("p", { className: "muted" }, ...children);
 const section = (title: string, ...children: ReactNode[]) => createElement("section", null, createElement("h2", null, title), ...children);
 
-// The Teams audio fallback on a Mac where Screen Recording is still off for Bee: the line and the button that asks.
+// Call audio on a Mac where Screen Recording is still off for Bee: the line and the button that asks.
 const teamsAudio: TeamsAudioView = {
-  status: { platform: "mac", supported: true, reason: null, teamsCall: false, permission: "denied" },
+  status: { platform: "mac", supported: true, reason: null, call: null, permission: "denied" },
   plan: "waiting",
   listening: false,
   failed: false,

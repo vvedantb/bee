@@ -8,7 +8,7 @@ import { debugLog, errorData } from "../../core/debug-log";
 import { detectLinks, mergeChips, sourceChips, visibleChips, type LinkChip } from "../../core/link-suggest";
 import { MAX_STEERING_TIPS, isFiller, isNewTurn, isQuestion, mergeTips, recentRestarts, runDelayMs, tipCap, tipKey, waitsForRun } from "../../core/steering";
 import { isAttributionUnknown, mergeLines, pipelineText, sessionLineCounts, summaryTranscript, type SessionLine } from "../../core/session-lines";
-import { TEAMS_AUDIO_SPEAKER, TEAMS_AUDIO_SPEAKER_ID, teamsAudioEcho, teamsAudioPlan, teamsAudioReplaced, type TeamsAudioPlan } from "../../core/teams-audio";
+import { TEAMS_AUDIO_SPEAKER, TEAMS_AUDIO_SPEAKER_ID, micEchoesCallAudio, teamsAudioEcho, teamsAudioPlan, teamsAudioReplaced, type TeamsAudioPlan } from "../../core/teams-audio";
 import { RECAP_AI_MIN_LINES, RECAP_LINES_SENT, RECAP_WINDOW_MS, beeLines, isRecapRequest, localMeetingLines, missedLines, recapBody, speakerText, type RecapEvent } from "../../core/recap";
 import { CONVERSATION_IDLE_MS, addExchange, commandFallbackReply, type BeeExchange } from "../../core/bee-history";
 import { CONVERSATION_QUESTION_MS, CONVERSATION_WINDOW_MS, OTHERS_QUIET_MS, REOPEN_WINDOW_MS, WAKE_FOLLOW_MS, isConfirmWords, isForBee, replyInvitesAnswer, routeLine } from "../../core/wake-word";
@@ -145,9 +145,10 @@ export type BeeState = {
   meetingPrompt: "start" | "stop" | null;
   // A short meeting notice ("Meeting ended, notes have been saved") the pill shows for MEETING_NOTICE_MS (notch.ts notchLine).
   meetingNotice: string | null;
-  // Teams audio fallback (core/teams-audio.ts): main's status (support and a Teams call; codes only, null until the first
-  // poll), and whether Bee hears the Teams app now. failed: the capture would not open or ended in this call; Bee carries on
-  // with the mic and tries again in the next call. failure: why (core/teams-audio-protocol.ts), for the Settings line.
+  // Call audio (core/teams-audio.ts): main's status (support and the call's app; codes only, null until the first poll), and
+  // whether Bee hears the call app now. failed: the capture would not open or ended in this call; Bee carries on with the mic
+  // and tries again in the next call, or when the call moves to another app. failure: why (core/teams-audio-protocol.ts), for
+  // the Live line.
   teamsAudio: { status: TeamsAudioStatus | null; listening: boolean; failed: boolean; failure: TeamsAudioFailure | null };
   // Computer use in progress (null when none), and what macOS allows it, for Settings (null until asked).
   computer: ComputerView | null;
@@ -541,8 +542,9 @@ function addLines(lines: SessionLine[]): boolean {
   if (lines.some((line) => !line.own)) lastOtherSpeakerAt = Date.now();
   const current = state.session.lines;
   if (current.length === 0) sessionMeetingId = state.meeting?.active ? state.meeting.id : null;
-  // A caption line that repeats a recent Teams-audio line replaces it: it names the speaker. Its words are
-  // already in, so it starts no turn of its own.
+  // A caption line that repeats a recent call-audio line replaces it: it names the speaker. A call-audio line that repeats the
+  // user's mic line from the last few seconds replaces that: the mic heard the speakers. Either way the words are already in,
+  // so it starts no turn of its own.
   const replaced = teamsAudioReplaced(current, lines);
   const gone = new Set(replaced.map((entry) => entry.id));
   const replacing = new Set(replaced.map((entry) => entry.by));
@@ -1483,13 +1485,13 @@ function setTeamsAudio(patch: Partial<BeeState["teamsAudio"]>): void {
   set({ teamsAudio: { ...state.teamsAudio, ...patch } });
 }
 
-/** What the Teams audio fallback should do now, from the setting, main's status and the mic. */
+/** What call audio should do now, from the setting, main's status and the mic. */
 export function teamsAudioNow(current: Pick<BeeState, "settings" | "teamsAudio" | "mic">): TeamsAudioPlan {
   const status = current.teamsAudio.status;
   return teamsAudioPlan({
     enabled: current.settings?.teamsAudioFallbackEnabled ?? false,
     supported: status?.supported ?? false,
-    teamsCall: status?.teamsCall ?? false,
+    inCall: (status?.call ?? null) !== null,
     micOn: current.mic.on,
   });
 }
@@ -1502,7 +1504,7 @@ function endTeamsAudio(): void {
 }
 
 /**
- * Starts or stops Teams audio to match teamsAudioNow. It runs beside the mic, never mixed into it: main runs the Teams-only
+ * Starts or stops call audio to match teamsAudioNow. It runs beside the mic, never mixed into it: main runs the call-app-only
  * helper with its own phrase segmenter and speech-to-text, and sends back text. Any
  * failure leaves the mic and the pipeline alone.
  */
@@ -1538,7 +1540,8 @@ async function syncTeamsAudio(): Promise<void> {
     capture.start(
       (texts) => actions.teamsAudioLines(texts),
       (failure) => {
-        // Stopped by main: a failure (Teams closed, permission) is not retried in this call; a plain stop may restart.
+        // Stopped by main: a failure (the call app closed, permission) is not retried in this call; a plain stop (the call
+        // moved to another app) may restart.
         endTeamsAudio();
         if (failure) setTeamsAudio({ failed: true, failure });
         console.debug(`teams-audio end ${failure ?? "stopped"}`);
@@ -1553,7 +1556,10 @@ async function syncTeamsAudio(): Promise<void> {
   }
 }
 
-/** Main's Teams audio status, on the meeting tick, then start or stop to match. Signed out: no status, so no Teams audio. */
+/**
+ * Main's call audio status, on the meeting tick, then start or stop to match. Signed out: no status, so no call audio. A call
+ * that moved to another app (Teams to Zoom, say) clears an earlier failure: the new app gets its own try.
+ */
 async function teamsAudioTick(): Promise<void> {
   if (teamsAudioTicking) return;
   teamsAudioTicking = true;
@@ -1561,7 +1567,10 @@ async function teamsAudioTick(): Promise<void> {
     const token = await getToken().catch(() => null);
     // Test stubs of window.bee may leave teamsAudio out.
     const status = token ? await window.bee.teamsAudio?.status(token) : null;
-    setTeamsAudio({ status: status ?? null });
+    const before = state.teamsAudio.status?.call ?? null;
+    const call = status?.call ?? null;
+    const moved = state.teamsAudio.failed && call !== null && call !== before;
+    setTeamsAudio(moved ? { status: status ?? null, failed: false, failure: null } : { status: status ?? null });
   } catch {
     // Main failed this tick; the last status stands until the next one.
   } finally {
@@ -1643,7 +1652,7 @@ async function startMic({ transcribe, onFrame }: MicOptions): Promise<void> {
     };
     set({ mic: { on: true, level: 0, error: null } });
     offerJoinRecap();
-    // Off the critical path: Teams audio (if the fallback applies) never blocks the mic.
+    // Off the critical path: call audio (if it applies) never blocks the mic.
     void syncTeamsAudio();
   } catch (error) {
     debugLog.error("audio", "mic-failed", { error: errorData(error) });
@@ -1698,7 +1707,7 @@ export const actions = {
   async saveSettings(update: SettingsUpdate): Promise<boolean> {
     try {
       set({ settings: await window.bee.saveSettings(update), error: null });
-      // Switching the Teams audio fallback off stops it at once.
+      // Switching call audio off stops it at once.
       void syncTeamsAudio();
       return true;
     } catch (error) {
@@ -1873,6 +1882,12 @@ export const actions = {
     const text = line.trim();
     if (!text) return;
     if (source === "typed") debugLog.info("meeting", "typed-line", { text });
+    // Mic echo: the mic heard the call through the speakers (no headphones). Dropped before the wake word, so the far end
+    // saying "Bee, …" never reaches this Bee as the user.
+    if (source === "mic" && micEchoesCallAudio(text, state.session.lines, Date.now())) {
+      console.debug("teams-audio mic=echo");
+      return;
+    }
     if (source === "mic" && takeWakeLine(text)) return;
     addOwnLine(text, source);
   },
@@ -1897,9 +1912,10 @@ export const actions = {
   },
 
   /**
-   * Phrases heard from the Teams app (Teams audio fallback). They join the session as "Meeting: …" and follow the same steering
-   * rules as captions. A phrase that repeats a line Bee already has from the last
-   * 20 s (the user's own or a caption) is dropped. Console lines carry counts only.
+   * Phrases heard from the call app (call audio). They join the session as "Meeting: …" (another person, not the user) and
+   * follow the same steering rules as captions. A phrase that repeats a caption from the last 20 s is dropped; one that repeats
+   * the user's mic line from the last 10 s replaces it (the mic heard the speakers; addLines, teamsAudioReplaced). Console
+   * lines carry counts only.
    */
   teamsAudioLines(texts: string[]): void {
     if (!state.settings?.teamsAudioFallbackEnabled) return;
@@ -2058,7 +2074,7 @@ export const actions = {
     }
   },
 
-  /** macOS: asks for Screen Recording (the Teams audio helper, look_at_screen), then lets the next tick try Teams audio again. */
+  /** macOS: asks for Screen Recording (the call audio helper, look_at_screen), then lets the next tick try call audio again. */
   async openScreenRecordingSettings(): Promise<void> {
     try {
       await window.bee.teamsAudio.openScreenRecordingSettings();
@@ -2196,7 +2212,7 @@ export const actions = {
     stopMic = null;
     stop?.();
     set({ mic: { ...MIC_OFF, error } });
-    // Teams audio only runs while the mic is on.
+    // Call audio only runs while the mic is on.
     void syncTeamsAudio();
     // Hints are about the mic: they go with it, and the levels heard are forgotten.
     hintDetector.clear();

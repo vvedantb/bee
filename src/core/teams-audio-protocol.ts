@@ -1,9 +1,12 @@
-// The Teams audio helper protocol (native/teams-audio/README.md): what the in-repo native helpers write and how Bee reads it.
+// The call audio helper protocol (native/teams-audio/README.md): what the in-repo native helpers write and how Bee reads it.
 // Pure: no Electron, no child processes, so tests drive it with bytes. The helpers (C++ on Windows, Swift on macOS) carry
 // their own copies of these values; CI runs scripts/check-helper-protocol.mjs against the helpers' --protocol output instead.
 
-/** Bumped when the stdout, stderr or exit-code contract changes. The helpers print it for --version. */
-export const TEAMS_AUDIO_PROTOCOL = 1;
+/**
+ * Bumped when the arguments, stdout, stderr or exit-code contract changes. The helpers print it for --version. 2: the helper
+ * takes its target (--image on Windows, --bundle-id on macOS) from an allowlist of call apps, not Teams alone.
+ */
+export const TEAMS_AUDIO_PROTOCOL = 2;
 
 /** stdout: raw PCM, no header. 16 kHz mono signed 16-bit little-endian, the rate speech-to-text gets (core/speech.ts). */
 export const HELPER_SAMPLE_RATE = 16_000;
@@ -31,31 +34,65 @@ export const HELPER_EXIT = {
 } as const;
 
 /**
- * Why a Teams audio capture did not start or stopped by itself. missing: no helper in this install. unsupported: the OS refused
+ * Why a call audio capture did not start or stopped by itself. missing: no helper in this install. unsupported: the OS refused
  * per-app capture (too old). denied: macOS Screen Recording is off for Bee (Windows: the audio service refused). no-teams: the
- * Teams desktop app is not running. failed: anything else. refused: main's own check said Bee should not listen now.
+ * call app (Teams, Zoom or the Meet browser) is not running; the wire code keeps its old name. failed: anything else.
+ * refused: main's own check said Bee should not listen now.
  */
 export const TEAMS_AUDIO_FAILURES = ["missing", "unsupported", "denied", "no-teams", "failed", "refused"] as const;
 export type TeamsAudioFailure = (typeof TEAMS_AUDIO_FAILURES)[number];
+
+// ---- Targets: the call apps a helper may hear ----
+// The helpers carry the same allowlists (--protocol prints them; CI compares). Anything else is a usage error in the helper:
+// Bee can never point it at a music or video app, and never at all system audio.
 
 /** Teams desktop apps on Windows, by image name (lower case). The helper includes each one's process tree. */
 export const TEAMS_WINDOWS_IMAGES = ["ms-teams.exe", "teams.exe"] as const;
 /** Teams desktop apps on macOS, by bundle id: new Teams, then classic. Their helper apps (`<id>.…`) are Teams too. */
 export const TEAMS_MAC_BUNDLE_IDS = ["com.microsoft.teams2", "com.microsoft.teams"] as const;
+/** The Zoom desktop app. */
+export const ZOOM_WINDOWS_IMAGES = ["zoom.exe"] as const;
+export const ZOOM_MAC_BUNDLE_IDS = ["us.zoom.xos"] as const;
+
+/**
+ * Browsers that may run a Google Meet call: how the meeting window reader names them (app name, lower case, without ".exe"),
+ * their Windows image and their macOS bundle id. Bee hears the whole browser (every tab), never anything else. Safari is not
+ * here: WebKit plays sound from shared system processes (com.apple.WebKit.*), so it cannot be kept to Safari alone.
+ */
+export const MEET_BROWSERS = [
+  { names: /^(google chrome( beta| dev| canary)?|chrome)$/, image: "chrome.exe", bundleId: "com.google.chrome" },
+  { names: /^chromium$/, image: "chrome.exe", bundleId: "org.chromium.chromium" },
+  { names: /^(microsoft edge( beta| dev| canary)?|msedge)$/, image: "msedge.exe", bundleId: "com.microsoft.edgemac" },
+  { names: /^brave( browser)?$/, image: "brave.exe", bundleId: "com.brave.browser" },
+  { names: /^arc$/, image: "arc.exe", bundleId: "company.thebrowser.browser" },
+  { names: /^(firefox|mozilla firefox|firefox developer edition)$/, image: "firefox.exe", bundleId: "org.mozilla.firefox" },
+  { names: /^vivaldi$/, image: "vivaldi.exe", bundleId: "com.vivaldi.vivaldi" },
+  { names: /^opera$/, image: "opera.exe", bundleId: "com.operasoftware.opera" },
+] as const;
+
+const unique = (list: readonly string[]): string[] => [...new Set(list)];
+
+/** Every image the Windows helper accepts with --image, in the order its --protocol prints them. */
+export const CALL_AUDIO_WINDOWS_IMAGES: readonly string[] = unique([...TEAMS_WINDOWS_IMAGES, ...ZOOM_WINDOWS_IMAGES, ...MEET_BROWSERS.map((browser) => browser.image)]);
+/** Every bundle id the macOS helper accepts with --bundle-id (and their `<id>.…` helper apps), in --protocol order. */
+export const CALL_AUDIO_MAC_BUNDLE_IDS: readonly string[] = unique([...TEAMS_MAC_BUNDLE_IDS, ...ZOOM_MAC_BUNDLE_IDS, ...MEET_BROWSERS.map((browser) => browser.bundleId)]);
+
 /** Bee's own bundle id (package.json build.appId). Never captured. */
 export const BEE_BUNDLE_ID = "app.bee.desktop";
 
-/** Whether a macOS bundle id is a Teams app or one of its helpers ("com.microsoft.teams2.helper"). Never Bee. */
-export function isTeamsBundleId(bundleId: string): boolean {
+const matchesBundle = (id: string, allowed: readonly string[]): boolean => allowed.some((app) => id === app || id.startsWith(`${app}.`));
+
+/** Whether a macOS bundle id is one of these apps or one of their helpers ("com.microsoft.teams2.helper"). Never Bee. */
+export function isCallAudioBundleId(bundleId: string, allowed: readonly string[] = CALL_AUDIO_MAC_BUNDLE_IDS): boolean {
   const id = bundleId.toLowerCase();
-  if (id === BEE_BUNDLE_ID || id.startsWith(`${BEE_BUNDLE_ID}.`)) return false;
-  return TEAMS_MAC_BUNDLE_IDS.some((teams) => id === teams || id.startsWith(`${teams}.`));
+  if (matchesBundle(id, [BEE_BUNDLE_ID])) return false;
+  return matchesBundle(id, allowed);
 }
 
-/** Whether a Windows image name ("C:\\…\\ms-teams.exe" or "MS-Teams.exe") is a Teams desktop app. */
-export function isTeamsImage(image: string): boolean {
+/** Whether a Windows image name ("C:\\…\\ms-teams.exe" or "Zoom.exe") is one of these apps. */
+export function isCallAudioImage(image: string, allowed: readonly string[] = CALL_AUDIO_WINDOWS_IMAGES): boolean {
   const name = image.split(/[\\/]/).pop()?.toLowerCase() ?? "";
-  return (TEAMS_WINDOWS_IMAGES as readonly string[]).includes(name);
+  return allowed.includes(name);
 }
 
 /** The status code on one stderr line, or null for anything else (Bee never logs the line itself). */

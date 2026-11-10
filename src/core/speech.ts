@@ -1,5 +1,5 @@
 // Audio → spoken phrases → speech-to-text (in main) → pipeline lines. The words are never shown. Shared by the mic (renderer)
-// and the Teams audio fallback (main/teams-audio-capture.ts), so it is free of window, React, Web Audio and Electron.
+// and call audio (main/teams-audio-capture.ts), so it is free of window, React, Web Audio and Electron.
 import type { TranscribeResult } from "../shared/ipc";
 
 /** A frame at or above this RMS (about −40 dBFS) counts as speech. */

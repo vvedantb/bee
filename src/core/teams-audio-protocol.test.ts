@@ -11,9 +11,13 @@ import {
   HELPER_SAMPLE_RATE,
   createPcmFramer,
   helperExitFailure,
+  CALL_AUDIO_MAC_BUNDLE_IDS,
+  CALL_AUDIO_WINDOWS_IMAGES,
+  TEAMS_MAC_BUNDLE_IDS,
+  TEAMS_WINDOWS_IMAGES,
   helperSamplesMs,
-  isTeamsBundleId,
-  isTeamsImage,
+  isCallAudioBundleId,
+  isCallAudioImage,
   parseHelperStatus,
   statusFailure,
 } from "./teams-audio-protocol";
@@ -40,28 +44,42 @@ describe("teams audio protocol constants", () => {
   });
 });
 
-describe("Teams targets", () => {
+describe("call audio targets", () => {
   it("knows Teams by bundle id, its helper apps too, and never Bee or a look-alike", () => {
-    expect(isTeamsBundleId("com.microsoft.teams2")).toBe(true);
-    expect(isTeamsBundleId("com.microsoft.teams")).toBe(true);
-    expect(isTeamsBundleId("com.microsoft.teams2.helper")).toBe(true);
-    expect(isTeamsBundleId("com.microsoft.teams.helper.Renderer")).toBe(true);
-    expect(isTeamsBundleId("COM.MICROSOFT.TEAMS2")).toBe(true);
-    expect(isTeamsBundleId("app.bee.desktop")).toBe(false);
-    expect(isTeamsBundleId("app.bee.desktop.helper")).toBe(false);
-    expect(isTeamsBundleId("com.microsoft.teamsish")).toBe(false);
-    expect(isTeamsBundleId("com.microsoft.edgemac")).toBe(false);
-    expect(isTeamsBundleId("com.google.Chrome")).toBe(false);
+    const teams = (id: string) => isCallAudioBundleId(id, TEAMS_MAC_BUNDLE_IDS);
+    expect(teams("com.microsoft.teams2")).toBe(true);
+    expect(teams("com.microsoft.teams")).toBe(true);
+    expect(teams("com.microsoft.teams2.helper")).toBe(true);
+    expect(teams("com.microsoft.teams.helper.Renderer")).toBe(true);
+    expect(teams("COM.MICROSOFT.TEAMS2")).toBe(true);
+    expect(teams("app.bee.desktop")).toBe(false);
+    expect(teams("com.microsoft.teamsish")).toBe(false);
+    expect(teams("com.microsoft.edgemac")).toBe(false);
+    expect(teams("com.google.Chrome")).toBe(false);
   });
 
-  it("knows Teams by image name with any path or case, and never a browser", () => {
-    expect(isTeamsImage("ms-teams.exe")).toBe(true);
-    expect(isTeamsImage("C:\\Program Files\\WindowsApps\\MSTeams_x64\\ms-teams.exe")).toBe(true);
-    expect(isTeamsImage("Teams.exe")).toBe(true);
-    expect(isTeamsImage("/usr/bin/teams.exe")).toBe(true);
-    expect(isTeamsImage("msedge.exe")).toBe(false);
-    expect(isTeamsImage("msedgewebview2.exe")).toBe(false);
-    expect(isTeamsImage("Bee.exe")).toBe(false);
+  it("allows only call apps on macOS: Teams, Zoom and the Meet browsers, never Bee, Safari or a media app", () => {
+    for (const id of ["us.zoom.xos", "com.google.Chrome", "com.google.Chrome.helper", "com.microsoft.edgemac", "org.mozilla.firefox", "company.thebrowser.Browser"]) {
+      expect(isCallAudioBundleId(id)).toBe(true);
+    }
+    for (const id of ["app.bee.desktop", "app.bee.desktop.helper", "com.apple.Safari", "com.apple.WebKit.GPU", "com.spotify.client", "com.apple.Music", "us.zoom.xosx"]) {
+      expect(isCallAudioBundleId(id)).toBe(false);
+    }
+  });
+
+  it("allows only call apps on Windows, by image name with any path or case", () => {
+    expect(isCallAudioImage("ms-teams.exe", TEAMS_WINDOWS_IMAGES)).toBe(true);
+    expect(isCallAudioImage("C:\\Program Files\\WindowsApps\\MSTeams_x64\\ms-teams.exe", TEAMS_WINDOWS_IMAGES)).toBe(true);
+    expect(isCallAudioImage("Teams.exe", TEAMS_WINDOWS_IMAGES)).toBe(true);
+    expect(isCallAudioImage("msedge.exe", TEAMS_WINDOWS_IMAGES)).toBe(false);
+    for (const image of ["Zoom.exe", "chrome.exe", "MSEDGE.EXE", "firefox.exe", "brave.exe"]) expect(isCallAudioImage(image)).toBe(true);
+    for (const image of ["Spotify.exe", "vlc.exe", "msedgewebview2.exe", "Bee.exe", "audiodg.exe"]) expect(isCallAudioImage(image)).toBe(false);
+  });
+
+  it("lists each app once, Teams first, as the helpers print them", () => {
+    expect(CALL_AUDIO_WINDOWS_IMAGES).toEqual(["ms-teams.exe", "teams.exe", "zoom.exe", "chrome.exe", "msedge.exe", "brave.exe", "arc.exe", "firefox.exe", "vivaldi.exe", "opera.exe"]);
+    expect(CALL_AUDIO_MAC_BUNDLE_IDS.slice(0, 3)).toEqual(["com.microsoft.teams2", "com.microsoft.teams", "us.zoom.xos"]);
+    expect(new Set(CALL_AUDIO_MAC_BUNDLE_IDS).size).toBe(CALL_AUDIO_MAC_BUNDLE_IDS.length);
   });
 });
 
@@ -70,7 +88,7 @@ describe("parseHelperStatus", () => {
     expect(parseHelperStatus("status=ready")).toBe("ready");
     expect(parseHelperStatus("status=failed hr=0x88890004")).toBe("failed");
     expect(parseHelperStatus("status=denied err=-3801\r")).toBe("denied");
-    expect(parseHelperStatus("status=failed tree=not-teams")).toBe("failed");
+    expect(parseHelperStatus("status=failed tree=not-target")).toBe("failed");
     expect(parseHelperStatus("  status=no-teams  ")).toBe("no-teams");
   });
 
