@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 // Developer-only diagnostic: which step of driving Microsoft Teams through agent-desktop fails on this machine.
 // Run from a repo checkout: `npm run check:teams` or `node scripts/teams-control-check.mjs [--json] [--verbose] [--keep]
 // [--skip-launch] [--timeout-ms N] [--app NAME]`. Not part of the release: electron-builder packs only out/**, resources/**
