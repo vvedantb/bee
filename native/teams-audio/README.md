@@ -34,6 +34,7 @@ Bee's side is `src/core/teams-audio-protocol.ts` (constants, parsing, framing) a
 | `--bundle-id <id>` | macOS: capture only this Teams bundle id (and its helper apps). Repeatable. A bundle id that is not Teams is a usage error. |
 | `--request-permission` | macOS: ask for Screen Recording (the system prompt shows once), print `granted` or `denied`, exit. Windows: prints `granted`. Never captures. |
 | `--version` | Print `teams-audio-helper protocol=1` to stdout and exit 0. Never opens audio, so it cannot hang (CI runs it). |
+| `--protocol` | Print the protocol constants (version, sample rate, exit codes, Teams ids, capture mode) as one JSON object to stdout and exit 0. Never opens audio. CI compares it with `src/core/teams-audio-protocol.ts` (`scripts/check-helper-protocol.mjs`). |
 | `--help` | Print usage to stdout and exit 0. |
 
 ### stdout

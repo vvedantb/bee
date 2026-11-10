@@ -65,11 +65,23 @@ func isTeams(_ bundleId: String) -> Bool {
 
 func usage(_ error: Bool) {
     let text = """
-    Usage: teams-audio-helper [--bundle-id <Teams bundle id>]… [--pid <Teams process id>] [--request-permission] [--version] [--help]
+    Usage: teams-audio-helper [--bundle-id <Teams bundle id>]… [--pid <Teams process id>] [--request-permission] [--protocol] [--version] [--help]
     Writes the Microsoft Teams app's audio alone to stdout as raw 16 kHz mono s16le PCM. Status codes go to stderr.
 
     """
     _ = text.withCString { pointer in write(error ? STDERR_FILENO : STDOUT_FILENO, pointer, strlen(pointer)) }
+}
+
+// --protocol: the protocol constants as one JSON object, so CI can compare them with core/teams-audio-protocol.ts.
+// Never opens audio. The capture fields describe the filter below: Teams apps only (including), Bee never captured.
+func printProtocol() {
+    func quoted(_ list: [String]) -> String { list.map { "\"\($0)\"" }.joined(separator: ",") }
+    let json = "{\"protocol\":\(protocolVersion),\"sampleRate\":\(sampleRate),"
+        + "\"exit\":{\"ok\":\(exitOk),\"usage\":\(exitUsage),\"unsupported\":\(exitUnsupported),"
+        + "\"denied\":\(exitDenied),\"noTeams\":\(exitNoTeams),\"failed\":\(exitFailed)},"
+        + "\"teamsBundleIds\":[\(quoted(teamsBundleIds))],\"beeBundleId\":\"\(beeBundleId)\","
+        + "\"capture\":{\"contentFilter\":\"including-apps\",\"excludesBee\":\(!isTeams(beeBundleId))}}\n"
+    _ = json.withCString { pointer in write(STDOUT_FILENO, pointer, strlen(pointer)) }
 }
 
 // ---- Arguments ----
@@ -82,6 +94,9 @@ while let argument = arguments.next() {
     switch argument {
     case "--version":
         print("teams-audio-helper protocol=\(protocolVersion)")
+        exit(exitOk)
+    case "--protocol":
+        printProtocol()
         exit(exitOk)
     case "--help":
         usage(false)
