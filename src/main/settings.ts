@@ -44,8 +44,8 @@ const fileSchema = z.object({
   sendSessionsToVmem: z.boolean().optional().catch(undefined),
   // Names Bee should know (core/known-names.ts): typed in Settings or learned from corrections and the screen. A bad value reads as none.
   knownNames: z.array(z.string()).default([]).catch([]),
-  // Teams audio fallback (core/teams-audio.ts). Off until switched on: it sends the words of
-  // people without Bee to speech-to-text. When on, it hears the Teams app alone, only when someone may not have Bee.
+  // Call audio, "Hear other people in calls" (core/teams-audio.ts; the key is from the Teams-only version). Off until switched
+  // on: it sends other people's words to speech-to-text. When on, it hears the call app alone (Teams, Zoom or the Meet browser).
   teamsAudioFallbackEnabled: z.boolean().default(false).catch(false),
   // The show/hide shortcut. A bad value reads as the default.
   toggleShortcut: acceleratorSchema.default(DEFAULT_TOGGLE_SHORTCUT).catch(DEFAULT_TOGGLE_SHORTCUT),
@@ -466,7 +466,7 @@ export function createSettingsStore(args: {
     };
   }
 
-  /** The Teams audio fallback switch, read on each status poll so Settings changes apply at once. Main only. */
+  /** The call audio switch, read on each status poll so Settings changes apply at once. Main only. */
   function teamsAudioFallback(): boolean {
     return read().teamsAudioFallbackEnabled;
   }

@@ -115,8 +115,9 @@ export const settingsViewSchema = z.object({
   logsDir: z.string(),
   // Names Bee should know (core/known-names.ts): typed here or learned from spelling corrections and chat names on screen.
   knownNames: z.array(z.string()),
-  // Teams audio fallback: with the mic on in a Teams call, hear the Teams app alone (never all
-  // system audio). Off by default; only platforms with a Teams-only capture path listen (core/teams-audio.ts).
+  // Call audio ("Hear other people in calls"; key kept from the Teams-only version): with the mic on in a call, hear the call
+  // app alone (Teams, Zoom or the Meet browser; never all system audio). Off by default; only platforms with a per-app capture
+  // path listen (core/teams-audio.ts).
   teamsAudioFallbackEnabled: z.boolean(),
   // The show/hide shortcut (core/shortcut.ts, shows or hides only), and whether Bee holds it now (false: another app does, or it could not register).
   toggleShortcut: z.string().max(100),
@@ -395,18 +396,19 @@ export const meetingWindowCaptionsSchema = z.object({
 });
 export type MeetingWindowCaptions = z.infer<typeof meetingWindowCaptionsSchema>;
 
-// Teams audio fallback (core/teams-audio.ts, main/teams-audio.ts). Codes only: never names, titles, audio or words. The
+// Call audio (core/teams-audio.ts, main/teams-audio.ts). Codes only: never names, titles, audio or words. The
 // renderer decides when to listen (store.ts teamsAudioPlan); main runs the helper, speech-to-text and sends back lines.
 export const teamsAudioStatusRequestSchema = z.object({ sessionToken: z.string().max(8000) });
 export const teamsAudioStatusSchema = z.object({
   platform: z.enum(["windows", "mac", "linux", "other"]),
-  // This build can capture the Teams app's audio alone here. Bee never captures all system audio instead.
+  // This build can capture one app's audio alone here (the call app). Bee never captures all system audio instead.
   supported: z.boolean(),
-  // Why not: unsupported-platform (Linux and others), needs-app-audio (no Teams-only path in this build), os-too-old (below
+  // Why not: unsupported-platform (Linux and others), needs-app-audio (no per-app path in this build), os-too-old (below
   // the helper's floor: Windows 10 2004, macOS 13), helper-missing (the native helper is not installed).
   reason: z.enum(["unsupported-platform", "needs-app-audio", "os-too-old", "helper-missing"]).nullable(),
-  // A Teams call now: the built-in Windows detector, the meeting window reader on a Teams call, or a simulated Teams meeting.
-  teamsCall: z.boolean(),
+  // The call Bee can hear now, by app: the meeting window reader's call (Teams, Zoom, or Google Meet in a browser Bee knows), or
+  // the built-in Windows Teams detector. Null: no call, or one Bee cannot hear alone. Process names and ids stay in main.
+  call: z.enum(["teams", "zoom", "meet"]).nullable(),
   // macOS Screen Recording for the helper, as the last capture found it. not-needed on Windows and elsewhere. unknown until
   // the first capture; denied stays until a capture starts or the user asks for access again.
   permission: z.enum(["not-needed", "unknown", "granted", "denied"]),
@@ -422,7 +424,7 @@ export const teamsAudioStartResultSchema = z.discriminatedUnion("ok", [
   z.object({ ok: z.literal(false), failure: teamsAudioFailureSchema }),
 ]);
 export type TeamsAudioStartResult = z.infer<typeof teamsAudioStartResultSchema>;
-// Main → renderer: phrases heard in the Teams app, as text. The renderer adds them as "Meeting" lines. Never shared or
+// Main → renderer: phrases heard in the call app, as text. The renderer adds them as "Meeting" lines. Never shared or
 // in console output; the local debug log keeps them.
 export const TEAMS_AUDIO_LINE_MAX = 2000;
 export const teamsAudioLinesSchema = z.object({
@@ -430,8 +432,8 @@ export const teamsAudioLinesSchema = z.object({
   lines: z.array(z.string().min(1).max(TEAMS_AUDIO_LINE_MAX)).min(1).max(10),
 });
 export type TeamsAudioLines = z.infer<typeof teamsAudioLinesSchema>;
-// Main → renderer: a capture stopped by itself. failure null: main stopped it (the call ended, everyone has Bee, the renderer
-// went quiet); otherwise why it failed.
+// Main → renderer: a capture stopped by itself. failure null: main stopped it (the call ended, the call app changed, the
+// renderer went quiet); otherwise why it failed.
 export const teamsAudioEndedSchema = z.object({ id: z.number().int().positive(), failure: teamsAudioFailureSchema.nullable() });
 export type TeamsAudioEnded = z.infer<typeof teamsAudioEndedSchema>;
 

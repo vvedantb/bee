@@ -62,9 +62,9 @@ export function MeetingSection({
   reader?: MeetingWindowStatus;
   /** macOS: opens Privacy & Security → Accessibility. */
   onOpenAccessibility?: () => void;
-  /** The Teams audio fallback's state, from the store. */
+  /** Call audio's state, from the store. */
   teamsAudio?: TeamsAudioView;
-  /** macOS: asks for Screen Recording for the Teams audio helper and opens its pane. */
+  /** macOS: asks for Screen Recording for the call audio helper and opens its pane. */
   onOpenScreenRecording?: () => void;
 }) {
   const label = summaryLabel(summary, settings?.autoMeetingDetection === true);
@@ -109,9 +109,9 @@ export function MeetingSection({
           />
           <SettingRow
             id="teams-audio-fallback"
-            label="Hear Teams when not everyone has Bee"
-            description="Teams audio only."
-            info="With your mic on in a Teams call, Bee hears the Teams app only, never all system audio."
+            label="Hear other people in calls"
+            description="Call audio only."
+            info="With your mic on in a call, Bee hears the call app only (Teams, Zoom, or the browser running Google Meet), never all system audio."
             checked={audioOn}
             onCheckedChange={(teamsAudioFallbackEnabled) => onChange({ teamsAudioFallbackEnabled })}
           />

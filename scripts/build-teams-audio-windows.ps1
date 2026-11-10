@@ -20,5 +20,5 @@ if (-not (Test-Path $exe)) { throw "Teams audio helper missing: $exe" }
 
 # --version prints and exits at once: it never opens audio, so it cannot hang.
 $version = & $exe --version
-if ($LASTEXITCODE -ne 0 -or "$version" -notmatch "^teams-audio-helper protocol=1$") { throw "Teams audio helper --version failed: $version" }
+if ($LASTEXITCODE -ne 0 -or "$version" -notmatch "^teams-audio-helper protocol=2$") { throw "Teams audio helper --version failed: $version" }
 Write-Host "Built $exe ($((Get-Item $exe).Length) bytes): $version"

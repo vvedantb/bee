@@ -1,15 +1,17 @@
-// Bee Teams audio helper for macOS. Hears the Microsoft Teams app alone, never all system audio and never the screen, and
-// writes it to stdout as raw 16 kHz mono signed 16-bit little-endian PCM. Protocol: native/teams-audio/README.md.
+// Bee call audio helper for macOS. Hears one call app alone (Teams by default; Zoom or a browser running Google Meet when Bee
+// names it with --bundle-id), never all system audio and never the screen, and writes it to stdout as raw 16 kHz mono signed
+// 16-bit little-endian PCM. Protocol: native/teams-audio/README.md.
 //
-// How: ScreenCaptureKit with an SCContentFilter that includes only the Teams apps (new Teams com.microsoft.teams2, classic
-// com.microsoft.teams, and their helper apps "<id>.…"), audio on. ScreenCaptureKit needs a video stream as well: it is 2 × 2
-// pixels at one frame a second, and every frame is dropped unread. Bee (app.bee.desktop) is never included.
+// How: ScreenCaptureKit with an SCContentFilter that includes only the target apps (by default new Teams com.microsoft.teams2,
+// classic com.microsoft.teams, and their helper apps "<id>.…"), audio on. --bundle-id accepts call apps only (targetBundleIds):
+// never a music or video app. ScreenCaptureKit needs a video stream as well: it is 2 × 2 pixels at one frame a second, and
+// every frame is dropped unread. Bee (app.bee.desktop) is never included.
 //
 // Floor: macOS 13 (ScreenCaptureKit audio). Permission: Screen Recording ("Screen & System Audio Recording" on macOS 15),
 // granted to Bee, which starts this helper. The helper never prompts unless run with --request-permission.
 //
 // stderr carries status codes only (`status=<code>`, maybe ` err=<n>`): never audio, names or titles. Exit codes: 0 clean
-// stop, 2 usage, 3 unsupported, 4 denied, 5 no Teams, 6 failed.
+// stop, 2 usage, 3 unsupported, 4 denied, 5 target app not running ("no-teams", the code's old name), 6 failed.
 
 import AVFoundation
 import CoreGraphics
@@ -17,7 +19,7 @@ import CoreMedia
 import Foundation
 import ScreenCaptureKit
 
-let protocolVersion = 1
+let protocolVersion = 2
 let exitOk: Int32 = 0
 let exitUsage: Int32 = 2
 let exitUnsupported: Int32 = 3
@@ -26,10 +28,17 @@ let exitNoTeams: Int32 = 5
 let exitFailed: Int32 = 6
 
 let sampleRate = 16_000
-// Teams desktop apps by bundle id. Their helper apps ("com.microsoft.teams2.helper") are Teams too.
+// Teams desktop apps by bundle id: the default target. Their helper apps ("com.microsoft.teams2.helper") are Teams too.
 let teamsBundleIds = ["com.microsoft.teams2", "com.microsoft.teams"]
+// Every bundle id --bundle-id accepts: Teams, Zoom and the browsers that may run a Google Meet call (Safari is not one: WebKit
+// plays sound from shared system processes). Same list and order as src/core/teams-audio-protocol.ts CALL_AUDIO_MAC_BUNDLE_IDS
+// (CI compares --protocol).
+let targetBundleIds = teamsBundleIds + [
+    "us.zoom.xos", "com.google.chrome", "org.chromium.chromium", "com.microsoft.edgemac", "com.brave.browser",
+    "company.thebrowser.browser", "org.mozilla.firefox", "com.vivaldi.vivaldi", "com.operasoftware.opera",
+]
 let beeBundleId = "app.bee.desktop"
-// How often the helper checks Teams is still running and follows Teams apps that started or quit.
+// How often the helper checks the target is still running and follows its apps that started or quit.
 let watchSeconds = 5.0
 
 func status(_ code: String, _ extra: String? = nil) {
@@ -57,30 +66,34 @@ func writeAll(_ pointer: UnsafeRawPointer, _ count: Int) -> Bool {
     return true
 }
 
-func isTeams(_ bundleId: String) -> Bool {
+/** Whether a bundle id is one of these apps or one of their helper apps ("<id>.…"). Never Bee. */
+func matches(_ bundleId: String, _ allowed: [String]) -> Bool {
     let id = bundleId.lowercased()
     if id == beeBundleId || id.hasPrefix(beeBundleId + ".") { return false }
-    return teamsBundleIds.contains { id == $0 || id.hasPrefix($0 + ".") }
+    return allowed.contains { id == $0 || id.hasPrefix($0 + ".") }
 }
 
 func usage(_ error: Bool) {
     let text = """
-    Usage: teams-audio-helper [--bundle-id <Teams bundle id>]… [--pid <Teams process id>] [--request-permission] [--protocol] [--version] [--help]
-    Writes the Microsoft Teams app's audio alone to stdout as raw 16 kHz mono s16le PCM. Status codes go to stderr.
+    Usage: teams-audio-helper [--bundle-id <call app bundle id>]… [--pid <process id>] [--request-permission] [--protocol] [--version] [--help]
+    Writes one call app's audio alone (Microsoft Teams unless --bundle-id names Zoom or a browser) to stdout as raw 16 kHz
+    mono s16le PCM. Status codes go to stderr.
 
     """
     _ = text.withCString { pointer in write(error ? STDERR_FILENO : STDOUT_FILENO, pointer, strlen(pointer)) }
 }
 
 // --protocol: the protocol constants as one JSON object, so CI can compare them with core/teams-audio-protocol.ts.
-// Never opens audio. The capture fields describe the filter below: Teams apps only (including), Bee never captured.
+// Never opens audio. The capture fields describe the filter below: the target apps only (including), Bee never captured.
 func printProtocol() {
     func quoted(_ list: [String]) -> String { list.map { "\"\($0)\"" }.joined(separator: ",") }
-    let json = "{\"protocol\":\(protocolVersion),\"sampleRate\":\(sampleRate),"
-        + "\"exit\":{\"ok\":\(exitOk),\"usage\":\(exitUsage),\"unsupported\":\(exitUnsupported),"
-        + "\"denied\":\(exitDenied),\"noTeams\":\(exitNoTeams),\"failed\":\(exitFailed)},"
-        + "\"teamsBundleIds\":[\(quoted(teamsBundleIds))],\"beeBundleId\":\"\(beeBundleId)\","
-        + "\"capture\":{\"contentFilter\":\"including-apps\",\"excludesBee\":\(!isTeams(beeBundleId))}}\n"
+    // One += per part: a long chain of + is slow for the Swift type checker.
+    var json = "{\"protocol\":\(protocolVersion),\"sampleRate\":\(sampleRate),"
+    json += "\"exit\":{\"ok\":\(exitOk),\"usage\":\(exitUsage),\"unsupported\":\(exitUnsupported),"
+    json += "\"denied\":\(exitDenied),\"noTeams\":\(exitNoTeams),\"failed\":\(exitFailed)},"
+    json += "\"teamsBundleIds\":[\(quoted(teamsBundleIds))],\"targetBundleIds\":[\(quoted(targetBundleIds))],"
+    json += "\"beeBundleId\":\"\(beeBundleId)\","
+    json += "\"capture\":{\"contentFilter\":\"including-apps\",\"excludesBee\":\(!matches(beeBundleId, targetBundleIds))}}\n"
     _ = json.withCString { pointer in write(STDOUT_FILENO, pointer, strlen(pointer)) }
 }
 
@@ -104,8 +117,8 @@ while let argument = arguments.next() {
     case "--request-permission":
         requestPermission = true
     case "--bundle-id":
-        // An id from Bee must still be Teams: the helper never hears anything else.
-        guard let id = arguments.next(), isTeams(id) else {
+        // Call apps only: an id outside targetBundleIds is a usage error, so Bee can never point the helper elsewhere.
+        guard let id = arguments.next(), matches(id, targetBundleIds) else {
             usage(true)
             exit(exitUsage)
         }
@@ -149,14 +162,14 @@ func failure(_ error: Error) -> Never {
     finish("failed", exitFailed, "err=\(code)")
 }
 
-/** The Teams apps to hear: by bundle id (Bee's overrides, or every Teams id), and by process id if Bee named one. */
-func teamsApps(_ content: SCShareableContent) -> [SCRunningApplication] {
+/** The apps to hear: by bundle id (Bee's, or every Teams id), and by process id if Bee named one. */
+func targetApps(_ content: SCShareableContent) -> [SCRunningApplication] {
+    let wanted = bundleIds.isEmpty ? teamsBundleIds : bundleIds
     return content.applications.filter { app in
         let id = app.bundleIdentifier.lowercased()
-        guard isTeams(id), app.processID != getpid() else { return false }
-        if !bundleIds.isEmpty && !bundleIds.contains(where: { id == $0 || id.hasPrefix($0 + ".") }) { return false }
-        // A process id from Bee narrows it to that Teams app; its helper apps stay in.
-        if let pid = requestedPid, app.processID != pid, !teamsBundleIds.contains(where: { id.hasPrefix($0 + ".") }) { return false }
+        guard matches(id, wanted), app.processID != getpid() else { return false }
+        // A process id from Bee narrows it to that app; its helper apps stay in.
+        if let pid = requestedPid, app.processID != pid, !wanted.contains(where: { id.hasPrefix($0 + ".") }) { return false }
         return true
     }
 }
@@ -178,7 +191,7 @@ final class Capture: NSObject, SCStreamOutput, SCStreamDelegate {
             DispatchQueue.main.async {
                 if let error = error { failure(error) }
                 guard let content = content else { finish("failed", exitFailed, "content=0") }
-                let apps = teamsApps(content)
+                let apps = targetApps(content)
                 if apps.isEmpty { finish("no-teams", exitNoTeams) }
                 guard let display = content.displays.first else { finish("failed", exitFailed, "display=0") }
                 self.open(display: display, apps: apps)
@@ -201,7 +214,7 @@ final class Capture: NSObject, SCStreamOutput, SCStreamDelegate {
     }
 
     private func open(display: SCDisplay, apps: [SCRunningApplication]) {
-        // Only the Teams apps: ScreenCaptureKit captures the audio of the apps a filter includes, and nothing else.
+        // Only the target apps: ScreenCaptureKit captures the audio of the apps a filter includes, and nothing else.
         let filter = SCContentFilter(display: display, including: apps, exceptingWindows: [])
         let stream = SCStream(filter: filter, configuration: configuration(), delegate: self)
         do {
@@ -221,7 +234,7 @@ final class Capture: NSObject, SCStreamOutput, SCStreamDelegate {
         }
     }
 
-    /** Every few seconds: stop if Teams quit; follow Teams helper apps that started or quit. */
+    /** Every few seconds: stop if the target quit; follow its helper apps that started or quit. */
     private func watch(display: SCDisplay) {
         DispatchQueue.main.asyncAfter(deadline: .now() + watchSeconds) {
             if self.stopping { return }
@@ -231,7 +244,7 @@ final class Capture: NSObject, SCStreamOutput, SCStreamDelegate {
                         self.watch(display: display)
                         return
                     }
-                    let apps = teamsApps(content)
+                    let apps = targetApps(content)
                     if apps.isEmpty {
                         self.stop(code: "no-teams", exitCode: exitNoTeams)
                         return

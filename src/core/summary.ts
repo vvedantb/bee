@@ -21,7 +21,7 @@ export const SUMMARY_SYSTEM = [
   "No title, no preamble, no closing remarks.",
 ].join("\n");
 
-// Added to the system prompt when the transcript is speaker-labelled (captions or Teams audio).
+// Added to the system prompt when the transcript is speaker-labelled (captions or call audio).
 export const SPEAKER_RULES = [
   "Each transcript line starts with the speaker's name and a colon.",
   "Use the names to attribute decisions and action items. When a speaker commits to a task (\"I'll send it\"), that speaker is the owner.",

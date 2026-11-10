@@ -402,7 +402,7 @@ if (clerk.isPrimaryInstance) {
     });
 
     // getDisplayMedia is always refused. Its only audio here is 'loopback' (all system audio), which Bee never captures; the
-    // Teams audio fallback uses the native helper instead (main/teams-audio-capture.ts, ARCHITECTURE.md). The mic is unaffected.
+    // call audio uses the native helper instead (main/teams-audio-capture.ts, ARCHITECTURE.md). The mic is unaffected.
     session.defaultSession.setDisplayMediaRequestHandler((_request, callback) => callback({}));
 
     // Meeting window reader: always on. agent-desktop, read-only and headless. Missing binary, no permission or any failure leaves
@@ -590,9 +590,9 @@ if (clerk.isPrimaryInstance) {
       meetingActive: () => autoOverlay,
     });
 
-    // Teams audio fallback: the native helper hears the Teams app alone (process loopback on Windows, ScreenCaptureKit on
-    // macOS); main reads its PCM, runs speech-to-text and sends text lines to the renderer. Status carries codes only; names
-    // stay here. A missing helper, an old OS or a denied permission reads as not available, and the mic carries on.
+    // Call audio: the native helper hears the call app alone (Teams, Zoom, or the browser running Google Meet; process loopback
+    // on Windows, ScreenCaptureKit on macOS); main reads its PCM, runs speech-to-text and sends text lines to the renderer.
+    // Status carries codes only; process names and ids stay here. A missing helper, an old OS or a denied permission reads as not available, and the mic carries on.
     const teamsAudioHelper = resolveTeamsAudioHelper({ packaged: app.isPackaged, resourcesPath: process.resourcesPath, appPath: app.getAppPath() });
     const sendToOverlay = (channel: string, payload: unknown): void => {
       if (win && !win.isDestroyed()) win.webContents.send(channel, payload);

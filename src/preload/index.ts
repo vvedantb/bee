@@ -320,7 +320,7 @@ const api = {
       z.void().parse(await ipcRenderer.invoke(IPC.openAccessibilitySettings));
     },
   },
-  // Teams audio fallback: platform support, and a Teams call, as codes. The renderer decides to listen; main runs the
+  // Call audio: platform support, and the call's app, as codes. The renderer decides to listen; main runs the
   // helper and speech-to-text, and sends back text lines only (never audio).
   teamsAudio: {
     status: async (sessionToken: string) => teamsAudioStatusSchema.parse(await ipcRenderer.invoke(IPC.teamsAudioStatus, { sessionToken })),

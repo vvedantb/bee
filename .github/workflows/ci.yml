@@ -54,7 +54,7 @@ jobs:
           $helper = "release/win-unpacked/resources/teams-audio/teams-audio-helper.exe"
           if (-not (Test-Path $helper)) { throw "Teams audio helper not packaged: $helper" }
           $version = & $helper --version
-          if ($LASTEXITCODE -ne 0 -or "$version" -ne "teams-audio-helper protocol=1") { throw "Packaged Teams audio helper --version failed: $version" }
+          if ($LASTEXITCODE -ne 0 -or "$version" -ne "teams-audio-helper protocol=2") { throw "Packaged Teams audio helper --version failed: $version" }
       - name: Check packaged koffi (asarUnpack + win32 binary + AllowSetForegroundWindow bind)
         run: node scripts/check-koffi-windows.mjs release/win-unpacked
 
@@ -103,7 +103,7 @@ jobs:
           check release/mac-arm64/Bee.app arm64
           check release/mac/Bee.app x86_64
           version="$(release/mac-arm64/Bee.app/Contents/Resources/teams-audio/teams-audio-helper --version)"
-          [ "$version" = "teams-audio-helper protocol=1" ] || { echo "Packaged Teams audio helper --version failed: $version"; exit 1; }
+          [ "$version" = "teams-audio-helper protocol=2" ] || { echo "Packaged Teams audio helper --version failed: $version"; exit 1; }
       - name: Smoke test packaged app
         run: |
           # macOS has no timeout command: kill the app after 30 s.

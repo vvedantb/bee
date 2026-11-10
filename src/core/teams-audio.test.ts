@@ -1,10 +1,15 @@
 import { describe, expect, it } from "vitest";
 import type { SessionLine } from "./session-lines";
 import {
+  CALL_AUDIO_MIC_ECHO_MS,
   TEAMS_AUDIO_ECHO_MS,
   TEAMS_AUDIO_SPEAKER,
   TEAMS_AUDIO_SPEAKER_ID,
   TEAMS_APP_AUDIO,
+  callAudioHelperArgs,
+  callAudioTarget,
+  micEchoesCallAudio,
+  sameCallAudioTarget,
   teamsAudioEcho,
   teamsAudioOsSupported,
   teamsAudioPlan,
@@ -69,17 +74,17 @@ describe("teamsAudioSupport", () => {
 });
 
 describe("teamsAudioPlan", () => {
-  const ready = { enabled: true, supported: true, teamsCall: true, micOn: true };
+  const ready = { enabled: true, supported: true, inCall: true, micOn: true };
 
-  // Client sync is gone, so no call is ever covered by a teammate's Bee: a Teams call with the mic on always listens.
-  it("listens in a Teams call with the mic on, with no sync or coverage to ask", () => {
+  // Client sync is gone, so no call is ever covered by a teammate's Bee: a call with the mic on always listens.
+  it("listens in a call with the mic on, with no sync or coverage to ask", () => {
     expect(teamsAudioPlan(ready)).toBe("listen");
   });
 
-  it("does not listen when off, unsupported, outside a Teams call or with the mic off", () => {
+  it("does not listen when off, unsupported, outside a call or with the mic off", () => {
     expect(teamsAudioPlan({ ...ready, enabled: false })).toBe("off");
     expect(teamsAudioPlan({ ...ready, supported: false })).toBe("unavailable");
-    expect(teamsAudioPlan({ ...ready, teamsCall: false })).toBe("waiting");
+    expect(teamsAudioPlan({ ...ready, inCall: false })).toBe("waiting");
     expect(teamsAudioPlan({ ...ready, micOn: false })).toBe("waiting");
   });
 
@@ -88,20 +93,93 @@ describe("teamsAudioPlan", () => {
   });
 });
 
-describe("teamsAudioEcho", () => {
-  it("drops a phrase that repeats the user's own recent line", () => {
-    const lines = [own("l1", "we can offer fifteen percent off this quarter", NOW - 5000)];
-    expect(teamsAudioEcho("We can offer fifteen percent off this quarter.", lines, NOW)).toBe(true);
+describe("callAudioTarget", () => {
+  const window = (app: "teams" | "zoom" | "meet", appName: string, patch: { pid?: number | null; bundleId?: string | null } = {}) => ({
+    app,
+    appName,
+    pid: patch.pid ?? null,
+    bundleId: patch.bundleId ?? null,
   });
 
+  it("hears the Teams app for a Teams call, from the reader or the built-in Windows detector", () => {
+    const teams = { kind: "teams", processes: ["ms-teams.exe", "teams.exe"], bundleIds: ["com.microsoft.teams2", "com.microsoft.teams"], pid: null };
+    expect(callAudioTarget({ window: window("teams", "Microsoft Teams", { pid: 42 }), teamsDetector: false })).toEqual(teams);
+    expect(callAudioTarget({ window: null, teamsDetector: true })).toEqual(teams);
+  });
+
+  it("hears the Zoom app for a Zoom call", () => {
+    expect(callAudioTarget({ window: window("zoom", "zoom.us", { pid: 7, bundleId: "us.zoom.xos" }), teamsDetector: false })).toEqual({
+      kind: "zoom",
+      processes: ["zoom.exe"],
+      bundleIds: ["us.zoom.xos"],
+      pid: null,
+    });
+  });
+
+  it("hears the browser that owns a Meet window, by bundle id or by name, with the window's process", () => {
+    expect(callAudioTarget({ window: window("meet", "Google Chrome", { pid: 900, bundleId: "com.google.Chrome" }), teamsDetector: false })).toEqual({
+      kind: "meet",
+      processes: ["chrome.exe"],
+      bundleIds: ["com.google.chrome"],
+      pid: 900,
+    });
+    // A channel build counts as its browser.
+    expect(callAudioTarget({ window: window("meet", "Google Chrome Beta", { bundleId: "com.google.Chrome.beta" }), teamsDetector: false })?.bundleIds).toEqual(["com.google.chrome"]);
+    // Windows: agent-desktop names the process; no bundle id.
+    expect(callAudioTarget({ window: window("meet", "msedge.exe", { pid: 31 }), teamsDetector: false })).toEqual({ kind: "meet", processes: ["msedge.exe"], bundleIds: ["com.microsoft.edgemac"], pid: 31 });
+    expect(callAudioTarget({ window: window("meet", "Firefox"), teamsDetector: false })?.processes).toEqual(["firefox.exe"]);
+    expect(callAudioTarget({ window: window("meet", "Arc", { bundleId: "company.thebrowser.Browser" }), teamsDetector: false })?.processes).toEqual(["arc.exe"]);
+  });
+
+  it("hears nothing for Meet in Safari or an unknown browser, never the whole system; the Teams detector still counts", () => {
+    expect(callAudioTarget({ window: window("meet", "Safari", { bundleId: "com.apple.Safari" }), teamsDetector: false })).toBeNull();
+    // A Safari bundle id is never guessed from a name that looks like Chrome.
+    expect(callAudioTarget({ window: window("meet", "Google Chrome", { bundleId: "com.apple.Safari" }), teamsDetector: false })).toBeNull();
+    expect(callAudioTarget({ window: window("meet", "Some Browser"), teamsDetector: false })).toBeNull();
+    expect(callAudioTarget({ window: window("meet", "Safari"), teamsDetector: true })?.kind).toBe("teams");
+    expect(callAudioTarget({ window: null, teamsDetector: false })).toBeNull();
+  });
+
+  it("tells a different app or process apart from the same one", () => {
+    const zoom = callAudioTarget({ window: window("zoom", "Zoom"), teamsDetector: false });
+    const teams = callAudioTarget({ window: null, teamsDetector: true });
+    const chrome = (pid: number) => callAudioTarget({ window: window("meet", "chrome", { pid }), teamsDetector: false });
+    expect(sameCallAudioTarget(zoom, callAudioTarget({ window: window("zoom", "zoom.us"), teamsDetector: false }))).toBe(true);
+    expect(sameCallAudioTarget(zoom, teams)).toBe(false);
+    expect(sameCallAudioTarget(chrome(1), chrome(1))).toBe(true);
+    expect(sameCallAudioTarget(chrome(1), chrome(2))).toBe(false);
+    expect(sameCallAudioTarget(null, null)).toBe(true);
+    expect(sameCallAudioTarget(zoom, null)).toBe(false);
+  });
+});
+
+describe("callAudioHelperArgs", () => {
+  it("names the target to the helper: --image and --pid on Windows, --bundle-id on macOS, nothing elsewhere", () => {
+    const meet = { kind: "meet" as const, processes: ["chrome.exe"], bundleIds: ["com.google.chrome"], pid: 900 };
+    expect(callAudioHelperArgs(meet, "windows")).toEqual(["--image", "chrome.exe", "--pid", "900"]);
+    expect(callAudioHelperArgs(meet, "mac")).toEqual(["--bundle-id", "com.google.chrome"]);
+    expect(callAudioHelperArgs({ ...meet, pid: null }, "windows")).toEqual(["--image", "chrome.exe"]);
+    expect(callAudioHelperArgs(meet, "linux")).toEqual([]);
+    const teams = callAudioTarget({ window: null, teamsDetector: true });
+    expect(teams && callAudioHelperArgs(teams, "windows")).toEqual(["--image", "ms-teams.exe", "--image", "teams.exe"]);
+    expect(teams && callAudioHelperArgs(teams, "mac")).toEqual(["--bundle-id", "com.microsoft.teams2", "--bundle-id", "com.microsoft.teams"]);
+  });
+});
+
+describe("teamsAudioEcho", () => {
   it("drops a phrase that repeats a teammate's Bee line or a caption", () => {
     expect(teamsAudioEcho("Does that include the support plan?", [line("r:1", "does that include the support plan", { clientTs: NOW - 3000 })], NOW)).toBe(true);
     expect(teamsAudioEcho("When does SSO ship for enterprise?", [caption("c1", "When does SSO ship for enterprise customers?", NOW - 2000)], NOW)).toBe(true);
   });
 
-  it("keeps new speech, old repeats and repeats of earlier Teams-audio lines", () => {
+  it("keeps a phrase that repeats the user's own line: that mic line was the echo (teamsAudioReplaced swaps it)", () => {
+    const lines = [own("l1", "we can offer fifteen percent off this quarter", NOW - 5000)];
+    expect(teamsAudioEcho("We can offer fifteen percent off this quarter.", lines, NOW)).toBe(false);
+  });
+
+  it("keeps new speech, old repeats and repeats of earlier call-audio lines", () => {
     const lines = [
-      own("l1", "we can offer fifteen percent off this quarter", NOW - TEAMS_AUDIO_ECHO_MS - 1),
+      caption("c1", "we can offer fifteen percent off this quarter", NOW - TEAMS_AUDIO_ECHO_MS - 1),
       line("r:1", "let's look at the roadmap", { clientTs: NOW - 1000 }),
       heard("t1", "yes that works for us", NOW - 1000),
     ];
@@ -111,8 +189,23 @@ describe("teamsAudioEcho", () => {
   });
 });
 
+describe("micEchoesCallAudio", () => {
+  it("drops a mic phrase that repeats a call-audio line from the last 10 s (the speakers)", () => {
+    const lines = [heard("t1", "can you send the contract today", NOW - 3000)];
+    expect(micEchoesCallAudio("Can you send the contract today?", lines, NOW)).toBe(true);
+    expect(micEchoesCallAudio("can you send the contract", lines, NOW)).toBe(true);
+  });
+
+  it("keeps the user's own words, old call-audio repeats, and repeats of captions or own lines", () => {
+    expect(micEchoesCallAudio("Yes, I will send it after lunch.", [heard("t1", "can you send the contract today", NOW - 1000)], NOW)).toBe(false);
+    expect(micEchoesCallAudio("Can you send the contract today?", [heard("t1", "can you send the contract today", NOW - CALL_AUDIO_MIC_ECHO_MS)], NOW)).toBe(false);
+    expect(micEchoesCallAudio("Can you send the contract today?", [caption("c1", "can you send the contract today", NOW - 1000)], NOW)).toBe(false);
+    expect(micEchoesCallAudio("Can you send the contract today?", [own("l1", "can you send the contract today", NOW - 1000)], NOW)).toBe(false);
+  });
+});
+
 describe("teamsAudioReplaced", () => {
-  it("replaces a Teams-audio line with a later teammate or caption line that has the same words", () => {
+  it("replaces a call-audio line with a later teammate or caption line that has the same words", () => {
     const lines = [own("l1", "hello"), heard("t1", "does that include the support plan", NOW - 4000), heard("t2", "great thanks", NOW - 1000)];
     const incoming = [line("r:7", "Does that include the support plan?", { clientTs: NOW - 4500 }), caption("c3", "Great, thanks.", NOW)];
     expect(teamsAudioReplaced(lines, incoming)).toEqual([
@@ -121,7 +214,14 @@ describe("teamsAudioReplaced", () => {
     ]);
   });
 
-  it("leaves Teams-audio lines alone for own lines, other words, other Teams-audio lines or far-apart times", () => {
+  it("replaces the user's recent mic line with a later call-audio line with the same words: the mic heard the speakers", () => {
+    const lines = [own("l1", "can you send the contract today", NOW - 2000), own("l2", "sure I can do that", NOW - 1000)];
+    expect(teamsAudioReplaced(lines, [heard("t9", "Can you send the contract today?", NOW)])).toEqual([{ id: "l1", by: "t9" }]);
+    // Too far apart: two separate things said.
+    expect(teamsAudioReplaced([own("l1", "can you send the contract today", NOW - CALL_AUDIO_MIC_ECHO_MS)], [heard("t9", "Can you send the contract today?", NOW)])).toEqual([]);
+  });
+
+  it("leaves call-audio lines alone for own lines, other words, other call-audio lines or far-apart times", () => {
     const lines = [heard("t1", "does that include the support plan", NOW)];
     expect(teamsAudioReplaced(lines, [own("l2", "does that include the support plan")])).toEqual([]);
     expect(teamsAudioReplaced(lines, [line("r:1", "what about pricing for next year")])).toEqual([]);

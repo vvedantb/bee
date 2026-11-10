@@ -70,6 +70,8 @@ export type MeetingWindowReader = {
   /** The call's name and people for retrieval and the brief. Null when off or no call window is read. */
   context: () => MeetingWindowContext | null;
   status: () => MeetingWindowStatus;
+  /** The call window Bee reads (app, process and bundle id), for call audio. Main only: never sent to the renderer. */
+  call: () => MeetingWindow | null;
   /** Stops reading and forgets everything (quit). */
   stop: () => void;
 };
@@ -368,6 +370,10 @@ export function createMeetingWindowReader(deps: {
       if (!deps.enabled()) return { state: "off", app: null, captions: false };
       const meeting = state === "ready" ? current() : null;
       return { state: state === "off" ? "starting" : state, app: meeting?.app ?? null, captions: meeting !== null && target?.windowId === meeting.windowId && captionsVisible };
+    },
+    call() {
+      if (!deps.enabled() || state !== "ready") return null;
+      return current();
     },
     stop() {
       reset();
