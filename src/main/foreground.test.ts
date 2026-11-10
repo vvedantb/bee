@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { ASFW_ANY, allowAnyForeground } from "./foreground";
+import { ASFW_ANY, ASFW_SIGNATURE, allowAnyForeground, loadAllowSetForegroundWindow, loadUser32 } from "./foreground";
 
 describe("allowAnyForeground", () => {
   it("calls AllowSetForegroundWindow in process with ASFW_ANY on Windows only", () => {
@@ -22,5 +22,12 @@ describe("allowAnyForeground", () => {
     expect(allowAnyForeground("win32", () => () => 0)).toBe(false);
     expect(allowAnyForeground("win32", () => { throw new Error("Cannot find module 'koffi'"); })).toBe(false);
     expect(allowAnyForeground("win32", () => () => { throw new Error("user32 call failed"); })).toBe(false);
+  });
+
+  it("exports the loader for CI and never loads it off Windows", () => {
+    expect(loadAllowSetForegroundWindow).toBe(loadUser32);
+    expect(ASFW_SIGNATURE).toContain("AllowSetForegroundWindow");
+    expect(allowAnyForeground("linux")).toBe(false);
+    expect(allowAnyForeground("darwin")).toBe(false);
   });
 });

@@ -18,15 +18,21 @@ type Loader = () => AllowSetForegroundWindow;
 
 let cached: AllowSetForegroundWindow | undefined;
 
-function loadUser32(): AllowSetForegroundWindow {
+/** Same signature as scripts/check-koffi-windows.mjs; CI binds it from the packaged tree. */
+export const ASFW_SIGNATURE = "bool __stdcall AllowSetForegroundWindow(uint32 dwProcessId)";
+
+/** Resolves the koffi binding without calling it. Throws when koffi or user32.dll cannot load (CI asserts this on Windows). */
+export function loadUser32(): AllowSetForegroundWindow {
   if (cached) return cached;
   // Lazy require keeps koffi out of startup and off non-Windows platforms.
   const koffi = createRequire(import.meta.url)("koffi") as {
     load(path: string): { func(signature: string): AllowSetForegroundWindow };
   };
-  cached = koffi.load("user32.dll").func("bool __stdcall AllowSetForegroundWindow(uint32 dwProcessId)");
+  cached = koffi.load("user32.dll").func(ASFW_SIGNATURE);
   return cached;
 }
+
+export const loadAllowSetForegroundWindow: Loader = loadUser32;
 
 /**
  * Lets any process take the foreground for the next few seconds (Windows only; a no-op elsewhere). Fails soft: a log line and
