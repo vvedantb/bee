@@ -18,7 +18,8 @@ import {
   lunaActivitySchema,
   lunaPartialSchema,
   meetingSummaryRequestSchema,
-  windowRequestSchema,
+  windowInteractiveSchema,
+  windowSizeSchema,
   memoryClearResultSchema,
   memoryFactViewSchema,
   memoryListResultSchema,
@@ -169,15 +170,14 @@ describe("Saved memory schemas", () => {
   });
 });
 
-describe("windowRequestSchema", () => {
-  it("takes a mode and a whole-pixel pill width", () => {
-    expect(windowRequestSchema.parse({ size: "collapsed", width: 296 })).toEqual({ size: "collapsed", width: 296 });
-    expect(windowRequestSchema.parse({ size: "response", width: 472 })).toEqual({ size: "response", width: 472 });
+describe("window IPC", () => {
+  it("sizes the window by mode alone: the renderer sends no width", () => {
+    expect(windowSizeSchema.parse("collapsed")).toBe("collapsed");
+    for (const bad of [{ size: "collapsed", width: 296 }, "huge"]) expect(windowSizeSchema.safeParse(bad).success).toBe(false);
   });
 
-  it("rejects a bare mode, an unknown mode, and a fractional, negative or missing width", () => {
-    for (const bad of ["collapsed", { size: "huge", width: 300 }, { size: "collapsed", width: 300.5 }, { size: "collapsed", width: -8 }, { size: "collapsed" }]) {
-      expect(windowRequestSchema.safeParse(bad).success).toBe(false);
-    }
+  it("takes only a boolean for the click-through switch", () => {
+    expect(windowInteractiveSchema.parse(true)).toBe(true);
+    for (const bad of ["true", 1, null, undefined]) expect(windowInteractiveSchema.safeParse(bad).success).toBe(false);
   });
 });

@@ -8,9 +8,9 @@ import { z } from "zod";
 import { fileURLToPath } from "node:url";
 import { RENDERER_HOST, RENDERER_SCHEME, RENDERER_URL } from "../shared/clerk";
 import { shortcutLabel } from "../core/shortcut";
-import { displayMatching, restoreOverlayBounds, scaleSize, type DisplayInfo } from "../core/interface-scale";
-import { OVERLAY_SIZES, PILL_MAX, fullWidthX, overlaySize, resizeAboutCentre } from "../core/overlay-size";
-import { IPC, TEAMS_AUDIO_LINE_MAX, settingsUpdateSchema, windowRequestSchema, type MeetingWindowCaptions, type TeamsAudioEnded, type TeamsAudioLines, type UserReturned, type WindowSize } from "../shared/ipc";
+import { displayMatching, placeInWorkArea, restoreOverlayBounds, scaleSize, type DisplayInfo } from "../core/interface-scale";
+import { OVERLAY_SIZES, ignoresMouse } from "../core/overlay-size";
+import { IPC, TEAMS_AUDIO_LINE_MAX, settingsUpdateSchema, windowInteractiveSchema, windowSizeSchema, type MeetingWindowCaptions, type TeamsAudioEnded, type TeamsAudioLines, type UserReturned, type WindowSize } from "../shared/ipc";
 import { debugLog, errorData, msSince, setDebugSink, teeConsole } from "../core/debug-log";
 import { NO_GATEWAY_KEY, STT_MODEL, createBeeGateway } from "../core/gateway";
 import { createAwayTracker } from "../core/recap";
@@ -69,8 +69,6 @@ const outDir = fileURLToPath(new URL(".", import.meta.url));
 let win: BrowserWindow | null = null;
 // The current window mode, so a zoom change re-applies its bounds, not the collapsed ones.
 let windowSize: WindowSize = "collapsed";
-// The compact pill's width in CSS px (core/overlay-size.ts), sent by the renderer; full until it has measured the pill.
-let pillWidth = PILL_MAX;
 let interfaceScale = 1;
 let tray: Tray | null = null;
 // Set at start-up, before the first window.
@@ -80,25 +78,23 @@ function displayInfos(): DisplayInfo[] {
   return screen.getAllDisplays().map(({ id, bounds, workArea, scaleFactor }) => ({ id, bounds, workArea, scaleFactor }));
 }
 
-// Saved as the full-width window's spot with the same centre, so start-up (full width until the pill is measured) lands there.
 function rememberPosition(window: BrowserWindow): void {
   const bounds = window.getBounds();
   const display = displayMatching(bounds, displayInfos());
-  const x = fullWidthX(bounds, scaleSize(OVERLAY_SIZES.collapsed, interfaceScale).width);
-  if (display) settings.saveOverlayPosition({ x, y: bounds.y, displayId: display.id });
+  if (display) settings.saveOverlayPosition({ x: bounds.x, y: bounds.y, displayId: display.id });
 }
 
-// The current mode's size at the current zoom: the compact pill when collapsed, full width otherwise.
+// The current mode's size at the current zoom: always full width, so a mode change only changes the height.
 function currentSize(): { width: number; height: number } {
-  return scaleSize(overlaySize(windowSize, pillWidth), interfaceScale);
+  return scaleSize(OVERLAY_SIZES[windowSize], interfaceScale);
 }
 
-// Resize in place about the window's centre on the display it is on; shift only to stay inside that work area.
+// Resize in place on the display the window is on; shift only to stay inside that work area.
 function resizeOverlay(window: BrowserWindow, size: { width: number; height: number }): void {
   const current = window.getBounds();
   const display = displayMatching(current, displayInfos()) ?? displayInfos().find((item) => item.id === screen.getPrimaryDisplay().id);
   if (!display) return;
-  const bounds = resizeAboutCentre({ size, current, area: display.workArea, margin: TOP_MARGIN });
+  const bounds = placeInWorkArea({ size, current, area: display.workArea, margin: TOP_MARGIN });
   window.setBounds(bounds);
   debugLog.debug("window", "bounds", { mode: windowSize, scale: interfaceScale, bounds, displayId: display.id });
   rememberPosition(window);
@@ -109,6 +105,15 @@ function applyInterfaceScale(scale: number): void {
   interfaceScale = scale;
   for (const window of BrowserWindow.getAllWindows()) window.webContents.setZoomFactor(scale);
   if (win) resizeOverlay(win, currentSize());
+}
+
+/**
+ * Click-through: the full-width window is mostly clear, so the clear area passes clicks to the app below and the renderer
+ * turns it off while the pointer is over one of Bee's surfaces (renderer/src/click-through.ts). Forwarded mouse moves keep
+ * the renderer's pointer events coming while clicks pass through. Keyboard focus is not affected.
+ */
+function setInteractive(window: BrowserWindow, interactive: boolean): void {
+  window.setIgnoreMouseEvents(ignoresMouse(process.platform, interactive), { forward: true });
 }
 
 // An automatic meeting session turns meeting mode on for its length without saving it. Main only.
@@ -124,7 +129,6 @@ function applyMeetingMode(window: BrowserWindow, meetingMode: boolean): void {
 function createWindow(meetingMode: boolean, scale: number): BrowserWindow {
   interfaceScale = scale;
   windowSize = "collapsed";
-  pillWidth = PILL_MAX;
   const window = new BrowserWindow({
     ...restoreOverlayBounds({
       saved: settings.overlayPosition(),
@@ -155,6 +159,8 @@ function createWindow(meetingMode: boolean, scale: number): BrowserWindow {
   });
   applyMeetingMode(window, meetingMode);
   window.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  // The pointer is on no surface until the renderer says so (it also says so as each page starts).
+  setInteractive(window, false);
   // Zoom resets on navigation, so apply again once the page is up.
   window.webContents.on("did-finish-load", () => window.webContents.setZoomFactor(interfaceScale));
   // `moved` fires once a drag ends on Windows and macOS; Linux only emits `move`.
@@ -589,9 +595,14 @@ if (clerk.isPrimaryInstance) {
     registerTeamsAudioIpc({ status: teamsAudioStatus, enabled: settings.teamsAudioFallback, capture: teamsAudioCapture, isMac });
 
     ipcMain.handle(IPC.setWindowSize, (_event, payload) => {
-      ({ size: windowSize, width: pillWidth } = windowRequestSchema.parse(payload));
-      debugLog.debug("window", "size", { mode: windowSize, pill: pillWidth });
+      windowSize = windowSizeSchema.parse(payload);
+      debugLog.debug("window", "size", { mode: windowSize });
       if (win) resizeOverlay(win, currentSize());
+    });
+    // Sent on every pointer move onto or off a surface: no log line, and a bad payload is dropped (a send has no caller to reject).
+    ipcMain.on(IPC.setWindowInteractive, (event, payload) => {
+      const interactive = windowInteractiveSchema.safeParse(payload);
+      if (win && !win.isDestroyed() && event.sender === win.webContents && interactive.success) setInteractive(win, interactive.data);
     });
 
     ipcMain.handle(IPC.openNotesFolder, () => shell.openPath(notesDir));

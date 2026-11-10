@@ -40,7 +40,6 @@ import {
   type TeamsAudioStatus,
   type TranscribeResult,
   type UpdateCheck,
-  type WindowRequest,
   type WindowSize,
 } from "../../shared/ipc";
 import { PILL_MAX, pillWidth } from "../../core/overlay-size";
@@ -94,8 +93,8 @@ export type BeeState = {
   expanded: boolean;
   // True while the panel plays its exit animation, before the window shrinks.
   collapsing: boolean;
-  // The pill's width in CSS px: the measured compact pill in every mode (the body and panel under it are full width). styles.css
-  // eases it (applyWindowSize).
+  // The pill's width in CSS px: the measured compact pill in every mode (the window, body and panel are full width). styles.css
+  // eases it.
   pillWidth: number;
   tab: Tab;
   result: PipelineResult | null;
@@ -174,8 +173,6 @@ const PIPELINE_WINDOW = 8;
 const COLLAPSE_MS = 160;
 // Matches the island exit animation in styles.css.
 const ISLAND_CLOSE_MS = 200;
-// Matches the island's width transition in styles.css: a narrowing window waits this long for the pill to ease in.
-const PILL_MORPH_MS = 380;
 // With motion reduced, CSS animations last 1ms, so exits do not wait for them.
 const REDUCED_EXIT_MS = 1;
 const MIC_OFF = { on: false, level: 0 };
@@ -338,11 +335,7 @@ let stoppedRun: number | null = null;
 let stopTeamsAudio: (() => void) | null = null;
 let teamsAudioOpening = false;
 let teamsAudioTicking = false;
-// What main last applied (it starts collapsed at full width), the measured compact pill, and the pending narrowing step.
-let sentWindow: WindowRequest = { size: "collapsed", width: PILL_MAX };
-let measuredPill = PILL_MAX;
-let narrowTimer: ReturnType<typeof setTimeout> | undefined;
-let windowSeq = 0;
+let sentSize: WindowSize = "collapsed";
 let islandHovered = false;
 let scrollLoggedAt = 0;
 // Meeting context. The detected meeting the session's lines belong to (null: none was detected, so only a click saves it),
@@ -531,36 +524,16 @@ export function islandArgs(current: BeeState) {
   };
 }
 
-async function sendWindow(request: WindowRequest): Promise<void> {
-  if (request.size === sentWindow.size && request.width === sentWindow.width) return;
-  sentWindow = request;
-  await window.bee.setWindowSize(request);
-}
-
 /**
- * Resize the window to fit: full panel, notch plus island body, or the notch alone as a compact pill. The pill keeps its
- * measured width in every mode; the window is full width for the body or panel under it. Growing, the window widens first and
- * the pill then eases out; narrowing, the pill eases in first (the height changes at once) and the window follows once the
- * morph is done, so the pill never clips. With no morph to wait for, the window narrows at once.
+ * Resize the window to fit: full panel, notch plus island body, or the notch alone. Only the height changes: the window is
+ * always full width, and the compact pill is CSS only (pillWidth), so its edges never move with the window.
  */
 async function applyWindowSize(): Promise<void> {
   const size: WindowSize =
     state.expanded && !state.collapsing ? "expanded" : state.computer?.confirm ? "response" : islandOpen(state) ? "response" : "collapsed";
-  const width = size === "collapsed" ? measuredPill : PILL_MAX;
-  const seq = ++windowSeq;
-  clearTimeout(narrowTimer);
-  if (width >= sentWindow.width) {
-    await sendWindow({ size, width });
-    if (seq === windowSeq && state.pillWidth !== measuredPill) set({ pillWidth: measuredPill });
-    return;
-  }
-  if (state.pillWidth === measuredPill) {
-    await sendWindow({ size, width });
-    return;
-  }
-  set({ pillWidth: measuredPill });
-  narrowTimer = setTimeout(() => void sendWindow({ size, width }), motionReduced() ? REDUCED_EXIT_MS : PILL_MORPH_MS);
-  await sendWindow({ size, width: sentWindow.width });
+  if (size === sentSize) return;
+  sentSize = size;
+  await window.bee.setWindowSize(size);
 }
 
 function selfName(): string {
@@ -1864,12 +1837,10 @@ export const actions = {
     if (!islandHovered) touchIsland();
   },
 
-  /** The pill header's natural width in CSS px (App.tsx usePillMeasure). Only a change of the snapped width resizes anything. */
+  /** The pill header's natural width in CSS px (pill-measure.ts). Only a change of the snapped width changes the pill. */
   measurePill(natural: number): void {
     const width = pillWidth(natural);
-    if (width === measuredPill) return;
-    measuredPill = width;
-    void applyWindowSize();
+    if (width !== state.pillWidth) set({ pillWidth: width });
   },
 
   /** The pointer on the island holds the body open; leaving restarts the clock. */

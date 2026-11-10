@@ -15,6 +15,8 @@
 // it is passed ?shots=1, and each "E2E_SHOT {"name"}" line it logs captures the window to <BEE_E2E_SHOTS_DIR>/<name>.png, reported
 // on stdout as "E2E_SHOT_FILE {"file"}". The store's window resizes are answered and ignored.
 // Every pipeline run that returns is reported on stdout as "E2E_RUN {...}": the notes it ranked and whether Jev was called.
+// The pill flicker page (pill-flicker.ts) gets its own overlay-like window, sized from the store's setWindowSize, and its
+// report comes from main (pill-flicker-main.ts).
 // BEE_E2E_MODE=record|replay (with BEE_E2E_FIXTURES_DIR) records the Gateway model calls to fixtures, or replays them with no
 // network and no key (replay.ts). Unset, the Gateway is live.
 import { BrowserWindow, app, ipcMain, session } from "electron";
@@ -33,6 +35,7 @@ import { createClaudeCode } from "../../src/main/claude-code";
 import { ensureNotesDir } from "../../src/main/notes";
 import { NO_GATEWAY_KEY } from "../../src/core/gateway";
 import { IPC, pipelineResultSchema, type CopyGatewayKeyResult } from "../../src/shared/ipc";
+import { runPillFlicker } from "./pill-flicker-main";
 import { REPLAY_KEY, e2eGateway, e2eModeSchema } from "./replay";
 
 // Obviously fake, so a screenshot can never show a real key.
@@ -219,6 +222,12 @@ void app.whenReady().then(async () => {
     claudeCode: createClaudeCode({ sessionDir: process.env.BEE_E2E_CLAUDE_SESSION_DIR || mkdtempSync(join(tmpdir(), "bee-claude-session-")) }),
   });
   session.defaultSession.setPermissionRequestHandler((_contents, permission, callback) => callback(permission === "media"));
+  if (/pill-flicker/.test(page)) {
+    const report = await runPillFlicker({ preload, page, token: process.env.BEE_E2E_TOKEN || fakeSessionToken() });
+    process.stdout.write(`E2E_RESULT ${JSON.stringify({ ok: true, ...report })}\n`);
+    app.exit(0);
+    return;
+  }
   ipcMain.handle(IPC.setWindowSize, () => undefined);
 
   const island = /conversation-page/.test(page);

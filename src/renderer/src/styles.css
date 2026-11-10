@@ -100,8 +100,8 @@ body {
 }
 
 /* The pill: centred at the top in every state. App.tsx sets the width to the compact pill (core/overlay-size.ts); without it
-   (the screenshot pages) the pill hugs its header. A new width eases like the body's spring (store.ts PILL_MORPH_MS); the
-   window is never narrower than the pill. The header clips the content, so the fillets below can sit outside the pill. */
+   (the screenshot pages) the pill hugs its header. A new width eases like the body's spring; the window is always full width,
+   so only the pill moves. The header clips the content, so the fillets below can sit outside the pill. */
 .island {
   position: relative;
   display: flex;

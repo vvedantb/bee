@@ -44,7 +44,8 @@ import {
   transcribeResultSchema,
   updateActionSchema,
   updateCheckSchema,
-  windowRequestSchema,
+  windowInteractiveSchema,
+  windowSizeSchema,
   type BackgroundJobView,
   type CommandRequest,
   type ConversationEnded,
@@ -68,7 +69,7 @@ import {
   type TeamsAudioEnded,
   type TeamsAudioLines,
   type TranscribeRequest,
-  type WindowRequest,
+  type WindowSize,
 } from "../shared/ipc";
 
 // One failure report per method and message a minute; repeats in between are counted into the next one.
@@ -197,8 +198,12 @@ const api = {
   getFavicon: async (domain: string) => faviconResultSchema.parse(await ipcRenderer.invoke(IPC.getFavicon, domain)),
   // A connector https icon URL as a data URL. null when none could be fetched. data: icons are used as-is in the renderer.
   getHttpsIcon: async (url: string) => httpsIconResultSchema.parse(await ipcRenderer.invoke(IPC.getHttpsIcon, url)),
-  setWindowSize: async (request: WindowRequest) => {
-    z.void().parse(await ipcRenderer.invoke(IPC.setWindowSize, windowRequestSchema.parse(request)));
+  setWindowSize: async (size: WindowSize) => {
+    z.void().parse(await ipcRenderer.invoke(IPC.setWindowSize, windowSizeSchema.parse(size)));
+  },
+  // The pointer is over one of Bee's surfaces, or the clear window area (renderer/src/click-through.ts). Fire and forget.
+  setWindowInteractive: (interactive: boolean) => {
+    ipcRenderer.send(IPC.setWindowInteractive, windowInteractiveSchema.parse(interactive));
   },
   openNotesFolder: async () => {
     z.string().parse(await ipcRenderer.invoke(IPC.openNotesFolder));

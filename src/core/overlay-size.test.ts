@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { scaleSize, type Rect } from "./interface-scale";
-import { OVERLAY_SIZES, PILL_MAX, PILL_MIN, SHELL_PADDING, clampPill, fullWidthX, overlaySize, pillWidth, resizeAboutCentre } from "./overlay-size";
+import { OVERLAY_SIZES, PILL_MAX, PILL_MIN, SHELL_PADDING, WINDOW_SIZES, ignoresMouse, pillWidth } from "./overlay-size";
 
 describe("pillWidth", () => {
   it("rounds the natural width up to an 8 px step", () => {
@@ -20,56 +19,22 @@ describe("pillWidth", () => {
   });
 });
 
-describe("clampPill", () => {
-  it("clamps any renderer number into range", () => {
-    expect(clampPill(10)).toBe(PILL_MIN);
-    expect(clampPill(5000)).toBe(PILL_MAX);
-    expect(clampPill(320)).toBe(320);
+describe("OVERLAY_SIZES", () => {
+  it("is one width in every mode, so only the height changes and the window never moves sideways", () => {
+    for (const mode of WINDOW_SIZES) expect(OVERLAY_SIZES[mode].width).toBe(480);
   });
 });
 
-describe("overlaySize", () => {
-  it("is the pill plus the shell margin when collapsed", () => {
-    expect(overlaySize("collapsed", 296)).toEqual({ width: 304, height: 64 });
-    expect(overlaySize("collapsed", PILL_MAX)).toEqual(OVERLAY_SIZES.collapsed);
-    expect(overlaySize("collapsed", 9999)).toEqual(OVERLAY_SIZES.collapsed);
-  });
-
-  it("ignores the pill when a response or the panel is open", () => {
-    expect(overlaySize("response", 296)).toEqual({ width: 480, height: 360 });
-    expect(overlaySize("expanded", 296)).toEqual({ width: 480, height: 640 });
-  });
-});
-
-describe("resizeAboutCentre", () => {
-  const area: Rect = { x: 0, y: 0, width: 1920, height: 1080 };
-  const centre = (rect: Rect) => rect.x + rect.width / 2;
-
-  it("grows and shrinks about the same centre, with no drift over many cycles", () => {
-    for (const scale of [1, 1.1, 1.25, 1.75]) {
-      const narrow = scaleSize(overlaySize("collapsed", 296), scale);
-      const wide = scaleSize(overlaySize("response", 296), scale);
-      const start: Rect = { x: 800, y: 8, ...narrow };
-      let bounds = start;
-      for (let cycle = 0; cycle < 5; cycle++) {
-        bounds = resizeAboutCentre({ size: wide, current: bounds, area, margin: 8 });
-        expect(bounds.width).toBe(wide.width);
-        expect(Math.abs(centre(bounds) - centre(start))).toBeLessThanOrEqual(0.5);
-        bounds = resizeAboutCentre({ size: narrow, current: bounds, area, margin: 8 });
-      }
-      expect(bounds).toEqual(start);
+describe("ignoresMouse", () => {
+  it("lets clicks through the clear area on Windows and macOS, and takes them over Bee's surfaces", () => {
+    for (const platform of ["win32", "darwin"] as const) {
+      expect(ignoresMouse(platform, false)).toBe(true);
+      expect(ignoresMouse(platform, true)).toBe(false);
     }
   });
 
-  it("shifts only to stay inside the work area", () => {
-    const bounds = resizeAboutCentre({ size: { width: 480, height: 360 }, current: { x: 1700, y: 8, width: 304, height: 64 }, area, margin: 8 });
-    expect(bounds).toEqual({ x: 1440, y: 8, width: 480, height: 360 });
-  });
-});
-
-describe("fullWidthX", () => {
-  it("is the full-width window's x with the same centre", () => {
-    expect(fullWidthX({ x: 808, y: 8, width: 304, height: 64 }, 480)).toBe(720);
-    expect(fullWidthX({ x: 720, y: 8, width: 480, height: 64 }, 480)).toBe(720);
+  it("never lets clicks through on Linux, which cannot forward mouse moves", () => {
+    expect(ignoresMouse("linux", false)).toBe(false);
+    expect(ignoresMouse("linux", true)).toBe(false);
   });
 });

@@ -19,6 +19,9 @@ export const IPC = {
   writeMeetingSummary: "bee:meeting:write-summary",
   openMeetingSummary: "bee:meeting:open-summary",
   setWindowSize: "bee:window:set-size",
+  // Renderer → main (send): the pointer is over something Bee paints (true) or the clear window area (false). Main turns
+  // click-through off or on (core/overlay-size.ts ignoresMouse).
+  setWindowInteractive: "bee:window:interactive",
   openNotesFolder: "bee:notes:open-folder",
   openLogsFolder: "bee:logs:open-folder",
   debugLog: "bee:debug:log",
@@ -81,9 +84,8 @@ export const IPC = {
 // Collapsed notch, notch plus the island response, or the full panel.
 export const windowSizeSchema = z.enum(WINDOW_SIZES);
 export type WindowSize = z.infer<typeof windowSizeSchema>;
-// The mode and the compact pill's width in CSS px (core/overlay-size.ts); main clamps the width and uses it only when collapsed.
-export const windowRequestSchema = z.object({ size: windowSizeSchema, width: z.number().int().nonnegative() });
-export type WindowRequest = z.infer<typeof windowRequestSchema>;
+// The pointer is over one of Bee's surfaces (IPC.setWindowInteractive).
+export const windowInteractiveSchema = z.boolean();
 
 // The allowed Interface size factors (core/interface-scale.ts); a save with any other number is rejected.
 const interfaceScaleSchema = z.number().refine((value) => (INTERFACE_SCALES as readonly number[]).includes(value), { message: "Unsupported interface size" });

@@ -48,7 +48,7 @@ async function setup() {
       getSettings: async () => ({ gatewayKeySource: "saved", personalisedLinks: false, vmemConnected: false, meetingMode: false }),
       mcp: { list: async () => [] },
       checkForUpdate: async () => ({ currentVersion: "0", latestVersion: null, available: false, error: null }),
-      setWindowSize: async ({ size }: { size: string }) => void sizes.push(size),
+      setWindowSize: async (size: string) => void sizes.push(size),
       enrichLinks: async () => ({ chips: [] }),
       transcribe: () => {
         const stt = deferred<Stt>();

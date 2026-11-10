@@ -1,14 +1,18 @@
 // The compact pill's width comes from its header's content (core/overlay-size.ts). Shared by App.tsx and the screenshot pages.
 
 /**
- * The header's natural width in CSS px: laid out as max-content for one read, then restored before anything paints. The
- * status text counts at most its CSS cap (.notch-status-text), so a long status truncates instead of widening the pill.
+ * The header's natural width in CSS px, read from a hidden max-content copy beside it that is gone before anything paints, so
+ * the live header never changes and a measure can never show. The status text counts at most its CSS cap
+ * (.notch-status-text), so a long status truncates instead of widening the pill.
  */
 export function naturalWidth(header: HTMLElement): number {
-  const width = header.style.width;
-  header.style.width = "max-content";
-  const natural = header.getBoundingClientRect().width;
-  header.style.width = width;
+  const probe = header.cloneNode(true);
+  if (!(probe instanceof HTMLElement) || !header.parentElement) return header.getBoundingClientRect().width;
+  probe.setAttribute("aria-hidden", "true");
+  probe.style.cssText = "position: absolute; top: 0; left: 0; width: max-content; visibility: hidden; pointer-events: none";
+  header.parentElement.append(probe);
+  const natural = probe.getBoundingClientRect().width;
+  probe.remove();
   return natural;
 }
 
