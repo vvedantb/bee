@@ -8,6 +8,11 @@ export const SPEECH_RMS = 0.01;
 export const PRE_ROLL_MS = 300;
 /** This much silence after speech ends the phrase. */
 export const END_SILENCE_MS = 800;
+/**
+ * This much silence after speech cuts the phrase early: its audio so far goes to speech-to-text at once, and the text is the
+ * phrase's line when no speech follows before END_SILENCE_MS. Speech before then resumes the phrase (a thinking pause).
+ */
+export const EARLY_END_MS = 400;
 /** Phrases with less speech than this (a click, a cough) are dropped before any Gateway call. */
 export const MIN_SPEECH_MS = 300;
 /** Long monologues are cut here so tips keep up. */
@@ -38,18 +43,24 @@ function concat(frames: Float32Array[]): Float32Array {
   return out;
 }
 
+/** What the segmenter saw. early: EARLY_END_MS of silence after speech, so the phrase may be over (its audio so far). resume:
+ * speech came back after an early cut, before the phrase ended. end: the phrase is over (END_SILENCE_MS of silence, the
+ * maximum length, or flush), with all its audio. A phrase can have several early and resume events, and ends once. */
+export type SegmentEvent = { kind: "early"; samples: Float32Array } | { kind: "resume" } | { kind: "end"; samples: Float32Array };
+
 /**
- * Energy-based phrase detector. push() returns the frame's RMS level for the meter.
- * onSpeechEnd fires when a phrase ends with at least MIN_SPEECH_MS of speech, just before onPhrase: the moment to show "Got it…".
- * A cough or click fires neither.
+ * Energy-based phrase detector. push() returns the frame's RMS level for the meter. Events fire inside push() or flush().
+ * Phrases with less than MIN_SPEECH_MS of speech (a cough, a click) fire nothing.
  */
-export function createSegmenter(args: { sampleRate: number; onPhrase: (samples: Float32Array) => void; onSpeechEnd?: () => void }) {
+export function createSegmenter(args: { sampleRate: number; onEvent: (event: SegmentEvent) => void }) {
   const msPerSample = 1000 / args.sampleRate;
   let frames: Float32Array[] = [];
   let bufferedMs = 0;
   let active = false;
   let speechMs = 0;
   let silenceMs = 0;
+  // An early event went out and no speech came since.
+  let early = false;
 
   function reset(): void {
     frames = [];
@@ -57,14 +68,14 @@ export function createSegmenter(args: { sampleRate: number; onPhrase: (samples: 
     active = false;
     speechMs = 0;
     silenceMs = 0;
+    early = false;
   }
 
   function end(): void {
     if (speechMs >= MIN_SPEECH_MS) {
       const samples = concat(frames);
       reset();
-      args.onSpeechEnd?.();
-      args.onPhrase(samples);
+      args.onEvent({ kind: "end", samples });
       return;
     }
     reset();
@@ -87,8 +98,16 @@ export function createSegmenter(args: { sampleRate: number; onPhrase: (samples: 
       if (voiced) {
         speechMs += ms;
         silenceMs = 0;
+        if (early) {
+          early = false;
+          args.onEvent({ kind: "resume" });
+        }
       } else {
         silenceMs += ms;
+      }
+      if (!early && silenceMs >= EARLY_END_MS && speechMs >= MIN_SPEECH_MS) {
+        early = true;
+        args.onEvent({ kind: "early", samples: concat(frames) });
       }
       if (silenceMs >= END_SILENCE_MS || bufferedMs >= MAX_PHRASE_MS) end();
       return level;
@@ -187,51 +206,145 @@ export function encodeWav(samples: Float32Array, sampleRate: number): Uint8Array
 export type PhraseOutcome = "words" | "empty" | "failed";
 
 /**
- * One mic session. Phrases are transcribed one at a time, in order, and each non-empty transcript goes to onLine.
+ * A phrase's line. The first one for an id is a new line; a later one with the same id revises it. final false: an early
+ * result (EARLY_END_MS), shown at once; the phrase's final line follows with final true (the same text, or the whole phrase's
+ * when speech resumed after the early cut).
+ */
+export type PhraseLine = { id: number; text: string; final: boolean };
+
+// Phrase ids, unique in this process: main's call audio captures and the renderer's mic sessions never reuse one.
+let phraseSeq = 0;
+
+type Phrase = {
+  id: number;
+  /** The first early cut's audio and when it came: the only cut transcribed early (one early request per phrase at most). */
+  early: { samples: Float32Array; at: number } | null;
+  /** Speech came back after the first early cut: its result, if any, is dropped and the whole phrase is transcribed at the end. */
+  resumed: boolean;
+  /** Aborts the early request (resume). */
+  abort: AbortController;
+  /** Resolves with the whole phrase when it ends. over: it has. */
+  ended: Promise<Float32Array>;
+  end: (samples: Float32Array) => void;
+  over: boolean;
+  endAt: number;
+  /** onSpeechEnd fired and no resume took it back. */
+  acked: boolean;
+};
+/**
+ * One mic (or call audio) session. Each phrase is transcribed early, at EARLY_END_MS of silence: that text goes to onLine at once
+ * (final false while the phrase may still go on) and, when no speech follows, it is the phrase's final line with no second
+ * request. When speech resumes before the phrase ends, the early request is aborted and its text ignored, and the whole phrase
+ * is transcribed once at the end: the line it gives revises the early one (same id). One request per phrase at a time, and
+ * phrases run one at a time, in order, so lines (and their revisions) arrive in spoken order.
  * onError gets a short message when a transcription fails, and null once one succeeds again.
- * onSpeechEnd fires the moment a phrase ends, before any encoding or STT. onSettled fires once that phrase's STT is done and
- * onLine or onError has run, with its outcome (never the words). Timings go to console.debug as numbers only.
+ * onSpeechEnd fires the moment speech seems over (the early cut, or the end if there was none), before any STT; onResume takes
+ * it back when speech resumes. onSettled fires once per phrase, after its final line or error, with its outcome (never the
+ * words). Timings go to console.debug as numbers and flags only.
  */
 export function startMicSession(args: {
   sampleRate: number;
-  transcribe: (wav: Uint8Array<ArrayBuffer>) => Promise<TranscribeResult>;
-  onLine: (text: string) => void;
+  transcribe: (wav: Uint8Array<ArrayBuffer>, signal: AbortSignal) => Promise<TranscribeResult>;
+  onLine: (line: PhraseLine) => void;
   onError: (message: string | null) => void;
   onSpeechEnd?: () => void;
+  onResume?: () => void;
   onSettled?: (outcome: PhraseOutcome) => void;
   /** The perf log label (numbers only). */
   label?: string;
 }) {
   const label = args.label ?? "stt-renderer";
   let queue = Promise.resolve();
-  let speechEndAt = 0;
+  let current: Phrase | null = null;
 
-  async function send(samples: Float32Array, endedAt: number): Promise<void> {
+  async function request(samples: Float32Array, signal: AbortSignal, from: number): Promise<TranscribeResult> {
     const sttStart = performance.now();
-    let outcome: PhraseOutcome = "failed";
     try {
-      const { text, error } = await args.transcribe(encodeWav(samples, args.sampleRate));
-      const done = performance.now();
-      console.debug(`perf ${label} ${Math.round(done - sttStart)}ms, ${Math.round(done - endedAt)}ms since speech end`);
-      args.onError(error);
-      if (text) args.onLine(text);
-      outcome = text ? "words" : error ? "failed" : "empty";
+      return await args.transcribe(encodeWav(samples, args.sampleRate), signal);
     } catch (error) {
-      args.onError(error instanceof Error ? error.message : "Speech-to-text failed");
+      return { text: null, error: error instanceof Error ? error.message : "Speech-to-text failed" };
     } finally {
-      args.onSettled?.(outcome);
+      const done = performance.now();
+      console.debug(`perf ${label} ${Math.round(done - sttStart)}ms, ${Math.round(done - from)}ms since speech end`);
     }
+  }
+
+  async function run(phrase: Phrase): Promise<void> {
+    // The early text shown as pending, the early request's time, and the result that is final.
+    let shown: string | null = null;
+    let earlyMs: number | null = null;
+    let result: TranscribeResult = { text: null, error: null };
+    try {
+      const early = phrase.early;
+      if (early && !phrase.over && !phrase.resumed) {
+        const first = await request(early.samples, phrase.abort.signal, early.at);
+        earlyMs = Math.round(performance.now() - early.at);
+        if (!phrase.resumed && !phrase.over && first.text) {
+          // Still inside the phrase: show the text now, pending.
+          shown = first.text;
+          args.onLine({ id: phrase.id, text: first.text, final: false });
+        }
+        await phrase.ended;
+        // No speech after the early cut: its result is the final one, with no second request.
+        if (!phrase.resumed) result = first;
+      }
+      const whole = await phrase.ended;
+      if (phrase.resumed || earlyMs === null) result = await request(whole, new AbortController().signal, phrase.endAt);
+    } finally {
+      // The whole phrase found no words or failed: the early text shown stays, as final.
+      const text = result.text ?? shown;
+      args.onError(text || !result.error ? null : result.error);
+      if (text) args.onLine({ id: phrase.id, text, final: true });
+      const finalMs = Math.max(0, Math.round(performance.now() - phrase.endAt));
+      console.debug(`perf ${label} phrase early=${earlyMs ?? "-"} resumed=${phrase.resumed ? 1 : 0} final=${finalMs}ms changed=${shown !== null && text !== shown ? 1 : 0}`);
+      args.onSettled?.(text ? "words" : result.error ? "failed" : "empty");
+    }
+  }
+
+  function ack(phrase: Phrase): void {
+    if (phrase.acked) return;
+    phrase.acked = true;
+    args.onSpeechEnd?.();
+  }
+
+  /** The phrase in progress, or a new one queued behind the others. */
+  function phraseNow(): Phrase {
+    if (current) return current;
+    let end: (samples: Float32Array) => void = () => undefined;
+    const ended = new Promise<Float32Array>((resolve) => (end = resolve));
+    phraseSeq += 1;
+    const phrase: Phrase = { id: phraseSeq, early: null, resumed: false, abort: new AbortController(), ended, end, over: false, endAt: 0, acked: false };
+    current = phrase;
+    queue = queue.then(() => run(phrase)).catch((error: unknown) => args.onError(error instanceof Error ? error.message : "Speech-to-text failed"));
+    return phrase;
   }
 
   const segmenter = createSegmenter({
     sampleRate: args.sampleRate,
-    onSpeechEnd: () => {
-      speechEndAt = performance.now();
-      args.onSpeechEnd?.();
-    },
-    onPhrase: (samples) => {
-      const endedAt = speechEndAt;
-      queue = queue.then(() => send(samples, endedAt));
+    onEvent: (event) => {
+      if (event.kind === "early") {
+        const phrase = phraseNow();
+        ack(phrase);
+        // A second pause in the same phrase sends nothing: the end does.
+        phrase.early ??= { samples: event.samples, at: performance.now() };
+        return;
+      }
+      if (event.kind === "resume") {
+        const phrase = current;
+        if (!phrase) return;
+        phrase.resumed = true;
+        phrase.abort.abort();
+        if (!phrase.acked) return;
+        phrase.acked = false;
+        args.onResume?.();
+        return;
+      }
+      const phrase = phraseNow();
+      current = null;
+      phrase.over = true;
+      phrase.endAt = performance.now();
+      ack(phrase);
+      phrase.end(event.samples);
     },
   });
 

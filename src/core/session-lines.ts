@@ -14,6 +14,8 @@ export type SessionLine = {
   clientTs: number;
   // Server receive time. Always null now that client sync is gone; kept so stored lines stay valid.
   serverTs: number | null;
+  // An early speech-to-text result (core/speech.ts EARLY_END_MS): the phrase's final text may still revise it.
+  pending?: boolean;
 };
 
 /** Insert lines in spoken order (stable for equal times), dropping ids already present. Keeps the newest max. */

@@ -2,6 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { pipelineRequestSchema, type PipelineRequest, type PipelineResult } from "../../shared/ipc";
 import type { startMicSession } from "./speech";
 
+// Phrase ids for lines the stubbed mic session hands over (core/speech.ts PhraseLine).
+let phraseSeq = 0;
+const nextPhrase = () => (phraseSeq += 1);
+
 // The store with the mic on, driven by fake timers: preload (window.bee), Clerk, the mic and speech-to-text are stubbed.
 type MicArgs = Parameters<typeof startMicSession>[0];
 
@@ -73,7 +77,7 @@ async function loadStore(runMs: number, answer?: string[]) {
   const say = async (text: string) => {
     mic.onSpeechEnd?.();
     await vi.advanceTimersByTimeAsync(STT_MS);
-    mic.onLine(text);
+    mic.onLine({ id: nextPhrase(), text, final: true });
     mic.onSettled?.("words");
     // A new turn's run starts on the next tick.
     await vi.advanceTimersByTimeAsync(0);

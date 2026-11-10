@@ -6,6 +6,10 @@ import type { MeetingSummaryRequest, PipelineResult, SettingsView } from "../../
 import { notchLine } from "./notch";
 import type { startMicSession } from "./speech";
 
+// Phrase ids for lines the stubbed mic session hands over (core/speech.ts PhraseLine).
+let phraseSeq = 0;
+const nextPhrase = () => (phraseSeq += 1);
+
 // Automatic meeting detection in the store, the only way a meeting starts or stops: start turns the mic on and shows one notice
 // in the pill, the end saves the summary once, turns the mic off and shows one notice after the save. Preload (window.bee), Clerk, the mic and
 // the summariser are stubbed: no AI call is made.
@@ -127,7 +131,7 @@ async function loadStore(options: { enabled?: boolean; summary?: "ok" | "fail" |
     const mic = micSessions.at(-1);
     if (!mic) throw new Error("no mic session");
     mic.onSpeechEnd?.();
-    mic.onLine(text);
+    mic.onLine({ id: nextPhrase(), text, final: true });
     mic.onSettled?.("words");
     await vi.advanceTimersByTimeAsync(100);
   };

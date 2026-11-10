@@ -47,6 +47,7 @@ import {
   meetingSummaryRequestSchema,
   pipelineCancelSchema,
   pipelineRequestSchema,
+  transcribeCancelSchema,
   transcribeRequestSchema,
   cardActionRequestSchema,
   type CardAction,
@@ -259,7 +260,10 @@ export function registerMeetingIpc(args: { notesDir: string;
     return { ...mcp, errors: [...signedOut, ...mcp.errors] };
   };
 
-  ipcMain.handle(IPC.transcribe, (_event, payload) => {
+  // Mic transcriptions in flight, by request id, so an early phrase cut that speech resumed can be aborted (core/speech.ts).
+  const transcriptions = new Map<number, AbortController>();
+
+  ipcMain.handle(IPC.transcribe, async (_event, payload) => {
     const request = transcribeRequestSchema.parse(payload);
     assertSignedIn(request.sessionToken);
     const apiKey = args.gatewayApiKey();
@@ -267,7 +271,24 @@ export function registerMeetingIpc(args: { notesDir: string;
       debugLog.warn("stt", "no-key", { source: "mic" });
       return { text: null, error: NO_GATEWAY_KEY };
     }
-    return transcribeSpeech({ model: createGateway(apiKey).transcription(STT_MODEL), audio: request.audio, source: "mic", vocabulary: sttVocabulary(args.knownNames?.() ?? []) });
+    const controller = new AbortController();
+    if (request.requestId !== undefined) transcriptions.set(request.requestId, controller);
+    try {
+      return await transcribeSpeech({
+        model: createGateway(apiKey).transcription(STT_MODEL),
+        audio: request.audio,
+        source: "mic",
+        vocabulary: sttVocabulary(args.knownNames?.() ?? []),
+        abortSignal: controller.signal,
+      });
+    } finally {
+      if (request.requestId !== undefined && transcriptions.get(request.requestId) === controller) transcriptions.delete(request.requestId);
+    }
+  });
+
+  ipcMain.handle(IPC.cancelTranscribe, (_event, payload) => {
+    const { requestId } = transcribeCancelSchema.parse(payload);
+    transcriptions.get(requestId)?.abort();
   });
 
   // The meeting context poll runs every few seconds: only a changed view is logged.

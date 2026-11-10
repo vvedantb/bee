@@ -3,10 +3,14 @@
 // process loopback on the app's process tree on Windows, ScreenCaptureKit filtered to the app on macOS) and speech-to-text;
 // this side only receives text lines, never audio. See ARCHITECTURE.md.
 import type { TeamsAudioFailure } from "../../core/teams-audio-protocol";
+import type { TeamsAudioLine } from "../../shared/ipc";
 
 export type TeamsAudioCapture = {
-  /** Lines flow from here. onEnd fires if the capture stops by itself: failure null when main stopped it (call over). */
-  start: (onLines: (texts: string[]) => void, onEnd: (failure: TeamsAudioFailure | null) => void) => void;
+  /**
+   * Lines flow from here: phrases, each new or a revision of an earlier one (same phrase id). onEnd fires if the capture stops by
+   * itself: failure null when main stopped it (call over).
+   */
+  start: (onLines: (lines: TeamsAudioLine[]) => void, onEnd: (failure: TeamsAudioFailure | null) => void) => void;
   stop: () => void;
 };
 
@@ -16,7 +20,7 @@ export type TeamsAudioOpen = { capture: TeamsAudioCapture; failure: null } | { c
 export async function openTeamsAudio(sessionToken: string): Promise<TeamsAudioOpen> {
   const bee = window.bee.teamsAudio;
   let id: number | null = null;
-  let onLines: ((texts: string[]) => void) | null = null;
+  let onLines: ((lines: TeamsAudioLine[]) => void) | null = null;
   let onEnd: ((failure: TeamsAudioFailure | null) => void) | null = null;
   // Subscribed before start, so an end that follows at once is not missed. Lines and ends of other captures are ignored.
   const offLines = bee.onLines((event) => {

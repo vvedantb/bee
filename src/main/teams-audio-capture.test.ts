@@ -86,7 +86,7 @@ function setup(over: { helper?: string | null; spawn?: SpawnHelper; transcribe?:
         wavs.push(wav.byteLength);
         return { text: WORDS, error: null };
       }),
-    onLines: (id, texts) => lines.push({ id, lines: texts }),
+    onLines: (id, phrases) => lines.push({ id, lines: phrases.map((line) => line.text) }),
     onEnded: (id, failure) => ended.push({ id, failure }),
   });
   const helper = (index = 0): FakeHelper => {

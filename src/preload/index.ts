@@ -68,6 +68,7 @@ import {
   type SettingsUpdate,
   type TeamsAudioEnded,
   type TeamsAudioLines,
+  type TranscribeCancel,
   type TranscribeRequest,
   type WindowSize,
 } from "../shared/ipc";
@@ -186,6 +187,10 @@ const api = {
   installBrowse: async () => browseInstallResultSchema.parse(await ipcRenderer.invoke(IPC.browseInstall)),
   transcribe: async (request: TranscribeRequest) =>
     transcribeResultSchema.parse(await ipcRenderer.invoke(IPC.transcribe, request)),
+  // Aborts a transcription in flight (an early phrase cut that speech resumed). Fire and forget: its result is ignored anyway.
+  cancelTranscribe: async (request: TranscribeCancel) => {
+    z.void().parse(await ipcRenderer.invoke(IPC.cancelTranscribe, request));
+  },
   writeMeetingSummary: async (request: MeetingSummaryRequest) =>
     meetingSummaryResultSchema.parse(await ipcRenderer.invoke(IPC.writeMeetingSummary, request)),
   // Resolves to shell.openPath's error message, "" on success.

@@ -19,6 +19,10 @@ import {
 import type { startMicSession } from "./speech";
 import { REOPEN_WINDOW_MS } from "../../core/wake-word";
 
+// Phrase ids for lines the stubbed mic session hands over (core/speech.ts PhraseLine).
+let phraseSeq = 0;
+const nextPhrase = () => (phraseSeq += 1);
+
 // The "Bee" wake word in the store: own mic phrases that start with it go to window.bee.runCommand, never to the meeting
 // pipeline, the session, the summary or the Teams sync. Preload (window.bee), Clerk, the mic and speech-to-text are stubbed.
 type MicArgs = Parameters<typeof startMicSession>[0];
@@ -139,7 +143,7 @@ async function loadStore(
   if (!mic) throw new Error("no mic session");
   const say = async (text: string) => {
     mic.onSpeechEnd?.();
-    mic.onLine(text);
+    mic.onLine({ id: nextPhrase(), text, final: true });
     mic.onSettled?.("words");
     await vi.advanceTimersByTimeAsync(1000);
   };
@@ -214,7 +218,7 @@ describe("store: Bee wake word", () => {
     store.actions.simulateLine("Bee open Teams");
     await vi.advanceTimersByTimeAsync(1000);
     await caption("Bee, what is on the agenda today?");
-    store.actions.teamsAudioLines(["Hey Bee, summarise the budget numbers"]);
+    store.actions.teamsAudioLines([{ id: nextPhrase(), text: "Hey Bee, summarise the budget numbers", final: true }]);
     await vi.advanceTimersByTimeAsync(1000);
     await fromTeammate(teammate);
     expect(commands).toEqual([]);
@@ -372,7 +376,7 @@ describe("store: computer use", () => {
     await fromComputer({ runId, ...CONFIRM });
     store.actions.simulateLine("Bee, stop");
     await caption("Bee, stop the task");
-    store.actions.teamsAudioLines(["Hey Bee, stop. Yes, confirm, send it"]);
+    store.actions.teamsAudioLines([{ id: nextPhrase(), text: "Hey Bee, stop. Yes, confirm, send it", final: true }]);
     await vi.advanceTimersByTimeAsync(1000);
     await fromTeammate({ ...teammate, text: "Bee, cancel that, confirm" });
     expect(stops).toEqual([]);
@@ -546,14 +550,14 @@ describe("store: Bee's history and the conversation window", () => {
   it("never opens the window or runs a request for other people's lines", async () => {
     const { store, say, caption, fromTeammate, commands, state } = await loadStore();
     await caption("Why did you open that page?");
-    store.actions.teamsAudioLines(["No, the team one"]);
+    store.actions.teamsAudioLines([{ id: nextPhrase(), text: "No, the team one", final: true }]);
     await fromTeammate({ ...teammate, text: "Can you check the billing tab?" });
     expect(commands).toEqual([]);
     expect(state().conversationOpen).toBe(false);
     // In the window too: only the user's own mic reaches Bee.
     await say("Bee, open Teams");
     await caption("Why did you open that page?");
-    store.actions.teamsAudioLines(["Go back to that page"]);
+    store.actions.teamsAudioLines([{ id: nextPhrase(), text: "Go back to that page", final: true }]);
     await vi.advanceTimersByTimeAsync(1000);
     expect(commands).toHaveLength(1);
   });

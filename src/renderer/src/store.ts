@@ -6,9 +6,18 @@ import { echoesOwnLine } from "../../core/agent-desktop-meeting";
 import { IDLE_AUTO, qualifies, stepAutoMeeting, type AutoEvent, type AutoMeetingState } from "../../core/auto-meeting-detection";
 import { debugLog, errorData } from "../../core/debug-log";
 import { detectLinks, mergeChips, sourceChips, visibleChips, type LinkChip } from "../../core/link-suggest";
-import { MAX_STEERING_TIPS, isFiller, isNewTurn, isQuestion, mergeTips, recentRestarts, runDelayMs, tipCap, tipKey, waitsForRun } from "../../core/steering";
+import { MAX_STEERING_TIPS, isFiller, isNewTurn, isQuestion, mergeTips, recentRestarts, runDelayMs, sameContent, tipCap, tipKey, waitsForRun } from "../../core/steering";
 import { isAttributionUnknown, mergeLines, pipelineText, sessionLineCounts, summaryTranscript, type SessionLine } from "../../core/session-lines";
-import { TEAMS_AUDIO_SPEAKER, TEAMS_AUDIO_SPEAKER_ID, micEchoesCallAudio, teamsAudioEcho, teamsAudioPlan, teamsAudioReplaced, type TeamsAudioPlan } from "../../core/teams-audio";
+import {
+  TEAMS_AUDIO_SPEAKER,
+  TEAMS_AUDIO_SPEAKER_ID,
+  isTeamsAudioLine,
+  micEchoesCallAudio,
+  teamsAudioEcho,
+  teamsAudioPlan,
+  teamsAudioReplaced,
+  type TeamsAudioPlan,
+} from "../../core/teams-audio";
 import { RECAP_AI_MIN_LINES, RECAP_LINES_SENT, RECAP_WINDOW_MS, beeLines, isRecapRequest, localMeetingLines, missedLines, recapBody, speakerText, type RecapEvent } from "../../core/recap";
 import { CONVERSATION_IDLE_MS, addExchange, commandFallbackReply, type BeeExchange } from "../../core/bee-history";
 import { CONVERSATION_QUESTION_MS, CONVERSATION_WINDOW_MS, OTHERS_QUIET_MS, REOPEN_WINDOW_MS, WAKE_FOLLOW_MS, isConfirmWords, isForBee, replyInvitesAnswer, routeLine } from "../../core/wake-word";
@@ -37,6 +46,7 @@ import {
   type PipelineResult,
   type SettingsUpdate,
   type SettingsView,
+  type TeamsAudioLine,
   type TeamsAudioStatus,
   type TranscribeResult,
   type UpdateCheck,
@@ -48,7 +58,7 @@ import { islandOpenMs, islandShowsBody, shouldAutoCollapse, shouldShowResponse }
 import { LOGO_DONE_MS } from "./logo";
 import { openMic } from "./mic";
 import { motionReduced } from "./motion";
-import { framePeak, startMicSession, type PhraseOutcome } from "./speech";
+import { framePeak, startMicSession, type PhraseLine, type PhraseOutcome } from "./speech";
 import { MEETING_READY_NOTICE, MEETING_START_NOTICE, MEETING_START_NO_MIC_NOTICE, meetingEndNotice, type MeetingEndOutcome } from "./meeting-notices";
 import { openTeamsAudio } from "./teams-audio";
 import { downloadUpdate, installUpdate, updateNow } from "./update";
@@ -193,6 +203,8 @@ const CAPTION_SPEAKER = "Meeting";
 // After a direct request's reply lands ("Bee, open Teams"), meeting lines wait this long before they start a turn, so the
 // reply can be read. Closing the island ends the wait.
 const COMMAND_HOLD_MS = 8000;
+// endMeeting waits at most this long for phrases still on their early text (core/speech.ts EARLY_END_MS) to get their final.
+const FINALS_WAIT_MS = 3000;
 
 let state: BeeState = {
   settings: null,
@@ -267,6 +279,17 @@ let heardPending = 0;
 let localSeq = 0;
 let captionSeq = 0;
 let teamsAudioSeq = 0;
+// Phrases whose final line has not come yet (core/speech.ts PhraseLine), by phrase id, for the mic and for call audio: the
+// session line the early result became (shown, pending), held (it could be a request to Bee, so nothing is added until the
+// final), or dropped (an echo; the final is dropped too). Once none is open, endMeeting stops waiting (finalsWaiting).
+type OpenPhrase = { kind: "shown"; lineId: string } | { kind: "held" } | { kind: "dropped" };
+const micPhrases = new Map<number, OpenPhrase>();
+const callPhrases = new Map<number, OpenPhrase>();
+let finalsWaiting: Array<() => void> = [];
+// Names each mic transcription, so an aborted early request can be cancelled in main (cancelTranscribe).
+let transcribeSeq = 0;
+// The E2E mic (startTestMic) numbers its phrases itself.
+let testPhraseSeq = 0;
 let turnSeq = 0;
 let turnText = "";
 // Live steering. A turn is a line and those that interrupt its run (core/steering.ts isNewTurn); inside it a new line keeps
@@ -586,10 +609,11 @@ async function enrichChips(sent: LinkChip[], text: string, seq: number): Promise
 /**
  * New spoken or simulated lines with content. Chips from their links open the island body even before Luna answers. A line that
  * interrupts a run steers it: the chips merge and turnSeq stays, so enrichChips for earlier chips is not dropped. Any other line
- * starts afresh: the last answer, its chips and the full-text view go at once, so only the new answer shows.
+ * starts afresh: the last answer, its chips and the full-text view go at once, so only the new answer shows. steer: a revised
+ * line (reviseLine) always steers.
  */
-function startTurn(lines: SessionLine[]): void {
-  const fresh = isNewTurn({ open: turnOpen, busy: state.busy, spokenDuringRun });
+function startTurn(lines: SessionLine[], steer = false): void {
+  const fresh = !steer && isNewTurn({ open: turnOpen, busy: state.busy, spokenDuringRun });
   const question = lines.some((line) => isQuestion(line.text));
   if (question) asked = true;
   turnAsked = (!fresh && turnAsked) || question;
@@ -951,13 +975,8 @@ export function beeConversation(): BeeExchange[] {
   return [...conversation];
 }
 
-/**
- * A mic phrase that starts with the wake word ("Bee, open Teams") is a request to the AI, not a meeting line: it never joins
- * the session, the summary, or meeting memory. "Bee" alone arms the next phrase. In the conversation window, a
- * phrase without "Bee" that looks addressed to Bee is a follow-up; an unclear one may get one small AI check (followUpCheck).
- * Returns true when the phrase was taken. Console lines never carry the words; the local debug log does.
- */
-function takeWakeLine(text: string): boolean {
+/** How a mic phrase would route now (core/wake-word.ts routeLine), and the state it was routed in. No side effects. */
+function wakeRoute(text: string) {
   const now = Date.now();
   const armed = now < wakeArmedUntil;
   const conversationOpen = now < conversationUntil && commandRun === null;
@@ -965,6 +984,17 @@ function takeWakeLine(text: string): boolean {
   const recentlyClosed =
     commandRun === null && !conversationOpen && conversationClosedAt > 0 && now - conversationClosedAt < REOPEN_WINDOW_MS;
   const route = routeLine({ text, source: "mic", armed, conversationOpen, lastBee, participants: participantNames(), othersSpoke, recentlyClosed });
+  return { now, route, armed, conversationOpen, othersSpoke, recentlyClosed };
+}
+
+/**
+ * A mic phrase that starts with the wake word ("Bee, open Teams") is a request to the AI, not a meeting line: it never joins
+ * the session, the summary, or meeting memory. "Bee" alone arms the next phrase. In the conversation window, a
+ * phrase without "Bee" that looks addressed to Bee is a follow-up; an unclear one may get one small AI check (followUpCheck).
+ * Returns true when the phrase was taken. Console lines never carry the words; the local debug log does.
+ */
+function takeWakeLine(text: string): boolean {
+  const { now, route, armed, conversationOpen, othersSpoke, recentlyClosed } = wakeRoute(text);
   wakeArmedUntil = route.kind === "wake" ? now + WAKE_FOLLOW_MS : 0;
   // The local debug log keeps the words that woke Bee, and the meeting lines that nearly did (a likely miss or false trigger).
   if (route.kind !== "meeting" || NEAR_WAKE.test(text) || conversationOpen || recentlyClosed) {
@@ -1181,8 +1211,8 @@ async function runCommand(command: string): Promise<void> {
   }
 }
 
-/** The user's own line joins the meeting: the session and, with content words, a run. */
-function addOwnLine(text: string, source: "typed" | "mic"): void {
+/** The user's own line joins the meeting: the session and, with content words, a run. pending: an early result. Returns its id. */
+function addOwnLine(text: string, source: "typed" | "mic", pending = false): string {
   localSeq += 1;
   const own: SessionLine = {
     id: `local-${localSeq}`,
@@ -1192,9 +1222,119 @@ function addOwnLine(text: string, source: "typed" | "mic"): void {
     text,
     clientTs: Date.now(),
     serverTs: null,
+    ...(pending ? { pending } : {}),
   };
   const content = addLines([own]);
   if (content) scheduleRun();
+  return own.id;
+}
+
+/** True when the early text could be the start of a request to Bee: it routes as one, looks like the wake word, or Bee is listening. */
+function holdsForBee(text: string): boolean {
+  const { route, armed, conversationOpen } = wakeRoute(text);
+  return route.kind !== "meeting" || NEAR_WAKE.test(text) || armed || conversationOpen;
+}
+
+/**
+ * A mic phrase from speech-to-text (core/speech.ts PhraseLine). A final line with no early one takes the usual path
+ * (simulateLine). An early line shows at once as a pending meeting line, unless it echoes call audio (dropped, and its final
+ * too) or could be the start of a request to Bee (held): then nothing is added until the final, which takes the usual path,
+ * so "Bee, open … Teams" stays one request. The final of a shown line revises it (reviseLine).
+ */
+function micPhrase(line: PhraseLine): void {
+  const text = line.text.trim();
+  const open = micPhrases.get(line.id);
+  if (line.final) closePhrase(micPhrases, line.id);
+  // The early words did not look like a request, but the whole phrase is one ("Hey" → "Hey Bee, open Teams"): the early line
+  // goes, and the final takes the usual path.
+  if (open?.kind === "shown" && line.final && wakeRoute(text).route.kind !== "meeting") {
+    dropLines(new Set([open.lineId]));
+    actions.simulateLine(text, "mic");
+    return;
+  }
+  if (open?.kind === "shown") reviseLine(open.lineId, text, line.final);
+  if (open) {
+    if (open.kind === "held" && line.final) actions.simulateLine(text, "mic");
+    return;
+  }
+  if (line.final) {
+    actions.simulateLine(text, "mic");
+    return;
+  }
+  if (micEchoesCallAudio(text, state.session.lines, Date.now())) {
+    console.debug("teams-audio mic=echo");
+    micPhrases.set(line.id, { kind: "dropped" });
+    return;
+  }
+  const held = holdsForBee(text);
+  debugLog.debug("stt", "early", { held });
+  micPhrases.set(line.id, held ? { kind: "held" } : { kind: "shown", lineId: addOwnLine(text, "mic", true) });
+}
+
+/** Phrases still waiting for their final line. */
+const openPhrases = (): number => micPhrases.size + callPhrases.size;
+
+/** A phrase's final line came: once no phrase waits for one, endMeeting goes on. */
+function closePhrase(phrases: Map<number, OpenPhrase>, id: number): void {
+  phrases.delete(id);
+  if (openPhrases() > 0) return;
+  const waiting = finalsWaiting;
+  finalsWaiting = [];
+  for (const done of waiting) done();
+}
+
+/** Resolves once no phrase waits for its final line, or after FINALS_WAIT_MS. */
+function finalsSettled(): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(done, FINALS_WAIT_MS);
+    function done(): void {
+      clearTimeout(timer);
+      finalsWaiting = finalsWaiting.filter((waiting) => waiting !== done);
+      resolve();
+    }
+    finalsWaiting.push(done);
+  });
+}
+
+/** Takes lines out of the session (and out of the lines waiting for a direct request's reply). */
+function dropLines(ids: ReadonlySet<string>): void {
+  if (ids.size === 0) return;
+  set({ session: { ...state.session, lines: state.session.lines.filter((line) => !ids.has(line.id)) } });
+  parkedLines = parkedLines.filter((line) => !ids.has(line.id));
+}
+
+/**
+ * A phrase's final text for a line already in the session (an early result). Same content words: the text changes quietly and
+ * nothing runs. Changed: the line steers its turn, as a line spoken over the answer does (debounced, kept tips, restart caps),
+ * never a new turn that wipes the answer. The echo guard runs again on the new text. A line that is gone (a caption or call
+ * audio replaced it, the echo guard dropped it, the meeting ended) is left alone.
+ */
+function reviseLine(id: string, text: string, final: boolean): void {
+  const lines = state.session.lines;
+  const line = lines.find((entry) => entry.id === id);
+  if (!line || !text) return;
+  const revised: SessionLine = { ...line, text, pending: !final };
+  const others = lines.filter((entry) => entry.id !== id);
+  const now = Date.now();
+  // The mic heard the far end after all, or call audio repeats a caption: the line goes. Call audio that now repeats the
+  // user's mic line replaces it, as a new call-audio line does (addLines).
+  const echo = line.own ? micEchoesCallAudio(text, others, now) : isTeamsAudioLine(line) && teamsAudioEcho(text, others, now);
+  const gone = new Set(echo ? [id] : isTeamsAudioLine(line) ? teamsAudioReplaced(others, [revised]).map((entry) => entry.id) : []);
+  const changed = !sameContent(line.text, text);
+  debugLog.debug("stt", "revise", { final, changed, echo, replaced: echo ? 0 : gone.size });
+  const swap = (entry: SessionLine) => (entry.id === id ? revised : entry);
+  set({ session: { ...state.session, lines: lines.map(swap) } });
+  parkedLines = parkedLines.map(swap);
+  dropLines(gone);
+  // Like a new line (addLines): an echo or a replacement starts no turn; the words are already in.
+  if (echo || gone.size > 0 || !changed || isFiller(text)) return;
+  // Parked behind a direct request's reply: the line starts its turn with the new text when the reply lets go.
+  if (commandRun !== null || commandHold !== undefined) {
+    if (!parkedLines.some((entry) => entry.id === id)) parkedLines = [...parkedLines, revised];
+    return;
+  }
+  startTurn([revised], turnOpen);
+  scheduleRun();
 }
 
 /**
@@ -1343,15 +1483,22 @@ async function sessionToken(): Promise<string> {
   return token;
 }
 
-async function transcribePhrase(audio: Uint8Array<ArrayBuffer>): Promise<TranscribeResult> {
+/** One phrase (or its early cut) to speech-to-text in main. An abort (speech resumed) asks main to stop the request. */
+async function transcribePhrase(audio: Uint8Array<ArrayBuffer>, signal: AbortSignal): Promise<TranscribeResult> {
   const started = performance.now();
+  transcribeSeq += 1;
+  const requestId = transcribeSeq;
+  const cancel = () => void window.bee.cancelTranscribe({ requestId }).catch(() => undefined);
+  signal.addEventListener("abort", cancel, { once: true });
   try {
-    const result = await window.bee.transcribe({ audio, sessionToken: await sessionToken() });
+    const result = await window.bee.transcribe({ audio, requestId, sessionToken: await sessionToken() });
     debugLog.info("stt", "mic-phrase", { bytes: audio.byteLength, ms: Math.round(performance.now() - started), text: result.text, error: result.error });
     return result;
   } catch (error) {
     debugLog.warn("stt", "mic-phrase-failed", { bytes: audio.byteLength, ms: Math.round(performance.now() - started), error: errorData(error) });
     throw error;
+  } finally {
+    signal.removeEventListener("abort", cancel);
   }
 }
 
@@ -1381,7 +1528,8 @@ const clock = (at: number) => new Date(at).toLocaleTimeString([], { hour: "2-dig
  */
 async function showRecap(reason: RecapReason, since: number): Promise<void> {
   const from = Math.max(since, ...state.session.lines.filter((line) => line.own).map((line) => line.clientTs));
-  const missed = missedLines(state.session.lines, from);
+  // Final text only: a line still on its early text (a second old) is left out.
+  const missed = missedLines(state.session.lines.filter((line) => !line.pending), from);
   const bee = reason === "joined" ? [] : beeLines(recapEvents, from);
   const saved = reason !== "joined" && recapEvents.some((event) => event.kind === "summary" && event.at > from);
   const buttons: CardButton[] = !saved ? [] : followCard?.buttons.length ? followCard.buttons : [{ label: "Open summary", action: { kind: "openSummary" } }];
@@ -1500,6 +1648,12 @@ function endTeamsAudio(): void {
   const stop = stopTeamsAudio;
   stopTeamsAudio = null;
   stop?.();
+  // A stopped capture sends no more finals: its early lines stand as they are.
+  for (const [id, open] of [...callPhrases]) {
+    closePhrase(callPhrases, id);
+    const line = open.kind === "shown" ? state.session.lines.find((entry) => entry.id === open.lineId) : undefined;
+    if (line) reviseLine(line.id, line.text, true);
+  }
   if (state.teamsAudio.listening) setTeamsAudio({ listening: false });
 }
 
@@ -1538,7 +1692,7 @@ async function syncTeamsAudio(): Promise<void> {
     setTeamsAudio({ listening: true, failed: false, failure: null });
     console.debug("teams-audio open=1");
     capture.start(
-      (texts) => actions.teamsAudioLines(texts),
+      (lines) => actions.teamsAudioLines(lines),
       (failure) => {
         // Stopped by main: a failure (the call app closed, permission) is not retried in this call; a plain stop (the call
         // moved to another app) may restart.
@@ -1589,8 +1743,13 @@ const phraseCallbacks = {
     if (state.busy) spokenDuringRun = true;
     set({ heard: true });
   },
-  // Same path as a typed line; latestRun drops results from superseded runs.
-  onLine: (line: string) => void actions.simulateLine(line, "mic"),
+  // Speech came back after an early cut (a thinking pause): the phrase goes on, so "Got it…" waits for its new end.
+  onResume: () => {
+    heardPending = Math.max(0, heardPending - 1);
+    if (heardPending === 0 && state.heard) set({ heard: false });
+  },
+  // Same path as a typed line (micPhrase); latestRun drops results from superseded runs.
+  onLine: (line: PhraseLine) => micPhrase(line),
   // After onLine, so busy is already set when the ack ends and the pill never falls back to "Listening…".
   onSettled: (outcome?: PhraseOutcome) => {
     heardPending = Math.max(0, heardPending - 1);
@@ -1611,14 +1770,15 @@ export function startTestMic(): { phrase: (text: string) => void } {
   return {
     phrase: (text) => {
       phraseCallbacks.onSpeechEnd();
-      phraseCallbacks.onLine(text);
+      testPhraseSeq += 1;
+      phraseCallbacks.onLine({ id: testPhraseSeq, text, final: true });
       phraseCallbacks.onSettled();
     },
   };
 }
 
 type MicOptions = {
-  transcribe: (audio: Uint8Array<ArrayBuffer>) => Promise<TranscribeResult>;
+  transcribe: (audio: Uint8Array<ArrayBuffer>, signal: AbortSignal) => Promise<TranscribeResult>;
   onFrame?: (frame: Float32Array, sampleRate: number) => void;
 };
 
@@ -1914,20 +2074,35 @@ export const actions = {
   /**
    * Phrases heard from the call app (call audio). They join the session as "Meeting: …" (another person, not the user) and
    * follow the same steering rules as captions. A phrase that repeats a caption from the last 20 s is dropped; one that repeats
-   * the user's mic line from the last 10 s replaces it (the mic heard the speakers; addLines, teamsAudioReplaced). Console
-   * lines carry counts only.
+   * the user's mic line from the last 10 s replaces it (the mic heard the speakers; addLines, teamsAudioReplaced). An early
+   * line (final false) shows at once, pending; its final revises it (reviseLine), and an early line dropped as an echo stays
+   * dropped. Console lines carry counts only.
    */
-  teamsAudioLines(texts: string[]): void {
+  teamsAudioLines(lines: TeamsAudioLine[]): void {
     if (!state.settings?.teamsAudioFallbackEnabled) return;
     const now = Date.now();
-    const fresh = texts
-      .map((text) => text.trim())
-      .filter((text) => text.length > 0 && !teamsAudioEcho(text, state.session.lines, now))
-      .map((text): SessionLine => {
-        teamsAudioSeq += 1;
-        return { id: `teams-audio-${teamsAudioSeq}`, own: false, speakerId: TEAMS_AUDIO_SPEAKER_ID, speakerName: TEAMS_AUDIO_SPEAKER, text, clientTs: now, serverTs: null };
-      });
-    console.debug(`teams-audio lines +${fresh.length} echo ${texts.length - fresh.length}`);
+    const fresh: SessionLine[] = [];
+    let echoes = 0;
+    for (const line of lines) {
+      const text = line.text.trim();
+      const open = callPhrases.get(line.id);
+      if (line.final) closePhrase(callPhrases, line.id);
+      if (open) {
+        if (open.kind === "shown") reviseLine(open.lineId, text, line.final);
+        continue;
+      }
+      if (!text) continue;
+      if (teamsAudioEcho(text, state.session.lines, now)) {
+        echoes += 1;
+        if (!line.final) callPhrases.set(line.id, { kind: "dropped" });
+        continue;
+      }
+      teamsAudioSeq += 1;
+      const id = `teams-audio-${teamsAudioSeq}`;
+      if (!line.final) callPhrases.set(line.id, { kind: "shown", lineId: id });
+      fresh.push({ id, own: false, speakerId: TEAMS_AUDIO_SPEAKER_ID, speakerName: TEAMS_AUDIO_SPEAKER, text, clientTs: now, serverTs: null, ...(line.final ? {} : { pending: true }) });
+    }
+    console.debug(`teams-audio lines +${fresh.length} echo ${echoes}`);
     if (fresh.length > 0 && addLines(fresh)) scheduleRun();
   },
 
@@ -2099,7 +2274,11 @@ export const actions = {
    * the Stop meeting button reaches it through the machine. The session starts empty for the next meeting straight away; on failure it is put back, ahead of any lines
    * that arrived meanwhile. Resolves how it ended: saved, failed, or none (nothing to save).
    */
-  async endMeeting(options: { auto?: boolean; stopMic?: boolean } = {}): Promise<MeetingEndOutcome> {    const ended = state.session;
+  async endMeeting(options: { auto?: boolean; stopMic?: boolean } = {}): Promise<MeetingEndOutcome> {
+    // The summary, meeting memory and vmem take final text: wait for phrases still on their early text (bounded). A line still
+    // pending after that keeps its early text.
+    if (openPhrases() > 0) await finalsSettled();
+    const ended = state.session;
     // The conversation window and the conversation for vmem end with the meeting, even one with no lines to save. Bee's history
     // for the AI (main) carries on.
     closeConversation("meeting-end");

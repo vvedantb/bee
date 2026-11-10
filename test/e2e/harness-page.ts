@@ -19,7 +19,9 @@ async function run(): Promise<void> {
   const mic = startMicSession({
     sampleRate: capture.sampleRate,
     transcribe: (audio) => window.bee.transcribe({ audio, sessionToken }),
-    onLine: (line) => {
+    onLine: ({ text: line, final }) => {
+      // An early result may still be revised: report the phrase's final line.
+      if (!final) return;
       capture.stop();
       void window.bee
         .runPipeline({ transcript: [line], sessionToken })

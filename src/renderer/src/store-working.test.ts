@@ -2,6 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { pipelineRequestSchema, type LunaActivity, type PipelineRequest, type PipelineResult } from "../../shared/ipc";
 import type { startMicSession } from "./speech";
 
+// Phrase ids for lines the stubbed mic session hands over (core/speech.ts PhraseLine).
+let phraseSeq = 0;
+const nextPhrase = () => (phraseSeq += 1);
+
 // The pill's working state from the moment a line lands until the run settles: thinking or answering, then searching while
 // web_search runs, then the tips. Preload (window.bee), Clerk, the mic and speech-to-text are stubbed, as in store.test.ts.
 type MicArgs = Parameters<typeof startMicSession>[0];
@@ -65,7 +69,7 @@ async function loadStore(answers: PipelineResult[]) {
   /** A line lands from speech-to-text. The run starts on the next tick. */
   const say = (text: string) => {
     mic.onSpeechEnd?.();
-    mic.onLine(text);
+    mic.onLine({ id: nextPhrase(), text, final: true });
     mic.onSettled?.("words");
   };
   const emit = (tool: string, phase: "start" | "end") => activity({ runId: requests.at(-1)?.runId, tool, phase });

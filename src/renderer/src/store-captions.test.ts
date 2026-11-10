@@ -2,6 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { pipelineRequestSchema, type MeetingWindowCaptions, type PipelineRequest, type PipelineResult, type SettingsView } from "../../shared/ipc";
 import type { startMicSession } from "./speech";
 
+// Phrase ids for lines the stubbed mic session hands over (core/speech.ts PhraseLine).
+let phraseSeq = 0;
+const nextPhrase = () => (phraseSeq += 1);
+
 // Live captions from the experimental meeting window reader reach the same pipeline as spoken lines, labelled by speaker.
 // Preload (window.bee), Clerk, the mic and speech-to-text are stubbed, as in store.test.ts.
 type MicArgs = Parameters<typeof startMicSession>[0];
@@ -110,7 +114,7 @@ describe("store: live captions", () => {
     const { store, send, requests } = await loadStore();
     await store.actions.toggleMic();
     const mic = micSessions.at(-1);
-    mic?.onLine("we can offer fifteen percent off this quarter");
+    mic?.onLine({ id: nextPhrase(), text: "we can offer fifteen percent off this quarter", final: true });
     await vi.advanceTimersByTimeAsync(1000);
     await send([
       { speaker: "Sam Lee", text: "We can offer fifteen percent off this quarter." },
