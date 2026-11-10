@@ -460,7 +460,7 @@ describe("createAgentDesktopComputerRunner", () => {
       expect(() => runner.run(command as never, []), command).toThrow(/not allowed/);
     }
     expect(() => runner.run("press", ["cmd+q", "--app=Discord", "--force"])).toThrow(/not allowed/);
-    expect(() => runner.run("click", ["@s8f3k2p9:e2", "--headed"])).toThrow(/not allowed/);
+    expect(() => runner.run("click", ["@s8f3k2p9:e2", "--headed=yes"])).toThrow(/not allowed|no value/);
     expect(calls).toEqual([]);
   });
 });

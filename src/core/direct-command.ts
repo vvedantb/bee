@@ -124,6 +124,8 @@ export type ComputerHost = {
   confirm: (request: ConfirmRequest, signal: AbortSignal) => Promise<boolean>;
   /** The island's step line ("Clicking Send…"). */
   onStep?: (label: string) => void;
+  /** Lowers Bee's overlay for a headed command; returns the restore (core/computer-tools.ts yieldFocus). */
+  yieldFocus?: () => () => void;
   /** The run's controls, so main can stop it (the Stop button, "Bee, stop"). */
   onControl?: (control: RunControl) => void;
   /** A step limit, for tests. None by default: the loop guard, Stop and the clock end a run. */
@@ -204,6 +206,7 @@ async function runComputerCommand(args: {
         confirm: host.confirm,
         onEffect: (kind) => committed.add(kind),
         onStep: host.onStep,
+        ...(host.yieldFocus ? { yieldFocus: host.yieldFocus } : {}),
         onActivity: args.onActivity,
       }),
       // Memory changes nothing on screen, so its calls take no step of the run's budget.

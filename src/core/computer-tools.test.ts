@@ -52,7 +52,7 @@ const desktop: DesktopActions = {
 };
 
 function setup(
-  options: { confirm?: (request: ConfirmRequest, signal: AbortSignal) => Promise<boolean>; run?: ComputerRun; control?: RunControl; platform?: ComputerPlatform } = {},
+  options: { confirm?: (request: ConfirmRequest, signal: AbortSignal) => Promise<boolean>; run?: ComputerRun; control?: RunControl; platform?: ComputerPlatform; yieldFocus?: () => () => void } = {},
 ) {
   const fake = fakeRun();
   const run = options.run ?? fake.run;
@@ -69,6 +69,7 @@ function setup(
       return options.confirm ? options.confirm(request, signal) : true;
     },
     onStep: (label) => steps.push(label),
+    ...(options.yieldFocus ? { yieldFocus: options.yieldFocus } : {}),
   });
   // The AI SDK's call shape.
   const call = <K extends keyof typeof tools>(name: K, input: Parameters<NonNullable<(typeof tools)[K]["execute"]>>[0]) =>
@@ -720,7 +721,7 @@ describe("computerTools: a slow or failing tree (a Chromium or WebView2 app such
   it("gives find a budget, and reads again once when that fails where a retry is safe", async () => {
     const { run, calls } = timedRun((_call, index) => (index === 0 ? { ok: false, code: "TIMEOUT", retry: "safe" } : { ok: true, data: { matches: [{ role: "textfield", name: "Type a message", ref_id: "@s8:e1" }] } }));
     const { call } = setup({ run });
-    expect(await call("find", { app: "Microsoft Teams", role: "textfield" })).toBe('textfield "Type a message" @s8:e1');
+    expect(await call("find", { app: "Microsoft Teams", role: "textfield" })).toMatch(/^textfield "Type a message" @s8:e1 Teams tip: cmd\+e goes to the search box/);
     expect(calls.map(({ args, timeoutMs }) => [args.at(-1), timeoutMs])).toEqual([
       ["--timeout-ms=12000", 18_000],
       ["--timeout-ms=25000", 31_000],
@@ -834,8 +835,8 @@ describe("computerTools: agent-desktop 1.1 snapshots and refs", () => {
     const { call, steps } = setup({ run, platform: "windows" });
     const shown = await call("snapshot", { app: "Microsoft Teams" });
     expect(calls.map(({ args, timeoutMs }) => [args.slice(2).join(" "), timeoutMs])).toEqual([
-      ["--app=Microsoft Teams --timeout-ms=12000", 18_000],
-      ["--app=Microsoft Teams --max-depth=25 --timeout-ms=25000", 31_000],
+      ["--app=ms-teams.exe --timeout-ms=12000", 18_000],
+      ["--app=ms-teams.exe --max-depth=25 --timeout-ms=25000", 31_000],
     ]);
     // Fewer refs, but each one acts.
     expect(shown).toContain('button "Item 11" @s7:e11');
@@ -862,7 +863,7 @@ describe("computerTools: agent-desktop 1.1 snapshots and refs", () => {
     expect(shallowTree(SNAPSHOT)).toBe(false);
     const { run, calls } = recorded(({ args }) => ({ ok: true, data: teams(args.some((arg) => arg.startsWith("--max-depth=")) ? DEEP : CUT) }));
     const shown = await setup({ run, platform: "windows" }).call("snapshot", { app: "Microsoft Teams" });
-    expect(calls.map(({ args }) => args.slice(2).join(" "))).toEqual(["--app=Microsoft Teams --timeout-ms=12000", "--app=Microsoft Teams --max-depth=25 --timeout-ms=25000"]);
+    expect(calls.map(({ args }) => args.slice(2).join(" "))).toEqual(["--app=ms-teams.exe --timeout-ms=12000", "--app=ms-teams.exe --max-depth=25 --timeout-ms=25000"]);
     // Fewer refs than the cut read, but these are the controls.
     expect(shown).toContain('textfield "Type a message" @s7:e9');
     expect(shown).not.toMatch(/sit deeper/);
@@ -1066,7 +1067,7 @@ describe("computerTools: Teams on Windows (app names, focus for keys, ambiguous 
     expect(matchApp("ms", windows)).toBeNull();
   });
 
-  it("asks list-apps once when an app is not found by the name given, uses the real name, says so, and keeps it for the run", async () => {
+  it("uses ms-teams.exe for Teams at once on Windows, says so, and keeps it for the run; list-apps names other apps", async () => {
     const { run, calls } = recorded(({ command, args }) => {
       if (command === "list-apps") return APPS;
       if (args.includes("--app=ms-teams.exe")) return command === "snapshot" ? { ok: true, data: window("s7", controls("s7")) } : { ok: true, data: { matches: [] } };
@@ -1079,8 +1080,6 @@ describe("computerTools: Teams on Windows (app names, focus for keys, ambiguous 
     expect(String(await call("find", { app: "Teams", name: "Zuzanna" }))).toMatch(/^Using ms-teams\.exe for Teams\. No matches/);
     expect(await call("press_key", { keys: "escape", app: "Teams", effect: "none" })).toMatch(/^Using ms-teams\.exe for Teams\. Done/);
     expect(lines(calls)).toEqual([
-      "snapshot --app=Teams --skeleton",
-      "list-apps",
       "snapshot --app=ms-teams.exe --skeleton",
       "find --app=ms-teams.exe --name=Zuzanna --limit=15",
       "press escape --app=ms-teams.exe",
@@ -1125,6 +1124,81 @@ describe("computerTools: Teams on Windows (app names, focus for keys, ambiguous 
     const none = recorded(({ command }) => (command === "press" ? noFocus : DONE));
     await setup({ run: none.run, platform: "windows" }).call("press_key", { keys: "return", app: "ms-teams.exe", effect: "none" });
     expect(lines(none.calls)).toEqual(["press return --app=ms-teams.exe"]);
+  });
+
+  it("clicks with real input when asked, alone and inside act, and steps Bee's overlay aside only for headed commands", async () => {
+    const { run, calls } = recorded(({ command }) => (command === "snapshot" ? { ok: true, data: window("s7", controls("s7")) } : DONE));
+    const events: string[] = [];
+    const { call } = setup({ run, platform: "windows", yieldFocus: () => (events.push("yield"), () => events.push("restore")) });
+    await call("snapshot", { app: "ms-teams.exe" });
+    await call("click", { ref: "@s7:e5", effect: "none" });
+    expect(events).toEqual([]);
+    expect(await call("click", { ref: "@s7:e5", effect: "none", physical: true })).toMatch(/^Done/);
+    expect(await call("act", { actions: [{ do: "click", ref: "@s7:e5", effect: "none", physical: true }] })).toMatch(/1\. click: Done/);
+    expect(lines(calls).slice(1)).toEqual(["click @s7:e5", `click @s7:e5 ${HEADED_FLAG}`, `click @s7:e5 ${HEADED_FLAG}`]);
+    expect(events).toEqual(["yield", "restore", "yield", "restore"]);
+    for (const { command, args } of calls) expect(() => assertComputerUse(command, args)).not.toThrow();
+  });
+
+  it("on Windows clicks once more with real input when a navigation click is refused (POLICY_DENIED), never a send", async () => {
+    const chats = [{ role: "treeitem", name: "Group chat George, Jayke, +2", ref_id: "@s7:e1" }, ...["Alice", "Bruno", "Chen", "Dara", "Eli", "Faye", "Gus", "Hana"].map((name, index) => ({ role: "treeitem", name, ref_id: `@s7:e${index + 10}` }))];
+    const denied: AgentDesktopResult = { ok: false, code: "POLICY_DENIED", kind: "supported_action", message: "direct semantic delivery is unavailable and physical fallback is denied", retry: "safe" };
+    const reply = ({ command, args }: Seen): AgentDesktopResult =>
+      command === "snapshot" ? { ok: true, data: window("s7", chats) } : command === "click" && !args.includes(HEADED_FLAG) ? denied : DONE;
+    const nav = recorded(reply);
+    const tools = setup({ run: nav.run, platform: "windows" });
+    await tools.call("snapshot", { app: "ms-teams.exe" });
+    expect(await tools.call("click", { ref: "@s7:e1", effect: "none" })).toMatch(/^Done/);
+    expect(lines(nav.calls).slice(1)).toEqual(["click @s7:e1", `click @s7:e1 ${HEADED_FLAG}`]);
+    // Inside act it is the same click action.
+    expect(await tools.call("act", { actions: [{ do: "click", ref: "@s7:e1", effect: "none" }] })).toMatch(/1\. click: Done/);
+    expect(lines(nav.calls).slice(3)).toEqual(["click @s7:e1", `click @s7:e1 ${HEADED_FLAG}`]);
+    // A send stays behind its Confirm and is never clicked again with real input.
+    const send = recorded(({ command, args }) => (command === "snapshot" ? { ok: true, data: window("s7", controls("s7")) } : reply({ command, args })));
+    const sending = setup({ run: send.run, platform: "windows" });
+    await sending.call("snapshot", { app: "ms-teams.exe" });
+    expect(await sending.call("click", { ref: "@s7:e3", effect: "send" })).toMatch(/POLICY_DENIED/);
+    expect(sending.asked).toHaveLength(1);
+    expect(lines(send.calls).slice(1)).toEqual(["click @s7:e3"]);
+    // Not on a Mac, and not for another refusal.
+    const mac = recorded(reply);
+    const macTools = setup({ run: mac.run, platform: "mac" });
+    await macTools.call("snapshot", { app: "ms-teams.exe" });
+    expect(await macTools.call("click", { ref: "@s7:e1", effect: "none" })).toMatch(/POLICY_DENIED/);
+    expect(lines(mac.calls).slice(1)).toEqual(["click @s7:e1"]);
+    const other = recorded(({ command }) => (command === "snapshot" ? { ok: true, data: window("s7", chats) } : { ok: false, code: "POLICY_DENIED", kind: "off_limits" }));
+    const otherTools = setup({ run: other.run, platform: "windows" });
+    await otherTools.call("snapshot", { app: "ms-teams.exe" });
+    await otherTools.call("click", { ref: "@s7:e1", effect: "none" });
+    expect(lines(other.calls).slice(1)).toEqual(["click @s7:e1"]);
+  });
+
+  it("on Windows names Teams ms-teams.exe at once, keeps classic Teams.exe when that is what runs, and gives the Teams tip once", async () => {
+    const first = recorded(({ command }) => (command === "list-windows" ? { ok: true, data: { windows: [] } } : DONE));
+    const tools = setup({ run: first.run, platform: "windows" });
+    const listed = await tools.call("list_windows", { app: "Microsoft Teams" });
+    expect(lines(first.calls)).toEqual(["list-windows --app=ms-teams.exe"]);
+    expect(listed).toMatch(/^Using ms-teams\.exe for Microsoft Teams\. No windows\. Teams tip: ctrl\+e goes to the search box/);
+    expect(await tools.call("list_windows", { app: "Teams" })).not.toMatch(/Teams tip/);
+    // Classic Teams: the alias misses, list-apps names the running one, and the call goes there.
+    const classic = recorded(({ command, args }) =>
+      command === "list-windows" && args.includes("--app=ms-teams.exe") ? { ok: false, code: "APP_NOT_FOUND" } : command === "list-apps" ? { ok: true, data: { apps: [{ name: "Teams.exe", pid: 1 }] } } : { ok: true, data: { windows: [] } },
+    );
+    await setup({ run: classic.run, platform: "windows" }).call("list_windows", { app: "Teams" });
+    expect(lines(classic.calls)).toEqual(["list-windows --app=ms-teams.exe", "list-apps", "list-windows --app=Teams.exe"]);
+    // Not on a Mac: no alias.
+    const mac = recorded(() => ({ ok: true, data: { windows: [] } }));
+    await setup({ run: mac.run, platform: "mac" }).call("list_windows", { app: "Teams" });
+    expect(lines(mac.calls)).toEqual(["list-windows --app=Teams"]);
+  });
+
+  it("gives the Teams tip when open_app or focus_window reaches Teams, once, and not for other apps", async () => {
+    const opened = setup({ platform: "windows" });
+    expect(await opened.call("open_app", { name: "Slack" })).toBe("Done: Opened Slack.");
+    expect(await opened.call("open_app", { name: "ms-teams.exe" })).toMatch(/^Done: Opened ms-teams\.exe\. Teams tip: ctrl\+e goes to the search box/);
+    expect(await opened.call("focus_window", { app: "Teams" })).toBe("Done: Focused Teams.");
+    const focused = setup({ platform: "mac" });
+    expect(await focused.call("focus_window", { app: "Microsoft Teams" })).toMatch(/Teams tip: cmd\+e goes to the search box/);
   });
 
   it("reads the window again when a saved ref is refused as ambiguous, and uses the same element there only when it is the only one", async () => {

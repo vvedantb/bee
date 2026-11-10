@@ -126,6 +126,24 @@ function applyMeetingMode(window: BrowserWindow, meetingMode: boolean): void {
   window.setAlwaysOnTop(true, meetingMode ? "screen-saver" : "floating");
 }
 
+/**
+ * Before a headed (physical) computer-use command on Windows. The overlay is always on top ("screen-saver" in meeting mode) and
+ * usually holds the foreground after the user asked Bee by keyboard, so Windows can refuse agent-desktop's SetForegroundWindow
+ * for the target app, and the overlay can sit over the element a real click lands on. Bee drops always-on-top, gives up focus
+ * and ignores the mouse until the command ends, then restores the stack. Focus is not taken back.
+ */
+function yieldOverlay(): () => void {
+  const window = win;
+  if (process.platform !== "win32" || !window || window.isDestroyed()) return () => {};
+  debugLog.debug("window", "yield-for-headed");
+  window.setAlwaysOnTop(false);
+  window.blur();
+  setInteractive(window, false);
+  return () => {
+    if (!window.isDestroyed()) applyMeetingMode(window, settings.view().meetingMode || autoOverlay);
+  };
+}
+
 function createWindow(meetingMode: boolean, scale: number): BrowserWindow {
   interfaceScale = scale;
   windowSize = "collapsed";
@@ -541,7 +559,7 @@ if (clerk.isPrimaryInstance) {
       briefings: briefings.get,
       desktop,
       computer: computerRunner && computerPlatform
-        ? { platform: computerPlatform, run: computerRunner.run, cleanup: computerRunner.cleanup }
+        ? { platform: computerPlatform, run: computerRunner.run, cleanup: computerRunner.cleanup, yieldFocus: yieldOverlay }
         : undefined,
       look: createScreenCapture(process.platform),
       ...(isMac ? { screenRecording: macScreenRecording } : {}),

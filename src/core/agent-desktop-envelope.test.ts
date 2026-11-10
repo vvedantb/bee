@@ -135,11 +135,12 @@ describe("assertComputerUse", () => {
     for (const state of ["focused", "enabled", ""]) expect(() => assertComputerUse("find", ["--app=Microsoft Teams", `--state=${state}`]), state).toThrow(/not allowed/);
   });
 
-  it("allows physical input only on press, type and focus", () => {
+  it("allows physical input only on click, press, type and focus", () => {
+    expect(() => assertComputerUse("click", [REF, HEADED_FLAG])).not.toThrow();
     expect(() => assertComputerUse("press", ["return", "--app=Slack", HEADED_FLAG])).not.toThrow();
     expect(() => assertComputerUse("type", [REF, HEADED_FLAG, STDIN_FLAG])).not.toThrow();
     expect(() => assertComputerUse("focus", [REF, HEADED_FLAG])).not.toThrow();
-    for (const command of ["click", "set-value", "scroll", "snapshot", "close-app", "select"]) {
+    for (const command of ["set-value", "scroll", "snapshot", "close-app", "select"]) {
       const args = command === "snapshot" ? ["--app=Slack"] : command === "close-app" ? ["Slack"] : [REF];
       expect(() => assertComputerUse(command, [...args, HEADED_FLAG, ...(command === "set-value" ? [STDIN_FLAG] : command === "select" ? ["--", "x"] : [])]), command).toThrow(/not allowed/);
     }

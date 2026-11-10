@@ -3,6 +3,7 @@ import { z } from "zod";
 import {
   HEADED_FLAG, REF_PATTERN, STDIN_FLAG, identityUnproven, parseApps, parseWindows, type AgentDesktopFailure, type AgentDesktopResult, type ComputerRun, type ComputerUseCommand,
 } from "./agent-desktop-envelope";
+import { isTeamsApp, teamsTip } from "./app-playbooks";
 import { awaitAnswer, CONFIRM_TIMEOUT_MS, type ComputerPlatform, type IrreversibleKind, type RunControl } from "./computer-control";
 import {
   EFFECTS, LABEL_MAX, WINDOW_ROLES, confirmDetail, confirmQuestion, focusAfterClick, insideOf, irreversibleKind, isNavField, isTextEntry, keepsFocus, keysLabel, shellElement,
@@ -39,6 +40,11 @@ export type ComputerToolDeps = {
   onStep?: (label: string) => void;
   onActivity?: (activity: LunaToolActivity) => void;
   confirmTimeoutMs?: number;
+  /**
+   * Called before a headed (physical) command: main lowers Bee's own overlay so agent-desktop can bring the target app forward
+   * and click it. Returns the restore, called once the command ends.
+   */
+  yieldFocus?: () => () => void;
   /**
    * An action finished that the confirm gate (core/computer-gate.ts, which reads the tree, not just the AI's effect) counts as a
    * send, delete, purchase or form submit: the proof the run's last line may claim it by (core/claim-guard.ts).
@@ -169,7 +175,7 @@ const HINTS: Record<string, string> = {
   APP_NOT_FOUND: "that app is not running, or has another name. Check list_apps, or open it with open_app.",
   WINDOW_NOT_FOUND: "no such window. Check list_windows.",
   ACTION_NOT_SUPPORTED: "that element cannot do this. Try another tool or element.",
-  POLICY_DENIED: "this step needs real input. Set physical only if the step truly needs real keys or focus.",
+  POLICY_DENIED: "this step needs real input. On click, type_text, focus or press_key, set physical only if the step truly needs real keys, focus or a headed click.",
   ACTION_FAILED: "it may still have happened. Look again before trying anything else. Never repeat a send or delete blindly.",
   APP_UNRESPONSIVE: "it may still have happened. Look again before trying anything else. Never repeat a send or delete blindly.",
   TIMEOUT: "it may still have happened. Look again before trying anything else.",
@@ -535,14 +541,14 @@ const effectSchema = z
 const physicalSchema = z
   .boolean()
   .optional()
-  .describe("Real key presses or focus. Only when POLICY_DENIED said this step needs it, or the system says this computer always needs it. Never to retry other errors.");
+  .describe("Real key presses, focus or a real click. Only when POLICY_DENIED said this step needs it, or the system says this computer always needs it. Never to retry other errors.");
 
 // act: the most actions one batch may hold, and what each one is. Only actions on refs the AI already has, keys and short pauses:
 // no looking (a batch never acts on a ref it has not seen), and no apps or pages (they change what the refs mean).
 export const ACT_MAX = 8;
 const ACT_PAUSE_MAX_MS = 3000;
 const actSchema = z.discriminatedUnion("do", [
-  z.object({ do: z.literal("click"), ref: refSchema, effect: effectSchema }),
+  z.object({ do: z.literal("click"), ref: refSchema, effect: effectSchema, physical: physicalSchema }),
   z.object({ do: z.literal("set_value"), ref: refSchema, value: z.string().max(4000), effect: effectSchema }),
   z.object({ do: z.literal("type_text"), ref: refSchema, text: z.string().min(1).max(4000), effect: effectSchema, physical: physicalSchema }),
   z.object({ do: z.literal("focus"), ref: refSchema, physical: physicalSchema }),
@@ -622,6 +628,9 @@ const appWords = (name: string) =>
 
 const LIBREOFFICE_ASK = /^(?:soffice|libreoffice(?:writer|calc|impress)?|writer)$/;
 const LIBREOFFICE_PROCESS = /^(?:soffice(?:\.bin|\.exe)?|libreoffice[\w .-]*)$/i;
+
+/** Windows: the new Teams runs as ms-teams.exe, so Teams and Microsoft Teams mean it before list-apps is read. Else null. */
+export const windowsAlias = (name: string): string | null => (isTeamsApp(name) && !/\.exe$/i.test(name.trim()) ? "ms-teams.exe" : null);
 
 /**
  * The running app (as list-apps names it) the AI means: the same name, the same but for case, the same words (Chrome is
@@ -747,12 +756,16 @@ export function computerTools(deps: ComputerToolDeps) {
   const exec = async (command: ComputerUseCommand, args: string[], timeoutMs: number, stdin?: string): Promise<AgentDesktopResult> => {
     const started = performance.now();
     let result: AgentDesktopResult;
+    // A headed command needs the target app in front. Bee's overlay stays on top and may hold the foreground, so it steps aside first.
+    const restore = args.includes(HEADED_FLAG) ? deps.yieldFocus?.() : undefined;
     try {
       // stdin (type and set-value text) is never logged: args carry only --stdin.
       result = await deps.run(command, args, { timeoutMs, signal: control.signal, ...(stdin !== undefined ? { stdin } : {}) });
     } catch (error) {
       debugLog.warn("computer", "exec-refused", { command, args, ms: msSince(started), error: errorData(error).message });
       return { ok: false, code: "REFUSED" };
+    } finally {
+      restore?.();
     }
     debugLog.debug("computer", "exec", { command, args, ok: result.ok, code: result.ok ? null : result.code, ms: msSince(started) });
     if (!result.ok) {
@@ -963,15 +976,24 @@ export function computerTools(deps: ComputerToolDeps) {
   const done = (result: AgentDesktopResult) => (result.ok ? formatDone(result.data) : errorLine(result));
   const desktopLine = (result: DesktopActionResult) => (result.ok ? `Done: ${result.message}.` : `Error: ${result.message}.`);
 
+  // The Teams tip (ctrl+e to search) goes out once a run, on the first result about Teams, whatever words the request used.
+  let teamsTold = false;
+  /** " Teams tip: …" the first time a result is about Teams, else "". */
+  const tipFor = (app: string | undefined): string => {
+    if (teamsTold || !app || !isTeamsApp(app)) return "";
+    teamsTold = true;
+    return ` ${teamsTip(deps.platform)}`;
+  };
+
   /**
    * Runs work with the app name agent-desktop knows: on Windows it wants the exact process identity (ms-teams.exe, not Teams).
    * A name this run matched before, or one the last list-apps matched; on APP_NOT_FOUND, list-apps, match, and run once more.
    * note says which name was used when it is not the AI's.
    */
   const withApp = async (asked: string | undefined, work: (app: string | undefined) => Promise<AgentDesktopResult>) => {
-    if (asked === undefined) return { result: await work(undefined), app: undefined, note: "" };
+    if (asked === undefined) return { result: await work(undefined), app: undefined, note: "", tip: "" };
     const name = cleanApp(asked) ?? asked;
-    const known = matched.get(name) ?? (running ? matchApp(name, running) : null);
+    const known = matched.get(name) ?? (running ? matchApp(name, running) : null) ?? (deps.platform === "windows" ? windowsAlias(name) : null);
     let app = known && !offLimitsApp(known) ? known : name;
     let result = await work(app);
     if (!result.ok && result.code === "APP_NOT_FOUND" && !control.reason()) {
@@ -985,7 +1007,7 @@ export function computerTools(deps: ComputerToolDeps) {
       }
     }
     if (result.ok && app !== name) matched.set(name, app);
-    return { result, app, note: app !== name ? `Using ${app} for ${name}. ` : "" };
+    return { result, app, note: app !== name ? `Using ${app} for ${name}. ` : "", tip: result.ok ? tipFor(app) : "" };
   };
 
   /**
@@ -1041,12 +1063,17 @@ export function computerTools(deps: ComputerToolDeps) {
    * (AMBIGUOUS_TARGET: nothing reached the app) is found again in a new read of its window by role and name; the action runs on
    * it once more only when gate (the step's confirm gate) calls neither element a send, delete, buy or submit.
    */
-  const onRef = (command: ComputerUseCommand, given: string, args: string[] = [], timeoutMs = ACT_MS, stdin?: string, gate?: (ref: string) => GateAction) => async () => {
+  const onRef = (command: ComputerUseCommand, given: string, args: string[] = [], timeoutMs = ACT_MS, stdin?: string, gate?: (ref: string) => GateAction, headedRetry?: () => boolean) => async () => {
     let ref = given;
     let result = await exec(command, [ref, ...args], timeoutMs, stdin);
     if (!result.ok && result.kind === "resolution_identity_unknown" && result.retry === "safe" && !control.reason()) {
       debugLog.info("computer", "act-again", { command, kind: result.kind });
       result = await exec(command, [ref, ...args], timeoutMs, stdin);
+    }
+    // Windows: the app takes no direct click (POLICY_DENIED, supported_action) and nothing was delivered, so click once more with real input.
+    if (!result.ok && result.code === "POLICY_DENIED" && (result.kind === undefined || /supported_action/i.test(result.kind)) && headedRetry?.() && !control.reason()) {
+      debugLog.info("computer", "act-headed", { command, kind: result.kind ?? null });
+      result = await exec(command, [ref, ...args, HEADED_FLAG], timeoutMs, stdin);
     }
     let note = "";
     if (!result.ok && result.code === "AMBIGUOUS_TARGET" && !control.reason()) {
@@ -1071,10 +1098,12 @@ export function computerTools(deps: ComputerToolDeps) {
     badRef(ref) ?? (SHELL_COMMANDS.has(command) && shellElement(refs.get(ref)) ? SHELL_MESSAGE : null);
 
   // The acting tools as actions, so a tool call and a batch (act) run the same checks, gates and work.
-  const clickAction = ({ ref, effect }: { ref: string; effect: Effect }): Action => ({
+  // physical: a real click (--headed). Without it, a navigation click (effect none) that Windows refuses is retried headed once. A
+  // send, delete, buy or submit never is: the gate has already decided it (here and from the tree), and only the AI may ask for it.
+  const clickAction = ({ ref, effect, physical }: { ref: string; effect: Effect; physical?: boolean | undefined }): Action => ({
     name: "click",
     label: label(ref, "Clicking", "Clicking…"),
-    work: onRef("click", ref, [], ACT_MS, undefined, (to) => gateFor("click", to, { effect })()),
+    work: onRef("click", ref, physical ? [HEADED_FLAG] : [], ACT_MS, undefined, (to) => gateFor("click", to, { effect })(), () => deps.platform === "windows" && !physical && effect === "none" && !irreversibleKind(gateFor("click", ref, { effect })())),
     gate: gateFor("click", ref, { effect }),
     refuse: refuseRef("click", ref),
   });
@@ -1350,7 +1379,7 @@ export function computerTools(deps: ComputerToolDeps) {
             ...(again && whole && !skeleton ? [`--max-depth=${DEEP_DEPTH}`] : []),
             `--timeout-ms=${budget}`,
           ];
-          const { result, app, note } = await withApp(input.root ? undefined : input.app, (name) => observe("snapshot", args(name, input.root), whole ? settleWindow(skeleton) : undefined));
+          const { result, app, note, tip } = await withApp(input.root ? undefined : input.app, (name) => observe("snapshot", args(name, input.root), whole ? settleWindow(skeleton) : undefined));
           const where: Scope = input.root ? (scopes.get(sidOf(input.root)) ?? {}) : { app, window_id: input.window_id };
           // A region whose ref is refused as ambiguous: read the window again, and read the same element's region there when it is
           // the only one with its role and name; else show the new read of the window.
@@ -1373,7 +1402,7 @@ export function computerTools(deps: ComputerToolDeps) {
                 unproven(result.data) ? UNPROVEN_NOTE : null,
               ].filter((line) => line !== null)
             : [];
-          return `${note}${[shown.text, ...notes].join("\n")}`;
+          return `${note}${[shown.text, ...notes].join("\n")}${tip}`;
         }),
     }),
 
@@ -1406,7 +1435,7 @@ export function computerTools(deps: ComputerToolDeps) {
             ...(input.exact ? ["--exact"] : []),
             `--limit=${FIND_LIMIT}`,
           ];
-          const { result, app, note } = await withApp(input.root ? undefined : input.app, (name) => observe("find", (budget) => [...args(name), `--timeout-ms=${budget}`]));
+          const { result, app, note, tip } = await withApp(input.root ? undefined : input.app, (name) => observe("find", (budget) => [...args(name), `--timeout-ms=${budget}`]));
           // A match keeps where it sits when a snapshot showed it, or sits inside root when one was given.
           const inside = insideOf(input.root ? refs.get(input.root) : null);
           const where: Scope = input.root ? (scopes.get(sidOf(input.root)) ?? {}) : { app, window_id: input.window_id };
@@ -1419,7 +1448,7 @@ export function computerTools(deps: ComputerToolDeps) {
             for (const present of result.data.roles_present.slice(0, 60)) if (typeof present === "string") roles.add(roleWord(present));
           }
           const mapped = role && input.role && role.role !== roleWord(input.role) ? `Role ${role.role} for ${roleWord(input.role)}. ` : "";
-          return `${note}${mapped}${result.ok ? formatMatches(result.data, found) : errorLine(result, true)}`;
+          return `${note}${mapped}${result.ok ? formatMatches(result.data, found) : errorLine(result, true)}${tip}`;
         }),
     }),
 
@@ -1458,7 +1487,7 @@ export function computerTools(deps: ComputerToolDeps) {
         step("list_windows", "Checking open windows…", async () => {
           const invalid = badApp(input.app);
           if (invalid) return invalid;
-          const { result, note } = await withApp(input.app, (app) => exec("list-windows", scope({ app }), READ_MS));
+          const { result, note, tip } = await withApp(input.app, (app) => exec("list-windows", scope({ app }), READ_MS));
           if (!result.ok) return `${note}${errorLine(result, true)}`;
           const listed = parseWindows(result.data)
             .filter((window) => !offLimitsApp(window.app))
@@ -1468,13 +1497,13 @@ export function computerTools(deps: ComputerToolDeps) {
             listed.length > 0
               ? listed.map((window) => `${window.id} ${quoted(window.app)} ${quoted(window.title)}${window.focused ? " (focused)" : ""}`).join("\n")
               : "No windows."
-          }`;
+          }${tip}`;
         }),
     }),
 
     click: tool({
       description: "Click (press) the element with this ref.",
-      inputSchema: z.object({ ref: refSchema, effect: effectSchema }),
+      inputSchema: z.object({ ref: refSchema, effect: effectSchema, physical: physicalSchema }),
       execute: (input) => run(clickAction(input)),
     }),
 
@@ -1565,7 +1594,7 @@ export function computerTools(deps: ComputerToolDeps) {
           if (offLimitsApp(name)) return OFF_LIMITS_MESSAGE;
           const result = await deps.desktop.openApp(name);
           if (result.ok) [currentApp, lastField] = [name, null];
-          return desktopLine(result);
+          return `${desktopLine(result)}${result.ok ? tipFor(name) : ""}`;
         }),
     }),
 
@@ -1577,7 +1606,7 @@ export function computerTools(deps: ComputerToolDeps) {
           if (offLimitsApp(app)) return OFF_LIMITS_MESSAGE;
           const result = await deps.desktop.focusWindow({ app, ...(title ? { title } : {}) });
           if (result.ok) [currentApp, lastField] = [app, null];
-          return desktopLine(result);
+          return `${desktopLine(result)}${result.ok ? tipFor(app) : ""}`;
         }),
     }),
 
