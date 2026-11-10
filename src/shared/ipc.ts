@@ -325,6 +325,12 @@ export const meetingSummaryRequestSchema = z.object({
   // The detected meeting (MeetingContextView.id) the lines belong to, so a summary written after the next meeting began still
   // saves to the right meeting memory.
   meetingId: z.number().int().nonnegative().optional(),
+  // A meeting or call where only the mic was heard (no Teams audio, no captions): who said what is unknown.
+  attributionUnknown: z.boolean().optional(),
+  // Line counts by source, for the log. Never text.
+  teamsAudioLines: z.number().int().nonnegative().optional(),
+  captionLines: z.number().int().nonnegative().optional(),
+  micLines: z.number().int().nonnegative().optional(),
   sessionToken: z.string().max(8000),
 });
 export type MeetingSummaryRequest = z.infer<typeof meetingSummaryRequestSchema>;

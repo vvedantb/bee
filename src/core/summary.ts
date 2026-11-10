@@ -28,10 +28,44 @@ export const SPEAKER_RULES = [
   "The transcript only has what Bee heard or read in the call. Do not guess what others said.",
 ].join("\n");
 
+// Added when a meeting or call was heard only through the mic: lines are unlabelled and may include other people.
+export const ATTRIBUTION_UNKNOWN_RULES = [
+  "The transcript lines are unlabelled. Bee heard only the mic, not the meeting audio, so lines may include other people heard through the speakers.",
+  "Do not assume the user said any line. Do not attribute decisions or action items to anyone, and do not invent names.",
+  "For every action item, write \"Owner unknown\" instead of a name, for example \"- Owner unknown: send the quote\".",
+].join("\n");
+
+export const ATTRIBUTION_UNAVAILABLE = "Attribution unavailable: Bee heard only the mic, not the meeting audio";
+
 // A plain line (solo, the speaker is the user) or a speaker-labelled line from a synced meeting.
 export type TranscriptLine = string | { speaker: string; text: string };
 
-export type SummaryInput = { transcript: TranscriptLine[]; notesCited?: string[]; tips?: string[] };
+export type SummaryInput = {
+  transcript: TranscriptLine[];
+  notesCited?: string[];
+  tips?: string[];
+  /** A meeting or call heard only through the mic: nobody can be named as speaker or owner. */
+  attributionUnknown?: boolean;
+};
+
+const PLACEHOLDER_OWNER = /^\s*(?:\*\*)?speaker(?:\s*#?\d+)?(?:\*\*)?\s*:\s*/i;
+
+/** Replaces an invented "Speaker:" or "Speaker 2:" owner with "Owner unknown". Real names are untouched. */
+export function scrubPlaceholderOwner(item: string): string {
+  return PLACEHOLDER_OWNER.test(item) ? item.replace(PLACEHOLDER_OWNER, "Owner unknown: ") : item;
+}
+
+function scrubActionItems(body: string): string {
+  const lines = body.replace(/\r\n/g, "\n").split("\n");
+  let inActions = false;
+  return lines
+    .map((line) => {
+      if (line.startsWith("## ")) inActions = line.slice(3).trim().toLowerCase() === "action items";
+      const match = inActions ? /^(\s*[-*]\s+)(.*)$/.exec(line) : null;
+      return match ? `${match[1]}${scrubPlaceholderOwner(match[2] ?? "")}` : line;
+    })
+    .join("\n");
+}
 
 export function lineText(line: TranscriptLine): string {
   return typeof line === "string" ? line : `${line.speaker.trim()}: ${line.text.trim()}`;
@@ -75,7 +109,8 @@ export function buildSummaryPrompt(args: SummaryInput): { system: string; prompt
     "",
     "Summary:",
   ].join("\n");
-  return { system: speakers.length > 0 ? `${SUMMARY_SYSTEM}\n${SPEAKER_RULES}` : SUMMARY_SYSTEM, prompt };
+  const system = speakers.length > 0 ? `${SUMMARY_SYSTEM}\n${SPEAKER_RULES}` : SUMMARY_SYSTEM;
+  return { system: args.attributionUnknown && speakers.length === 0 ? `${system}\n${ATTRIBUTION_UNKNOWN_RULES}` : system, prompt };
 }
 
 /** The system first, with a cache breakpoint (gateway.ts ANTHROPIC_CACHE), then the transcript. */
@@ -88,9 +123,11 @@ export function summaryRequest(prompt: { system: string; prompt: string }): { in
 
 /** Title first, then the given sections, the speakers (if any), then the notes and tips from the session. */
 function assemble(when: Date, body: string, args: SummaryInput): string {
-  const parts = [`# Meeting summary — ${summaryStamp(when)}`, body.trim()];
+  const parts = [`# Meeting summary — ${summaryStamp(when)}`, scrubActionItems(body).trim()];
   const speakers = transcriptSpeakers(args.transcript);
-  if (speakers.length > 0) {
+  if (speakers.length === 0 && args.attributionUnknown) {
+    parts.push(`## Speakers\n${bullets([ATTRIBUTION_UNAVAILABLE], "None.")}`);
+  } else if (speakers.length > 0) {
     parts.push(`## Speakers\n${bullets([...speakers, "Partial: only what Bee heard or read in the call is captured."], "None.")}`);
   }
   parts.push(`## Notes cited\n${bullets(args.notesCited ?? [], "None.")}`);
@@ -133,7 +170,7 @@ function sectionBullets(markdown: string, heading: string): string[] {
 export function extractSummaryFields(markdown: string): { decisions: string[]; actionItems: string[]; topics: string[] } {
   return {
     decisions: sectionBullets(markdown, "Decisions"),
-    actionItems: sectionBullets(markdown, "Action items"),
+    actionItems: sectionBullets(markdown, "Action items").map(scrubPlaceholderOwner),
     topics: sectionBullets(markdown, "Topics"),
   };
 }

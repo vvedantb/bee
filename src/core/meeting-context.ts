@@ -64,7 +64,7 @@ export type MeetingContext = {
   /** The brief for the meeting in progress, for Luna. Undefined with no meeting or no name. */
   brief: () => string | undefined;
   /** Saves a finished meeting to local memory. False when the meeting has no name. */
-  remember: (args: { meetingId?: number; summaryMarkdown: string; usedLlm: boolean; tips: readonly string[] }) => boolean;
+  remember: (args: { meetingId?: number; summaryMarkdown: string; usedLlm: boolean; tips: readonly string[]; attributionUnknown?: boolean }) => boolean;
   /** Deletes all saved meetings. Returns how many. */
   clearMemory: () => number;
   /** The detected name of a meeting (by id, else the current one), for a finished session's title. Undefined when unknown. */
@@ -259,7 +259,7 @@ export function createMeetingContext(deps: MeetingContextDeps): MeetingContext {
     attendees(meetingId) {
       return byId(meetingId)?.identity?.attendees ?? [];
     },
-    remember({ meetingId, summaryMarkdown, usedLlm, tips }) {
+    remember({ meetingId, summaryMarkdown, usedLlm, tips, attributionUnknown }) {
       const meeting = byId(meetingId);
       const identity = meeting?.identity;
       if (!meeting || !identity?.subject) return false;
@@ -276,6 +276,7 @@ export function createMeetingContext(deps: MeetingContextDeps): MeetingContext {
         tips: [...tips],
         decisions: usedLlm ? fields.decisions : [],
         actionItems: usedLlm ? fields.actionItems : [],
+        ...(attributionUnknown ? { attributionUnknown: true } : {}),
       };
       deps.memory.add(record);
       return true;

@@ -527,12 +527,12 @@ export function registerMeetingIpc(args: { notesDir: string;
 
   // Without a key (or if Luna fails) a plain summary is still written, so the meeting is never lost.
   ipcMain.handle(IPC.writeMeetingSummary, async (_event, payload): Promise<MeetingSummaryResult> => {
-    const { sessionToken, ...input } = meetingSummaryRequestSchema.parse(payload);
+    const { sessionToken, teamsAudioLines, captionLines, micLines, ...input } = meetingSummaryRequestSchema.parse(payload);
     assertSignedIn(sessionToken);
     const when = new Date();
     const apiKey = args.gatewayApiKey();
     const started = performance.now();
-    debugLog.info("meeting", "summary-start", { lines: input.transcript.length, notesCited: input.notesCited.length, tips: input.tips.length, meetingId: input.meetingId, hasKey: Boolean(apiKey) });
+    debugLog.info("meeting", "summary-start", { lines: input.transcript.length, notesCited: input.notesCited.length, tips: input.tips.length, meetingId: input.meetingId, hasKey: Boolean(apiKey), teamsAudioLines, captionLines, micLines });
     const summary = apiKey
       ? await generateMeetingSummary({ ...input, model: createGateway(apiKey).languageModel(GUIDE_MODEL), when })
       : { markdown: buildLocalSummary({ ...input, when }), usedLlm: false, error: NO_GATEWAY_KEY };
@@ -540,7 +540,7 @@ export function registerMeetingIpc(args: { notesDir: string;
     debugLog.info("meeting", "summary-written", { path, usedLlm: summary.usedLlm, error: summary.error, ms: msSince(started), markdown: summary.markdown });
     // Structured fields go to meeting memory too (when it is on and the meeting has a name). Failing to save never loses the note.
     try {
-      const remembered = args.meeting.remember({ meetingId: input.meetingId, summaryMarkdown: summary.markdown, usedLlm: summary.usedLlm, tips: input.tips });
+      const remembered = args.meeting.remember({ meetingId: input.meetingId, summaryMarkdown: summary.markdown, usedLlm: summary.usedLlm, tips: input.tips, attributionUnknown: input.attributionUnknown });
       console.debug(`perf meeting-memory saved=${remembered ? 1 : 0}`);
     } catch {
       console.debug("perf meeting-memory saved=0");

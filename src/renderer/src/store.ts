@@ -7,7 +7,7 @@ import { IDLE_AUTO, qualifies, stepAutoMeeting, type AutoEvent, type AutoMeeting
 import { debugLog, errorData } from "../../core/debug-log";
 import { detectLinks, mergeChips, sourceChips, visibleChips, type LinkChip } from "../../core/link-suggest";
 import { MAX_STEERING_TIPS, isFiller, isNewTurn, isQuestion, mergeTips, recentRestarts, runDelayMs, tipCap, tipKey, waitsForRun } from "../../core/steering";
-import { mergeLines, pipelineText, summaryTranscript, type SessionLine } from "../../core/session-lines";
+import { isAttributionUnknown, mergeLines, pipelineText, sessionLineCounts, summaryTranscript, type SessionLine } from "../../core/session-lines";
 import { TEAMS_AUDIO_SPEAKER, TEAMS_AUDIO_SPEAKER_ID, teamsAudioEcho, teamsAudioPlan, teamsAudioReplaced, type TeamsAudioPlan } from "../../core/teams-audio";
 import { RECAP_AI_MIN_LINES, RECAP_LINES_SENT, RECAP_WINDOW_MS, beeLines, isRecapRequest, localMeetingLines, missedLines, recapBody, speakerText, type RecapEvent } from "../../core/recap";
 import { CONVERSATION_IDLE_MS, addExchange, commandFallbackReply, type BeeExchange } from "../../core/bee-history";
@@ -2129,6 +2129,9 @@ export const actions = {
     // end (stopMic) turns it off: the meeting is over. It is not retried if it fails.
     if (stopMic && (!options.auto || options.stopMic)) actions.stopMic(null);
     const meetingId = sessionMeetingId;
+    // A meeting or call: meeting mode, or a detected meeting that the session belongs to.
+    const attributionUnknown = isAttributionUnknown(ended.lines, state.settings?.meetingMode === true || meetingId !== null);
+    const counts = sessionLineCounts(ended.lines);
     sessionMeetingId = null;
     clearTimeout(runTimer);
     runTimer = undefined;
@@ -2145,6 +2148,8 @@ export const actions = {
         notesCited: ended.notesCited,
         tips: ended.tips.map(clampTip),
         ...(meetingId !== null ? { meetingId } : {}),
+        ...(attributionUnknown ? { attributionUnknown } : {}),
+        ...counts,
         sessionToken: await sessionToken(),
       });
       setSummary({ saving: false, result });

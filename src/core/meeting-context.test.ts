@@ -177,6 +177,15 @@ describe("remembering a meeting", () => {
     });
   });
 
+  it("keeps the attribution flag only when the summary request set it", async () => {
+    const t = setup();
+    await t.run(15);
+    t.context.remember({ meetingId: 1, summaryMarkdown: markdown, usedLlm: true, tips: [], attributionUnknown: true });
+    expect(t.memory.list()[0]?.attributionUnknown).toBe(true);
+    t.context.remember({ meetingId: 1, summaryMarkdown: markdown, usedLlm: true, tips: [] });
+    expect(t.memory.list().at(-1)?.attributionUnknown).toBeUndefined();
+  });
+
   it("saves a meeting after its call ended, by id", async () => {
     const t = setup();
     await t.run(15);

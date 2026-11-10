@@ -25,6 +25,8 @@ export const meetingRecordSchema = z.object({
   tips: z.array(z.string().max(200)).max(8),
   decisions: z.array(z.string().max(ITEM_MAX)).max(LIST_MAX),
   actionItems: z.array(z.string().max(ITEM_MAX)).max(LIST_MAX),
+  /** True when Bee heard only the mic, so saved lines may not all be the user's. Absent on older records. */
+  attributionUnknown: z.boolean().optional(),
 });
 export type MeetingRecord = z.infer<typeof meetingRecordSchema>;
 
@@ -47,6 +49,7 @@ export function boundRecord(record: MeetingRecord): MeetingRecord {
     tips: clipList(record.tips, 8, 200),
     decisions: clipList(record.decisions, LIST_MAX, ITEM_MAX),
     actionItems: clipList(record.actionItems, LIST_MAX, ITEM_MAX),
+    ...(record.attributionUnknown ? { attributionUnknown: true } : {}),
   };
 }
 

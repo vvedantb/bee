@@ -15,6 +15,15 @@ const identity = (extra: Partial<MeetingIdentity> = {}): MeetingIdentity => ({
   ...extra,
 });
 
+describe("mic-only past meetings", () => {
+  it("tells Luna the saved lines may not all be the user's", () => {
+    const past = pastMeetings({ records: [record(3, { attributionUnknown: true })], identity: identity() });
+    expect(buildBrief({ identity: identity(), past, notes: [] }).text).toContain("may not all be the user's");
+    const plain = pastMeetings({ records: [record(3)], identity: identity() });
+    expect(buildBrief({ identity: identity(), past: plain, notes: [] }).text).not.toContain("may not all be the user's");
+  });
+});
+
 describe("pastMeetings", () => {
   it("finds earlier meetings with the same key or subject, newest first", () => {
     const records = [record(3, { key: "weekly sync@priya nair#r" }), record(9, { key: "weekly sync@-", id: "title-only" }), record(5, { subject: "Other", key: "other@x", attendees: ["Zed"] })];
