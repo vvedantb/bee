@@ -15,6 +15,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
     "check:helper-protocol": "node scripts/check-helper-protocol.mjs",
+    "check:teams": "node scripts/teams-control-check.mjs",
     "lint": "node scripts/no-source-text-in-tests.mjs",
     "preflight": "npm run typecheck && npm run lint && npm test",
     "landing:build": "npm --prefix landing run build",
