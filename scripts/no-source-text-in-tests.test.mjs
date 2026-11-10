@@ -7,6 +7,7 @@ describe("no-source-text-in-tests", () => {
     expect(findViolations('const t = readFileSync(repo("src/main/index.ts"), "utf8")')).toHaveLength(1);
     expect(findViolations('readFileSync(join(root, "native/teams-audio/windows/helper.cpp"))')).toHaveLength(1);
     expect(findViolations('readdirSync(join(root, "src"))')).toHaveLength(1);
+    expect(findViolations('readFileSync(join(root, "src\\\\main\\\\foo"))')).toHaveLength(1);
     expect(findViolations('import css from "./app.css?raw"')).toHaveLength(1);
   });
 
