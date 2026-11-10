@@ -193,13 +193,6 @@ const CAPTION_SPEAKER = "Meeting";
 // reply can be read. Closing the island ends the wait.
 const COMMAND_HOLD_MS = 8000;
 
-export const SAMPLE_LINES = [
-  "Let's pick up the Acme renewal. They are asking for a bigger discount.",
-  "Could we go to twenty percent off if they sign this week?",
-  "Also, when does SSO ship for enterprise customers?",
-  "Separately, what salary band are we offering the backend candidate?",
-];
-
 let state: BeeState = {
   settings: null,
   mcp: { servers: [], tests: {}, error: null },
@@ -270,7 +263,6 @@ export function useBee(): BeeState {
 let latestRun = 0;
 // Phrases heard whose speech-to-text is still running.
 let heardPending = 0;
-let sampleIndex = 0;
 let localSeq = 0;
 let captionSeq = 0;
 let teamsAudioSeq = 0;
@@ -957,17 +949,13 @@ export function beeConversation(): BeeExchange[] {
   return [...conversation];
 }
 
-/** What Talk to Bee (typed) did with a line (actions.typeCommand). */
-export type TypedCommandOutcome = "taken" | "empty" | "no-wake";
-
 /**
  * A mic phrase that starts with the wake word ("Bee, open Teams") is a request to the AI, not a meeting line: it never joins
  * the session, the summary, or meeting memory. "Bee" alone arms the next phrase. In the conversation window, a
  * phrase without "Bee" that looks addressed to Bee is a follow-up; an unclear one may get one small AI check (followUpCheck).
- * Returns true when the phrase was taken. Console lines never carry the words; the local debug log does. `via` is "typed-command"
- * for Live → Manual test → Talk to Bee (typed): typed text through this same router, logged as such.
+ * Returns true when the phrase was taken. Console lines never carry the words; the local debug log does.
  */
-function takeWakeLine(text: string, via: "mic" | "typed-command" = "mic"): boolean {
+function takeWakeLine(text: string): boolean {
   const now = Date.now();
   const armed = now < wakeArmedUntil;
   const conversationOpen = now < conversationUntil && commandRun === null;
@@ -978,14 +966,14 @@ function takeWakeLine(text: string, via: "mic" | "typed-command" = "mic"): boole
   wakeArmedUntil = route.kind === "wake" ? now + WAKE_FOLLOW_MS : 0;
   // The local debug log keeps the words that woke Bee, and the meeting lines that nearly did (a likely miss or false trigger).
   if (route.kind !== "meeting" || NEAR_WAKE.test(text) || conversationOpen || recentlyClosed) {
-    debugLog.info("wake", route.kind === "meeting" ? "near-miss" : route.kind, { text, via, route, armed, conversationOpen, othersSpoke, recentlyClosed });
+    debugLog.info("wake", route.kind === "meeting" ? "near-miss" : route.kind, { text, route, armed, conversationOpen, othersSpoke, recentlyClosed });
   }
   if (route.kind === "meeting") {
     // A reply to someone else, or a name from the meeting: the user has turned back to the meeting.
     if (conversationOpen && (route.reason === "reply-to-others" || route.reason === "names-participant")) closeConversation(route.reason);
     return false;
   }
-  console.debug(`Bee: wake ${route.kind}${via === "mic" ? "" : ` via ${via}`}`);
+  console.debug(`Bee: wake ${route.kind}`);
   if (route.kind === "close") {
     closeConversation("thanks");
     return true;
@@ -997,7 +985,7 @@ function takeWakeLine(text: string, via: "mic" | "typed-command" = "mic"): boole
     set({ computer: { ...state.computer, step: "Tap Confirm to go ahead…" } });
     return true;
   }
-  if (route.kind === "command") void runCommand(route.command, via);
+  if (route.kind === "command") void runCommand(route.command);
   // "Bee, stop" ends the request in flight, if any, and the conversation. Nothing else happens.
   if (route.kind === "stop") {
     stoppedRun = commandRun;
@@ -1065,7 +1053,7 @@ async function stopCommand(): Promise<void> {
  * Bee's own history (bee-history.json), sent whole with the next requests; here it joins the conversation for vmem
  * (rememberExchange) and opens the conversation window.
  */
-async function runCommand(command: string, via: "mic" | "typed-command" = "mic"): Promise<void> {
+async function runCommand(command: string): Promise<void> {
   // "Bee, what did I miss?": the recap card, made here from what the store already has, instead of an AI request.
   if (isRecapRequest(command)) {
     debugLog.info("ai", "recap-request", { command });
@@ -1077,7 +1065,7 @@ async function runCommand(command: string, via: "mic" | "typed-command" = "mic")
   const previous = latestRun;
   const run = ++latestRun;
   const started = performance.now();
-  debugLog.info("ai", "command-start", { run, command, via, cancelled: previous > 0 ? previous : null });
+  debugLog.info("ai", "command-start", { run, command, cancelled: previous > 0 ? previous : null });
   if (previous > 0) void window.bee.cancelPipeline({ runId: previous }).catch(() => undefined);
   clearTimeout(runTimer);
   runTimer = undefined;
@@ -1876,16 +1864,10 @@ export const actions = {
     if (!state.expanded || state.collapsing) await actions.setExpanded(true);
   },
 
-  nextSampleLine(): string {
-    const line = SAMPLE_LINES[sampleIndex % SAMPLE_LINES.length] ?? "";
-    sampleIndex += 1;
-    return line;
-  },
-
   /**
-   * Add a meeting line (typed, or a phrase from Grok STT) and, if it has content words, schedule retrieve → Jev → Luna (after a
-   * short debounce). A mic phrase that
-   * starts with the wake word ("Bee, open Teams") is a direct request instead (takeWakeLine); typed lines never are.
+   * Add a meeting line (a phrase from Grok STT, or a typed one) and, if it has content words, schedule retrieve → Jev → Luna
+   * (after a short debounce). A mic phrase that starts with the wake word ("Bee, open Teams") is a direct request instead
+   * (takeWakeLine); typed lines never are. The app sends mic phrases only: "typed" is how tests and the E2E pages add a line.
    */
   simulateLine(line: string, source: "typed" | "mic" = "typed"): void {
     const text = line.trim();
@@ -1893,20 +1875,6 @@ export const actions = {
     if (source === "typed") debugLog.info("meeting", "typed-line", { text });
     if (source === "mic" && takeWakeLine(text)) return;
     addOwnLine(text, source);
-  },
-
-  /**
-   * Live → Manual test → Talk to Bee (typed): typed text through the wake word router, like a mic phrase after speech-to-text.
-   * "taken": Bee took it as a request. "no-wake": it did not start with the wake word, so it is dropped: never a meeting line.
-   * Works while a request runs (a newer one replaces it; "Bee, stop" stops it).
-   */
-  typeCommand(line: string): TypedCommandOutcome {
-    const text = line.trim();
-    if (!text) return "empty";
-    debugLog.info("wake", "typed-command", { text });
-    if (takeWakeLine(text, "typed-command")) return "taken";
-    debugLog.info("wake", "typed-command-dropped", { text });
-    return "no-wake";
   },
 
   /**
@@ -2192,7 +2160,7 @@ export const actions = {
     return cleared;
   },
 
-  /** Bee's saved memory facts (Settings → Saved memory), oldest first. Not saved meetings. */
+  /** Bee's saved memory facts (Memory → Saved memory), oldest first. Not saved meetings. */
   async listMemory(): Promise<MemoryFactView[]> {
     return (await window.bee.memory.list(await sessionToken())).facts;
   },

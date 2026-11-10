@@ -299,7 +299,7 @@ const api = {
     showInactive: async () => void (await ipcRenderer.invoke(IPC.meetingShow)),
     clearMemory: async (sessionToken: string) => clearMeetingMemoryResultSchema.parse(await ipcRenderer.invoke(IPC.clearMeetingMemory, { sessionToken })),
   },
-  // Settings → Saved memory: Bee's memory facts for direct requests, oldest first, and the clear. Never history or saved meetings.
+  // Memory → Saved memory: Bee's memory facts for direct requests, oldest first, and the clear. Never history or saved meetings.
   memory: {
     list: async (sessionToken: string) => memoryListResultSchema.parse(await ipcRenderer.invoke(IPC.memoryList, { sessionToken })),
     clear: async (sessionToken: string) => memoryClearResultSchema.parse(await ipcRenderer.invoke(IPC.memoryClear, { sessionToken })),

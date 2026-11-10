@@ -1,6 +1,6 @@
 import type { MemoryFactView } from "../../shared/ipc";
 
-// Settings → Saved memory's list and wording (MemorySection.tsx). No UI kit here, so tests can render it in node.
+// Memory → Saved memory's list and wording (MemorySection.tsx). No UI kit here, so tests can render it in node.
 
 const KIND_LABEL: Record<MemoryFactView["kind"], string> = { person: "Person", preference: "Preference", app: "App", other: "Other" };
 const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];

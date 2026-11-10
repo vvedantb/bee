@@ -11,8 +11,6 @@ import {
   islandOpenMs,
   shouldAutoCollapse,
   shouldShowResponse,
-  timingsLabel,
-  timingsTitle,
 } from "./island";
 
 const empty = { tips: [], guideError: null, dismissed: false };
@@ -270,22 +268,6 @@ describe("islandClick", () => {
     expect(islandClick("chevron", folded)).toBe("open-panel");
     expect(islandClick("chevron", { ...folded, panelOpen: true })).toBe("close-panel");
     expect(islandClick("chevron", { ...folded, bodyShown: true })).toBe("open-panel");
-  });
-});
-
-describe("timingsLabel", () => {
-  const timings = { retrieve: 10, rank: 900, guide: 2000, mcp: 400 };
-
-  it("is wall time: retrieval, then the slower of Jev and MCP plus Luna", () => {
-    expect(timingsLabel(timings)).toBe("2410 ms");
-    expect(timingsLabel({ ...timings, rank: 5000 })).toBe("5010 ms");
-  });
-
-  it("shows MCP on its own, not inside Luna's time", () => {
-    const title = timingsTitle(timings);
-    expect(title).toContain("MCP 400 ms");
-    expect(title).toContain("AI 2000 ms");
-    expect(title).toContain("Jev 900 ms");
   });
 });
 

@@ -151,7 +151,7 @@ export type BeeMemory = {
   /** Oldest first. */
   facts: () => MemoryFact[];
   write: (change: MemoryChange) => MemoryWriteResult;
-  /** Forgets every fact (Settings → Saved memory) and resolves how many there were. Throws when it cannot, keeping them all. */
+  /** Forgets every fact (Memory → Saved memory) and resolves how many there were. Throws when it cannot, keeping them all. */
   clear: () => number;
 };
 

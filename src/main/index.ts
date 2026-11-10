@@ -549,7 +549,7 @@ if (clerk.isPrimaryInstance) {
     const beeHistory = createBeeHistoryStore({ path: join(userDataDir, "bee-history.json") });
     // Bee's memory for direct requests (core/bee-memory.ts): the memory folder beside it, small and capped. Missing: empty.
     const beeMemory = createBeeMemoryStore({ userDataDir });
-    // Settings → Saved memory lists and clears this same store, so a clear reaches the next direct request at once.
+    // Memory → Saved memory lists and clears this same store, so a clear reaches the next direct request at once.
     registerBeeMemoryIpc(beeMemory);
     registerMeetingIpc({
       transcripts,

@@ -1,4 +1,4 @@
-// What Settings and the Live tab say about the Teams audio fallback. No React or window here, so tests can call it.
+// What the Live tab says about the Teams audio fallback. No React or window here, so tests can call it.
 import type { TeamsAudioPlan } from "../../core/teams-audio";
 import type { TeamsAudioFailure } from "../../core/teams-audio-protocol";
 import type { TeamsAudioStatus } from "../../shared/ipc";
@@ -7,7 +7,7 @@ import type { TeamsAudioStatus } from "../../shared/ipc";
 export type TeamsAudioView = { status: TeamsAudioStatus | null; plan: TeamsAudioPlan; listening: boolean; failed: boolean; failure?: TeamsAudioFailure | null };
 
 const MIC_ONLY = "Bee uses your mic only.";
-/** The Settings line while Bee hears the Teams app. Not "Meeting in progress": only a started meeting says that (notch.ts). */
+/** The Live → Meeting line while Bee hears the Teams app. Not "Meeting in progress": only a started meeting says that (notch.ts). */
 export const TEAMS_AUDIO_LISTENING = "Listening to Teams audio.";
 const CARRIES_ON = "Bee carries on with your mic.";
 const MISSING = `The Teams audio helper is missing. Reinstall Bee. ${MIC_ONLY}`;
@@ -38,7 +38,7 @@ function failed(platform: TeamsAudioStatus["platform"], failure: TeamsAudioFailu
   return `Could not hear Teams in this call. ${CARRIES_ON}`;
 }
 
-/** macOS: the helper needs Screen Recording, so Settings shows the button that asks for it. */
+/** macOS: the helper needs Screen Recording, so Live → Meeting shows the button that asks for it. */
 export function teamsAudioNeedsScreenRecording(audio: TeamsAudioView | undefined): boolean {
   if (!audio?.status || audio.plan === "off" || audio.status.platform !== "mac" || !audio.status.supported || audio.listening) return false;
   return audio.failure === "denied" || audio.status.permission === "denied";

@@ -33,6 +33,11 @@ export function normalizeNames(names: readonly string[]): string[] {
   return out.slice(-KNOWN_NAMES_MAX);
 }
 
+/** The names typed in the Memory tab, one per line, as the list to save. */
+export function namesFromText(text: string): string[] {
+  return normalizeNames(text.split(/\r?\n/));
+}
+
 /** The list with newly learned names added at the end. A name already there (any case) stays where it is. */
 export function mergeNames(known: readonly string[], learned: readonly string[]): string[] {
   return normalizeNames([...known, ...learned]);

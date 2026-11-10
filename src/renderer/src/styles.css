@@ -834,7 +834,7 @@ p {
   color: inherit;
 }
 
-/* Settings → "Names Bee should know": collapsed until opened. */
+/* Memory → "Names Bee should know": collapsed until opened. */
 .known-names-trigger {
   display: inline-flex;
   align-items: center;
@@ -848,15 +848,6 @@ p {
 
 .known-names-trigger[data-state="open"] .chevron-icon {
   transform: rotate(90deg);
-}
-
-/* forceMount keeps it in the form; closed, it is not shown. */
-.known-names-content[data-state="closed"] {
-  display: none;
-}
-
-.known-names-content > textarea {
-  margin-top: 6px;
 }
 
 .error-text {
@@ -878,48 +869,16 @@ ol {
   gap: 6px;
 }
 
-.tips li,
-.notes li {
-  animation: rise-in var(--medium) var(--ease-out) backwards;
-}
-
-.tips li:nth-child(2),
-.notes li:nth-child(2) {
-  animation-delay: 40ms;
-}
-
-.notes li:nth-child(n + 3) {
-  animation-delay: 80ms;
-}
-
 .tips li {
   padding: 8px 10px;
   border-radius: 10px;
   background: var(--surface-raised);
   font-size: 14px;
+  animation: rise-in var(--medium) var(--ease-out) backwards;
 }
 
-.notes li {
-  padding: 8px 10px;
-  border-radius: 10px;
-  background: var(--surface-sunken);
-}
-
-.notes p {
-  margin-top: 4px;
-  white-space: pre-wrap;
-  color: var(--muted);
-}
-
-.note-head {
-  display: flex;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.cite {
-  margin-right: 6px;
-  color: var(--accent);
+.tips li:nth-child(2) {
+  animation-delay: 40ms;
 }
 
 .simulate,
@@ -934,7 +893,7 @@ ol {
   margin-top: 8px;
 }
 
-/* Settings → Saved memory: one fact per row, its kind and date under it. */
+/* Memory → Saved memory: one fact per row, its kind and date under it. */
 .memory-facts {
   gap: 6px;
   margin-top: 8px;

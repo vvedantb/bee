@@ -1,7 +1,8 @@
 import { Avatar, AvatarFallback, AvatarImage, Button, Checkbox, Input, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Textarea } from "@vvedantb/ui";
 import { useEffect, useState, type FormEvent } from "react";
-import type { McpSave, McpServerView } from "../../shared/ipc";
+import type { McpSave, McpServerView, SettingsView } from "../../shared/ipc";
 import { faviconHostOf, safeIconSrc } from "../../shared/mcp-icons";
+import { ConnectorSwitches } from "./ConnectorSwitches";
 import { SecretField } from "./SecretField";
 import { actions, type McpTestState } from "./store";
 
@@ -279,8 +280,11 @@ function ConnectorRow({ server, connected, busy, onToggle, onOpen }: ConnectorRo
   );
 }
 
-/** The Connectors tab: one row per saved server, with setup behind Add custom or a click on a row. Secrets never come back. */
-export function Connectors(props: { servers: McpServerView[]; tests: Record<string, McpTestState>; error: string | null }) {
+/**
+ * The Connectors tab: one row per saved server, with setup behind Add custom or a click on a row, then the switches for what Bee
+ * sends to connectors (list view only, once settings have loaded). Secrets never come back.
+ */
+export function Connectors(props: { servers: McpServerView[]; tests: Record<string, McpTestState>; error: string | null; settings: SettingsView | null }) {
   // "new", a server id, or null (list only).
   const [editing, setEditing] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -307,39 +311,42 @@ export function Connectors(props: { servers: McpServerView[]; tests: Record<stri
   }
 
   return (
-    <section>
-      <h2>Connectors</h2>
-      <ul className="connector-list">
-        {props.servers.map((server) => {
-          // An HTTP server with auth "none" signs in with MCP OAuth and counts as connected once tokens are stored; other rows just switch on and off.
-          // Disconnect keeps the saved server: sign-in servers revoke and drop their tokens and switch off, others just switch off.
-          // Removing the server is in its details view.
-          const oauth = server.transport === "http" && server.auth.type === "none";
-          const connected = oauth ? server.enabled && server.hasAuth : server.enabled;
-          const connect = () =>
-            oauth
-              ? actions.connectMcpServer({ name: server.name, enabled: true, transport: "http", url: server.url, auth: { type: "none" } }, server.id)
-              : actions.setMcpEnabled({ id: server.id, enabled: true });
-          const disconnect = () => (oauth ? actions.signOutMcpServer(server.id) : actions.setMcpEnabled({ id: server.id, enabled: false }));
-          return (
-            <ConnectorRow
-              key={server.id}
-              server={server}
-              connected={connected}
-              busy={busy === server.id}
-              onToggle={() => void run(server.id, () => (connected ? disconnect() : connect()))}
-              onOpen={() => setEditing(server.id)}
-            />
-          );
-        })}
-      </ul>
-      {props.servers.length === 0 ? <p className="muted">No connectors yet. Add an MCP server to give the AI its tools.</p> : null}
-      {props.error ? <p className="error">{props.error}</p> : null}
-      <div className="actions row">
-        <Button type="button" variant="link" size="sm" onClick={() => setEditing("new")}>
-          Add custom
-        </Button>
-      </div>
-    </section>
+    <>
+      <section>
+        <h2>Connectors</h2>
+        <ul className="connector-list">
+          {props.servers.map((server) => {
+            // An HTTP server with auth "none" signs in with MCP OAuth and counts as connected once tokens are stored; other rows just switch on and off.
+            // Disconnect keeps the saved server: sign-in servers revoke and drop their tokens and switch off, others just switch off.
+            // Removing the server is in its details view.
+            const oauth = server.transport === "http" && server.auth.type === "none";
+            const connected = oauth ? server.enabled && server.hasAuth : server.enabled;
+            const connect = () =>
+              oauth
+                ? actions.connectMcpServer({ name: server.name, enabled: true, transport: "http", url: server.url, auth: { type: "none" } }, server.id)
+                : actions.setMcpEnabled({ id: server.id, enabled: true });
+            const disconnect = () => (oauth ? actions.signOutMcpServer(server.id) : actions.setMcpEnabled({ id: server.id, enabled: false }));
+            return (
+              <ConnectorRow
+                key={server.id}
+                server={server}
+                connected={connected}
+                busy={busy === server.id}
+                onToggle={() => void run(server.id, () => (connected ? disconnect() : connect()))}
+                onOpen={() => setEditing(server.id)}
+              />
+            );
+          })}
+        </ul>
+        {props.servers.length === 0 ? <p className="muted">No connectors yet. Add an MCP server to give the AI its tools.</p> : null}
+        {props.error ? <p className="error">{props.error}</p> : null}
+        <div className="actions row">
+          <Button type="button" variant="link" size="sm" onClick={() => setEditing("new")}>
+            Add custom
+          </Button>
+        </div>
+      </section>
+      {props.settings ? <ConnectorSwitches settings={props.settings} onSave={(update) => void actions.saveSettings(update)} /> : null}
+    </>
   );
 }
