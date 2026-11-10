@@ -52,6 +52,20 @@ describe("transcribeSpeech", () => {
     expect(outcome.error).toMatch(/^Speech-to-text failed: /);
   });
 
+  it("aborts on the caller's signal (speech resumed after an early cut) with no words and no error", async () => {
+    const controller = new AbortController();
+    const doGenerate = vi.fn<Generate>(
+      ({ abortSignal }) =>
+        new Promise((_resolve, reject) => {
+          abortSignal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+        }),
+    );
+    const outcome = transcribeSpeech({ model: model(doGenerate), audio, abortSignal: controller.signal });
+    await vi.waitFor(() => expect(doGenerate).toHaveBeenCalled());
+    controller.abort();
+    expect(await outcome).toEqual({ text: null, error: null });
+  });
+
   it("sends the words to listen for as Mistral's contextBias, and nothing when there are none", async () => {
     const doGenerate = vi.fn<Generate>(async () => result("Bee, message Zuzanna"));
     await transcribeSpeech({ model: model(doGenerate), audio, vocabulary: ["Bee", "Zuzanna Szczepaniak-Moody"] });

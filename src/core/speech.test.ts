@@ -1,8 +1,8 @@
 import { fileURLToPath } from "node:url";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, type Mock } from "vitest";
 import { readWav, speechSpans } from "../../test/helpers/wav";
 import { transcribeRequestSchema, type TranscribeResult } from "../shared/ipc";
-import { END_SILENCE_MS, MAX_PHRASE_MS, MIN_SPEECH_MS, WAV_SAMPLE_RATE, createSegmenter, encodeWav, frameLevel, startMicSession } from "./speech";
+import { EARLY_END_MS, END_SILENCE_MS, MAX_PHRASE_MS, MIN_SPEECH_MS, WAV_SAMPLE_RATE, createSegmenter, encodeWav, frameLevel, startMicSession, type PhraseLine, type SegmentEvent } from "./speech";
 
 const RATE = 48_000;
 // 4096 samples at 48 kHz is ~85 ms, the frame size the store uses.
@@ -25,6 +25,11 @@ function feed(push: (frame: Float32Array) => number, ...runs: Float32Array[][]):
   for (const run of runs) for (const frame of run) push(frame);
 }
 
+/** A segmenter event handler that passes each phrase's end (its whole audio) to onPhrase. */
+const onEnd = (onPhrase: (samples: Float32Array) => void) => (event: SegmentEvent) => {
+  if (event.kind === "end") onPhrase(event.samples);
+};
+
 describe("frameLevel", () => {
   it("returns RMS: 0 for silence, amplitude/√2 for a sine", () => {
     expect(frameLevel(silence())).toBe(0);
@@ -35,7 +40,7 @@ describe("frameLevel", () => {
 describe("createSegmenter", () => {
   it("emits one phrase after speech followed by silence, with pre-roll", () => {
     const onPhrase = vi.fn();
-    const segmenter = createSegmenter({ sampleRate: RATE, onPhrase });
+    const segmenter = createSegmenter({ sampleRate: RATE, onEvent: onEnd(onPhrase) });
     feed(segmenter.push, frames(1000, silence), frames(1000, tone));
     expect(onPhrase).not.toHaveBeenCalled();
     feed(segmenter.push, frames(END_SILENCE_MS, silence));
@@ -48,21 +53,21 @@ describe("createSegmenter", () => {
 
   it("drops blips shorter than the minimum speech length", () => {
     const onPhrase = vi.fn();
-    const segmenter = createSegmenter({ sampleRate: RATE, onPhrase });
+    const segmenter = createSegmenter({ sampleRate: RATE, onEvent: onEnd(onPhrase) });
     feed(segmenter.push, [tone()], frames(END_SILENCE_MS, silence));
     expect(onPhrase).not.toHaveBeenCalled();
   });
 
   it("cuts long speech at the maximum phrase length", () => {
     const onPhrase = vi.fn();
-    const segmenter = createSegmenter({ sampleRate: RATE, onPhrase });
+    const segmenter = createSegmenter({ sampleRate: RATE, onEvent: onEnd(onPhrase) });
     feed(segmenter.push, frames(MAX_PHRASE_MS + 1000, tone));
     expect(onPhrase).toHaveBeenCalledTimes(1);
   });
 
   it("flush() ends a phrase in progress and ignores silence", () => {
     const onPhrase = vi.fn();
-    const segmenter = createSegmenter({ sampleRate: RATE, onPhrase });
+    const segmenter = createSegmenter({ sampleRate: RATE, onEvent: onEnd(onPhrase) });
     feed(segmenter.push, frames(500, silence));
     segmenter.flush();
     expect(onPhrase).not.toHaveBeenCalled();
@@ -107,7 +112,7 @@ describe("createSegmenter on the live mic fixture", () => {
     const segmenter = createSegmenter({
       sampleRate: rate,
       // Fires inside push(), after the frame that ended the phrase was counted.
-      onPhrase: (phrase) => phrases.push({ start: (pushed - phrase.length) / rate, end: pushed / rate, samples: phrase }),
+      onEvent: onEnd((phrase) => phrases.push({ start: (pushed - phrase.length) / rate, end: pushed / rate, samples: phrase })),
     });
     for (let at = 0; at < samples.length; at += FRAME) {
       const frame = samples.slice(at, at + FRAME);
@@ -165,7 +170,7 @@ describe("encodeWav on the live mic fixture", () => {
     const phrases: Array<{ from: number; samples: Float32Array }> = [];
     let pushed = 0;
     // As startMicSession does: each phrase the segmenter emits goes to encodeWav at the capture rate.
-    const segmenter = createSegmenter({ sampleRate: rate, onPhrase: (phrase) => phrases.push({ from: pushed - phrase.length, samples: phrase }) });
+    const segmenter = createSegmenter({ sampleRate: rate, onEvent: onEnd((phrase) => phrases.push({ from: pushed - phrase.length, samples: phrase })) });
     for (let at = 0; at < samples.length; at += FRAME) {
       const frame = samples.slice(at, at + FRAME);
       pushed += frame.length;
@@ -198,43 +203,55 @@ describe("encodeWav on the live mic fixture", () => {
   });
 });
 
-describe("onSpeechEnd", () => {
-  it("fires once the end silence has passed, not before, and before onPhrase", () => {
-    const order: string[] = [];
-    const segmenter = createSegmenter({ sampleRate: RATE, onSpeechEnd: () => order.push("end"), onPhrase: () => order.push("phrase") });
-    feed(segmenter.push, frames(1000, tone), frames(END_SILENCE_MS - 2 * FRAME_MS, silence));
-    expect(order).toEqual([]);
+describe("createSegmenter events", () => {
+  function events() {
+    const seen: Array<{ kind: SegmentEvent["kind"]; ms: number }> = [];
+    const segmenter = createSegmenter({
+      sampleRate: RATE,
+      onEvent: (event) => seen.push({ kind: event.kind, ms: event.kind === "resume" ? 0 : Math.round((event.samples.length / RATE) * 1000) }),
+    });
+    return { segmenter, kinds: () => seen.map((event) => event.kind), seen };
+  }
+
+  it("cuts early once the early silence has passed, then ends the same phrase at the end silence", () => {
+    const { segmenter, kinds, seen } = events();
+    feed(segmenter.push, frames(1000, tone), frames(EARLY_END_MS - 2 * FRAME_MS, silence));
+    expect(kinds()).toEqual([]);
     feed(segmenter.push, frames(3 * FRAME_MS, silence));
-    expect(order).toEqual(["end", "phrase"]);
+    expect(kinds()).toEqual(["early"]);
+    feed(segmenter.push, frames(END_SILENCE_MS - EARLY_END_MS, silence));
+    expect(kinds()).toEqual(["early", "end"]);
+    // The early cut holds the speech so far; the end holds it all, its silence included.
+    expect(seen[1]?.ms ?? 0).toBeGreaterThan((seen[0]?.ms ?? 0) + 300);
+  });
+
+  it("resumes the phrase when speech comes back before the end silence, and ends it once with all its audio", () => {
+    const { segmenter, kinds, seen } = events();
+    feed(segmenter.push, frames(800, tone), frames(EARLY_END_MS + 100, silence), frames(800, tone));
+    expect(kinds()).toEqual(["early", "resume"]);
+    // A second pause cuts early again; the end comes once.
+    feed(segmenter.push, frames(END_SILENCE_MS + 100, silence));
+    expect(kinds()).toEqual(["early", "resume", "early", "end"]);
+    expect(seen.at(-1)?.ms ?? 0).toBeGreaterThan(2000);
   });
 
   it("needs at least the minimum speech: a cough or click fires nothing", () => {
-    const onSpeechEnd = vi.fn();
-    const onPhrase = vi.fn();
-    const segmenter = createSegmenter({ sampleRate: RATE, onSpeechEnd, onPhrase });
+    const { segmenter, kinds } = events();
     feed(segmenter.push, [tone()], frames(END_SILENCE_MS + 200, silence));
-    expect(onSpeechEnd).not.toHaveBeenCalled();
-    expect(onPhrase).not.toHaveBeenCalled();
+    expect(kinds()).toEqual([]);
     // Just over the minimum does fire.
     feed(segmenter.push, frames(MIN_SPEECH_MS + FRAME_MS, tone), frames(END_SILENCE_MS + 200, silence));
-    expect(onSpeechEnd).toHaveBeenCalledTimes(1);
+    expect(kinds()).toEqual(["early", "end"]);
   });
 
-  it("fires for a flushed phrase and for a phrase cut at the maximum length", () => {
-    const onSpeechEnd = vi.fn();
-    const segmenter = createSegmenter({ sampleRate: RATE, onSpeechEnd, onPhrase: () => undefined });
-    feed(segmenter.push, frames(800, tone));
-    segmenter.flush();
-    expect(onSpeechEnd).toHaveBeenCalledTimes(1);
+  it("ends a phrase cut at the maximum length, and at flush, with no early cut; after a resume the cap still ends it", () => {
+    const { segmenter, kinds } = events();
     feed(segmenter.push, frames(MAX_PHRASE_MS + 1000, tone));
-    expect(onSpeechEnd).toHaveBeenCalledTimes(2);
-  });
-
-  it("works without a callback", () => {
-    const onPhrase = vi.fn();
-    const segmenter = createSegmenter({ sampleRate: RATE, onPhrase });
-    feed(segmenter.push, frames(800, tone), frames(END_SILENCE_MS + 200, silence));
-    expect(onPhrase).toHaveBeenCalledTimes(1);
+    expect(kinds()).toEqual(["end"]);
+    segmenter.flush();
+    expect(kinds()).toEqual(["end", "end"]);
+    feed(segmenter.push, frames(800, tone), frames(EARLY_END_MS + 100, silence), frames(MAX_PHRASE_MS, tone));
+    expect(kinds()).toEqual(["end", "end", "early", "resume", "end"]);
   });
 });
 
@@ -353,9 +370,17 @@ describe("encodeWav", () => {
   });
 });
 
+/** The text of each line a session handed over; each is final (the speech is fed at once, so no early line shows). */
+function texts(onLine: Mock<(line: PhraseLine) => void>): string[] {
+  return onLine.mock.calls.map(([line]) => {
+    expect(line.final).toBe(true);
+    return line.text;
+  });
+}
+
 describe("startMicSession", () => {
   function session(transcribe: (wav: Uint8Array) => Promise<TranscribeResult>) {
-    const onLine = vi.fn();
+    const onLine = vi.fn<(line: PhraseLine) => void>();
     const onError = vi.fn();
     const mic = startMicSession({ sampleRate: RATE, transcribe, onLine, onError });
     return { mic, onLine, onError };
@@ -371,7 +396,7 @@ describe("startMicSession", () => {
     feed(mic.push, frames(800, tone), frames(END_SILENCE_MS, silence), frames(800, tone));
     await mic.stop();
     expect(transcribe).toHaveBeenCalledTimes(2);
-    expect(onLine.mock.calls).toEqual([["phrase 1"], ["phrase 2"]]);
+    expect(texts(onLine)).toEqual(["phrase 1", "phrase 2"]);
     expect(onError).toHaveBeenLastCalledWith(null);
   });
 
@@ -385,7 +410,7 @@ describe("startMicSession", () => {
     const { mic, onLine } = session(transcribe);
     feed(mic.push, frames(800, tone), frames(END_SILENCE_MS, silence), frames(800, tone));
     await mic.stop();
-    expect(onLine.mock.calls).toEqual([["phrase 1"], ["phrase 2"]]);
+    expect(texts(onLine)).toEqual(["phrase 1", "phrase 2"]);
   });
 
   it("does not call the pipeline for phrases with no words", async () => {
@@ -408,7 +433,7 @@ describe("startMicSession", () => {
     feed(mic.push, ...Array.from({ length: 3 }, () => [...frames(800, tone), ...frames(END_SILENCE_MS, silence)]));
     await mic.stop();
     expect(onError.mock.calls).toEqual([["Speech-to-text failed: Unauthorized"], ["Sign in to Bee to get guidance."], [null]]);
-    expect(onLine.mock.calls).toEqual([["back again"]]);
+    expect(texts(onLine)).toEqual(["back again"]);
   });
 
   it("sends nothing for silence", async () => {
@@ -417,6 +442,152 @@ describe("startMicSession", () => {
     feed(mic.push, frames(3000, silence));
     await mic.stop();
     expect(transcribe).not.toHaveBeenCalled();
+  });
+});
+
+describe("startMicSession: early result at the early cut", () => {
+  /** A session whose transcribe calls wait until the test answers them, in order. */
+  function controlled() {
+    const calls: Array<{ seconds: number; signal: AbortSignal; answer: (text: string | null) => void }> = [];
+    let busy = 0;
+    let most = 0;
+    const lines: PhraseLine[] = [];
+    const events: string[] = [];
+    const mic = startMicSession({
+      sampleRate: RATE,
+      transcribe: (wav, signal) =>
+        new Promise<TranscribeResult>((resolve) => {
+          busy += 1;
+          most = Math.max(most, busy);
+          const answer = (text: string | null) => {
+            busy -= 1;
+            resolve({ text, error: null });
+          };
+          // As main does: an aborted request comes back with no words.
+          signal.addEventListener("abort", () => answer(null), { once: true });
+          calls.push({ seconds: (wav.byteLength - 44) / 2 / WAV_SAMPLE_RATE, signal, answer });
+        }),
+      onLine: (line) => lines.push(line),
+      onError: () => undefined,
+      onSpeechEnd: () => events.push("ack"),
+      onResume: () => events.push("resume"),
+      onSettled: (outcome) => events.push(outcome),
+    });
+    const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+    return { mic, calls, lines, events, settle, most: () => most };
+  }
+
+  it("a phrase with no resume makes one request: its early text shows pending, then the same text is final", async () => {
+    const t = controlled();
+    feed(t.mic.push, frames(1000, tone), frames(EARLY_END_MS + 50, silence));
+    await t.settle();
+    expect(t.calls).toHaveLength(1);
+    expect(t.events).toEqual(["ack"]);
+    t.calls[0]?.answer("Can we ship on Friday?");
+    await t.settle();
+    expect(t.lines).toEqual([{ id: expect.any(Number), text: "Can we ship on Friday?", final: false }]);
+    feed(t.mic.push, frames(END_SILENCE_MS - EARLY_END_MS, silence));
+    await t.mic.stop();
+    expect(t.calls).toHaveLength(1);
+    expect(t.lines.map((line) => [line.id, line.text, line.final])).toEqual([
+      [t.lines[0]?.id, "Can we ship on Friday?", false],
+      [t.lines[0]?.id, "Can we ship on Friday?", true],
+    ]);
+    expect(t.events).toEqual(["ack", "words"]);
+  });
+
+  it("an early result that lands after the phrase ended is the final line at once", async () => {
+    const t = controlled();
+    feed(t.mic.push, frames(1000, tone), frames(EARLY_END_MS + 50, silence));
+    await t.settle();
+    feed(t.mic.push, frames(END_SILENCE_MS, silence));
+    t.calls[0]?.answer("Can we ship on Friday?");
+    await t.mic.stop();
+    expect(t.calls).toHaveLength(1);
+    expect(t.lines).toEqual([{ id: expect.any(Number), text: "Can we ship on Friday?", final: true }]);
+  });
+
+  it("speech after the early cut aborts the early request, ignores it and transcribes the whole phrase once, as a revision", async () => {
+    const t = controlled();
+    feed(t.mic.push, frames(1000, tone), frames(EARLY_END_MS + 50, silence));
+    await t.settle();
+    t.calls[0]?.answer("Bee, open");
+    await t.settle();
+    expect(t.lines).toEqual([{ id: expect.any(Number), text: "Bee, open", final: false }]);
+    // A thinking pause, then the rest of the phrase, and a second pause: no second early request.
+    feed(t.mic.push, frames(800, tone), frames(EARLY_END_MS + 50, silence));
+    await t.settle();
+    expect(t.calls).toHaveLength(1);
+    feed(t.mic.push, frames(END_SILENCE_MS, silence));
+    await t.settle();
+    expect(t.calls).toHaveLength(2);
+    // The whole phrase: both bursts of speech.
+    expect(t.calls[1]?.seconds ?? 0).toBeGreaterThan(2);
+    t.calls[1]?.answer("Bee, open Teams");
+    await t.mic.stop();
+    expect(t.lines.map((line) => [line.id, line.text, line.final])).toEqual([
+      [t.lines[0]?.id, "Bee, open", false],
+      [t.lines[0]?.id, "Bee, open Teams", true],
+    ]);
+    expect(t.events).toEqual(["ack", "resume", "ack", "words"]);
+  });
+
+  it("a resume while the early request is in flight aborts it and runs one request at a time", async () => {
+    const t = controlled();
+    feed(t.mic.push, frames(1000, tone), frames(EARLY_END_MS + 50, silence));
+    await t.settle();
+    feed(t.mic.push, frames(500, tone));
+    expect(t.calls[0]?.signal.aborted).toBe(true);
+    feed(t.mic.push, frames(END_SILENCE_MS, silence));
+    await t.settle();
+    expect(t.calls).toHaveLength(2);
+    t.calls[1]?.answer("Let's check the roadmap first");
+    await t.mic.stop();
+    // The aborted early request showed nothing.
+    expect(t.lines).toEqual([{ id: expect.any(Number), text: "Let's check the roadmap first", final: true }]);
+    expect(t.most()).toBe(1);
+  });
+
+  it("keeps two phrases in order, the second's early request waiting for the first's final", async () => {
+    const t = controlled();
+    // Phrase 1 resumes after its early request started, so it needs a second request at its end.
+    feed(t.mic.push, frames(800, tone), frames(EARLY_END_MS + 50, silence));
+    await t.settle();
+    feed(t.mic.push, frames(500, tone), frames(END_SILENCE_MS, silence));
+    await t.settle();
+    expect(t.calls).toHaveLength(2);
+    // Phrase 2 is cut early while phrase 1's request is in flight: its request waits.
+    feed(t.mic.push, frames(800, tone), frames(EARLY_END_MS + 50, silence));
+    await t.settle();
+    expect(t.calls).toHaveLength(2);
+    t.calls[1]?.answer("first phrase");
+    await t.settle();
+    expect(t.calls).toHaveLength(3);
+    t.calls[2]?.answer("second phrase");
+    await t.mic.stop();
+    expect(t.lines.map((line) => [line.text, line.final])).toEqual([
+      ["first phrase", true],
+      ["second phrase", true],
+    ]);
+    expect(t.lines[0]?.id).toBeLessThan(t.lines[1]?.id ?? 0);
+    expect(t.most()).toBe(1);
+  });
+
+  it("logs each phrase's early and final timings as numbers and flags, never the words", async () => {
+    const debug = vi.spyOn(console, "debug").mockImplementation(() => undefined);
+    try {
+      const t = controlled();
+      feed(t.mic.push, frames(1000, tone), frames(EARLY_END_MS + 50, silence));
+      await t.settle();
+      t.calls[0]?.answer("secret words");
+      feed(t.mic.push, frames(END_SILENCE_MS, silence));
+      await t.mic.stop();
+      const logged = debug.mock.calls.map((call) => call.join(" ")).join("\n");
+      expect(logged).toMatch(/perf stt-renderer phrase early=\d+ resumed=0 final=\d+ms changed=0/);
+      expect(logged).not.toContain("secret");
+    } finally {
+      debug.mockRestore();
+    }
   });
 });
 

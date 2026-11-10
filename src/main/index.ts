@@ -613,14 +613,14 @@ if (clerk.isPrimaryInstance) {
     debugLog.info("teams-audio", "helper", { found: teamsAudioHelper !== null, path: teamsAudioHelper });
     const teamsAudioCapture = createTeamsAudioCapture({
       helperPath: () => teamsAudioHelper,
-      transcribe: (audio) => {
+      transcribe: (audio, abortSignal) => {
         const apiKey = settings.gatewayApiKey();
         if (!apiKey) return Promise.resolve({ text: null, error: NO_GATEWAY_KEY });
-        return transcribeSpeech({ model: createBeeGateway(apiKey).transcription(STT_MODEL), audio, source: "teams-audio", vocabulary: sttVocabulary(settings.knownNames()) });
+        return transcribeSpeech({ model: createBeeGateway(apiKey).transcription(STT_MODEL), audio, source: "teams-audio", vocabulary: sttVocabulary(settings.knownNames()), abortSignal });
       },
       onLines: (id, lines) => {
         debugLog.info("teams-audio", "lines", { id, lines });
-        sendToOverlay(IPC.teamsAudioLines, { id, lines: lines.map((line) => line.slice(0, TEAMS_AUDIO_LINE_MAX)) } satisfies TeamsAudioLines);
+        sendToOverlay(IPC.teamsAudioLines, { id, lines: lines.map((line) => ({ ...line, text: line.text.slice(0, TEAMS_AUDIO_LINE_MAX) })) } satisfies TeamsAudioLines);
       },
       onEnded: (id, failure) => {
         debugLog.info("teams-audio", "ended", { id, failure });

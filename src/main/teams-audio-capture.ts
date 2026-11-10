@@ -1,5 +1,5 @@
 import { spawn as nodeSpawn } from "node:child_process";
-import { frameLevel, framePeak, startMicSession } from "../core/speech";
+import { frameLevel, framePeak, startMicSession, type PhraseLine } from "../core/speech";
 import {
   HELPER_SAMPLE_RATE,
   createPcmFramer,
@@ -70,8 +70,9 @@ export type TeamsAudioCapture = {
 
 export function createTeamsAudioCapture(deps: {
   helperPath: () => string | null;
-  transcribe: (wav: Uint8Array<ArrayBuffer>) => Promise<TranscribeOutcome>;
-  onLines: (id: number, lines: string[]) => void;
+  transcribe: (wav: Uint8Array<ArrayBuffer>, signal: AbortSignal) => Promise<TranscribeOutcome>;
+  /** A phrase's line: new, or a revision of an earlier one with the same phrase id (core/speech.ts PhraseLine). */
+  onLines: (id: number, lines: PhraseLine[]) => void;
   onEnded: (id: number, failure: TeamsAudioFailure | null) => void;
   spawn?: SpawnHelper;
   env?: NodeJS.ProcessEnv;
@@ -170,6 +171,7 @@ export function createTeamsAudioCapture(deps: {
     const framer = createPcmFramer();
     let lastAudioAt = now();
     let phrases = 0;
+    let lastPhrase = 0;
     // Audio seen since the last heartbeat. Tells no PCM (bytes=0) from silent PCM (rms=0) from quiet PCM (rms below SPEECH_RMS).
     let beat = { bytes: 0, frames: 0, sumSquares: 0, samples: 0, peak: 0 };
     // The segmenter and speech-to-text queue: the mic's own (core/speech.ts), at the helper's 16 kHz.
@@ -177,12 +179,15 @@ export function createTeamsAudioCapture(deps: {
       sampleRate: HELPER_SAMPLE_RATE,
       label: "stt-teams-audio",
       // A capture that stopped sends nothing more to speech-to-text.
-      transcribe: async (wav) => (session.stopped ? { text: null, error: null } : deps.transcribe(wav)),
-      onLine: (text) => {
+      transcribe: async (wav, signal) => (session.stopped ? { text: null, error: null } : deps.transcribe(wav, signal)),
+      onLine: (line) => {
         if (session.stopped) return;
-        phrases += 1;
-        console.debug(`teams-audio lines +1 total ${phrases}`);
-        deps.onLines(id, [text]);
+        // A phrase counts once: its final line after an early one is a revision.
+        const revision = line.id === lastPhrase;
+        if (!revision) phrases += 1;
+        lastPhrase = line.id;
+        console.debug(`teams-audio lines ${revision ? "rev" : "+1"} total ${phrases}`);
+        deps.onLines(id, [line]);
       },
       // The mic shows speech-to-text trouble; here it is a code in the log, never the message.
       onError: (error) => {

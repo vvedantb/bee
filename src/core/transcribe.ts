@@ -26,6 +26,8 @@ export async function transcribeSpeech(args: {
   vocabulary?: readonly string[];
   /** Which capture the phrase came from, for the local debug log only. */
   source?: "mic" | "teams-audio";
+  /** Aborts the request: an early phrase cut that speech resumed (core/speech.ts). Comes back as no words and no error. */
+  abortSignal?: AbortSignal;
 }): Promise<TranscribeOutcome> {
   const started = performance.now();
   const about = { source: args.source ?? null, model: modelName(args.model), bytes: args.audio.byteLength };
@@ -35,7 +37,7 @@ export async function transcribeSpeech(args: {
       model: args.model,
       audio: args.audio,
       maxRetries: 1,
-      abortSignal: AbortSignal.timeout(args.timeoutMs ?? STT_TIMEOUT_MS),
+      abortSignal: AbortSignal.any([AbortSignal.timeout(args.timeoutMs ?? STT_TIMEOUT_MS), ...(args.abortSignal ? [args.abortSignal] : [])]),
       // User-facing: not flex (see gateway.ts). The Gateway passes the mistral options to Voxtral.
       providerOptions: { ...gatewayTier("default"), ...(args.vocabulary?.length ? { mistral: { contextBias: [...args.vocabulary] } } : {}) },
     });
@@ -46,6 +48,10 @@ export async function transcribeSpeech(args: {
     debugLog.info("stt", "result", { ...about, ms: msSince(started), text, words, language: result.language ?? null, seconds: result.durationInSeconds ?? null });
     return { text: words ? text : null, error: null };
   } catch (error) {
+    if (args.abortSignal?.aborted) {
+      debugLog.debug("stt", "aborted", { ...about, ms: msSince(started) });
+      return { text: null, error: null };
+    }
     if (NoTranscriptGeneratedError.isInstance(error)) {
       debugLog.info("stt", "result", { ...about, ms: msSince(started), text: null, words: false });
       return { text: null, error: null };

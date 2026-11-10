@@ -16,6 +16,8 @@ export const IPC = {
   runPipeline: "bee:pipeline:run",
   runCommand: "bee:command:run",
   transcribe: "bee:speech:transcribe",
+  // Renderer → main: abort a transcription in flight (an early phrase cut that speech resumed; core/speech.ts).
+  cancelTranscribe: "bee:speech:cancel",
   writeMeetingSummary: "bee:meeting:write-summary",
   openMeetingSummary: "bee:meeting:open-summary",
   setWindowSize: "bee:window:set-size",
@@ -425,11 +427,14 @@ export const teamsAudioStartResultSchema = z.discriminatedUnion("ok", [
 ]);
 export type TeamsAudioStartResult = z.infer<typeof teamsAudioStartResultSchema>;
 // Main → renderer: phrases heard in the call app, as text. The renderer adds them as "Meeting" lines. Never shared or
-// in console output; the local debug log keeps them.
+// in console output; the local debug log keeps them. Each line is a phrase (core/speech.ts PhraseLine): final false is an
+// early result; a later line with the same phrase id revises it.
 export const TEAMS_AUDIO_LINE_MAX = 2000;
+export const teamsAudioLineSchema = z.object({ id: z.number().int().positive(), text: z.string().min(1).max(TEAMS_AUDIO_LINE_MAX), final: z.boolean() });
+export type TeamsAudioLine = z.infer<typeof teamsAudioLineSchema>;
 export const teamsAudioLinesSchema = z.object({
   id: z.number().int().positive(),
-  lines: z.array(z.string().min(1).max(TEAMS_AUDIO_LINE_MAX)).min(1).max(10),
+  lines: z.array(teamsAudioLineSchema).min(1).max(10),
 });
 export type TeamsAudioLines = z.infer<typeof teamsAudioLinesSchema>;
 // Main → renderer: a capture stopped by itself. failure null: main stopped it (the call ended, the call app changed, the
@@ -457,9 +462,13 @@ export const transcribeRequestSchema = z.object({
   audio: z.instanceof(Uint8Array).refine((audio) => audio.byteLength > 44 && audio.byteLength <= TRANSCRIBE_MAX_BYTES, {
     message: "Audio must be a non-empty WAV under 2 MB",
   }),
+  // Names the request, so cancelTranscribe can abort it.
+  requestId: z.number().int().positive().optional(),
   sessionToken: z.string().max(8000),
 });
 export type TranscribeRequest = z.infer<typeof transcribeRequestSchema>;
+export const transcribeCancelSchema = z.object({ requestId: z.number().int().positive() });
+export type TranscribeCancel = z.infer<typeof transcribeCancelSchema>;
 
 // text is null when the phrase had no words. The text never reaches the UI: the renderer feeds it to the pipeline.
 export const transcribeResultSchema = z.object({ text: z.string().nullable(), error: z.string().nullable() });

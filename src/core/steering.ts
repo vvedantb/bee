@@ -18,6 +18,11 @@ export function isFiller(line: string): boolean {
   return tokenize(line).length === 0;
 }
 
+/** True when two versions of a line have the same content words, in order: a revision only in filler, case or punctuation. */
+export function sameContent(a: string, b: string): boolean {
+  return tokenize(a).join(" ") === tokenize(b).join(" ");
+}
+
 // Speech-to-text often drops the "?", so a line that opens like a question counts too.
 const QUESTION_START =
   /^(?:(?:so|and|but|okay|ok|hey|right|well|then)[\s,]+)*(?:(?:what|what's|whats|why|how|how's|when|where|who|whom|whose|which|explain|tell me)\b|(?:is|are|was|were|does|did|can|could|will|would|should|has|have)\s+(?:i|you|we|they|he|she|it|there|this|that|these|those|the|any)\b|do\s+(?:i|you|we|they)\b)/i;

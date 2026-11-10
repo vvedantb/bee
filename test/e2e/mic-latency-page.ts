@@ -100,13 +100,17 @@ function onFrame(frame: Float32Array, rate: number): void {
   if (!marker) {
     sampleRate = rate;
     firstFrameMs = now();
+    let inPhrase = false;
     marker = createSegmenter({
       sampleRate: rate,
-      // Fires inside push(), so the audio clock is at the end of the frame that ended the phrase.
-      onSpeechEnd: () => segments.push({ ms: now(), audioS: round3(audioS()), phraseS: 0 }),
-      onPhrase: (phrase) => {
+      // Fires inside push(), so the audio clock is at the end of the frame that cut the phrase. A segment starts at the phrase's
+      // first early cut (or its end, with none): the moment its speech-to-text starts (core/speech.ts startMicSession).
+      onEvent: (event) => {
+        if (event.kind === "resume") return;
+        if (!inPhrase) segments.push({ ms: now(), audioS: round3(audioS()), phraseS: 0 });
+        inPhrase = event.kind === "early";
         const last = segments.at(-1);
-        if (last) last.phraseS = round3(phrase.length / rate);
+        if (last) last.phraseS = round3(event.samples.length / rate);
       },
     });
   }

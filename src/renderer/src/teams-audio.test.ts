@@ -49,10 +49,10 @@ describe("openTeamsAudio", () => {
     const opened = await openTeamsAudio("token");
     expect(bee.calls.start).toEqual(["token"]);
     const heard: string[][] = [];
-    opened.capture?.start((texts) => heard.push(texts), () => undefined);
-    bee.lines({ id: 7, lines: ["When does SSO ship?"] });
+    opened.capture?.start((lines) => heard.push(lines.map((line) => line.text)), () => undefined);
+    bee.lines({ id: 7, lines: [{ id: 1, text: "When does SSO ship?", final: true }] });
     // An older capture's late line is ignored.
-    bee.lines({ id: 6, lines: ["Old phrase"] });
+    bee.lines({ id: 6, lines: [{ id: 1, text: "Old phrase", final: true }] });
     expect(heard).toEqual([["When does SSO ship?"]]);
   });
 
@@ -60,12 +60,12 @@ describe("openTeamsAudio", () => {
     const bee = stubBee({ ok: true, id: 1 });
     const opened = await openTeamsAudio("token");
     const heard: string[][] = [];
-    opened.capture?.start((texts) => heard.push(texts), () => undefined);
+    opened.capture?.start((lines) => heard.push(lines.map((line) => line.text)), () => undefined);
     opened.capture?.stop();
     opened.capture?.stop();
     expect(bee.calls.stop).toBe(1);
     expect(bee.listeners()).toBe(0);
-    bee.lines({ id: 1, lines: ["After stop"] });
+    bee.lines({ id: 1, lines: [{ id: 1, text: "After stop", final: true }] });
     expect(heard).toEqual([]);
   });
 

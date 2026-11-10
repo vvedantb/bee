@@ -5,10 +5,15 @@ import {
   type PipelineRequest,
   type PipelineResult,
   type SettingsView,
+  type TeamsAudioLine,
   type TeamsAudioStatus,
 } from "../../shared/ipc";
 import type { startMicSession } from "./speech";
 import type { TeamsAudioCapture, TeamsAudioOpen } from "./teams-audio";
+
+// Phrase ids for lines the stubbed mic session hands over (core/speech.ts PhraseLine).
+let phraseSeq = 0;
+const nextPhrase = () => (phraseSeq += 1);
 
 // Call audio in the store: lines from the call app join the session like captions as another person, are deduped against
 // speech Bee already has (captions, and the mic's echo of the speakers), and are never shared. The capture runs beside the
@@ -77,7 +82,7 @@ const NO_HELPER: TeamsAudioStatus = { platform: "windows", supported: false, rea
 
 /** A capture main started: lines() delivers text as main would, end() stops it from main's side. */
 function fakeCapture() {
-  let onLines: (texts: string[]) => void = () => undefined;
+  let onLines: (lines: TeamsAudioLine[]) => void = () => undefined;
   let onEnd: Parameters<TeamsAudioCapture["start"]>[1] = () => undefined;
   const source: TeamsAudioCapture = {
     start: (lines, end) => {
@@ -89,7 +94,7 @@ function fakeCapture() {
     },
   };
   const opened: TeamsAudioOpen = { capture: source, failure: null };
-  return { opened, lines: (texts: string[]) => onLines(texts), end: (failure: Parameters<typeof onEnd>[0] = "no-teams") => onEnd(failure) };
+  return { opened, lines: (texts: string[]) => onLines(texts.map((text) => ({ id: nextPhrase(), text, final: true }))), end: (failure: Parameters<typeof onEnd>[0] = "no-teams") => onEnd(failure) };
 }
 
 async function loadStore(options: { settings?: Partial<SettingsView>; status?: TeamsAudioStatus } = {}) {
@@ -132,7 +137,7 @@ async function loadStore(options: { settings?: Partial<SettingsView>; status?: T
     await vi.advanceTimersByTimeAsync(1000);
   };
   const heard = async (text: string) => {
-    store.actions.teamsAudioLines([text]);
+    store.actions.teamsAudioLines([{ id: nextPhrase(), text, final: true }]);
     await vi.advanceTimersByTimeAsync(1000);
   };
   const said = (store: { getBeeState: () => { session: { lines: Array<{ own: boolean; speakerName: string; text: string }> } } }) =>
@@ -185,13 +190,13 @@ describe("store: Teams audio lines", () => {
     await heard("Bee, what is our refund policy?");
     const runs = requests.length;
     // The mic hears the far end through the speakers a moment later.
-    sessions.at(-1)?.onLine("Bee what is our refund policy");
+    sessions.at(-1)?.onLine({ id: nextPhrase(), text: "Bee what is our refund policy", final: true });
     await vi.advanceTimersByTimeAsync(1000);
     expect(said()).toEqual(["Meeting: Bee, what is our refund policy?"]);
     expect(store.getBeeState().busy).toBe(false);
     expect(requests.length).toBe(runs);
     // The user's own words still count.
-    sessions.at(-1)?.onLine("we can offer fifteen percent off this quarter");
+    sessions.at(-1)?.onLine({ id: nextPhrase(), text: "we can offer fifteen percent off this quarter", final: true });
     await vi.advanceTimersByTimeAsync(1000);
     expect(said().at(-1)).toBe("we can offer fifteen percent off this quarter");
   });
@@ -200,7 +205,7 @@ describe("store: Teams audio lines", () => {
     const { store, requests, heard, said } = await loadStore({ status: NO_HELPER });
     await store.actions.toggleMic();
     // The mic's copy of the far end arrives first.
-    sessions.at(-1)?.onLine("can you send the contract today");
+    sessions.at(-1)?.onLine({ id: nextPhrase(), text: "can you send the contract today", final: true });
     await vi.advanceTimersByTimeAsync(1000);
     const runs = requests.length;
     await heard("Can you send the contract today?");
@@ -212,7 +217,7 @@ describe("store: Teams audio lines", () => {
     const { isAttributionUnknown } = await import("../../core/session-lines");
     const { store, heard } = await loadStore({ status: NO_HELPER });
     await store.actions.toggleMic();
-    sessions.at(-1)?.onLine("let me share my screen");
+    sessions.at(-1)?.onLine({ id: nextPhrase(), text: "let me share my screen", final: true });
     await vi.advanceTimersByTimeAsync(1000);
     expect(isAttributionUnknown(store.getBeeState().session.lines, true)).toBe(true);
     await heard("Sure, go ahead.");

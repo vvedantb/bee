@@ -158,9 +158,17 @@ With the mic on, start a phrase with **"Bee"** (or "Hey Bee") and the rest is a 
 
 Bee transcribes with **Voxtral Small** (`mistral/voxtral-small-transcribe-3`) through Vercel AI Gateway, using the same Gateway key as the AI and Jev. Each call lists the words to listen for: "Bee", Jev, vmem and the names in **Memory → Names Bee should know**. This fixes most misheard names.
 
-1. The mic is captured with Web Audio. A simple level detector cuts the audio into phrases: speech, then 0.8 s of silence, up to 15 s per phrase. Blips under 0.3 s are dropped without a Gateway call. Bee never mixes system audio into the mic. [Call audio](#call-audio) is a separate stream of the call app alone.
+1. The mic is captured with Web Audio. A simple level detector cuts the audio into phrases: speech, then 0.8 s of silence, up to 15 s per phrase (an early result comes at 0.4 s; see below). Blips under 0.3 s are dropped without a Gateway call. Bee never mixes system audio into the mic. [Call audio](#call-audio) is a separate stream of the call app alone.
 2. Each phrase is sent to the main process as a 16 kHz mono WAV. Main calls Voxtral (Gateway default tier) and returns the text.
 3. The text joins a short internal buffer (the last 8 lines), and the pipeline runs. The words are never shown on screen.
+
+**Early result.** Bee does not wait for the full 0.8 s of silence. At 0.4 s of silence it sends the phrase so far, so the text is usually ready about 0.9 s after you stop talking (it was about 1.4 s). If you start talking again before 0.8 s (a thinking pause), the phrase goes on: the early request is cancelled, and at the real end the whole phrase is sent once. Its text then replaces the early line:
+
+- Same words (only punctuation, case or filler differ): the line is updated quietly, and nothing runs again.
+- Changed words: the answer on screen is updated, as for a line spoken over it. It is never cleared as a new topic.
+- A phrase that could be a request to Bee ("Bee, open …", or any phrase while Bee is listening for one) waits for its final text, so "Bee, open … Teams" stays one request.
+
+Each phrase costs one request, or two when you resume after a pause. A second pause in the same phrase sends nothing more. The meeting summary waits up to 3 s for final text.
 
 If a phrase fails to transcribe, the notch shows a short error (for example "Speech-to-text failed: AI Gateway authentication failed…"). The mic stays on and the error clears after the next phrase succeeds. Without a key, the notch says to add one in Settings.
 

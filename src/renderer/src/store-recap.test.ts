@@ -12,6 +12,10 @@ import {
 import type { SessionLine } from "../../core/session-lines";
 import type { startMicSession } from "./speech";
 
+// Phrase ids for lines the stubbed mic session hands over (core/speech.ts PhraseLine).
+let phraseSeq = 0;
+const nextPhrase = () => (phraseSeq += 1);
+
 // "What did I miss?" in the store (core/recap.ts): the recap card when main says the user is back, when the mic goes on in a
 // meeting that has started, and on "Bee, what did I miss?". Preload (window.bee), Clerk, the mic and speech-to-text are stubbed.
 type MicArgs = Parameters<typeof startMicSession>[0];
@@ -111,7 +115,7 @@ async function loadStore(options: { recap?: RecapResult } = {}) {
     const mic = micSessions.at(-1);
     if (!mic) throw new Error("no mic session");
     mic.onSpeechEnd?.();
-    mic.onLine(text);
+    mic.onLine({ id: nextPhrase(), text, final: true });
     mic.onSettled?.("words");
     await vi.advanceTimersByTimeAsync(1000);
   };
