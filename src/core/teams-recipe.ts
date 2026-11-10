@@ -12,8 +12,9 @@ import { nameMatches, type ResolvedName } from "./known-names";
 // "Bee, message Sam on Teams saying I'm running late": a fixed recipe that code runs, step by step, instead of the AI. Teams (a
 // WebView2 app) often refuses semantic clicks and misreports its compose box, so the AI loop is slow and unsure there; the steps
 // that always work are the keyboard's. parseTeamsMessage is conservative: Teams named, a person or chat, and the words to send,
-// else null and the request goes to the AI as before. runTeamsRecipe opens Teams, opens the chat with ctrl+e (cmd+e), the name,
-// Down and Return, and checks that chat really opened (its window title or header names the person) before it writes anything;
+// else null and the request goes to the AI as before. runTeamsRecipe opens Teams, types the name in its search (ctrl+e or cmd+e,
+// then a check that the box shows it), picks the result that names the person with Down and Return, and checks that chat really
+// opened (the chat list's selected row, the window title or the header names the person) before it writes anything;
 // when it cannot tell, it stops and hands the task to the AI with what it did. It pastes the message (the clipboard's old text
 // goes back after), reads the box back, types it once if the paste did not take, and sends only after the user's Confirm. Nothing
 // is ever typed into a chat Bee could not check, a box that already holds the user's own draft is left alone, and Stop ends it
@@ -101,7 +102,14 @@ export function namesChat(title: string, name: string): boolean {
 /** Text as Bee compares a field with what it wrote: no zero-width marks, runs of space as one, trimmed. */
 const squash = (text: string) => text.replace(/[​-‍﻿]/g, "").replace(/\s+/g, " ").trim();
 
-const matchSchema = z.object({ ref_id: z.string().optional(), role: z.string().optional().catch(undefined), name: z.string().optional().catch(undefined) });
+// ref_id is null for what cannot be acted on (a chat's header); value is a field's text; states holds "selected" for a chosen row.
+const matchSchema = z.object({
+  ref_id: z.string().nullish().catch(null),
+  role: z.string().optional().catch(undefined),
+  name: z.string().nullish().catch(null),
+  value: z.string().nullish().catch(null),
+  states: z.array(z.string()).optional().catch(undefined),
+});
 const matchesSchema = z.object({ matches: z.array(matchSchema.nullable().catch(null)) });
 type Match = z.infer<typeof matchSchema>;
 
@@ -119,6 +127,19 @@ const windowsSchema = z.union([
 // A message box by its name in Teams ("Type a message", "Type a reply"), never a search box.
 const COMPOSE_NAME = /\b(?:type a (?:new )?(?:message|reply)|message|reply|compose)\b/i;
 const SEARCH_NAME = /\b(?:search|find|filter|look ?up)\b/i;
+
+/**
+ * The search result to open for this name: its place in the list, "several" when results name two different people or chats, or
+ * null when none names it. A result that starts with the name wins ("George" opens "George Dowling", not the group chat "Sam Lee,
+ * George Dowling"); Teams' own "Search for …" row never counts.
+ */
+export function pickResult(names: readonly string[], name: string): number | "several" | null {
+  const rows = names.map((text, index) => ({ text, index })).filter(({ text }) => !SEARCH_NAME.test(text) && namesChat(text, name));
+  const leading = rows.filter(({ text }) => fold(text).startsWith(fold(name)));
+  const best = leading.length > 0 ? leading : rows;
+  if (new Set(best.map(({ text }) => fold(text))).size > 1) return "several";
+  return best[0]?.index ?? null;
+}
 
 /** The message box among find's text fields: one named like Teams' compose box ("Type a message" first), or null. */
 export function composeRef(matches: readonly Match[]): string | null {
@@ -199,43 +220,74 @@ export async function runTeamsRecipe(message: TeamsMessage & { name: string }, d
   const press = (keys: string) => exec("press", [keys, ...where, HEADED_FLAG], KEY_MS);
   if (stopped()) return { kind: "stopped" };
 
-  // 2. ctrl+e (cmd+e), the name with real keys, then Down and Return: the chat opens.
+  // 2. ctrl+e (cmd+e) and the name with real keys. Teams' search box must then hold the name: keys that missed it move through
+  // the chat list instead (Down and Return then open the chat at the top, often the user's own). Once more by focusing the box.
   const search = await logged("search", okResult)(press(modKey(platform, "e")));
   if (stopped()) return { kind: "stopped" };
   if (!search.ok) return fallback("Bee could not open Teams' search with the keyboard.");
   await pause(pauses.search);
   const keys = keyPresses(message.name);
-  const typed = await logged("name", okResult)(
-    (async () => {
-      if (!keys || keys.length > NAME_KEYS_MAX) return (await pasteText(exec, { text: message.name, platform, scope: where })).result;
-      for (const key of keys) {
-        if (stopped()) return { ok: false, code: "ABORTED" } satisfies AgentDesktopResult;
-        const result = await press(key);
-        if (!result.ok) return result;
-      }
-      return { ok: true, data: null } satisfies AgentDesktopResult;
-    })(),
-  );
+  const typeName = async (): Promise<AgentDesktopResult> => {
+    if (!keys || keys.length > NAME_KEYS_MAX) return (await pasteText(exec, { text: message.name, platform, scope: where })).result;
+    for (const key of keys) {
+      if (stopped()) return { ok: false, code: "ABORTED" };
+      const result = await press(key);
+      if (!result.ok) return result;
+    }
+    return { ok: true, data: null };
+  };
+  const searchFields = async (): Promise<Match[]> => {
+    const fields = await exec("find", [...where, "--role=textfield", "--limit=15", `--timeout-ms=${LOOK_MS}`], LOOK_MS + 6000);
+    return fields.ok ? findMatches(fields.data).filter((match) => SEARCH_NAME.test(match.name ?? "")) : [];
+  };
+  // A box holds the name when its text has it, or when it has the keyboard (Teams may not report the text). A miss only when no box
+  // holds it and some box said what it holds or that it lacks the keyboard. No box, or nothing reported: Bee cannot tell, and
+  // step 4 still checks the chat.
+  const hasName = (field: Match) => (typeof field.value === "string" && fold(field.value).includes(fold(message.name))) || field.states?.includes("focused") === true;
+  const missed = (fields: readonly Match[]) => !fields.some(hasName) && fields.some((field) => typeof field.value === "string" || field.states !== undefined);
+  const typed = await logged("name", okResult)(typeName());
   if (stopped()) return { kind: "stopped" };
   if (!typed.ok) return fallback(`Bee pressed ${modKey(platform, "e")} in Teams but could not type the name to search for.`);
+  let searched = await logged("search-box", (found: Match[]) => !missed(found))(searchFields());
+  if (stopped()) return { kind: "stopped" };
+  const target = missed(searched) ? searched.find((field) => field.ref_id && !field.states?.includes("readonly"))?.ref_id : undefined;
+  if (target) {
+    // The keys missed the box: put the cursor in it (a click when Teams refuses focus), select what it holds, type again.
+    let into = await logged("focus-search", okResult)(exec("focus", [target, HEADED_FLAG], KEY_MS));
+    if (!into.ok && !stopped()) into = await logged("click-search", okResult)(exec("click", [target, HEADED_FLAG], KEY_MS));
+    const again = into.ok && !stopped() && (await press(modKey(platform, "a"))).ok ? await logged("name-again", okResult)(typeName()) : into;
+    if (stopped()) return { kind: "stopped" };
+    if (again.ok) searched = await logged("search-box", (found: Match[]) => !missed(found))(searchFields());
+    if (stopped()) return { kind: "stopped" };
+  }
+  if (missed(searched)) return fallback(`Bee pressed ${modKey(platform, "e")} and typed the name, but Teams' search box did not show it, so Bee opened no chat.`);
   done.push(`Bee pressed ${modKey(platform, "e")} and typed "${message.name}" in Teams' search.`);
   await pause(pauses.results);
-  for (const key of ["down", "return"]) {
+  if (stopped()) return { kind: "stopped" };
+
+  // 3. The result that names the person, by its place in the list (keys only). Two people match: Bee asks for the full name. No
+  // result it can read: the first, as before. Step 4 checks the chat either way.
+  const results = await logged("results", okResult)(exec("find", [...where, "--role=option", "--limit=20", `--timeout-ms=${LOOK_MS}`], LOOK_MS + 6000));
+  if (stopped()) return { kind: "stopped" };
+  const pick = pickResult(results.ok ? findMatches(results.data).map((match) => match.name ?? "") : [], message.name);
+  if (pick === "several") return { kind: "failed", line: `More than one person or chat in Teams matches "${message.name}". Say the full name. Nothing was sent.` };
+  const downs = (pick ?? 0) + 1;
+  for (const key of [...Array.from({ length: downs }, () => "down"), "return"]) {
     const result = await logged(key, okResult)(press(key));
     if (stopped()) return { kind: "stopped" };
     if (!result.ok) return fallback("Bee could not pick the search result.");
   }
-  done.push("It pressed Down and Return to open the first result.");
+  done.push(pick === null ? "It pressed Down and Return to open the first result." : `It pressed Down ${downs === 1 ? "once" : `${downs} times`} and Return to open the result that names ${message.name}.`);
   await pause(pauses.open);
   if (stopped()) return { kind: "stopped" };
 
-  // 3. The right chat is open: the window's title or a heading names the person. Else nothing is written.
+  // 4. The right chat is open: the chat list's selected row, the window's title or a heading names the person. Else nothing is written.
   const verified = await logged("verify", (value: boolean) => value)(chatOpen(exec, where, message.name));
   if (stopped()) return { kind: "stopped" };
   if (!verified) return fallback(`Bee could not confirm the chat with ${message.name} opened, so it typed no message.`);
   done.push(`The chat with ${message.name} is open.`);
 
-  // 4. The message box, empty (or showing only its placeholder): a draft of the user's own is never touched.
+  // 5. The message box, empty (or showing only its placeholder): a draft of the user's own is never touched.
   deps.onStep?.("Writing the message…");
   const fields = await logged("find-box", okResult)(exec("find", [...where, "--role=textfield", "--limit=15", `--timeout-ms=${LOOK_MS}`], LOOK_MS + 6000));
   if (stopped()) return { kind: "stopped" };
@@ -254,7 +306,7 @@ export async function runTeamsRecipe(message: TeamsMessage & { name: string }, d
   if (stopped()) return { kind: "stopped" };
   if (!focused.ok) return fallback("Bee found the message box but could not put the cursor in it.");
 
-  // 5. Paste, read back; once with real keys if the paste did not take. Only exact text goes on.
+  // 6. Paste, read back; once with real keys if the paste did not take. Only exact text goes on.
   const holds = (held: string | null) => held !== null && squash(held) === squash(message.text);
   const pasted = await logged("paste", (value: PasteOutcome) => value.result.ok)(pasteText(exec, { text: message.text, platform, scope: where }));
   if (stopped()) return { kind: "stopped" };
@@ -282,7 +334,7 @@ export async function runTeamsRecipe(message: TeamsMessage & { name: string }, d
   if (pasted.restored === false) debugLog.info("computer", "teams-recipe", { step: "clipboard-restore", ok: false });
   if (!message.send) return { kind: "drafted", line: `Drafted the message to ${first} in Teams. Not sent.` };
 
-  // 6. The user's Confirm, then Return, then the box must be empty.
+  // 7. The user's Confirm, then Return, then the box must be empty.
   deps.onStep?.(CONFIRM_LABEL);
   const request: ConfirmRequest = { kind: "send", question: "Send this?", detail: `To ${shortName(message.name, 30)} in Teams — “${shortName(message.text, 70)}”` };
   debugLog.info("computer", "teams-recipe-confirm", { chars: message.text.length });
@@ -304,8 +356,14 @@ export async function runTeamsRecipe(message: TeamsMessage & { name: string }, d
   return { kind: "sent", line: `Sent to ${message.name}.` };
 }
 
-/** The chat with this name is open: Teams' window title names it, or a heading in the window does. */
+/**
+ * The chat with this name is open. When the chat list says which row is selected, that row decides, whatever the title says: the
+ * title can lag behind the open chat. Else Teams' window title names it, or a heading in the window (the chat's header) does.
+ */
 async function chatOpen(exec: Exec, where: readonly string[], name: string): Promise<boolean> {
+  const rows = await exec("find", [...where, "--role=treeitem", "--limit=60", `--timeout-ms=${LOOK_MS}`], LOOK_MS + 6000);
+  const selected = rows.ok ? findMatches(rows.data).filter((match) => match.states?.includes("selected")) : [];
+  if (selected.length > 0) return selected.some((match) => namesChat(match.name ?? "", name));
   const windows = await exec("list-windows", [...where], READ_MS);
   const parsed = windows.ok ? windowsSchema.safeParse(windows.data) : null;
   const titles = parsed?.success ? parsed.data.map((row) => row?.title ?? "") : [];

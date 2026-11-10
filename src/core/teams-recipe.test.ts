@@ -3,7 +3,7 @@ import type { AgentDesktopResult, ComputerRun, ComputerUseCommand } from "./agen
 import { createRunControl, type ComputerPlatform, type IrreversibleKind, type RunControl } from "./computer-control";
 import type { ConfirmRequest } from "./computer-tools";
 import type { DesktopActions } from "./desktop-actions";
-import { composeRef, nameWords, namesChat, parseTeamsMessage, recipientName, runTeamsRecipe, type TeamsMessage } from "./teams-recipe";
+import { composeRef, nameWords, namesChat, parseTeamsMessage, pickResult, recipientName, runTeamsRecipe, type TeamsMessage } from "./teams-recipe";
 
 describe("parseTeamsMessage", () => {
   it("reads who and what from the ways people ask", () => {
@@ -71,14 +71,61 @@ describe("names", () => {
     expect(composeRef([{ ref_id: "@s1:e1", name: "Search messages" }])).toBeNull();
     expect(composeRef([{ ref_id: "bad", name: "Type a message" }])).toBeNull();
   });
+
+  it("picks the search result that names the person, and none when two different people match", () => {
+    expect(pickResult(['Search for "George"', "Georgia Dow", "George Dowling"], "George")).toBe(2);
+    expect(pickResult(["Sam Lee, George Dowling", "George Dowling"], "George Dowling")).toBe(1);
+    expect(pickResult(["George Dowling", "George Dowling"], "George")).toBe(0);
+    expect(pickResult(["George Dowling", "George Smith"], "George")).toBe("several");
+    expect(pickResult(["Sam Lee", 'Search for "George"'], "George")).toBeNull();
+    expect(pickResult([], "George")).toBeNull();
+  });
 });
 
 type Call = { command: ComputerUseCommand; args: string[]; stdin?: string };
-type Teams = { title: string; heading: string; box: string; clipboard: string; opened: boolean; sent: string | null; pasteWorks: boolean; typeWorks: boolean };
+type Teams = {
+  title: string;
+  heading: string;
+  box: string;
+  clipboard: string;
+  /** Keys reach the search box (ctrl+e worked, or Bee focused it), and what it holds. */
+  searching: boolean;
+  search: string;
+  downs: number;
+  opened: boolean;
+  sent: string | null;
+  pasteWorks: boolean;
+  typeWorks: boolean;
+};
 
-function teams(options: { chat?: string; heading?: string; box?: string; pasteWorks?: boolean; typeWorks?: boolean; onCall?: (call: Call, state: Teams) => AgentDesktopResult | null } = {}) {
+/** results: the search's suggestions in order; Down n times and Return opens the nth. selected: the chat list's selected row once open. */
+function teams(
+  options: {
+    chat?: string;
+    heading?: string;
+    box?: string;
+    pasteWorks?: boolean;
+    typeWorks?: boolean;
+    results?: string[];
+    selected?: string;
+    searchMisses?: boolean;
+    onCall?: (call: Call, state: Teams) => AgentDesktopResult | null;
+  } = {},
+) {
   const calls: Call[] = [];
-  const state: Teams = { title: "Activity | Microsoft Teams", heading: "", box: options.box ?? "", clipboard: "user's clipboard", opened: false, sent: null, pasteWorks: options.pasteWorks ?? true, typeWorks: options.typeWorks ?? true };
+  const state: Teams = {
+    title: "Activity | Microsoft Teams",
+    heading: "",
+    box: options.box ?? "",
+    clipboard: "user's clipboard",
+    searching: false,
+    search: "",
+    downs: 0,
+    opened: false,
+    sent: null,
+    pasteWorks: options.pasteWorks ?? true,
+    typeWorks: options.typeWorks ?? true,
+  };
   const done: AgentDesktopResult = { ok: true, data: { disposition: { delivery: "delivered_verified" } } };
   const run: ComputerRun = async (command, args, runOptions) => {
     const call = { command, args, ...(runOptions?.stdin !== undefined ? { stdin: runOptions.stdin } : {}) };
@@ -91,8 +138,22 @@ function teams(options: { chat?: string; heading?: string; box?: string; pasteWo
       case "list-windows":
         return { ok: true, data: [{ id: "w-1", title: state.title, app_name: "ms-teams.exe", is_focused: true }] };
       case "find":
-        if (args.includes("--role=heading")) return { ok: true, data: { matches: state.heading ? [{ role: "heading", name: state.heading }] : [] } };
-        return { ok: true, data: { matches: [{ ref_id: "@s1:e1", role: "textfield", name: "Search (Ctrl+E)" }, { ref_id: "@s1:e2", role: "textfield", name: "Type a message" }] } };
+        // A header is not actionable: agent-desktop gives it no ref.
+        if (args.includes("--role=heading")) return { ok: true, data: { matches: state.heading ? [{ ref_id: null, role: "heading", name: state.heading }] : [] } };
+        if (args.includes("--role=option")) return { ok: true, data: { matches: state.opened ? [] : (options.results ?? []).map((name) => ({ ref_id: null, role: "option", name })) } };
+        if (args.includes("--role=treeitem")) return { ok: true, data: { matches: state.opened && options.selected ? [{ ref_id: null, role: "treeitem", name: options.selected, states: ["selected"] }] : [] } };
+        return {
+          ok: true,
+          data: {
+            matches: [
+              { ref_id: "@s1:e1", role: "textfield", name: "Search (Ctrl+E)", value: state.search || null, states: state.searching && !state.opened ? ["focused"] : [] },
+              { ref_id: "@s1:e2", role: "textfield", name: "Type a message" },
+            ],
+          },
+        };
+      case "focus":
+        if (args[0] === "@s1:e1") state.searching = true;
+        return done;
       case "get":
         return { ok: true, data: { value: state.box } };
       case "clipboard-get":
@@ -107,11 +168,18 @@ function teams(options: { chat?: string; heading?: string; box?: string; pasteWo
         if (state.typeWorks) state.box = runOptions?.stdin ?? "";
         return done;
       case "press": {
-        const key = args[0];
+        const key = args[0] ?? "";
+        if ((key === "ctrl+e" || key === "cmd+e") && !options.searchMisses) state.searching = true;
+        if (state.searching && !state.opened) {
+          if (key === "ctrl+a") state.search = "";
+          const char = key === "space" ? " " : /^shift\+.$/.test(key) ? key.slice(-1).toUpperCase() : /^.$/.test(key) ? key : "";
+          state.search += char;
+        }
+        if (key === "down" && !state.opened) state.downs += 1;
         if (key === "ctrl+v" && state.pasteWorks) state.box += state.clipboard;
         if (key === "return" && !state.opened) {
           state.opened = true;
-          state.title = `Chat | ${options.chat ?? "Sam Lee"} | Microsoft Teams`;
+          state.title = `Chat | ${options.results?.[state.downs - 1] ?? options.chat ?? "Sam Lee"} | Microsoft Teams`;
           state.heading = options.heading ?? "";
         } else if (key === "return") {
           state.sent = state.box;
@@ -177,7 +245,7 @@ describe("runTeamsRecipe", () => {
     // Every key is real input in Teams' process.
     for (const call of fake.calls.filter((item) => item.command === "press")) expect(call.args.slice(1), line(call)).toEqual(["--app=ms-teams.exe", "--headed"]);
     expect(fake.calls.map((call) => call.command).filter((command) => command !== "press")).toEqual([
-      "list-apps", "list-windows", "find", "get", "focus", "clipboard-get", "clipboard-set", "wait", "clipboard-set", "get", "get",
+      "list-apps", "find", "find", "find", "list-windows", "find", "get", "focus", "clipboard-get", "clipboard-set", "wait", "clipboard-set", "get", "get",
     ]);
     // The message travels on stdin only, never in argv.
     expect(fake.calls.flatMap((call) => call.args).join(" ")).not.toContain("Running late");
@@ -195,6 +263,47 @@ describe("runTeamsRecipe", () => {
   it("accepts the chat when a heading names the person though the title does not", async () => {
     const fake = teams({ chat: "Chat", heading: "Sam Lee" });
     expect((await recipe(fake).go(SAM)).kind).toBe("sent");
+  });
+
+  it("opens the result that names the person, past Teams' own Search row and other names", async () => {
+    const fake = teams({ results: ['Search for "Sam Lee"', "Sam Carter", "Sam Lee"] });
+    const { go } = recipe(fake);
+    expect(await go(SAM)).toEqual({ kind: "sent", line: "Sent to Sam Lee." });
+    const keys = fake.calls.filter((call) => call.command === "press").map((call) => call.args[0]);
+    expect(keys.slice(keys.indexOf("down"))).toEqual(["down", "down", "down", "return", "ctrl+v", "return"]);
+  });
+
+  it("asks for the full name when two people match, and opens no chat", async () => {
+    const fake = teams({ results: ["Sam Lee", "Sam Carter"] });
+    const { go, asked } = recipe(fake);
+    expect(await go({ ...SAM, name: "Sam" })).toEqual({ kind: "failed", line: 'More than one person or chat in Teams matches "Sam". Say the full name. Nothing was sent.' });
+    expect(asked).toEqual([]);
+    expect(fake.state.opened).toBe(false);
+  });
+
+  it("types the name again in the search box when ctrl+e missed it, and never walks the chat list", async () => {
+    const fake = teams({ searchMisses: true });
+    expect(await recipe(fake).go(SAM)).toEqual({ kind: "sent", line: "Sent to Sam Lee." });
+    const focused = fake.calls.filter((call) => call.command === "focus").map((call) => call.args[0]);
+    expect(focused[0]).toBe("@s1:e1");
+    expect(fake.calls.filter((call) => call.command === "press").map((call) => call.args[0])).toContain("ctrl+a");
+  });
+
+  it("opens no chat when the name never reaches the search box", async () => {
+    const fake = teams({ searchMisses: true, onCall: (call) => (call.command === "focus" || call.command === "click" ? { ok: false, code: "ACTION_NOT_SUPPORTED" } : null) });
+    expect(await recipe(fake).go(SAM)).toEqual({
+      kind: "fallback",
+      done: "Bee opened Microsoft Teams. Bee pressed ctrl+e and typed the name, but Teams' search box did not show it, so Bee opened no chat.",
+    });
+    expect(fake.calls.filter((call) => call.command === "press").map((call) => call.args[0])).not.toContain("down");
+  });
+
+  it("trusts the chat list's selected row over a window title that lags behind", async () => {
+    const stale = teams({ chat: "Sam Lee", selected: "Vedant (You)" });
+    expect((await recipe(stale).go(SAM)).kind).toBe("fallback");
+    expect(stale.state.box).toBe("");
+    const right = teams({ chat: "Chat", selected: "Sam Lee" });
+    expect((await recipe(right).go(SAM)).kind).toBe("sent");
   });
 
   it("never writes into a chat it cannot check: the wrong chat opened, so it hands over to the AI with what it did", async () => {
