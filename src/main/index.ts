@@ -24,6 +24,7 @@ import { createVmemSearch } from "../core/vmem-history";
 import { createBeeHistoryStore } from "./bee-history-store";
 import { createClaudeCode } from "./claude-code";
 import { createBrowse } from "./browse";
+import { allowAnyForeground } from "./foreground";
 import { registerBeeMemoryIpc } from "./bee-memory-ipc";
 import { createBeeMemoryStore } from "./bee-memory-store";
 import { createDebugLog, settingsChange, type DebugLogWriter } from "./debug-log";
@@ -136,8 +137,12 @@ function applyMeetingMode(window: BrowserWindow, meetingMode: boolean): void {
  * and ignores the mouse until the command ends, then restores the stack. Focus is not taken back.
  */
 function yieldOverlay(): () => void {
+  if (process.platform !== "win32") return () => {};
+  // Bee holds the foreground here, so only Bee can let the child's SetForegroundWindow through the foreground lock; agent-desktop
+  // already brings the target app forward itself, so Bee does not call focus-window first. Runs before the child starts.
+  allowAnyForeground();
   const window = win;
-  if (process.platform !== "win32" || !window || window.isDestroyed()) return () => {};
+  if (!window || window.isDestroyed()) return () => {};
   debugLog.debug("window", "yield-for-headed");
   window.setAlwaysOnTop(false);
   window.blur();

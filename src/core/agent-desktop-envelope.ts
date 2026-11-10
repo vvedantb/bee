@@ -244,9 +244,10 @@ function assertWaitElement(args: readonly string[]): void {
  * A failed command: a short code safe for logs (agent-desktop's own, or SPAWN_FAILED, TIMEOUT_LOCAL, BAD_OUTPUT, ABORTED,
  * REFUSED); agent-desktop's message cut short and redacted (safeMessage); whether a retry is safe ("safe": it was never
  * delivered); its details.kind ("observation_incomplete", "identity_not_unique"); and retryable: false when agent-desktop
- * says waiting cannot change the outcome (details.retryable).
+ * says waiting cannot change the outcome (details.retryable). step, reason and occluderRole: short snake_case tokens from
+ * details (the chain step that failed, why, and the role of the element covering the target), for the log only.
  */
-export type AgentDesktopFailure = { ok: false; code: string; message?: string; retry?: string; kind?: string; retryable?: false };
+export type AgentDesktopFailure = { ok: false; code: string; message?: string; retry?: string; kind?: string; step?: string; reason?: string; occluderRole?: string; retryable?: false };
 
 /** ok: the command's data. */
 export type AgentDesktopResult = { ok: true; data: unknown } | AgentDesktopFailure;
@@ -272,6 +273,20 @@ const safeCode = (code: string): string => (/^[A-Z][A-Z0-9_]{0,39}$/.test(code) 
 /** A snake_case token ("safe", "observation_incomplete"), or undefined. */
 const token = (value: unknown): string | undefined => (typeof value === "string" && /^[a-z][a-z0-9_]{0,39}$/.test(value) ? value : undefined);
 const field = (holder: unknown, key: string): unknown => (isRecord(holder) ? holder[key] : undefined);
+/** A role word ("Pane", "list item"), lower-cased to a snake_case token, or undefined. */
+const roleToken = (value: unknown): string | undefined => token(typeof value === "string" ? value.trim().toLowerCase().replace(/[\s-]+/g, "_") : undefined);
+/** The role of the element covering the target: details.occluder.role, or the same in an entry of details.checks. */
+function occluderRole(details: unknown): string | undefined {
+  const direct = roleToken(field(field(details, "occluder"), "role"));
+  if (direct) return direct;
+  const checks = field(details, "checks");
+  if (!Array.isArray(checks)) return undefined;
+  for (const entry of checks.slice(0, 20)) {
+    const role = roleToken(field(field(entry, "occluder"), "role")) ?? roleToken(field(entry, "occluder_role"));
+    if (role) return role;
+  }
+  return undefined;
+}
 
 /** How much of agent-desktop's message is kept. */
 export const MESSAGE_MAX = 160;
@@ -333,6 +348,9 @@ export function parseEnvelope(stdout: string): AgentDesktopResult {
     const message = safeMessage(error.message);
     const retry = token(field(error.disposition, "retry"));
     const kind = token(field(error.details, "kind"));
+    const step = token(field(error.details, "step"));
+    const reason = token(field(error.details, "reason"));
+    const occluder = occluderRole(error.details);
     const final = field(error.details, "retryable") === false;
     return {
       ok: false,
@@ -340,6 +358,9 @@ export function parseEnvelope(stdout: string): AgentDesktopResult {
       ...(message ? { message } : {}),
       ...(retry ? { retry } : {}),
       ...(kind ? { kind } : {}),
+      ...(step ? { step } : {}),
+      ...(reason ? { reason } : {}),
+      ...(occluder ? { occluderRole: occluder } : {}),
       ...(final ? { retryable: false as const } : {}),
     };
   }

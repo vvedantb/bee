@@ -1,8 +1,12 @@
 import type { HookInput } from "@anthropic-ai/claude-agent-sdk";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { tool } from "ai";
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
 import type { IrreversibleKind } from "./computer-control";
 import type { ConfirmRequest } from "./computer-tools";
-import { browseGateHook, runCostUsd } from "./claude-agent";
+import { browseGateHook, runCostUsd, toolRouter } from "./claude-agent";
 import { BROWSE_DECLINED, BROWSE_NO_CONFIRM } from "./browse-gate";
 
 // The hook Claude Code runs before each browse execute (core/claude-agent.ts browseGateHook), called as Claude Code calls it.
@@ -83,5 +87,21 @@ describe("runCostUsd", () => {
 
   it("gives null when the total fell below the previous one", () => {
     expect(runCostUsd(1, 2).costUsd).toBeNull();
+  });
+});
+
+describe("toolRouter", () => {
+  it("lists every Bee tool with alwaysLoad, so Claude Code never defers them behind ToolSearch", async () => {
+    const router = toolRouter();
+    await router.use({ click: tool({ description: "Click", inputSchema: z.object({ ref: z.string(), effect: z.enum(["none", "send"]) }), execute: async () => "ok" }) }, new AbortController().signal);
+    const [serverSide, clientSide] = InMemoryTransport.createLinkedPair();
+    await router.server.connect(serverSide);
+    const client = new Client({ name: "test", version: "1.0.0" });
+    await client.connect(clientSide);
+    const { tools } = await client.listTools();
+    expect(tools.map((item) => item.name)).toEqual(["click"]);
+    expect(tools[0]?._meta).toEqual({ "anthropic/alwaysLoad": true });
+    expect(tools[0]?.inputSchema.required).toContain("effect");
+    await client.close();
   });
 });

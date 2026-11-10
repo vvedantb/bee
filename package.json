@@ -42,6 +42,7 @@
     "agent-desktop": "^1.2.0",
     "ai": "^7.0.116",
     "electron-store": "^8.2.0",
+    "koffi": "3.3.7",
     "zod": "^4.6.5"
   },
   "devDependencies": {
@@ -111,6 +112,10 @@
       "!node_modules/@solana{,/**}",
       "!node_modules/@solana-mobile{,/**}",
       "!node_modules/@wallet-standard{,/**}"
+    ],
+    "asarUnpack": [
+      "**/node_modules/koffi/**/*",
+      "**/node_modules/@koromix/koffi-*/**/*"
     ],
     "protocols": [
       {

@@ -268,6 +268,17 @@ describe("parseEnvelope", () => {
     expect(parseEnvelope(JSON.stringify({ ok: false, error: { code: "TIMEOUT", details: { retryable: "false" } } }))).toEqual({ ok: false, code: "TIMEOUT" });
   });
 
+  it("keeps safe step, reason and occluder role from details, and drops anything that is not a short token", () => {
+    const parse = (details: unknown) => parseEnvelope(JSON.stringify({ ok: false, error: { code: "ACTION_FAILED", details } }));
+    expect(parse({ kind: "chain_exhausted", step: "set_foreground", reason: "foreground_lock", occluder: { role: "Pane", name: "Sam Lee" } })).toEqual({
+      ok: false, code: "ACTION_FAILED", kind: "chain_exhausted", step: "set_foreground", reason: "foreground_lock", occluderRole: "pane",
+    });
+    // From an entry of checks[].
+    expect(parse({ checks: [{ name: "visible" }, { occluder: { role: "List Item" } }] })).toEqual({ ok: false, code: "ACTION_FAILED", occluderRole: "list_item" });
+    // Free text (a title, typed text) is never kept.
+    expect(parse({ step: "Typed password hunter2", reason: "Sam's chat", occluder: { role: "Sam Lee / Private" } })).toEqual({ ok: false, code: "ACTION_FAILED" });
+  });
+
   it("tells a snapshot that could not prove its refs (identity_unproven) from one that did", () => {
     const snapshot = (extra: Record<string, unknown>) => parseEnvelope(JSON.stringify({ version: "2.6", ok: true, command: "snapshot", data: { snapshot_id: "s1", complete: true, ref_count: 3, tree: {}, ...extra } }));
     const unproven = snapshot({ identity_unproven: true });

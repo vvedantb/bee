@@ -18,8 +18,8 @@ export const APP_PLAYBOOKS: readonly AppPlaybook[] = [
     app: "Microsoft Teams",
     names: ["teams", "microsoft teams", "ms teams"],
     hints: {
-      windows: "ctrl+e goes to the search box: press it, set_value the person's or chat's name, then pick the match from the results. ctrl+n starts a new chat.",
-      mac: "cmd+e goes to the search box: press it, set_value the person's or chat's name, then pick the match from the results. cmd+n starts a new chat.",
+      windows: "To open a chat: press ctrl+e, type_text the person's or chat's name, press down, then press return. ctrl+n starts a new chat.",
+      mac: "To open a chat: press cmd+e, type_text the person's or chat's name, press down, then press return. cmd+n starts a new chat.",
     },
   },
   {

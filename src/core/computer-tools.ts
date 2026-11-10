@@ -205,7 +205,7 @@ const KIND_HINTS: Record<string, string> = {
     "this element has an identical twin in the window, so it cannot be used by ref. Act on a control that is unique in the window: find it by name, or root into its row. If there is none, stop and say Bee cannot tell which one to use.",
   saved_ref_ambiguous: "an identical element appeared since the snapshot. Take a new snapshot, and act on a control that is unique in the window.",
   resolution_identity_unknown: "agent-desktop could not check the element in time, so nothing was done. Look again, then try once more.",
-  post_action_verification: "it happened, but the element now reads differently (the app may have reformatted it). Read it before writing again. Never repeat a send or delete blindly.",
+  post_action_verification: "it happened, but the element now reads differently (the app may have reformatted it). Read it before writing again. If it still shows its old text or a placeholder, write it with type_text instead. Never repeat a send or delete blindly.",
   actionability_timeout: "the element never became ready: it may be disabled, hidden or covered. Check it with read, or take a new snapshot.",
   scroll_into_view_unsupported: "the element is out of view and cannot scroll itself. Scroll the area around it with scroll, then try again.",
   live_read_incomplete: "the app did not answer for that element. Take a new snapshot and use its refs.",
@@ -772,7 +772,7 @@ export function computerTools(deps: ComputerToolDeps) {
     }
     debugLog.debug("computer", "exec", { command, args, ok: result.ok, code: result.ok ? null : result.code, ms: msSince(started) });
     if (!result.ok) {
-      debugLog.warn("computer", "exec-failed", { command, code: result.code, message: result.message ?? null, retry: result.retry ?? null, kind: result.kind ?? null, timeoutMs, ms: msSince(started) });
+      debugLog.warn("computer", "exec-failed", { command, code: result.code, message: result.message ?? null, retry: result.retry ?? null, kind: result.kind ?? null, step: result.step ?? null, reason: result.reason ?? null, occluderRole: result.occluderRole ?? null, timeoutMs, ms: msSince(started) });
       console.debug(`computer ${command} ${result.code}`);
       if (result.code === "PERM_DENIED") control.stop("permission");
     }
@@ -979,7 +979,7 @@ export function computerTools(deps: ComputerToolDeps) {
   const done = (result: AgentDesktopResult) => (result.ok ? formatDone(result.data) : errorLine(result));
   const desktopLine = (result: DesktopActionResult) => (result.ok ? `Done: ${result.message}.` : `Error: ${result.message}.`);
 
-  // The Teams tip (ctrl+e to search) goes out once a run, on the first result about Teams, whatever words the request used.
+  // The Teams tip (ctrl+e, name, Down, Enter to open a chat) goes out once a run, on the first result about Teams, whatever words the request used.
   let teamsTold = false;
   /** " Teams tip: …" the first time a result is about Teams, else "". */
   const tipFor = (app: string | undefined): string => {
@@ -1066,9 +1066,11 @@ export function computerTools(deps: ComputerToolDeps) {
    * (AMBIGUOUS_TARGET: nothing reached the app) is found again in a new read of its window by role and name; the action runs on
    * it once more only when gate (the step's confirm gate) calls neither element a send, delete, buy or submit.
    */
-  const onRef = (command: ComputerUseCommand, given: string, args: string[] = [], timeoutMs = ACT_MS, stdin?: string, gate?: (ref: string) => GateAction, headedRetry?: () => boolean) => async () => {
+  const onRef = (command: ComputerUseCommand, given: string, args: string[] = [], timeoutMs = ACT_MS, stdin?: string, gate?: (ref: string) => GateAction, headedRetry?: () => boolean, keyFallback?: () => boolean) => async () => {
     let ref = given;
     let result = await exec(command, [ref, ...args], timeoutMs, stdin);
+    let note = "";
+    let headed = args.includes(HEADED_FLAG);
     if (!result.ok && result.kind === "resolution_identity_unknown" && result.retry === "safe" && !control.reason()) {
       debugLog.info("computer", "act-again", { command, kind: result.kind });
       result = await exec(command, [ref, ...args], timeoutMs, stdin);
@@ -1077,8 +1079,35 @@ export function computerTools(deps: ComputerToolDeps) {
     if (!result.ok && result.code === "POLICY_DENIED" && (result.kind === undefined || /supported_action/i.test(result.kind)) && headedRetry?.() && !control.reason()) {
       debugLog.info("computer", "act-headed", { command, kind: result.kind ?? null });
       result = await exec(command, [ref, ...args, HEADED_FLAG], timeoutMs, stdin);
+      headed = true;
     }
-    let note = "";
+    // The headed click can still fail on Windows (its foreground step is refused, or a physical click exhausts its chain). A tree
+    // item, list item or tab opens with Return, so focus it and press Return once. keyFallback has already ruled out sends, deletes,
+    // other roles and a click with an effect. This runs after a headed retry and after a click the AI made physical (headed from the start).
+    if (!result.ok && command === "click" && headed && keyFallback?.() && !control.reason()) {
+      debugLog.info("computer", "act-keyboard", { kind: result.kind ?? null });
+      const focused = await exec("focus", [ref, HEADED_FLAG], ACT_MS);
+      const pressed = focused.ok && !control.reason() ? await exec("press", ["return", ...scope({ app: currentApp ?? undefined }), HEADED_FLAG], ACT_MS) : null;
+      if (pressed?.ok) {
+        result = pressed;
+        note = " (The click was refused, so Bee focused it and pressed Return.)";
+      }
+    }
+    // set_value that failed its own check (post_action_verification): Teams shows a placeholder as the value, so the write cannot be
+    // proven. When the field still reads empty or as its placeholder, type the text once instead; any other state is left to the AI.
+    if (!result.ok && command === "set-value" && result.kind === "post_action_verification" && stdin !== undefined && !control.reason() && !(gate && irreversibleKind(gate(ref)))) {
+      const held = await readField(ref);
+      const name = (refs.get(ref)?.name ?? "").trim();
+      if (held !== null && (held.trim() === "" || (name !== "" && held.trim() === name))) {
+        debugLog.info("computer", "set-value-typed", { heldChars: held.length });
+        const focused = await exec("focus", [ref, HEADED_FLAG], ACT_MS);
+        const typed = focused.ok && !control.reason() ? await exec("type", [ref, HEADED_FLAG, STDIN_FLAG], ACT_MS + Math.min(40_000, stdin.length * 40), stdin) : null;
+        if (typed?.ok) {
+          result = typed;
+          note = " (set_value did not take, so Bee typed the text instead.)";
+        }
+      }
+    }
     if (!result.ok && result.code === "AMBIGUOUS_TARGET" && !control.reason()) {
       const fresh = await readAgain(ref);
       const twin = fresh?.ok ? twinOf(refs.get(given), fresh.kept) : null;
@@ -1103,13 +1132,20 @@ export function computerTools(deps: ComputerToolDeps) {
   // The acting tools as actions, so a tool call and a batch (act) run the same checks, gates and work.
   // physical: a real click (--headed). Without it, a navigation click (effect none) that Windows refuses is retried headed once. A
   // send, delete, buy or submit never is: the gate has already decided it (here and from the tree), and only the AI may ask for it.
-  const clickAction = ({ ref, effect, physical }: { ref: string; effect: Effect; physical?: boolean | undefined }): Action => ({
-    name: "click",
-    label: label(ref, "Clicking", "Clicking…"),
-    work: onRef("click", ref, physical ? [HEADED_FLAG] : [], ACT_MS, undefined, (to) => gateFor("click", to, { effect })(), () => deps.platform === "windows" && !physical && effect === "none" && HEADED_ROLES.has(roleWord(refs.get(ref)?.role ?? "")) && !irreversibleKind(gateFor("click", ref, { effect })())),
-    gate: gateFor("click", ref, { effect }),
-    refuse: refuseRef("click", ref),
-  });
+  const clickAction = ({ ref, effect, physical }: { ref: string; effect: Effect; physical?: boolean | undefined }): Action => {
+    // Windows, a tree item, list item or tab, effect none, and no send, delete, buy or submit by the gate.
+    const navOk = () => deps.platform === "windows" && effect === "none" && HEADED_ROLES.has(roleWord(refs.get(ref)?.role ?? "")) && !irreversibleKind(gateFor("click", ref, { effect })());
+    const headedOk = () => !physical && navOk();
+    // The Return that follows must pass the press gate too (a send-looking Return after a written message is not pressed here).
+    const returnOk = () => navOk() && !irreversibleKind(gateFor("press", ref, { effect, keys: "return" })());
+    return {
+      name: "click",
+      label: label(ref, "Clicking", "Clicking…"),
+      work: onRef("click", ref, physical ? [HEADED_FLAG] : [], ACT_MS, undefined, (to) => gateFor("click", to, { effect })(), headedOk, returnOk),
+      gate: gateFor("click", ref, { effect }),
+      refuse: refuseRef("click", ref),
+    };
+  };
   /**
    * type_text on a field: replaces what the field holds, never appends ("hi Krzys" plus "hi" is "hi Krzyshi"). A field that holds
    * text is cleared first, the text is typed, and the field is read back: only a field that holds exactly the text comes back Done.
@@ -1125,7 +1161,9 @@ export function computerTools(deps: ComputerToolDeps) {
         return typing();
       }
       const held = await readField(ref);
-      if (held !== null && held !== "" && !(await emptyField(ref))) {
+      // Teams shows its placeholder ("Type a message") as the field's value: a value equal to the name is an empty field.
+      const placeholder = held !== null && held.trim() === (refs.get(ref)?.name ?? "").trim();
+      if (held !== null && held !== "" && !placeholder && !(await emptyField(ref))) {
         lastWrite = { ref, text, failed: true };
         return "Error: Bee could not clear the field first, so typed nothing: typing would add to what it holds. Look at the field again.";
       }
