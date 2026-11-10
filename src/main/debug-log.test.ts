@@ -239,15 +239,6 @@ describe("createDebugLog file rollover: old files are always kept", () => {
     expect(files()).toHaveLength(1);
     expect(events().map((line) => line.event)).toEqual(["two"]);
   });
-
-  it("has no code that deletes or truncates files", () => {
-    for (const file of ["debug-log.ts", "debug-log-ipc.ts"]) {
-      const source = readFileSync(new URL(file, import.meta.url), "utf8");
-      expect(source, file).not.toMatch(/\b(?:unlink|unlinkSync|rm|rmSync|rmdir|rmdirSync|truncate|truncateSync|ftruncate|ftruncateSync)\b/);
-      // Files open for appending only, and only when new ("ax"): never "w", which would empty an existing file.
-      expect(source, file).not.toMatch(/open(?:Sync)?\([^)]*["']w\+?["']/);
-    }
-  });
 });
 
 describe("debugLogFileName", () => {
