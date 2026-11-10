@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { HEADED_FLAG, STDIN_FLAG, assertComputerUse, type AgentDesktopResult, type ComputerRun, type ComputerUseCommand } from "./agent-desktop-envelope";
+import { HEADED_FLAG, STDIN_FLAG, assertComputerUse, parseEnvelope, type AgentDesktopResult, type ComputerRun, type ComputerUseCommand } from "./agent-desktop-envelope";
 import { createRunControl, type ComputerPlatform, type RunControl } from "./computer-control";
 import { shellElement, type Element } from "./computer-gate";
 import {
@@ -721,7 +721,7 @@ describe("computerTools: a slow or failing tree (a Chromium or WebView2 app such
   it("gives find a budget, and reads again once when that fails where a retry is safe", async () => {
     const { run, calls } = timedRun((_call, index) => (index === 0 ? { ok: false, code: "TIMEOUT", retry: "safe" } : { ok: true, data: { matches: [{ role: "textfield", name: "Type a message", ref_id: "@s8:e1" }] } }));
     const { call } = setup({ run });
-    expect(await call("find", { app: "Microsoft Teams", role: "textfield" })).toMatch(/^textfield "Type a message" @s8:e1 Teams tip: cmd\+e goes to the search box/);
+    expect(await call("find", { app: "Microsoft Teams", role: "textfield" })).toMatch(/^textfield "Type a message" @s8:e1 Teams tip: To open a chat: press cmd\+e, type_text/);
     expect(calls.map(({ args, timeoutMs }) => [args.at(-1), timeoutMs])).toEqual([
       ["--timeout-ms=12000", 18_000],
       ["--timeout-ms=25000", 31_000],
@@ -1179,12 +1179,97 @@ describe("computerTools: Teams on Windows (app names, focus for keys, ambiguous 
     expect(lines(other.calls).slice(1)).toEqual(["click @s7:e1"]);
   });
 
+  it("on Windows, when the headed click also fails, focuses a tree item and presses Return once; never for a send or a button; also after a physical click, with no headless click first", async () => {
+    const denied: AgentDesktopResult = { ok: false, code: "POLICY_DENIED", kind: "supported_action", retry: "safe" };
+    const exhausted: AgentDesktopResult = { ok: false, code: "ACTION_FAILED", message: "All chain steps exhausted", kind: "chain_exhausted", step: "set_foreground", retry: "safe" };
+    const tree = [
+      { role: "button", name: "Open", ref_id: "@s7:e4" },
+      ...["Alice", "Bruno", "Chen", "Dara", "Eli", "Faye", "Gus", "Hana"].map((name, index) => ({ role: "treeitem", name, ref_id: `@s7:e${index + 5}` })),
+    ];
+    const replyFor = (children: unknown[]) => ({ command, args }: Seen): AgentDesktopResult =>
+      command === "snapshot" ? { ok: true, data: window("s7", children) } : command === "click" ? (args.includes(HEADED_FLAG) ? exhausted : denied) : DONE;
+    const nav = recorded(replyFor(tree));
+    const tools = setup({ run: nav.run, platform: "windows" });
+    await tools.call("snapshot", { app: "ms-teams.exe" });
+    expect(await tools.call("click", { ref: "@s7:e5", effect: "none" })).toMatch(/^Done.*pressed Return/);
+    expect(lines(nav.calls).slice(1)).toEqual(["click @s7:e5", `click @s7:e5 ${HEADED_FLAG}`, `focus @s7:e5 ${HEADED_FLAG}`, `press return --app=ms-teams.exe ${HEADED_FLAG}`]);
+    for (const { command, args } of nav.calls) expect(() => assertComputerUse(command, args)).not.toThrow();
+    // A click the AI made physical: one headed click (no headless click first), then focus and Return.
+    const physical = recorded(replyFor(tree));
+    const physicalTools = setup({ run: physical.run, platform: "windows" });
+    await physicalTools.call("snapshot", { app: "ms-teams.exe" });
+    expect(await physicalTools.call("click", { ref: "@s7:e5", effect: "none", physical: true })).toMatch(/^Done.*pressed Return/);
+    expect(lines(physical.calls).slice(1)).toEqual([`click @s7:e5 ${HEADED_FLAG}`, `focus @s7:e5 ${HEADED_FLAG}`, `press return --app=ms-teams.exe ${HEADED_FLAG}`]);
+    // A send and a button, even physical: no focus, no Return.
+    for (const [ref, input] of [["@s7:e3", { effect: "send" }], ["@s7:e4", { effect: "none" }], ["@s7:e3", { effect: "send", physical: true }], ["@s7:e4", { effect: "none", physical: true }]] as const) {
+      const other = recorded(replyFor(ref === "@s7:e3" ? controls("s7") : tree));
+      const otherTools = setup({ run: other.run, platform: "windows" });
+      await otherTools.call("snapshot", { app: "ms-teams.exe" });
+      expect(await otherTools.call("click", { ref, ...input })).toMatch(/^Error/);
+      expect(other.calls.map(({ command }) => command).filter((command) => command === "focus" || command === "press")).toEqual([]);
+    }
+  });
+
+  it("when set_value fails its check and the field still reads as its placeholder, types the text once; otherwise hints type_text", async () => {
+    const field = { role: "textfield", name: "Type a message", ref_id: "@s7:e6" };
+    const failed: AgentDesktopResult = { ok: false, code: "ACTION_FAILED", kind: "post_action_verification", retry: "unsafe" };
+    const attempt = async (reread: unknown, effect: "none" | "send") => {
+      const { run, calls } = recorded(({ command }) => (command === "snapshot" ? { ok: true, data: window("s7", [field]) } : command === "set-value" ? failed : command === "get" ? { ok: true, data: reread } : DONE));
+      const tools = setup({ run, platform: "windows" });
+      await tools.call("snapshot", { app: "ms-teams.exe" });
+      const output = await tools.call("set_value", { ref: "@s7:e6", value: "hello", effect });
+      return { output, lines: lines(calls).filter((line) => !line.startsWith("snapshot")) };
+    };
+    for (const value of ["Type a message", ""]) {
+      const typed = await attempt({ value }, "none");
+      expect(typed.output).toMatch(/^Done.*Bee typed the text instead/);
+      expect(typed.lines).toEqual(["set-value @s7:e6 --stdin", "get @s7:e6 --property=value", `focus @s7:e6 ${HEADED_FLAG}`, `type @s7:e6 ${HEADED_FLAG} --stdin`]);
+    }
+    // The field changed to something else: no blind retry, and the hint names type_text.
+    const other = await attempt({ value: "hell" }, "none");
+    expect(other.output).toMatch(/^Error ACTION_FAILED:.*type_text/);
+    expect(other.lines.map((line) => line.split(" ")[0])).toEqual(["set-value", "get"]);
+    // A send stays gated: Bee does not type it on its own after the failure.
+    const send = await attempt({ value: "Type a message" }, "send");
+    expect(send.output).toMatch(/^Error ACTION_FAILED/);
+    expect(send.lines.map((line) => line.split(" ")[0])).not.toContain("type");
+  });
+
+  it("type_text treats a value equal to the field's name as empty, so it types without clearing first", async () => {
+    const field = { role: "textfield", name: "Type a message", value: "Type a message", ref_id: "@s7:e6" };
+    const { run, calls } = recorded(({ command }) => (command === "snapshot" ? { ok: true, data: window("s7", [field]) } : command === "get" ? { ok: true, data: { value: "Type a message" } } : DONE));
+    const tools = setup({ run, platform: "windows" });
+    await tools.call("snapshot", { app: "ms-teams.exe" });
+    await tools.call("type_text", { ref: "@s7:e6", text: "hello", effect: "none" });
+    expect(calls.map(({ command }) => command)).not.toContain("clear");
+    expect(calls.map(({ command }) => command)).toContain("type");
+  });
+
+  it("logs agent-desktop's step, reason and occluder role (and no names) when a command fails", async () => {
+    const events: DebugEvent[] = [];
+    setDebugSink({ write: (event) => events.push(event), wants: () => true });
+    try {
+      const envelope = parseEnvelope(
+        JSON.stringify({ ok: false, error: { code: "ACTION_FAILED", message: "All chain steps exhausted", details: { kind: "chain_exhausted", step: "set_foreground", reason: "foreground_lock", occluder: { role: "Pane", name: "Sam Lee private chat" } } } }),
+      );
+      const { run } = recorded(({ command }) => (command === "snapshot" ? { ok: true, data: window("s7", controls("s7")) } : envelope));
+      const tools = setup({ run, platform: "windows" });
+      await tools.call("snapshot", { app: "ms-teams.exe" });
+      await tools.call("click", { ref: "@s7:e4", effect: "none" });
+    } finally {
+      setDebugSink(null);
+    }
+    const failed = events.filter((event) => event.event === "exec-failed");
+    expect(failed[0]).toMatchObject({ data: { command: "click", code: "ACTION_FAILED", kind: "chain_exhausted", step: "set_foreground", reason: "foreground_lock", occluderRole: "pane" } });
+    expect(JSON.stringify(events)).not.toContain("Sam Lee");
+  });
+
   it("on Windows names Teams ms-teams.exe at once, keeps classic Teams.exe when that is what runs, and gives the Teams tip once", async () => {
     const first = recorded(({ command }) => (command === "list-windows" ? { ok: true, data: { windows: [] } } : DONE));
     const tools = setup({ run: first.run, platform: "windows" });
     const listed = await tools.call("list_windows", { app: "Microsoft Teams" });
     expect(lines(first.calls)).toEqual(["list-windows --app=ms-teams.exe"]);
-    expect(listed).toMatch(/^Using ms-teams\.exe for Microsoft Teams\. No windows\. Teams tip: ctrl\+e goes to the search box/);
+    expect(listed).toMatch(/^Using ms-teams\.exe for Microsoft Teams\. No windows\. Teams tip: To open a chat: press ctrl\+e, type_text/);
     expect(await tools.call("list_windows", { app: "Teams" })).not.toMatch(/Teams tip/);
     // Classic Teams: the alias misses, list-apps names the running one, and the call goes there.
     const classic = recorded(({ command, args }) =>
@@ -1201,10 +1286,10 @@ describe("computerTools: Teams on Windows (app names, focus for keys, ambiguous 
   it("gives the Teams tip when open_app or focus_window reaches Teams, once, and not for other apps", async () => {
     const opened = setup({ platform: "windows" });
     expect(await opened.call("open_app", { name: "Slack" })).toBe("Done: Opened Slack.");
-    expect(await opened.call("open_app", { name: "ms-teams.exe" })).toMatch(/^Done: Opened ms-teams\.exe\. Teams tip: ctrl\+e goes to the search box/);
+    expect(await opened.call("open_app", { name: "ms-teams.exe" })).toMatch(/^Done: Opened ms-teams\.exe\. Teams tip: To open a chat: press ctrl\+e, type_text/);
     expect(await opened.call("focus_window", { app: "Teams" })).toBe("Done: Focused Teams.");
     const focused = setup({ platform: "mac" });
-    expect(await focused.call("focus_window", { app: "Microsoft Teams" })).toMatch(/Teams tip: cmd\+e goes to the search box/);
+    expect(await focused.call("focus_window", { app: "Microsoft Teams" })).toMatch(/Teams tip: To open a chat: press cmd\+e, type_text/);
   });
 
   it("reads the window again when a saved ref is refused as ambiguous, and uses the same element there only when it is the only one", async () => {

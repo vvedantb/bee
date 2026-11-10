@@ -172,11 +172,15 @@ export async function resultContent(toModelOutput: LocalTool["toModelOutput"], c
   return { content: [{ type: "text", text: resultText(model.value) }], ...(model.type === "error-text" || model.type === "error-json" ? { isError: true } : {}) };
 }
 
+// Claude Code defers MCP tools behind ToolSearch unless a tool says otherwise. A deferred Bee tool that ToolSearch failed to load
+// ran without its required `effect`, so Bee's tools are always in the prompt with their schemas.
+export const ALWAYS_LOAD = { "anthropic/alwaysLoad": true } as const;
+
 /**
  * Bee's tools as one in-process MCP server that runs the current request's tools. `use` swaps them in; when the names change it
  * tells Claude Code, which lists them again before the next turn. Input is checked against each tool's own schema first.
  */
-function toolRouter() {
+export function toolRouter() {
   let current = new Map<string, LocalTool>();
   let signal: AbortSignal = new AbortController().signal;
   // What Claude Code last listed; null before it first asks. `relisted` wakes a request waiting for the new list.
@@ -184,7 +188,7 @@ function toolRouter() {
   let relisted: (() => void) | null = null;
   const server = new McpServer({ name: SERVER, version: "1.0.0" }, { capabilities: { tools: { listChanged: true } } });
   server.server.setRequestHandler(ListToolsRequestSchema, async () => {
-    const tools = await Promise.all([...current].map(async ([name, tool]) => ({ name, description: tool.description, inputSchema: { type: "object" as const, ...(await tool.schema.jsonSchema) } })));
+    const tools = await Promise.all([...current].map(async ([name, tool]) => ({ name, description: tool.description, inputSchema: { type: "object" as const, ...(await tool.schema.jsonSchema) }, _meta: ALWAYS_LOAD })));
     listedNames = [...current.keys()].sort().join(",");
     relisted?.();
     relisted = null;

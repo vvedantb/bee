@@ -24,8 +24,8 @@ describe("playbooksFor", () => {
 
 describe("playbookBlock", () => {
   it("gives the hint for this computer's keys", () => {
-    expect(playbookBlock("message Sam in Teams", "windows")).toContain("Microsoft Teams: ctrl+e goes to the search box");
-    expect(playbookBlock("message Sam in Teams", "mac")).toContain("Microsoft Teams: cmd+e goes to the search box");
+    expect(playbookBlock("message Sam in Teams", "windows")).toContain("Microsoft Teams: To open a chat: press ctrl+e, type_text");
+    expect(playbookBlock("message Sam in Teams", "mac")).toContain("Microsoft Teams: To open a chat: press cmd+e, type_text");
     expect(playbookBlock("click Send", "mac")).toBe("");
   });
 
@@ -53,7 +53,7 @@ describe("Teams tip", () => {
   });
 
   it("gives the playbook's Teams hint for the OS", () => {
-    expect(teamsTip("windows")).toBe("Teams tip: ctrl+e goes to the search box: press it, set_value the person's or chat's name, then pick the match from the results. ctrl+n starts a new chat.");
-    expect(teamsTip("mac")).toMatch(/^Teams tip: cmd\+e goes to the search box/);
+    expect(teamsTip("windows")).toBe("Teams tip: To open a chat: press ctrl+e, type_text the person's or chat's name, press down, then press return. ctrl+n starts a new chat.");
+    expect(teamsTip("mac")).toMatch(/^Teams tip: To open a chat: press cmd\+e, type_text/);
   });
 });

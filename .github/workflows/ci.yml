@@ -42,6 +42,8 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npx electron-vite build
+      - name: Check koffi stays external in built main
+        run: node scripts/check-koffi-external.mjs out/main/index.js
       - name: Package Windows (unpacked, unsigned)
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
@@ -53,6 +55,8 @@ jobs:
           if (-not (Test-Path $helper)) { throw "Teams audio helper not packaged: $helper" }
           $version = & $helper --version
           if ($LASTEXITCODE -ne 0 -or "$version" -ne "teams-audio-helper protocol=1") { throw "Packaged Teams audio helper --version failed: $version" }
+      - name: Check packaged koffi (asarUnpack + win32 binary + AllowSetForegroundWindow bind)
+        run: node scripts/check-koffi-windows.mjs release/win-unpacked
 
   macos:
     runs-on: macos-latest
