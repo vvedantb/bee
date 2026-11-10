@@ -14,7 +14,7 @@ export function smallButton(label: string, variant: ButtonProps["variant"]): str
   return renderToStaticMarkup(createElement(Button, { type: "button", variant, size: "sm" }, label));
 }
 
-/** The pill (its own surface, hugging its header) and the full-width panel under it, as App.tsx renders them when expanded. */
+/** The pill (hugging its header) joined to the full-width panel under it, as App.tsx renders them when expanded. */
 export function panelPage(tab: BeeState["tab"], body: string): string {
   return `<div class="island">${pill("Bee is ready", false, { panel: true })}</div>
   <main class="panel">

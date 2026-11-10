@@ -25,7 +25,7 @@ const SOURCE = { title: "Acme enterprise pricing – example.com", url: "https:/
 // Fake streamed tips, long enough to overflow the body several times over.
 const LONG_TIPS = Array.from({ length: 12 }, (_, i) => `Tip ${i + 1}: confirm the renewal date and the seat count before quoting the two-year discount.`);
 
-// The pill alone, and the pill with the body as its own card under it (App.tsx Island).
+// The pill alone, and the pill with the body joined under it as one shape (App.tsx Island).
 const pillOnly = (header: string, thinking = false) => `<div class="${thinking ? "island thinking" : "island"}">${header}</div>`;
 const withBody = (header: string, body: string, thinking = false) => `${pillOnly(header, thinking)}${islandBody(body)}`;
 

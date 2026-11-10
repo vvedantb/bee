@@ -190,8 +190,8 @@ function openStatus(click: StatusClick): void {
 // The pill's header reports its natural width to the store, which sizes the compact pill and the window (applyWindowSize).
 const watchPill = (header: HTMLElement) => watchNaturalWidth(header, (natural) => actions.measurePill(natural));
 
-// The pill, and under it the response body: two surfaces, like the pill over the panel. The pill hugs its header like a Dynamic
-// Island in every state (styles.css .island); the body under it is full width.
+// The pill, and under it the response body, like the pill over the panel. The pill hugs its header like a Dynamic Island in
+// every state; the full-width body joins it as one shape (styles.css .island).
 function Island({ state }: { state: BeeState }) {
   const { isSignedIn } = useAuth();
   const open = state.expanded && !state.collapsing;
