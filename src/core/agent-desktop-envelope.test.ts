@@ -105,43 +105,83 @@ describe("assertComputerUse", () => {
     expect(() => assertComputerUse("permissions", [])).not.toThrow();
   });
 
-  it("refuses screenshots, clipboard, notifications, mouse, drag, batch, sessions, launch and every other command", () => {
+  it("refuses notifications, hover, held input, batch, sessions, launch and every other command", () => {
     for (const command of [
-      "screenshot", "clipboard-get", "clipboard-set", "clipboard-clear", "batch", "launch", "mouse-click", "mouse-move", "mouse-wheel", "drag", "hover",
-      "double-click", "right-click", "key-down", "notification-action", "dismiss-all-notifications", "list-notifications", "session", "trace",
-      "cursor-overlay", "open-system-surface", "move-window", "resize-window", "status", "focus-window", "toggle",
+      "clipboard-clear", "batch", "launch", "mouse-move", "mouse-down", "mouse-up", "hover", "triple-click",
+      "key-down", "notification-action", "dismiss-all-notifications", "list-notifications", "session", "trace",
+      "cursor-overlay", "open-system-surface", "move-window", "resize-window", "status", "focus-window", "toggle", "list-displays",
     ]) {
       expect(() => assertComputerUse(command, []), command).toThrow(/not allowed/);
     }
   });
 
-  it("refuses --force, traces, sessions, debug files and screenshots to disk", () => {
+  it("refuses --force, traces, sessions and debug files", () => {
     expect(() => assertComputerUse("press", ["cmd+q", "--app=Discord", "--force"])).toThrow(/not allowed/);
     expect(() => assertComputerUse("close-app", ["Discord", "--force"])).toThrow(/not allowed/);
-    for (const flag of ["--trace=/tmp/t", "--trace-strict", "--session=abc", "--debug", "--screenshot=/tmp/x.html", "--wait-for=button:OK", "--agent-id=a", "--include-bounds"]) {
+    for (const flag of ["--trace=/tmp/t", "--trace-strict", "--session=abc", "--debug", "--screenshot=/tmp/x.html", "--wait-for=button:OK", "--agent-id=a"]) {
       expect(() => assertComputerUse("snapshot", ["--app=Discord", flag]), flag).toThrow(/not allowed/);
-    }
-  });
-
-  it("works through the tree only: no screenshot, no mouse and no focus search, whatever the arguments", () => {
-    for (const command of ["screenshot", "mouse-click"]) expect(COMPUTER_USE_COMMANDS as readonly string[], command).not.toContain(command);
-    for (const args of [[], ["--app=Discord"], ["--app=Discord", "--window-id=w-1"], ["--screen=0"], ["--app=Discord", "/tmp/out.png"]]) {
-      expect(() => assertComputerUse("screenshot", args), args.join(" ")).toThrow(/command not allowed/);
-    }
-    for (const command of ["mouse-click", "mouse-move", "mouse-wheel", "mouse-down", "mouse-up", "drag", "hover", "double-click", "triple-click", "right-click"]) {
-      for (const args of [[], ["--xy=640,812"], ["--xy=640,812", HEADED_FLAG]]) expect(() => assertComputerUse(command, args), `${command} ${args.join(" ")}`).toThrow(/command not allowed/);
     }
     // find --state=focused was only for learning what a click at a point had focused.
     for (const state of ["focused", "enabled", ""]) expect(() => assertComputerUse("find", ["--app=Microsoft Teams", `--state=${state}`]), state).toThrow(/not allowed/);
   });
 
-  it("allows physical input only on click, press, type and focus", () => {
+  it("takes a screenshot of one app or window as base64 only: never to a file, a display or a debug page", () => {
+    expect(() => assertComputerUse("screenshot", ["--window-id=w-12"])).not.toThrow();
+    // Linux's AT-SPI window ids hold dots.
+    expect(() => assertComputerUse("screenshot", ["--window-id=w-1.2-org-a11y-atspi-accessible-1"])).not.toThrow();
+    expect(() => assertComputerUse("screenshot", ["--window-id=w-../../etc"])).toThrow(/value not allowed/);
+    expect(() => assertComputerUse("screenshot", ["--app=Microsoft Teams"])).not.toThrow();
+    expect(() => assertComputerUse("snapshot", ["--window-id=w-12", "--interactive-only", "--compact", "--include-bounds", "--timeout-ms=12000"])).not.toThrow();
+    for (const args of [["--window-id=w-1", "/tmp/out.png"], ["--screen=0"], ["--window-id=w-1", "--screenshot=/tmp/x.html"], ["--window-id=w-1", HEADED_FLAG], ["--window-id=../x"]]) {
+      expect(() => assertComputerUse("screenshot", args), args.join(" ")).toThrow(/not allowed/);
+    }
+  });
+
+  it("clicks, drags and scrolls at a point only with real input, whole screen units and no held modifiers", () => {
+    expect(() => assertComputerUse("mouse-click", ["--xy=640,812", HEADED_FLAG])).not.toThrow();
+    expect(() => assertComputerUse("mouse-click", ["--xy=-1280,40", "--button=right", "--count=2", HEADED_FLAG])).not.toThrow();
+    expect(() => assertComputerUse("drag", ["--from-xy=10,10", "--to-xy=300,40", HEADED_FLAG])).not.toThrow();
+    expect(() => assertComputerUse("mouse-wheel", ["--x=500", "--y=-20", "--dy=-3", HEADED_FLAG])).not.toThrow();
+    // Never without --headed: the semantic path has no point.
+    expect(() => assertComputerUse("mouse-click", ["--xy=640,812"])).toThrow(/needs --headed/);
+    expect(() => assertComputerUse("drag", ["--from-xy=1,1", "--to-xy=2,2"])).toThrow(/needs --headed/);
+    expect(() => assertComputerUse("mouse-wheel", ["--x=1", "--y=1", "--dy=3"])).toThrow(/needs --headed/);
+    for (const args of [
+      ["--xy=640.5,812", HEADED_FLAG], ["--xy=640", HEADED_FLAG], ["--xy", "640,812", HEADED_FLAG], ["--xy=640,812", "--button=middle", HEADED_FLAG],
+      ["--xy=640,812", "--count=3", HEADED_FLAG], ["--xy=640,812", "--modifiers=ctrl", HEADED_FLAG], ["--xy=640,812", "--screenshot=/tmp/x.html", HEADED_FLAG],
+    ]) {
+      expect(() => assertComputerUse("mouse-click", args), args.join(" ")).toThrow();
+    }
+    // Drag between points only (no refs, no duration or drop tricks); the wheel turns 1 to 20 lines.
+    expect(() => assertComputerUse("drag", [`--from=${REF}`, "--to-xy=1,1", HEADED_FLAG])).toThrow(/not allowed/);
+    expect(() => assertComputerUse("drag", ["--from-xy=1,1", "--to-xy=2,2", "--duration=9000", HEADED_FLAG])).toThrow(/not allowed/);
+    for (const dy of ["0", "21", "-40", "1.5"]) expect(() => assertComputerUse("mouse-wheel", ["--x=1", "--y=1", `--dy=${dy}`, HEADED_FLAG]), dy).toThrow(/value not allowed/);
+  });
+
+  it("right-clicks a ref headless or headed, and double-clicks one only headed", () => {
+    expect(() => assertComputerUse("right-click", [REF])).not.toThrow();
+    expect(() => assertComputerUse("right-click", [REF, HEADED_FLAG])).not.toThrow();
+    expect(() => assertComputerUse("double-click", [REF, HEADED_FLAG])).not.toThrow();
+    expect(() => assertComputerUse("double-click", [REF])).toThrow(/needs --headed/);
+    expect(() => assertComputerUse("right-click", ["--xy=1,1", HEADED_FLAG])).toThrow();
+  });
+
+  it("reads the clipboard's text and sets it from stdin only: never images, files or argv text", () => {
+    expect(() => assertComputerUse("clipboard-get", [])).not.toThrow();
+    expect(() => assertComputerUse("clipboard-set", [STDIN_FLAG])).not.toThrow();
+    expect(() => assertComputerUse("clipboard-set", ["secret"])).toThrow();
+    expect(() => assertComputerUse("clipboard-set", [])).toThrow(/goes on stdin/);
+    for (const flag of ["--image=/tmp/a.png", "--file-url=/etc/passwd"]) expect(() => assertComputerUse("clipboard-set", [STDIN_FLAG, flag]), flag).toThrow(/not allowed/);
+    for (const flag of ["--format=image", "--out=/tmp/x", "--format=file-urls"]) expect(() => assertComputerUse("clipboard-get", [flag]), flag).toThrow(/not allowed/);
+  });
+
+  it("allows physical input only on click, press, type, focus and the point and double-click commands", () => {
     expect(() => assertComputerUse("click", [REF, HEADED_FLAG])).not.toThrow();
     expect(() => assertComputerUse("press", ["return", "--app=Slack", HEADED_FLAG])).not.toThrow();
     expect(() => assertComputerUse("type", [REF, HEADED_FLAG, STDIN_FLAG])).not.toThrow();
     expect(() => assertComputerUse("focus", [REF, HEADED_FLAG])).not.toThrow();
-    for (const command of ["set-value", "scroll", "snapshot", "close-app", "select"]) {
-      const args = command === "snapshot" ? ["--app=Slack"] : command === "close-app" ? ["Slack"] : [REF];
+    for (const command of ["set-value", "scroll", "snapshot", "close-app", "select", "screenshot", "clipboard-get"]) {
+      const args = command === "snapshot" || command === "screenshot" ? ["--app=Slack"] : command === "close-app" ? ["Slack"] : command === "clipboard-get" ? [] : [REF];
       expect(() => assertComputerUse(command, [...args, HEADED_FLAG, ...(command === "set-value" ? [STDIN_FLAG] : command === "select" ? ["--", "x"] : [])]), command).toThrow(/not allowed/);
     }
     expect(() => assertComputerUse("press", ["return", "--app=Slack", "--headed=yes"])).toThrow(/not allowed|no value/);

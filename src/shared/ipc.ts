@@ -269,7 +269,8 @@ export const computerUpdateSchema = z.discriminatedUnion("type", [
     runId: runIdSchema,
     type: z.literal("confirm"),
     id: z.number().int().positive(),
-    kind: z.enum(["send", "delete", "buy", "submit"]),
+    // click: a click or drag at a spot in a picture where Bee could not read what is there (core/computer-gate.ts ConfirmKind).
+    kind: z.enum(["send", "delete", "buy", "submit", "click"]),
     question: z.string().max(COMPUTER_LINE_MAX),
     detail: z.string().max(COMPUTER_LINE_MAX),
   }),

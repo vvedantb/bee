@@ -22,6 +22,7 @@ const claudeCodeView = (status: ClaudeCodeStatus): ClaudeCodeView => ({ state: s
 import type { CommandAgent } from "../core/claude-agent";
 import { runDirectCommand, type ComputerHost } from "../core/direct-command";
 import type { ScreenCapture } from "../core/screen-look";
+import type { ComputerVision } from "../core/computer-vision";
 import { classifyFollowUp } from "../core/follow-up";
 import { summariseRecap } from "../core/recap";
 import { loadMcpTools, type McpPool, type McpServerConfig } from "../core/mcp";
@@ -97,7 +98,7 @@ export function registerMeetingIpc(args: { notesDir: string;
    * Computer use for a direct request (core/computer-use.ts): its own agent-desktop runner, never the meeting window reader's.
    * Absent: Bee cannot operate apps here (Linux, or no agent-desktop).
    */
-  computer?: { platform: ComputerPlatform; run: ComputerRun; cleanup: () => void; yieldFocus?: () => () => void };
+  computer?: { platform: ComputerPlatform; run: ComputerRun; cleanup: () => void; yieldFocus?: () => () => void; vision?: ComputerVision };
   /** Finished sessions to vmem (main/vmem-transcript-queue.ts). It checks the setting and the connector itself. */
   transcripts?: VmemTranscripts;
   /** Bee's history of direct requests on disk (main/bee-history-store.ts). Absent: each request starts with none. */
@@ -218,6 +219,7 @@ export function registerMeetingIpc(args: { notesDir: string;
       run: computer.run,
       ...(skills ? { skills } : {}),
       ...(computer.yieldFocus ? { yieldFocus: computer.yieldFocus } : {}),
+      ...(computer.vision ? { vision: computer.vision } : {}),
       onStep: (label) => {
         debugLog.info("computer", "step-line", { runId, label });
         if (runId !== undefined) send({ runId, type: "step", label: label.slice(0, COMPUTER_LINE_MAX) });

@@ -4,7 +4,7 @@ import { HEADED_FLAG, STDIN_FLAG, assertComputerUse, parseEnvelope, type AgentDe
 import { createRunControl, type ComputerPlatform, type RunControl } from "./computer-control";
 import { shellElement, type Element } from "./computer-gate";
 import {
-  ACT_MAX, CANNOT_CONTROL, COMPUTER_TOOL_NAMES, actionDone, CONFIRM_LABEL, STOPPED, computerTools, errorLine, findRole, formatDone, formatMatches, formatSnapshot, matchApp, offLimitsApp, shallowTree, holdsText, undoTypingLabel, writerRecordedTyping,
+  ACT_MAX, CANNOT_CONTROL, COMPUTER_TOOL_NAMES, LOOK_THEN_STOP, actionDone, CONFIRM_LABEL, STOPPED, computerTools, errorLine, findRole, formatDone, formatMatches, formatSnapshot, matchApp, offLimitsApp, shallowTree, holdsText, undoTypingLabel, writerRecordedTyping,
   thinTree,
   type ConfirmRequest,
 } from "./computer-tools";
@@ -608,7 +608,7 @@ describe("errorLine: what the AI is told", () => {
     const line = errorLine({ ok: false, code: "INTERNAL", message: "Accessibility deadline exhausted before IPC", retry: "safe" }, true);
     expect(line).toMatch(/^Error INTERNAL: /);
     expect(line).toMatch(/skeleton snapshot, then root/);
-    expect(line).toMatch(/If it keeps failing, stop and say Bee cannot control this app\./);
+    expect(line).toMatch(/If it keeps failing, call look and act on the picture with click_at; if that fails too, stop and say Bee cannot control this app\./);
     expect(line).toMatch(/Detail: Accessibility deadline exhausted before IPC$/);
     expect(line).not.toMatch(/that did not work/);
   });
@@ -686,7 +686,7 @@ describe("computerTools: a slow or failing tree (a Chromium or WebView2 app such
     const thin = await setup({ run: failed.run }).call("snapshot", { app: "Microsoft Teams" });
     expect(thin).toContain('button "Item 1" @s7:e1');
     // Bee already waited: the AI tries the tree another way, then stops.
-    expect(thin).toMatch(/Few elements came back, though Bee gave the app time to load\. Try find by role .* or a skeleton snapshot then root\. If those show nothing usable either, stop and say Bee cannot control this app\./);
+    expect(thin).toMatch(/Few elements came back, though Bee gave the app time to load\. Try find by role .* or a skeleton snapshot then root\. If those show nothing usable either, call look and act on the picture with click_at; if that fails too, stop and say Bee cannot control this app\./);
   });
 
   it("returns a partial tree rather than an error, and reads a partial one again only when it is small", async () => {
@@ -792,7 +792,7 @@ describe("computerTools: agent-desktop 1.1 snapshots and refs", () => {
   it("keeps the tool surface small: read checks states, an empty set_value clears, set_state ticks and expands, scroll without a direction brings a ref into view", async () => {
     const { call, calls, tools, steps } = setup();
     expect(Object.keys(tools).sort()).toEqual([...COMPUTER_TOOL_NAMES].sort());
-    expect(COMPUTER_TOOL_NAMES).toHaveLength(19);
+    expect(COMPUTER_TOOL_NAMES).toHaveLength(26);
     await call("snapshot", { app: "Discord" });
     await call("read", { ref: "@s1abc:e1" });
     await call("read", { ref: "@s1abc:e1", property: "value" });
@@ -926,7 +926,7 @@ describe("computerTools: agent-desktop 1.1 snapshots and refs", () => {
   });
 });
 
-describe("computerTools: the tree is the only way in", () => {
+describe("computerTools: the tree first, then a picture", () => {
   const TEAMS = "Microsoft Teams";
   const PICTURE = /screenshot|click_at|click at a point|picture|image/i;
   type Timed = { command: ComputerUseCommand; args: string[] };
@@ -948,30 +948,29 @@ describe("computerTools: the tree is the only way in", () => {
     tree: { role: "window", name: TEAMS, children },
   });
 
-  it("has no screenshot or click at a point, sends the AI text only, and types only into a ref", () => {
+  it("offers look and the point tools, turns only look's result into an image, and types only into a ref", () => {
     const { tools } = setup();
-    for (const name of ["screenshot", "click_at"]) {
-      expect(Object.keys(tools), name).not.toContain(name);
-      expect(COMPUTER_TOOL_NAMES as readonly string[], name).not.toContain(name);
+    for (const name of ["look", "click_at", "drag_at", "wheel_at", "right_click", "double_click", "paste_text"]) {
+      expect(Object.keys(tools), name).toContain(name);
+      expect([...COMPUTER_TOOL_NAMES], name).toContain(name);
     }
-    // No tool turns its result into a file or image part.
-    for (const [name, item] of Object.entries(tools)) expect((item as { toModelOutput?: unknown }).toModelOutput, name).toBeUndefined();
+    // Only look turns its result into a file or image part.
+    for (const [name, item] of Object.entries(tools)) expect(item.toModelOutput === undefined, name).toBe(name !== "look");
     type Schema = { safeParse: (value: unknown) => { success: boolean } };
     const typeText = tools.type_text.inputSchema as unknown as Schema;
     expect(typeText.safeParse({ text: "Running late", effect: "none" }).success).toBe(false);
     expect(typeText.safeParse({ ref: "@s1abc:e1", text: "Running late", effect: "none" }).success).toBe(true);
   });
 
-  it("says plainly that Bee cannot control an app whose tree stays empty once Bee has waited, and never offers a picture", async () => {
+  it("says to look at an app whose tree stays empty once Bee has waited, and only then to stop", async () => {
     const { run, calls } = recorded(({ command }) => (command === "snapshot" ? { ok: true, data: teams([]) } : { ok: true, data: { matches: [] } }));
     const { call } = setup({ run });
     for (const input of [{ app: TEAMS }, { app: TEAMS, skeleton: true }]) {
       const shown = await call("snapshot", input);
-      expect(shown, JSON.stringify(input)).toContain(`If those show nothing usable either, ${CANNOT_CONTROL}.`);
-      expect(shown, JSON.stringify(input)).not.toMatch(PICTURE);
+      expect(shown, JSON.stringify(input)).toContain(`If those show nothing usable either, ${LOOK_THEN_STOP}.`);
     }
     expect(await call("find", { app: TEAMS, role: "textfield" })).toBe("No matches.");
-    // Each whole-window read ran twice (Bee waited for the app); nothing but the tree was ever asked for.
+    // Each whole-window read ran twice (Bee waited for the app); no picture is taken unless the AI asks for one.
     expect(calls.map(({ command }) => command)).toEqual(["snapshot", "snapshot", "snapshot", "snapshot", "find"]);
   });
 
@@ -986,16 +985,14 @@ describe("computerTools: the tree is the only way in", () => {
     ];
     const shallow = recorded(() => ({ ok: true, data: teams(cut) }));
     const deep = await setup({ run: shallow.run }).call("snapshot", { app: TEAMS });
-    expect(deep).toContain(`If those show no usable controls, ${CANNOT_CONTROL}.`);
-    expect(deep).not.toMatch(PICTURE);
+    expect(deep).toContain(`If those show no usable controls, ${LOOK_THEN_STOP}.`);
     const buttons = Array.from({ length: 30 }, (_, index) => ({ role: "button", name: `Item ${index}`, ref_id: `@s7:e${index}` }));
     const unproven = recorded(() => ({ ok: true, data: teams(buttons, { identity_unproven: true }) }));
     const refused = await setup({ run: unproven.run, platform: "windows" }).call("snapshot", { app: TEAMS });
-    expect(refused).toContain(`If they keep being refused, ${CANNOT_CONTROL}.`);
-    expect(refused).not.toMatch(PICTURE);
+    expect(refused).toContain(`If they keep being refused, ${LOOK_THEN_STOP}.`);
   });
 
-  it("never tells the AI to take a picture or click a point, whatever agent-desktop says", () => {
+  it("tells the AI to take a picture only once the tree has failed it, whatever agent-desktop says", () => {
     const codes = [
       "STALE_REF", "SNAPSHOT_NOT_FOUND", "ELEMENT_NOT_FOUND", "AMBIGUOUS_TARGET", "APP_NOT_FOUND", "WINDOW_NOT_FOUND", "ACTION_NOT_SUPPORTED", "POLICY_DENIED",
       "ACTION_FAILED", "APP_UNRESPONSIVE", "TIMEOUT", "TIMEOUT_LOCAL", "INVALID_ARGS", "PLATFORM_NOT_SUPPORTED", "PERM_DENIED", "ABORTED", "INTERNAL", "BAD_OUTPUT",
@@ -1009,14 +1006,16 @@ describe("computerTools: the tree is the only way in", () => {
       for (const kind of kinds) {
         for (const look of [true, false]) {
           const line = errorLine({ ok: false, code, retry: "safe", ...(kind ? { kind } : {}) }, look);
-          expect(line, `${code} ${kind} ${look}`).not.toMatch(PICTURE);
+          // Only a hint for a tree that keeps failing, or a control that refuses even real input, says to look.
+          if (!line.includes("If it keeps failing") && code !== "POLICY_DENIED") expect(line, `${code} ${kind} ${look}`).not.toMatch(PICTURE);
         }
       }
     }
-    // A tree that keeps failing ends in a plain stop.
+    // A tree that keeps failing ends in a look, then a plain stop; a control that refuses real input too is clicked in a look.
     for (const code of ["INTERNAL", "BAD_OUTPUT", "TIMEOUT", "TIMEOUT_LOCAL", "APP_UNRESPONSIVE"]) {
-      expect(errorLine({ ok: false, code, retry: "safe" }, true), code).toContain(`If it keeps failing, ${CANNOT_CONTROL}.`);
+      expect(errorLine({ ok: false, code, retry: "safe" }, true), code).toContain(`If it keeps failing, ${LOOK_THEN_STOP}.`);
     }
+    expect(errorLine({ ok: false, code: "POLICY_DENIED" })).toContain("call look and click it with click_at");
   });
 });
 

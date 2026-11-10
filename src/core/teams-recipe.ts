@@ -1,0 +1,315 @@
+import { z } from "zod";
+import { HEADED_FLAG, REF_PATTERN, STDIN_FLAG, parseApps, type AgentDesktopData, type AgentDesktopResult, type ComputerRun } from "./agent-desktop-envelope";
+import { isTeamsApp } from "./app-playbooks";
+import { awaitAnswer, CONFIRM_TIMEOUT_MS, type ComputerPlatform, type IrreversibleKind, type RunControl } from "./computer-control";
+import { createExec, modKey, pasteText, type Exec, type PasteOutcome } from "./computer-exec";
+import { shortName } from "./computer-gate";
+import { CONFIRM_LABEL, fieldValue, keyPresses, matchApp, windowsAlias, type ConfirmRequest } from "./computer-tools";
+import { debugLog, msSince } from "./debug-log";
+import type { DesktopActions } from "./desktop-actions";
+import { nameMatches, type ResolvedName } from "./known-names";
+
+// "Bee, message Sam on Teams saying I'm running late": a fixed recipe that code runs, step by step, instead of the AI. Teams (a
+// WebView2 app) often refuses semantic clicks and misreports its compose box, so the AI loop is slow and unsure there; the steps
+// that always work are the keyboard's. parseTeamsMessage is conservative: Teams named, a person or chat, and the words to send,
+// else null and the request goes to the AI as before. runTeamsRecipe opens Teams, opens the chat with ctrl+e (cmd+e), the name,
+// Down and Return, and checks that chat really opened (its window title or header names the person) before it writes anything;
+// when it cannot tell, it stops and hands the task to the AI with what it did. It pastes the message (the clipboard's old text
+// goes back after), reads the box back, types it once if the paste did not take, and sends only after the user's Confirm. Nothing
+// is ever typed into a chat Bee could not check, a box that already holds the user's own draft is left alone, and Stop ends it
+// between any two steps. Logs carry step names, outcomes and times, never the name or the message.
+
+export type TeamsMessage = { to: string; text: string; send: boolean };
+
+// Polite padding before the request, and quotes around it.
+const POLITE = /^(?:(?:please|hey|ok|okay|so|now|just|can you|could you|would you|will you)[\s,]+)+/i;
+const TEAMS = String.raw`(?:microsoft\s+|ms\s+)?teams`;
+// A person or chat: one to four words of letters (any script), with ' . - inside.
+const NAME = String.raw`[\p{L}][\p{L}'’.-]*(?:\s+[\p{L}][\p{L}'’.-]*){0,3}`;
+const SEND_VERB = String.raw`(?:message|tell|text|ping|dm|send\s+(?:a\s+)?(?:${TEAMS}\s+)?message\s+to)`;
+const DRAFT_VERB = String.raw`(?:draft|write|prepare|compose)\s+(?:a\s+)?(?:${TEAMS}\s+)?(?:message|reply|note)\s+(?:to|for)`;
+// What comes between the name and the words: "saying", "that", a colon or comma, a dash with spaces round it.
+const SAYING = String.raw`(?:\s*[:,]\s*|\s+[–—-]\s+|\s+(?:saying|say|that|to say)\s*:?\s*)`;
+const IN_TEAMS = String.raw`(?:in|on|via|over|through|using)\s+${TEAMS}`;
+const WHERE = String.raw`\s+${IN_TEAMS}`;
+// The words, then where: "… saying hi on Teams".
+const TEXT_THEN_WHERE = String.raw`(?<text>.+?)[\s,]+${IN_TEAMS}[.!]?$`;
+
+const PATTERNS: readonly { pattern: RegExp; send: boolean }[] = [
+  // message Sam on Teams saying hi / tell Sam in Teams that I'm late / draft a message to Sam on Teams saying hi
+  { pattern: new RegExp(String.raw`^${SEND_VERB}\s+(?<to>${NAME})${WHERE}${SAYING}(?<text>.+)$`, "iu"), send: true },
+  { pattern: new RegExp(String.raw`^${DRAFT_VERB}\s+(?<to>${NAME})${WHERE}${SAYING}(?<text>.+)$`, "iu"), send: false },
+  // message Sam saying hi on Teams
+  { pattern: new RegExp(String.raw`^${SEND_VERB}\s+(?<to>${NAME}?)${SAYING}${TEXT_THEN_WHERE}`, "iu"), send: true },
+  { pattern: new RegExp(String.raw`^${DRAFT_VERB}\s+(?<to>${NAME}?)${SAYING}${TEXT_THEN_WHERE}`, "iu"), send: false },
+  // send Sam a Teams message: hi / send Sam a message on Teams saying hi / send a Teams message to Sam saying hi
+  { pattern: new RegExp(String.raw`^send\s+(?<to>${NAME}?)\s+an?\s+${TEAMS}\s+message${SAYING}(?<text>.+)$`, "iu"), send: true },
+  { pattern: new RegExp(String.raw`^send\s+(?<to>${NAME}?)\s+a\s+message${WHERE}${SAYING}(?<text>.+)$`, "iu"), send: true },
+  { pattern: new RegExp(String.raw`^send\s+an?\s+${TEAMS}\s+message\s+to\s+(?<to>${NAME}?)${SAYING}(?<text>.+)$`, "iu"), send: true },
+  // reply to Sam in Teams with sounds good
+  { pattern: new RegExp(String.raw`^reply\s+to\s+(?<to>${NAME})${WHERE}(?:${SAYING}|\s+with\s+)(?<text>.+)$`, "iu"), send: true },
+  // on Teams, message Sam saying hi
+  { pattern: new RegExp(String.raw`^${IN_TEAMS}[\s,]+${SEND_VERB}\s+(?<to>${NAME}?)${SAYING}(?<text>.+)$`, "iu"), send: true },
+];
+
+// Words that are no person to look up: pronouns, "everyone", and the app itself.
+const NOT_A_NAME = /^(?:him|her|them|me|us|it|this|that|everyone|everybody|all|someone|somebody|teams|microsoft|chat|group|channel|you)$/i;
+const TEXT_MAX = 2000;
+
+/** "Bee, message Sam on Teams saying hi" as { to: "Sam", text: "hi", send: true }, or null for anything it is not sure of. */
+export function parseTeamsMessage(command: string): TeamsMessage | null {
+  const said = command.replace(/\s+/g, " ").trim().replace(/^["“](.*)["”]$/u, "$1").replace(POLITE, "").trim();
+  for (const { pattern, send } of PATTERNS) {
+    const match = pattern.exec(said);
+    const to = (match?.groups?.to ?? "").replace(/^the\s+/i, "").replace(/\s+(?:group\s+)?chat$/i, "").trim();
+    const text = (match?.groups?.text ?? "").trim().replace(/^["“‘']+(.*?)["”’']+$/u, "$1").trim();
+    if (!match || !to || !text || text.length > TEXT_MAX) continue;
+    if (to.split(" ").some((word) => NOT_A_NAME.test(word))) return null;
+    return { to, text, send };
+  }
+  return null;
+}
+
+/**
+ * The name to search Teams for: the one the user's recent requests settled (resolved), else the only known name it matches
+ * (core/known-names.ts: "Zuzanna" for "Susannah"), else the name as said.
+ */
+export function recipientName(to: string, known: readonly string[], resolved: readonly ResolvedName[] = []): string {
+  const settled = resolved.find((item) => item.heard.toLowerCase() === to.toLowerCase() || item.heard.toLowerCase() === to.split(" ")[0]?.toLowerCase());
+  if (settled) return settled.name;
+  if (to.includes(" ")) return to;
+  const matches = nameMatches(to, known);
+  return matches.length === 1 && matches[0] ? matches[0].name : to;
+}
+
+/** Letters only, lower case, no accents: "Zoë Łukasz-Nowak" → "zoe łukasz nowak". */
+const fold = (text: string) => ` ${text.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim()} `;
+
+/** The words a chat's title must hold for this name: its first and last (one word for a one-word name). */
+export function nameWords(name: string): string[] {
+  const words = fold(name).trim().split(" ").filter((word) => word.length >= 2);
+  return words.length <= 1 ? words : [words[0] ?? "", words.at(-1) ?? ""];
+}
+
+/** A title or header names this person or chat: every word of nameWords, as whole words, any case or accent. */
+export function namesChat(title: string, name: string): boolean {
+  const words = nameWords(name);
+  const hay = fold(title);
+  return words.length > 0 && words.every((word) => hay.includes(` ${word} `));
+}
+
+/** Text as Bee compares a field with what it wrote: no zero-width marks, runs of space as one, trimmed. */
+const squash = (text: string) => text.replace(/[​-‍﻿]/g, "").replace(/\s+/g, " ").trim();
+
+const matchSchema = z.object({ ref_id: z.string().optional(), role: z.string().optional().catch(undefined), name: z.string().optional().catch(undefined) });
+const matchesSchema = z.object({ matches: z.array(matchSchema.nullable().catch(null)) });
+type Match = z.infer<typeof matchSchema>;
+
+/** find's matches (agent-desktop: { matches: [{ ref_id, role, name }] }), the unreadable ones dropped. */
+function findMatches(data: AgentDesktopData): Match[] {
+  const parsed = matchesSchema.safeParse(data);
+  return parsed.success ? parsed.data.matches.filter((match) => match !== null) : [];
+}
+
+const windowsSchema = z.union([
+  z.array(z.object({ title: z.string().optional().catch(undefined) }).nullable().catch(null)),
+  z.object({ windows: z.array(z.object({ title: z.string().optional().catch(undefined) }).nullable().catch(null)) }).transform((data) => data.windows),
+]);
+
+// A message box by its name in Teams ("Type a message", "Type a reply"), never a search box.
+const COMPOSE_NAME = /\b(?:type a (?:new )?(?:message|reply)|message|reply|compose)\b/i;
+const SEARCH_NAME = /\b(?:search|find|filter|look ?up)\b/i;
+
+/** The message box among find's text fields: one named like Teams' compose box ("Type a message" first), or null. */
+export function composeRef(matches: readonly Match[]): string | null {
+  const boxes = matches.filter((match) => match.ref_id && REF_PATTERN.test(match.ref_id) && COMPOSE_NAME.test(match.name ?? "") && !SEARCH_NAME.test(match.name ?? ""));
+  const best = boxes.find((match) => /type a (?:new )?message/i.test(match.name ?? "")) ?? boxes[0];
+  return best?.ref_id ?? null;
+}
+
+export type RecipeDeps = {
+  run: ComputerRun;
+  desktop: DesktopActions;
+  control: RunControl;
+  platform: ComputerPlatform;
+  confirm: (request: ConfirmRequest, signal: AbortSignal) => Promise<boolean>;
+  onStep?: ((label: string) => void) | undefined;
+  yieldFocus?: (() => () => void) | undefined;
+  /** The send went out (the box emptied after Return): proof for the claim guard (core/claim-guard.ts). */
+  onEffect?: ((kind: IrreversibleKind) => void) | undefined;
+  confirmTimeoutMs?: number;
+  /** Pauses between keyboard steps (Teams' search fills in as it is typed); tests set 0. */
+  pauseMs?: { search: number; results: number; open: number; sent: number };
+};
+
+/**
+ * sent: Return went out and the box emptied. drafted: the message is in the box, unsent (asked for a draft, or Cancel). failed: an
+ * honest line, nothing sent, no AI after. fallback: Bee could not be sure of a step before any text was written; the AI carries on
+ * from done. stopped: Stop or a newer request.
+ */
+export type RecipeOutcome =
+  | { kind: "sent"; line: string }
+  | { kind: "drafted"; line: string }
+  | { kind: "failed"; line: string }
+  | { kind: "fallback"; done: string }
+  | { kind: "stopped" };
+
+const PAUSES = { search: 700, results: 1500, open: 2000, sent: 1000 };
+const KEY_MS = 12_000;
+const READ_MS = 15_000;
+const LOOK_MS = 12_000;
+const TYPE_MS = 40_000;
+/** The longest name typed key by key; a longer one, or one with a character no key types, is pasted. */
+const NAME_KEYS_MAX = 60;
+const TEAMS_LABEL = "Microsoft Teams";
+
+/** Runs the recipe for one parsed request. Never throws. */
+export async function runTeamsRecipe(message: TeamsMessage & { name: string }, deps: RecipeDeps): Promise<RecipeOutcome> {
+  const { control, platform } = deps;
+  const pauses = deps.pauseMs ?? PAUSES;
+  const exec: Exec = createExec(deps);
+  const started = performance.now();
+  const first = shortName(message.name.split(" ")[0] ?? message.name, 30);
+  const stopped = () => control.reason() !== null;
+  /** One step's outcome in the log: its name, whether it worked, how long it took. Never the name or the message. */
+  const logged = <T>(step: string, ok: (value: T) => boolean) => async (work: Promise<T>): Promise<T> => {
+    const at = performance.now();
+    const value = await work;
+    debugLog.info("computer", "teams-recipe", { step, ok: ok(value), ms: msSince(at) });
+    return value;
+  };
+  const okResult = (result: AgentDesktopResult) => result.ok;
+  const pause = (ms: number) => (ms > 0 && !stopped() ? exec("wait", [String(ms)], ms + 5000) : Promise.resolve<AgentDesktopResult>({ ok: true, data: null }));
+  const done: string[] = [];
+  const fallback = (why: string): RecipeOutcome => {
+    debugLog.info("computer", "teams-recipe-fallback", { steps: done.length, ms: msSince(started) });
+    return { kind: "fallback", done: `${done.join(" ")} ${why}`.trim() };
+  };
+
+  // 1. Teams in front, and its name as agent-desktop knows it (ms-teams.exe on Windows).
+  deps.onStep?.(`Opening the chat with ${first}…`);
+  const opened = await logged("open", (result: { ok: boolean }) => result.ok)(deps.desktop.openApp(TEAMS_LABEL, control.signal));
+  if (stopped()) return { kind: "stopped" };
+  if (!opened.ok) return fallback("Bee could not open Microsoft Teams.");
+  done.push("Bee opened Microsoft Teams.");
+  const listed = await logged("list-apps", okResult)(exec("list-apps", [], READ_MS));
+  const running = listed.ok ? parseApps(listed.data).map((app) => app.name) : [];
+  const app = matchApp(TEAMS_LABEL, running.filter(isTeamsApp)) ?? (platform === "windows" ? windowsAlias(TEAMS_LABEL) : null) ?? TEAMS_LABEL;
+  const where = [`--app=${app}`];
+  const press = (keys: string) => exec("press", [keys, ...where, HEADED_FLAG], KEY_MS);
+  if (stopped()) return { kind: "stopped" };
+
+  // 2. ctrl+e (cmd+e), the name with real keys, then Down and Return: the chat opens.
+  const search = await logged("search", okResult)(press(modKey(platform, "e")));
+  if (stopped()) return { kind: "stopped" };
+  if (!search.ok) return fallback("Bee could not open Teams' search with the keyboard.");
+  await pause(pauses.search);
+  const keys = keyPresses(message.name);
+  const typed = await logged("name", okResult)(
+    (async () => {
+      if (!keys || keys.length > NAME_KEYS_MAX) return (await pasteText(exec, { text: message.name, platform, scope: where })).result;
+      for (const key of keys) {
+        if (stopped()) return { ok: false, code: "ABORTED" } satisfies AgentDesktopResult;
+        const result = await press(key);
+        if (!result.ok) return result;
+      }
+      return { ok: true, data: null } satisfies AgentDesktopResult;
+    })(),
+  );
+  if (stopped()) return { kind: "stopped" };
+  if (!typed.ok) return fallback(`Bee pressed ${modKey(platform, "e")} in Teams but could not type the name to search for.`);
+  done.push(`Bee pressed ${modKey(platform, "e")} and typed "${message.name}" in Teams' search.`);
+  await pause(pauses.results);
+  for (const key of ["down", "return"]) {
+    const result = await logged(key, okResult)(press(key));
+    if (stopped()) return { kind: "stopped" };
+    if (!result.ok) return fallback("Bee could not pick the search result.");
+  }
+  done.push("It pressed Down and Return to open the first result.");
+  await pause(pauses.open);
+  if (stopped()) return { kind: "stopped" };
+
+  // 3. The right chat is open: the window's title or a heading names the person. Else nothing is written.
+  const verified = await logged("verify", (value: boolean) => value)(chatOpen(exec, where, message.name));
+  if (stopped()) return { kind: "stopped" };
+  if (!verified) return fallback(`Bee could not confirm the chat with ${message.name} opened, so it typed no message.`);
+  done.push(`The chat with ${message.name} is open.`);
+
+  // 4. The message box, empty (or showing only its placeholder): a draft of the user's own is never touched.
+  deps.onStep?.("Writing the message…");
+  const fields = await logged("find-box", okResult)(exec("find", [...where, "--role=textfield", "--limit=15", `--timeout-ms=${LOOK_MS}`], LOOK_MS + 6000));
+  if (stopped()) return { kind: "stopped" };
+  const box = fields.ok ? composeRef(findMatches(fields.data)) : null;
+  if (!box) return fallback("Bee could not find the message box in that chat.");
+  const read = async () => {
+    const result = await exec("get", [box, "--property=value"], READ_MS);
+    return result.ok ? fieldValue(result.data) : null;
+  };
+  const placeholderOf = (held: string) => /^type a (?:new )?(?:message|reply)/i.test(squash(held));
+  const empty = (held: string | null) => held !== null && (squash(held) === "" || placeholderOf(held));
+  const before = await read();
+  if (stopped()) return { kind: "stopped" };
+  if (before !== null && !empty(before)) return { kind: "failed", line: `The chat with ${first} already has a draft in the message box, so Bee left it alone. Nothing was sent.` };
+  const focused = await logged("focus-box", okResult)(exec("focus", [box, HEADED_FLAG], KEY_MS));
+  if (stopped()) return { kind: "stopped" };
+  if (!focused.ok) return fallback("Bee found the message box but could not put the cursor in it.");
+
+  // 5. Paste, read back; once with real keys if the paste did not take. Only exact text goes on.
+  const holds = (held: string | null) => held !== null && squash(held) === squash(message.text);
+  const pasted = await logged("paste", (value: PasteOutcome) => value.result.ok)(pasteText(exec, { text: message.text, platform, scope: where }));
+  if (stopped()) return { kind: "stopped" };
+  let held = await read();
+  if (stopped()) return { kind: "stopped" };
+  if (held === null) {
+    // Teams did not say what the box holds: Bee cannot check the text, so it never sends it.
+    debugLog.info("computer", "teams-recipe", { step: "read-back", ok: false, unread: true });
+    return pasted.result.ok
+      ? { kind: "drafted", line: `Bee pasted the message into the chat with ${first} but could not read it back, so it did not send it.` }
+      : { kind: "failed", line: "Bee could not write the message in Teams, so nothing was sent." };
+  }
+  if (!holds(held)) {
+    // Only Bee's own text can be in the box now (it was empty): clear it, then type once.
+    if (!empty(held)) await exec("clear", [box], KEY_MS);
+    const retyped = await logged("type", okResult)(exec("type", [box, HEADED_FLAG, STDIN_FLAG], TYPE_MS, message.text));
+    if (stopped()) return { kind: "stopped" };
+    held = retyped.ok ? await read() : held;
+    if (stopped()) return { kind: "stopped" };
+    if (!holds(held)) {
+      if (held !== null && !empty(held)) await exec("clear", [box], KEY_MS);
+      return { kind: "failed", line: "Bee could not write the message in Teams, so nothing was sent." };
+    }
+  }
+  if (pasted.restored === false) debugLog.info("computer", "teams-recipe", { step: "clipboard-restore", ok: false });
+  if (!message.send) return { kind: "drafted", line: `Drafted the message to ${first} in Teams. Not sent.` };
+
+  // 6. The user's Confirm, then Return, then the box must be empty.
+  deps.onStep?.(CONFIRM_LABEL);
+  const request: ConfirmRequest = { kind: "send", question: "Send this?", detail: `To ${shortName(message.name, 30)} in Teams — “${shortName(message.text, 70)}”` };
+  debugLog.info("computer", "teams-recipe-confirm", { chars: message.text.length });
+  const confirmed = await control.paused(() => awaitAnswer((signal) => deps.confirm(request, signal), control.signal, deps.confirmTimeoutMs ?? CONFIRM_TIMEOUT_MS));
+  debugLog.info("computer", "teams-recipe", { step: "confirm", ok: confirmed });
+  if (stopped()) return { kind: "stopped" };
+  if (!confirmed) return { kind: "drafted", line: "Drafted, not sent." };
+  deps.onStep?.(`Sending to ${first}…`);
+  const sent = await logged("send", okResult)(press("return"));
+  if (!sent.ok) return { kind: "failed", line: `Bee could not press Enter in Teams. The message is still in the box, not sent.` };
+  // Once Return went out the run must not stop before it checks: the check runs even after a Stop.
+  if (pauses.sent > 0) await exec("wait", [String(pauses.sent)], pauses.sent + 5000, undefined, true);
+  const after = await exec("get", [box, "--property=value"], READ_MS, undefined, true);
+  const left = after.ok ? fieldValue(after.data) : null;
+  debugLog.info("computer", "teams-recipe", { step: "sent-check", ok: left !== null && empty(left), ms: msSince(started) });
+  if (left === null) return { kind: "sent", line: `Pressed Enter to send to ${first}; Bee could not check that it went.` };
+  if (!empty(left)) return { kind: "failed", line: "Bee pressed Enter, but the message is still in the box, so it may not have been sent." };
+  deps.onEffect?.("send");
+  return { kind: "sent", line: `Sent to ${message.name}.` };
+}
+
+/** The chat with this name is open: Teams' window title names it, or a heading in the window does. */
+async function chatOpen(exec: Exec, where: readonly string[], name: string): Promise<boolean> {
+  const windows = await exec("list-windows", [...where], READ_MS);
+  const parsed = windows.ok ? windowsSchema.safeParse(windows.data) : null;
+  const titles = parsed?.success ? parsed.data.map((row) => row?.title ?? "") : [];
+  if (titles.some((title) => namesChat(title, name))) return true;
+  const headings = await exec("find", [...where, "--role=heading", "--limit=15", `--timeout-ms=${LOOK_MS}`], LOOK_MS + 6000);
+  return headings.ok && findMatches(headings.data).some((match) => namesChat(match.name ?? "", name));
+}

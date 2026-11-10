@@ -52,6 +52,14 @@ const ACTIVITY_LABELS = new Map([
   ["act", "Working on screen…"],
   ["close_app", "Closing the app…"],
   ["wait", "Waiting…"],
+  // Seeing and pointing (core/computer-vision.ts): a picture of one window, and the real mouse at a point in it.
+  ["look", "Looking at the app…"],
+  ["click_at", "Clicking…"],
+  ["drag_at", "Dragging…"],
+  ["wheel_at", "Scrolling…"],
+  ["right_click", "Clicking…"],
+  ["double_click", "Clicking…"],
+  ["paste_text", "Pasting…"],
 ]);
 
 /** Pill text for the tool Luna is using. MCP tools are named server__tool. Anything unknown reads as thinking. */

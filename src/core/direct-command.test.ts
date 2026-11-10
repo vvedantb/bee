@@ -2,6 +2,7 @@ import { simulateReadableStream, type ModelMessage } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { pipelineResultSchema } from "../shared/ipc";
+import type { AgentDesktopResult } from "./agent-desktop-envelope";
 import { assistantMessage, userMessage } from "./bee-history";
 import { MEMORY_RULES, inMemoryBeeMemory } from "./bee-memory";
 import { ACCESSIBILITY_LINE, LINUX_A11Y_LINE, type RunControl } from "./computer-control";
@@ -825,5 +826,63 @@ describe("runDirectCommand: names where spelling wins (PR #80 e2e B and G)", () 
     const learned: string[][] = [];
     await run({ command: "No, I meant Krzysztof.", snippets, gateway, actions: fakeActions().actions, knownNames: known, onLearnNames: (names) => learned.push(names) });
     expect(learned.flat()).toContain("Krzysztof");
+  });
+});
+
+describe("runDirectCommand: the Teams message recipe", () => {
+  /** A Windows host whose Teams opens the chat named `chat`; the compose box empties on the Return that sends. */
+  function teamsHost(chat: string) {
+    const state: { opened: boolean; box: string; clipboard: string; sent: string | null; title: string } = { opened: false, box: "", clipboard: "", sent: null, title: "Microsoft Teams" };
+    const done: AgentDesktopResult = { ok: true, data: {} };
+    const computer: ComputerHost = {
+      platform: "windows",
+      confirm: async () => true,
+      run: async (command, args, options) => {
+        if (command === "list-apps") return { ok: true, data: { apps: [{ name: "ms-teams.exe" }] } };
+        if (command === "list-windows") return { ok: true, data: [{ id: "w-1", title: state.title, app_name: "ms-teams.exe", is_focused: true }] };
+        if (command === "find") return { ok: true, data: { matches: args.includes("--role=textfield") ? [{ ref_id: "@s1:e2", role: "textfield", name: "Type a message" }] : [] } };
+        if (command === "get") return { ok: true, data: { value: state.box } };
+        if (command === "clipboard-set") state.clipboard = options?.stdin ?? "";
+        if (command === "press" && args[0] === "ctrl+v") state.box = state.clipboard;
+        if (command === "press" && args[0] === "return") {
+          if (state.opened) [state.sent, state.box] = [state.box, ""];
+          else [state.opened, state.title] = [true, `Chat | ${chat} | Microsoft Teams`];
+        }
+        return done;
+      },
+    };
+    return { computer, state };
+  }
+  const recording = () => {
+    const requests: AgentRequest[] = [];
+    const agent = async (request: AgentRequest): Promise<AgentResult> => {
+      requests.push(request);
+      return { text: "Sent the message.", messages: [{ role: "assistant", content: [{ type: "text", text: "Sent the message." }] }], finish: "stop", looped: false, sources: [], costUsd: null };
+    };
+    return { agent, requests };
+  };
+
+  it("sends a Teams message with Bee's own steps and no AI call, to the known name, and keeps it in the history", async () => {
+    const { computer, state } = teamsHost("Sam Lee");
+    const { agent, requests } = recording();
+    const { actions, calls } = fakeActions();
+    const turns: ModelMessage[][] = [];
+    const result = await runDirectCommand({ command: "message Sam on Teams saying running late", snippets, agent, gateway: null, actions, computer, knownNames: ["Sam Lee"], onTurn: (turn) => turns.push(turn) });
+    expect(result.tips).toEqual(["Sent to Sam Lee."]);
+    expect(requests).toEqual([]);
+    expect(calls).toEqual(["openApp Microsoft Teams"]);
+    expect(state.sent).toBe("running late");
+    expect(JSON.stringify(turns[0])).toContain('"toolName":"teams_message"');
+  });
+
+  it("hands over to the AI, with what Bee did, when it cannot check the right chat opened", async () => {
+    const { computer, state } = teamsHost("Samira Khan");
+    const { agent, requests } = recording();
+    await runDirectCommand({ command: "message Sam on Teams saying running late", snippets, agent, gateway: null, actions: fakeActions().actions, computer, knownNames: ["Sam Lee"] });
+    expect(state.sent).toBeNull();
+    expect(state.box).toBe("");
+    expect(requests).toHaveLength(1);
+    expect(JSON.stringify(requests[0]?.content)).toContain("What Bee already did for this request (real, not a guess): Bee opened Microsoft Teams.");
+    expect(JSON.stringify(requests[0]?.content)).toContain("Bee could not confirm the chat with Sam Lee opened, so it typed no message.");
   });
 });

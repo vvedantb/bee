@@ -128,6 +128,9 @@ export type RunEvidence = {
 const NOT_READS = new Set([
   "click", "type_text", "set_value", "focus", "select_option", "set_state", "scroll", "press_key", "act", "open_app", "focus_window", "open_url", "close_app",
   "wait", "list_apps", "list_windows", "use_computer", "memory_write", "append_note", "run_in_background",
+  // A point in a picture (core/computer-vision.ts), a right or double click, a paste. A point action proves an effect only when the
+  // AI marked it and the user confirmed it (effect) or the gate counted it; one that ran unasked proves nothing.
+  "click_at", "drag_at", "wheel_at", "right_click", "double_click", "paste_text", "teams_message",
   // Claude Code's own tools that change things (core/claude-agent.ts): actions Bee cannot check (RunEvidence.outside).
   "Bash", "Edit", "Write", "NotebookEdit",
 ]);
@@ -137,7 +140,7 @@ const OUTSIDE = new Set(["Bash", "Edit", "Write", "NotebookEdit"]);
 const OPENS = new Set(["open_app", "focus_window"]);
 // Bee's own tools that read something other than an app or a connector: never a calendar.
 const NOT_CALENDAR = new Set(["web_search", "memory_read", "list_dir", "search_files", "read_file", "list_apps", "list_windows"]);
-const TYPES = new Set(["set_value", "type_text"]);
+const TYPES = new Set(["set_value", "type_text", "paste_text"]);
 const KINDS = new Set<string>(["send", "delete", "buy", "submit"]);
 
 // A calendar app by name: "Calendar", "gnome-calendar", "org.gnome.Calendar", "Fantastical", "BusyCal". Outlook is left out:
@@ -424,6 +427,10 @@ const TOOL_WORDS: Record<string, string> = {
   list_apps: "the list of open apps",
   list_windows: "the list of windows",
   type_text: "typing",
+  paste_text: "pasting",
+  click_at: "clicking",
+  drag_at: "dragging",
+  wheel_at: "scrolling",
   set_value: "filling in the field",
   press_key: "the key press",
   select_option: "choosing the option",

@@ -20,10 +20,12 @@ import type { ComputerPlatform } from "../core/computer-control";
 // Runs the agent-desktop CLI (npm agent-desktop, Apache-2.0). The experimental meeting window reader gets a runner for
 // read-only commands only (assertReadOnly). Bee's desktop tools for a direct request ("Bee, open Teams") get a separate runner
 // for launching, focusing and listing apps only (assertDesktopAction). Computer use ("Bee, send Sam a message in Slack") gets a
-// third, for observing and acting on one element at a time (assertComputerUse). The first two are always headless; computer use
-// is headless unless the AI asks for physical keys on press, type or focus. One command at a time per runner, each with a
-// timeout. stdout is parsed and dropped: nothing it holds is logged. Spawn failures come back as codes, never as throws. Text
-// that computer use types or sets goes on the child's stdin (--stdin), never in argv, and is never logged.
+// third, for observing and acting on one element at a time, and on a point in a window's picture (assertComputerUse). The first two
+// are always headless; computer use is headless unless the AI asks for physical keys on press, type or focus, and always physical
+// for a click, drag or wheel at a point and a double click. One command at a time per runner, each with a
+// timeout. stdout is parsed and dropped: nothing it holds is logged (a screenshot's base64 included). Spawn failures come back as
+// codes, never as throws. Text that computer use types, sets or puts on the clipboard goes on the child's stdin (--stdin), never in
+// argv, and is never logged.
 
 export type AgentDesktopBinary = { path: string; macHelper: string | null };
 
@@ -90,8 +92,8 @@ const execWithStdin: ExecFile = (file, args, { stdin, ...options }, callback) =>
 };
 
 const DEFAULT_TIMEOUT_MS = 6000;
-// A dense call window snapshot can run to a few MB of JSON.
-const MAX_BUFFER = 16 * 1024 * 1024;
+// A dense call window snapshot can run to a few MB of JSON, and a 4K window's screenshot (base64 PNG) to tens of MB.
+const MAX_BUFFER = 64 * 1024 * 1024;
 // Names that look like secrets never reach the child (Bee's own Gateway key may be in the environment). Whole words only, so
 // XAUTHORITY or KEYBOARD settings stay.
 const SECRET_ENV = /(^|_)(API_?KEY|KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?)(_|$)/i;

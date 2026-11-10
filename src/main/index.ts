@@ -42,7 +42,7 @@ import { AGENT_CALENDAR_SYSTEM, agentCalendarPrompt, createAgentCalendarReader, 
 import { registerMcpIpc } from "./mcp-ipc";
 import { registerOpenUrlIpc } from "./open-url";
 import { registerMeetingIpc } from "./meeting-ipc";
-import { createScreenCapture, macScreenRecording } from "./screen-capture";
+import { createScreenCapture, macScreenRecording, shrinkShot } from "./screen-capture";
 import { createVmemTranscripts } from "./vmem-transcript-queue";
 import { ensureNotesDir } from "./notes";
 import { handleRendererProtocol } from "./renderer-protocol";
@@ -570,7 +570,13 @@ if (clerk.isPrimaryInstance) {
       briefings: briefings.get,
       desktop,
       computer: computerRunner && computerPlatform
-        ? { platform: computerPlatform, run: computerRunner.run, cleanup: computerRunner.cleanup, yieldFocus: yieldOverlay }
+        ? {
+            platform: computerPlatform,
+            run: computerRunner.run,
+            cleanup: computerRunner.cleanup,
+            yieldFocus: yieldOverlay,
+            vision: { shrink: shrinkShot, ...(isMac ? { screenRecording: macScreenRecording } : {}) },
+          }
         : undefined,
       look: createScreenCapture(process.platform),
       ...(isMac ? { screenRecording: macScreenRecording } : {}),

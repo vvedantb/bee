@@ -74,6 +74,16 @@ describe("activityLabel", () => {
     expect(activityLabel("use_computer")).toBe("Using your computer…");
   });
 
+  it("names looking at an app and acting at a point in short words", () => {
+    expect(activityLabel("look")).toBe("Looking at the app…");
+    expect(activityLabel("click_at")).toBe("Clicking…");
+    expect(activityLabel("right_click")).toBe("Clicking…");
+    expect(activityLabel("double_click")).toBe("Clicking…");
+    expect(activityLabel("drag_at")).toBe("Dragging…");
+    expect(activityLabel("wheel_at")).toBe("Scrolling…");
+    expect(activityLabel("paste_text")).toBe("Pasting…");
+  });
+
   it("falls back to Thinking… for unknown, missing or inherited names", () => {
     expect(activityLabel("calendar_lookup")).toBe("Thinking…");
     expect(activityLabel(null)).toBe("Thinking…");
