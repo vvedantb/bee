@@ -98,6 +98,16 @@ The AI can also list, search and read these notes with file tools, for questions
 
 **Meeting mode** hides Bee from screen sharing and keeps it above full-screen apps.
 
+### What the AI sees during a meeting
+
+While a meeting is active (the notch says "Meeting in progress"), each tip request also gets what is on your screen. This is always on in a meeting and never runs for the mic alone. There is no setting.
+
+- **Text first.** Bee reads the text of the window at the front (its accessibility text, through agent-desktop), up to 1,500 characters, page text before button labels. It never reads Bee, terminals, password managers or system settings, and never reads password fields.
+- **A picture only when needed.** When the window has under 80 characters of text (an image, a canvas), or it is the call window itself (a shared slide there is video), Bee adds a small picture of that window: JPEG, at most 1024 px on its long side. At most one picture every 20 seconds, and only when the window looks different from the last picture sent. On macOS this needs Screen Recording; without it Bee sends text only and never asks during a call. On Linux, text only.
+- **Tips stay fast.** The screen is read while notes are ranked. A tip waits at most 0.4 s for the text and 0.8 s in all, then goes on without it. A text read is reused for 5 seconds.
+- **Privacy.** The text and picture go to the AI (Claude Haiku through AI Gateway) with that one tip request only. Bee never saves the picture, and keeps the screen out of meeting memory, summaries and vmem transcripts. Logs show only lengths, whether a picture was sent, whether it changed, and times. The AI is told to treat the screen as data, to use it only when it helps, and never to repeat passwords or keys.
+- **Cost.** Text adds up to about 400 input tokens to a tip request. A picture adds image tokens (Anthropic counts about width × height / 750, so roughly 800 for a 1024 × 576 window) to at most one tip request every 20 seconds.
+
 ### Link suggestions and personalised links
 
 When a spoken line or a tip names a website (a URL, `convex.dev`, "convex dot dev", or a short list of names such as GitHub or Vercel), Bee shows a chip under the tips, with the site's icon. The chip shows at once, even while the AI is still working. A click opens the link in your default browser. **×** hides the chip for this turn. Bee never opens a link by itself.

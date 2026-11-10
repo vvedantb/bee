@@ -33,7 +33,7 @@ it("sees the picture of the front window when the window's text is not enough", 
     platform: "mac",
     capture: async (front) => {
       fronts.push(front);
-      return { ok: true, shot: { data: PICTURE, mediaType: "image/jpeg", width: 400, height: 300, source: "window" } };
+      return { ok: true, shot: { data: PICTURE, mediaType: "image/jpeg", width: 400, height: 300, source: "window", hash: "0" } };
     },
   };
   const activity: string[] = [];

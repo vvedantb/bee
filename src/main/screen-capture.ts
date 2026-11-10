@@ -2,22 +2,22 @@ import { BrowserWindow, desktopCapturer, nativeImage, screen, systemPreferences,
 import type { AccessState } from "../core/agent-desktop-envelope";
 import type { ShotImage } from "../core/computer-vision";
 import { debugLog, errorData } from "../core/debug-log";
-import { LOOK_JPEG_QUALITY, LOOK_MAX_SIDE, lookSize, pickScreenSource, pickWindowSource, type CaptureOutcome, type FrontWindow, type ScreenCapture } from "../core/screen-look";
+import { HASH_SIDE, averageHash } from "../core/screen-context";
+import { LOOK_CAPTURE, lookSize, pickScreenSource, pickWindowSource, type CaptureOptions, type CaptureOutcome, type FrontWindow, type ScreenCapture } from "../core/screen-look";
 
-// look_at_screen's picture (core/screen-look.ts): the front window through Electron's desktopCapturer, or the display it is on
-// when the window has no source of its own. Kept in memory only: never written to disk and never logged. On macOS it needs
-// Screen Recording; the first time it is missing, asking for sources makes macOS show its own prompt. Windows needs no
-// permission. Linux has none.
+// look_at_screen's picture (core/screen-look.ts), and the small one meeting tips may add (core/screen-context.ts): the front
+// window through Electron's desktopCapturer, or the display it is on when the window has no source of its own. Kept in memory
+// only: never written to disk and never logged. On macOS it needs Screen Recording; the first time it is missing, asking for
+// sources makes macOS show its own prompt (look_at_screen only: meeting tips never ask). Windows needs no permission. Linux has none.
 
-const THUMBNAIL = { width: LOOK_MAX_SIDE, height: LOOK_MAX_SIDE };
-
-/** The picture as JPEG base64, scaled so its long side is at most LOOK_MAX_SIDE. Failed when the capture came back empty. */
-function encode(image: NativeImage, source: "window" | "screen"): CaptureOutcome {
+/** The picture as JPEG base64, scaled so its long side is at most options.maxSide, with its hash. Failed when the capture came back empty. */
+function encode(image: NativeImage, source: "window" | "screen", options: CaptureOptions = LOOK_CAPTURE): CaptureOutcome {
   if (image.isEmpty()) return { ok: false, reason: "failed" };
   const now = image.getSize();
-  const size = lookSize(now.width, now.height);
+  const size = lookSize(now.width, now.height, options.maxSide);
   const scaled = size.width === now.width && size.height === now.height ? image : image.resize({ ...size, quality: "good" });
-  return { ok: true, shot: { data: scaled.toJPEG(LOOK_JPEG_QUALITY).toString("base64"), mediaType: "image/jpeg", ...size, source } };
+  const hash = averageHash(scaled.resize({ width: HASH_SIDE, height: HASH_SIDE, quality: "good" }).toBitmap());
+  return { ok: true, shot: { data: scaled.toJPEG(options.quality).toString("base64"), mediaType: "image/jpeg", ...size, source, hash } };
 }
 
 /**
@@ -64,26 +64,27 @@ export function createScreenCapture(platform: NodeJS.Platform): ScreenCapture {
   let asked = false;
   return {
     platform: platform === "darwin" ? "mac" : "windows",
-    capture: async (front) => {
+    capture: async (front, options = LOOK_CAPTURE) => {
       if (platform === "darwin" && macScreenRecording() !== "granted") {
-        if (!asked) {
+        if (options.ask && !asked) {
           asked = true;
           await desktopCapturer.getSources({ types: ["screen"], thumbnailSize: { width: 0, height: 0 } }).catch(() => []);
         }
         return { ok: false, reason: "permission" };
       }
       try {
-        const windows = await desktopCapturer.getSources({ types: ["window"], thumbnailSize: THUMBNAIL, fetchWindowIcons: false });
+        const thumbnailSize = { width: options.maxSide, height: options.maxSide };
+        const windows = await desktopCapturer.getSources({ types: ["window"], thumbnailSize, fetchWindowIcons: false });
         const window = pickWindowSource(windows, front);
-        const fromWindow = window ? encode(window.thumbnail, "window") : null;
+        const fromWindow = window ? encode(window.thumbnail, "window", options) : null;
         if (fromWindow?.ok) return fromWindow;
         debugLog.info("screen", "look-window-missing", { matched: window !== null, screen: front.screen });
         if (!front.screen) return { ok: false, reason: "failed" };
         const displayId = displayFor(front);
         return await withoutBee(async (): Promise<CaptureOutcome> => {
-          const screens = await desktopCapturer.getSources({ types: ["screen"], thumbnailSize: THUMBNAIL });
+          const screens = await desktopCapturer.getSources({ types: ["screen"], thumbnailSize });
           const found = pickScreenSource(screens, displayId);
-          return found ? encode(found.thumbnail, "screen") : { ok: false, reason: "failed" };
+          return found ? encode(found.thumbnail, "screen", options) : { ok: false, reason: "failed" };
         });
       } catch (error) {
         debugLog.warn("screen", "look-capture-failed", { error: errorData(error) });

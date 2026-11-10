@@ -21,7 +21,7 @@ import {
 
 // look_at_screen with fake window lists and captures: no Electron, no model.
 
-const SHOT: ScreenShot = { data: "QUJD", mediaType: "image/jpeg", width: 1568, height: 980, source: "window" };
+const SHOT: ScreenShot = { data: "QUJD", mediaType: "image/jpeg", width: 1568, height: 980, source: "window", hash: "0" };
 const options = { toolCallId: "call-1", messages: [], context: {} };
 
 function windowsRun(windows: object[]): ComputerRun {

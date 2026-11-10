@@ -5,6 +5,7 @@ import type { McpTools } from "./mcp";
 import { guideWithLuna, noteCitation, type LunaToolActivity, type TipFields } from "./luna";
 import type { Snippet } from "./notes";
 import { retrieve, transcriptQuery } from "./retrieve";
+import { SCREEN_PICTURE_MS, withDeadline, type ScreenGlance } from "./screen-context";
 import { needsWebSearch, type SearchLocation } from "./web-search";
 
 const RETRIEVE_LIMIT = 5;
@@ -55,6 +56,11 @@ export async function runPipeline(args: {
   snippets: Snippet[];
   gateway: BeeGateway | null;
   notesDir?: string;
+  /**
+   * Reads the user's screen (core/screen-context.ts), only while a meeting is active. It starts at once, beside Jev and the MCP
+   * load; Luna waits for it at most SCREEN_PICTURE_MS, then goes on without it.
+   */
+  screen?: () => Promise<ScreenGlance | null>;
   /** Connects the user's MCP servers. It starts at once, beside Jev. The run lets go of them in the background when it ends. */
   loadMcpTools?: () => Promise<McpTools>;
   onActivity?: (activity: LunaToolActivity) => void;
@@ -95,12 +101,14 @@ export async function runPipeline(args: {
   });
   console.debug(`perf web-search ${webSearch ? "on" : "off"}`);
   const gateway = args.gateway;
+  const screenRun = args.screen ? timed(withDeadline(args.screen(), SCREEN_PICTURE_MS)) : null;
   const mcpRun = timed(loadMcp(args.loadMcpTools));
   const jevRun = timed(
     rankWithJev({ model: gateway.evaluationModel(JEV_MODEL), transcript: args.transcript, candidates, signal: args.signal }),
   );
   const lunaRun = (async () => {
-    const { value: mcp, ms: mcpMs } = await mcpRun;
+    const [{ value: mcp, ms: mcpMs }, screen] = await Promise.all([mcpRun, screenRun]);
+    if (screen) console.debug(`perf screen ${Math.round(screen.ms)}ms text=${screen.value?.text.length ?? 0} picture=${screen.value?.picture ? 1 : 0}`);
     const started = performance.now();
     const guide = await guideWithLuna({
       model: gateway.languageModel(GUIDE_MODEL),
@@ -109,6 +117,7 @@ export async function runPipeline(args: {
       earlier: args.earlier,
       turnLines: args.turnLines,
       meetingBrief: args.meetingBrief,
+      screenGlance: screen?.value ?? null,
       webSearch,
       searchLocation: args.searchLocation,
       notes: guideNotes,

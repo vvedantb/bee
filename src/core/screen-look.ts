@@ -1,6 +1,6 @@
 import { tool } from "ai";
 import { z } from "zod";
-import { parseWindows, type AdWindow, type ComputerRun } from "./agent-desktop-envelope";
+import { parseWindows, type AdWindow, type AgentDesktopResult, type ComputerRun } from "./agent-desktop-envelope";
 import type { ToolModelOutput } from "./claude-agent";
 import { offLimitsApp } from "./computer-tools";
 import { debugLog, errorData } from "./debug-log";
@@ -26,10 +26,19 @@ export type Rect = { x: number; y: number; width: number; height: number };
  * may be captured instead when the window has no source of its own (lookTarget).
  */
 export type FrontWindow = { app: string; title: string; bounds: Rect | null; screen: boolean };
-export type ScreenShot = { data: string; mediaType: "image/jpeg"; width: number; height: number; source: "window" | "screen" };
+/** hash: a perceptual hash of the picture (core/screen-context.ts averageHash), so meeting tips can tell a changed screen. */
+export type ScreenShot = { data: string; mediaType: "image/jpeg"; width: number; height: number; source: "window" | "screen"; hash: string };
 export type CaptureOutcome = { ok: true; shot: ScreenShot } | { ok: false; reason: "permission" | "failed" };
-/** Main's capture (main/screen-capture.ts). "other": this OS has none (Linux). */
-export type ScreenCapture = { platform: LookPlatform; capture: (front: FrontWindow) => Promise<CaptureOutcome> };
+/**
+ * How a picture is taken: its long side at most, its JPEG quality, and whether macOS may show its Screen Recording prompt when
+ * Bee does not have it yet (never during a meeting: core/screen-context.ts passes false).
+ */
+export type CaptureOptions = { maxSide: number; quality: number; ask: boolean };
+export const LOOK_CAPTURE: CaptureOptions = { maxSide: LOOK_MAX_SIDE, quality: LOOK_JPEG_QUALITY, ask: true };
+/** Main's capture (main/screen-capture.ts). "other": this OS has none (Linux). Without options: LOOK_CAPTURE. */
+export type ScreenCapture = { platform: LookPlatform; capture: (front: FrontWindow, options?: CaptureOptions) => Promise<CaptureOutcome> };
+/** Any agent-desktop runner that may list windows: computer use's, or the read-only one meeting tips use (main/index.ts). */
+export type WindowListRun = (command: "list-windows", args: string[], options?: { timeoutMs?: number }) => Promise<AgentDesktopResult>;
 
 export const LOOK_UNAVAILABLE = "Bee cannot look at the screen on this computer. Answer from the window's text, or say Bee cannot see it.";
 export const LOOK_PERMISSION =
@@ -73,7 +82,7 @@ const boundsSchema = z.union([z.array(rowSchema), z.object({ windows: z.array(ro
 export type FocusedWindow = AdWindow & { bounds: Rect | null };
 
 /** The focused windows from list-windows (agent-desktop may mark more than one), in its order, with bounds when it gives them. */
-export async function readFocusedWindows(run: ComputerRun): Promise<FocusedWindow[]> {
+export async function readFocusedWindows(run: WindowListRun): Promise<FocusedWindow[]> {
   const result = await run("list-windows", [], { timeoutMs: FRONT_WINDOW_MS });
   if (!result.ok) return [];
   const parsed = boundsSchema.safeParse(result.data);

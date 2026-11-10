@@ -132,15 +132,17 @@ export function mergeReadings(own: DetectorReading, extra: DetectorReading): Det
 
 // ---- Accessibility tree: people and captions ----
 
-const textOf = (node: AdNode): string => (node.name || node.value).replace(/\s+/g, " ").trim();
+/** A node's text, one line: its name, else its value. Also read by core/screen-context.ts. */
+export const textOf = (node: AdNode): string => (node.name || node.value).replace(/\s+/g, " ").trim();
 
-function* walk(node: AdNode): Generator<AdNode> {
+/** Every node, depth first in tree order (roughly reading order). */
+export function* walk(node: AdNode): Generator<AdNode> {
   yield node;
   for (const child of node.children) yield* walk(child);
 }
 
 // Controls, not content. A "People" button or a "Turn on live captions" menu item names a region it does not hold.
-const CONTROL_ROLE = /^(button|menuitem|menu|menubar|checkbox|switch|toggle|togglebutton|radio|radiobutton|tab|link|combobox|textfield|searchfield|slider|popupbutton|splitbutton|image|img)$/i;
+export const CONTROL_ROLE = /^(button|menuitem|menu|menubar|checkbox|switch|toggle|togglebutton|radio|radiobutton|tab|link|combobox|textfield|searchfield|slider|popupbutton|splitbutton|image|img)$/i;
 const ROSTER = /\b(participants?|attendees|in this meeting|in the meeting|roster|people)\b/i;
 const ITEM_ROLE = /^(listitem|treeitem|row|cell|outlineitem|gridcell)$/i;
 // Words in roster headers and tile labels that are never part of a person's name.

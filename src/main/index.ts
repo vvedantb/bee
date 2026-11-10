@@ -43,6 +43,7 @@ import { registerMcpIpc } from "./mcp-ipc";
 import { registerOpenUrlIpc } from "./open-url";
 import { registerMeetingIpc } from "./meeting-ipc";
 import { createScreenCapture, macScreenRecording, shrinkShot } from "./screen-capture";
+import { createScreenReader } from "../core/screen-context";
 import { createVmemTranscripts } from "./vmem-transcript-queue";
 import { ensureNotesDir } from "./notes";
 import { handleRendererProtocol } from "./renderer-protocol";
@@ -436,6 +437,11 @@ if (clerk.isPrimaryInstance) {
     const computerPlatform = computerPlatformOf(process.platform);
     const computerRunner = agentDesktopBinary && computerPlatform ? createAgentDesktopComputerRunner(agentDesktopBinary) : null;
     app.on("will-quit", () => computerRunner?.cleanup());
+    // Meeting tips see the front window (core/screen-context.ts): a fourth runner, read-only (list-windows and snapshot), so a
+    // screen read never waits behind the meeting window reader or a computer-use task, nor holds them up.
+    const screenRunner = agentDesktopBinary ? createAgentDesktopRunner(agentDesktopBinary) : null;
+    app.on("will-quit", () => screenRunner?.cleanup());
+    const look = createScreenCapture(process.platform);
     ipcMain.handle(IPC.openAccessibilitySettings, async () => {
       if (!isMac) return;
       // Asking once lists Bee in the pane (macOS shows its own prompt); the pane opens either way.
@@ -578,8 +584,10 @@ if (clerk.isPrimaryInstance) {
             vision: { shrink: shrinkShot, ...(isMac ? { screenRecording: macScreenRecording } : {}) },
           }
         : undefined,
-      look: createScreenCapture(process.platform),
+      look,
       ...(isMac ? { screenRecording: macScreenRecording } : {}),
+      screen: createScreenReader({ run: screenRunner?.run ?? null, look }),
+      meetingActive: () => autoOverlay,
     });
 
     // Call audio: the native helper hears the call app alone (Teams, Zoom, or the browser running Google Meet; process loopback
