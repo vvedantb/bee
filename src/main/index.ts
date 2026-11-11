@@ -12,7 +12,8 @@ import { displayMatching, placeInWorkArea, restoreOverlayBounds, scaleSize, type
 import { OVERLAY_SIZES, ignoresMouse } from "../core/overlay-size";
 import { IPC, TEAMS_AUDIO_LINE_MAX, settingsUpdateSchema, windowInteractiveSchema, windowSizeSchema, type MeetingWindowCaptions, type TeamsAudioEnded, type TeamsAudioLines, type UserReturned, type WindowSize } from "../shared/ipc";
 import { debugLog, errorData, msSince, setDebugSink, teeConsole } from "../core/debug-log";
-import { NO_GATEWAY_KEY, STT_MODEL, createBeeGateway } from "../core/gateway";
+import { GUIDE_MODEL, NO_GATEWAY_KEY, STT_MODEL, createBeeGateway } from "../core/gateway";
+import { AGENT_MODEL } from "../core/claude-agent";
 import { createAwayTracker } from "../core/recap";
 import { teamsAudioOsSupported, teamsAudioPlatform } from "../core/teams-audio";
 import { sttVocabulary, transcribeSpeech } from "../core/transcribe";
@@ -292,6 +293,7 @@ function startDebugLog(logsDir: string): DebugLogWriter {
   const writer = createDebugLog({
     dir: logsDir,
     sessionId: randomUUID(),
+    version: app.getVersion(),
     header: () => ({ version: app.getVersion(), platform: process.platform, release: release(), arch: process.arch, electron: process.versions.electron }),
     // Called once until a write works again, so this warning cannot loop through the console tee.
     onError: (error) => console.warn("Bee: debug log write failed:", error),
@@ -382,6 +384,9 @@ if (clerk.isPrimaryInstance) {
       notesDir,
       logsDir,
       settings: settings.view(),
+      // Which AI answers what, and the screens computer use maps points on.
+      models: { agentPlan: AGENT_MODEL.plan, agentFast: AGENT_MODEL.fast, tips: GUIDE_MODEL, speech: STT_MODEL },
+      displays: screen.getAllDisplays().map((display) => ({ id: display.id, bounds: display.bounds, scale: display.scaleFactor, primary: display.id === screen.getPrimaryDisplay().id })),
     } });
     registerDebugLogIpc({ writer: debug, logsDir });
 
@@ -441,6 +446,8 @@ if (clerk.isPrimaryInstance) {
     // screen read never waits behind the meeting window reader or a computer-use task, nor holds them up.
     const screenRunner = agentDesktopBinary ? createAgentDesktopRunner(agentDesktopBinary) : null;
     app.on("will-quit", () => screenRunner?.cleanup());
+    // agent-desktop's own version, once: every computer-use step goes through it.
+    void screenRunner?.run("version", [], { timeoutMs: 10_000 }).then((result) => debugLog.info("computer", "agent-desktop", result.ok ? { data: result.data } : { code: result.code }));
     const look = createScreenCapture(process.platform);
     ipcMain.handle(IPC.openAccessibilitySettings, async () => {
       if (!isMac) return;
