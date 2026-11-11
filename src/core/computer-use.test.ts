@@ -424,6 +424,7 @@ describe("finalLine", () => {
     expect(finalLine("NONE")).toBe("");
     expect(finalLines("- Sam asked for a PR review.\n- Priya asked for the contract.\n- Ended: ms-teams, Sam Lee chat")).toEqual(["Sam asked for a PR review.", "Priya asked for the contract."]);
     expect(finalLines(["one", "two", "three", "four", "five", "six"].join("\n"))).toHaveLength(5);
+    expect(finalLines("Nothing was sent. Ended: ms-teams, chat with Priya Shah.")).toEqual(["Nothing was sent."]);
     expect(finalLine("x".repeat(400)).length).toBeLessThanOrEqual(160);
   });
 });

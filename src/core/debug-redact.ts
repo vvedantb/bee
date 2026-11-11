@@ -31,6 +31,8 @@ const VALUE_PATTERNS: ReadonlyArray<[RegExp, string]> = [
   [/\bxox[abprs]-[A-Za-z0-9-]{10,}/g, "[redacted-key]"],
   [/\bAKIA[0-9A-Z]{16}\b/g, "[redacted-key]"],
   [/\bAIza[0-9A-Za-z_-]{30,}/g, "[redacted-key]"],
+  // An assignment to a secret-named variable, as a terminal or .env shows it: API_TOKEN=…, DB_PASSWORD: …
+  [/\b([A-Za-z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|PRIVATE_KEY)[A-Za-z0-9_]*\s*[=:]\s*)["']?[^\s"']{4,}["']?/g, `$1${REDACTED}`],
   // Secrets in a URL's query or fragment: OAuth codes and state, tokens, keys, signatures.
   [
     /([?&#](?:code|state|token|access_token|refresh_token|id_token|client_secret|api_key|apikey|key|password|secret|sig|signature|session|session_token|__clerk_db_jwt)=)[^&#\s"'<>]+/gi,

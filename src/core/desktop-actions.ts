@@ -122,10 +122,17 @@ const KNOWN_APPS: readonly KnownApp[] = [
 ];
 
 // Shells, script hosts and system tools Bee never opens, whatever the request: one more step and they run anything.
-const BLOCKED_APPS = new Set(
+// Terminals: never opened or typed into, but computer use may read one the user asks about (core/computer-tools.ts).
+const TERMINAL_APPS = new Set(
   [
     "terminal", "iterm", "iterm2", "warp", "ghostty", "alacritty", "kitty", "hyper", "console",
-    "cmd", "cmd.exe", "command prompt", "powershell", "pwsh", "windows powershell", "windows terminal", "wt",
+    "cmd", "cmd.exe", "command prompt", "powershell", "pwsh", "windows powershell", "windows terminal", "wt", "windowsterminal", "openconsole",
+    "gnome-terminal", "gnome-terminal-server", "konsole", "xterm", "tilix", "terminator", "xfce4-terminal", "wezterm", "wezterm-gui",
+  ].map((name) => name.toLowerCase()),
+);
+const BLOCKED_APPS = new Set(
+  [
+    ...TERMINAL_APPS,
     "bash", "sh", "zsh", "fish", "wsl", "ubuntu",
     "script editor", "automator", "osascript", "shortcuts", "wscript", "cscript", "mshta", "rundll32", "regedit",
     "registry editor", "task scheduler", "keychain access", "passwords", "logoff", "shutdown",
@@ -137,6 +144,11 @@ export const BLOCKED_APP_MESSAGE = "Bee does not open terminals, script tools or
 /** A shell, script host or system tool Bee never opens, nor reads or types into for computer use (core/computer-tools.ts). */
 export function isBlockedApp(name: string): boolean {
   return BLOCKED_APPS.has(appKey(name));
+}
+
+/** A terminal or console app: blocked like a shell, except that computer use may read its window's text. */
+export function isTerminalApp(name: string): boolean {
+  return TERMINAL_APPS.has(appKey(name));
 }
 
 /** Lower case, single spaces, no "the" in front or "app" behind: the key app names are compared by. */

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MAX_STRING_CHARS, REDACTED, isSecretKey, redactDebugData, redactString } from "./debug-redact";
+import { MAX_STRING_CHARS, REDACTED, isSecretKey, redactDebugData, redactSecretValues, redactString } from "./debug-redact";
 
 // Fake values shaped like real ones, none of them a real secret. Built at run time so no key-shaped text is committed for a
 // secret scanner to flag.
@@ -43,6 +43,11 @@ describe("redactDebugData", () => {
   it("keeps token counts and sign-in flags", () => {
     const usage = { inputTokens: 120, outputTokens: 40, inputTokenDetails: { cacheReadTokens: 100, cacheWriteTokens: 0 }, outputTokenDetails: { reasoningTokens: 0 } };
     expect(redactDebugData({ usage, hasToken: true, signedIn: false })).toEqual({ usage, hasToken: true, signedIn: false });
+  });
+
+  it("hides values assigned to secret-named variables, as a terminal or .env shows them", () => {
+    expect(redactSecretValues("export API_TOKEN=abc123secret\nDB_PASSWORD: 'hunter22'\nPORT=5173")).toBe(`export API_TOKEN=${REDACTED}\nDB_PASSWORD: ${REDACTED}\nPORT=5173`);
+    expect(redactSecretValues("TypeError: Cannot read properties of undefined (reading 'sessionToken')")).toBe("TypeError: Cannot read properties of undefined (reading 'sessionToken')");
   });
 
   it("finds keys inside ordinary text: prompts, errors and notes", () => {
