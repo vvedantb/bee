@@ -18,9 +18,19 @@ const call = (toolName: string, input: Record<string, unknown>, output: string):
 const said = (text: string): ModelMessage => ({ role: "assistant", content: [{ type: "text", text }] });
 
 describe("claimedEffect", () => {
+  it("never counts what someone else sent or wrote as Bee's claim", () => {
+    expect(claimedEffect("Sam Lee also emailed asking Vedant to approve invoice 2231.")).toBeNull();
+    expect(claimedEffect("Priya Shah emailed asking for the signed pilot contract by Friday.")).toBeNull();
+    expect(claimedEffect("George replied that the build is up.")).toBeNull();
+    expect(claimedEffect("She messaged about the demo.")).toBeNull();
+    expect(claimedEffect("George sent you the deck.")).toBeNull();
+  });
+
   it("reads a positive claim of a send, delete, purchase or submit", () => {
     expect(claimedEffect("Sent hi to Zuzanna.")).toBe("send");
     expect(claimedEffect("Message delivered.")).toBe("send");
+    expect(claimedEffect("Email sent to Sam.")).toBe("send");
+    expect(claimedEffect("Bee emailed Priya the contract.")).toBe("send");
     expect(claimedEffect("Replied to the thread and closed the tab.")).toBe("send");
     expect(claimedEffect("Deleted the draft.")).toBe("delete");
     expect(claimedEffect("Bought the fixture item.")).toBe("buy");

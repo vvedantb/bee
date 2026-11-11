@@ -23,6 +23,10 @@ const CLAIMS: readonly (readonly [ClaimKind, RegExp])[] = [
 // A clause that denies, doubts or puts off the action: "not sent yet", "could not verify it was sent", "nothing was deleted".
 const NEGATED =
   /\b(?:not|never|no|nothing|none|cannot|unable|failed|fail|without|yet|unsent|whether|if|would|will|ready to|about to|could not|did not|was not|is not|has not|have not)\b|n['’]t\b/i;
+// Someone else did it: "Sam Lee emailed asking…", "Priya replied", "George sent you…". A name (never Bee) or he, she, they or
+// someone right before a verb that takes a person ("Email sent" stays Bee's claim). Bee writes itself as "Bee", so it never matches.
+const OTHER_SENDER =
+  /(?:^|\s)(?:(?!Bee\b)\p{Lu}[\p{L}'’.-]*(?:\s+\p{Lu}[\p{L}'’.-]*)*|[Hh]e|[Ss]he|[Tt]hey|[Ss]omeone)\s+(?:also\s+|just\s+|already\s+|has\s+|had\s+)?(?:replied|messaged|e-?mailed|sent you)\b/u;
 // Where a line splits into clauses, so "Sent hi, but could not close the tab" still claims the send.
 const CLAUSE = /[,;.!?:]+|\s[—–-]\s|\b(?:but|and|then|so|although|though|while)\b/i;
 
@@ -31,7 +35,7 @@ export function claimedEffects(line: string): ClaimKind[] {
   const found: ClaimKind[] = [];
   for (const clause of line.split(CLAUSE)) {
     const text = clause.trim();
-    if (!text || NEGATED.test(text)) continue;
+    if (!text || NEGATED.test(text) || OTHER_SENDER.test(text)) continue;
     for (const [kind, pattern] of CLAIMS) if (pattern.test(text) && !found.includes(kind)) found.push(kind);
   }
   return found;
