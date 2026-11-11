@@ -333,6 +333,39 @@ describe("runTeamsRecipe", () => {
     expect(order.slice(0, 3)).toEqual(["focus @s1:e1", "focus @s1:e2", "press ctrl+e"]);
   });
 
+  it("sends keys to the Teams window that holds focus (its search popup) when Teams' process scope is refused", async () => {
+    const noKeyboard: AgentDesktopResult = { ok: false, code: "ACTION_FAILED", message: "Application has no verified keyboard focus for key delivery" };
+    const fake = teams({
+      onCall: (call, state) => {
+        if (call.command === "press" && call.args.includes("--app=ms-teams.exe") && !state.opened) return noKeyboard;
+        if (call.command === "list-windows" && !state.opened) return { ok: true, data: [{ id: "w-1", title: "Microsoft Teams" }, { id: "w-popup", title: "", is_focused: true }] };
+        return null;
+      },
+    });
+    expect((await recipe(fake).go(SAM)).kind).toBe("sent");
+    const scoped = fake.calls.filter((call) => call.command === "press" && call.args.includes("--window-id=w-popup")).map((call) => call.args[0]);
+    expect(scoped.slice(0, 2)).toEqual(["ctrl+a", "shift+s"]);
+    // Once the chat is open, the send goes to Teams' process again.
+    const last = fake.calls.filter((call) => call.command === "press").at(-1);
+    expect(last?.args).toEqual(["return", "--app=ms-teams.exe", "--headed"]);
+  });
+
+  it("types the name into the search box itself when no key reaches Teams", async () => {
+    const noKeyboard: AgentDesktopResult = { ok: false, code: "ACTION_FAILED", message: "Application has no verified keyboard focus for key delivery" };
+    const fake = teams({
+      onCall: (call, state) => {
+        if (call.command === "press" && !state.opened && call.args[0] !== "down" && call.args[0] !== "return") return noKeyboard;
+        if (call.command === "type" && call.args[0] === "@s1:e1") {
+          state.search = call.stdin ?? "";
+          return { ok: true, data: {} };
+        }
+        return null;
+      },
+    });
+    expect((await recipe(fake).go(SAM)).kind).toBe("sent");
+    expect(fake.calls.find((call) => call.command === "type")).toEqual({ command: "type", args: ["@s1:e1", "--headed", "--stdin"], stdin: "Sam Lee" });
+  });
+
   it("presses ctrl+e once more when Teams was not found just after it opened", async () => {
     let first = true;
     const fake = teams({

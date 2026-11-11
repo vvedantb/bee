@@ -139,6 +139,11 @@ function findMatches(data: AgentDesktopData): Match[] {
   return parsed.success ? parsed.data.matches.filter((match) => match !== null) : [];
 }
 
+// agent-desktop's refusal when no element of the app holds the keyboard.
+const NO_KEYBOARD = /keyboard focus/i;
+const windowRowSchema = z.object({ id: z.string(), is_focused: z.boolean().optional().catch(undefined) }).nullable().catch(null);
+const windowRowsSchema = z.union([z.array(windowRowSchema), z.object({ windows: z.array(windowRowSchema) }).transform((data) => data.windows)]);
+
 const windowsSchema = z.union([
   z.array(z.object({ title: z.string().optional().catch(undefined) }).nullable().catch(null)),
   z.object({ windows: z.array(z.object({ title: z.string().optional().catch(undefined) }).nullable().catch(null)) }).transform((data) => data.windows),
@@ -243,7 +248,27 @@ export async function runTeamsRecipe(asked: TeamsMessage & { name: string }, dep
   done.push("Bee opened Microsoft Teams.");
   const app = matchApp(TEAMS_LABEL, teamsApps) ?? (teamsApps.length === 1 ? teamsApps[0] : null) ?? (platform === "windows" ? windowsAlias(TEAMS_LABEL) : null) ?? TEAMS_LABEL;
   const where = [`--app=${app}`];
-  const press = (keys: string) => exec("press", [keys, ...where, HEADED_FLAG], KEY_MS);
+  // Keys go to Teams' process (--app). When Teams holds the keyboard in a window of its own (its search popup), agent-desktop
+  // refuses them for that scope ("no verified keyboard focus"): they go once more to the Teams window that holds focus, which
+  // is kept for the next keys until it fails.
+  let keyWindow: string | null = null;
+  const press = async (keys: string): Promise<AgentDesktopResult> => {
+    if (keyWindow) {
+      const result = await exec("press", [keys, `--window-id=${keyWindow}`, HEADED_FLAG], KEY_MS);
+      if (result.ok || stopped()) return result;
+      keyWindow = null;
+    }
+    const result = await exec("press", [keys, ...where, HEADED_FLAG], KEY_MS);
+    if (result.ok || stopped() || !NO_KEYBOARD.test(result.message ?? "")) return result;
+    const listed = await exec("list-windows", [...where], READ_MS);
+    const rows = listed.ok ? windowRowsSchema.safeParse(listed.data) : null;
+    const windows = rows?.success ? rows.data.filter((row) => row !== null) : [];
+    const focused = windows.find((row) => row.is_focused)?.id ?? null;
+    debugLog.info("computer", "teams-recipe", { step: "key-window", ok: focused !== null, windows: windows.length });
+    if (!focused || stopped()) return result;
+    keyWindow = focused;
+    return exec("press", [keys, `--window-id=${focused}`, HEADED_FLAG], KEY_MS);
+  };
   if (stopped()) return { kind: "stopped" };
 
   // The user's own chat: the chat list's row marked "(You)" gives the name to search for ("Chat Vedant Bhopatrao (You) You: …").
@@ -261,12 +286,18 @@ export async function runTeamsRecipe(asked: TeamsMessage & { name: string }, dep
   // it puts the cursor in the message box and presses ctrl+e (cmd+e); else ctrl+e alone. Then the box must hold the name: keys
   // that missed it move through the chat list instead (Down and Return then open the chat at the top, often the user's own).
   const keys = keyPresses(message.name);
+  let searchBox: string | null = null;
   const typeName = async (): Promise<AgentDesktopResult> => {
     if (!keys || keys.length > NAME_KEYS_MAX) return (await pasteText(exec, { text: message.name, platform, scope: where })).result;
-    for (const key of keys) {
+    for (const [index, key] of keys.entries()) {
       if (stopped()) return { ok: false, code: "ABORTED" };
       const result = await press(key);
-      if (!result.ok) return result;
+      if (result.ok) continue;
+      // Keys refused at the first one, with the search box known: type the name into the box itself instead.
+      if (index === 0 && searchBox && NO_KEYBOARD.test(result.message ?? "") && !stopped()) {
+        return logged("type-name", okResult)(exec("type", [searchBox, HEADED_FLAG, STDIN_FLAG], TYPE_MS, message.name));
+      }
+      return result;
     }
     return { ok: true, data: null };
   };
@@ -280,7 +311,7 @@ export async function runTeamsRecipe(asked: TeamsMessage & { name: string }, dep
     return found;
   };
   const editable = (fields: readonly Match[]) => fields.find((field) => field.ref_id && REF_PATTERN.test(field.ref_id) && !field.states?.includes("readonly"))?.ref_id ?? null;
-  const searchBox = editable(await logged("find-search", (found: Match[]) => found.length > 0)(searchFields()));
+  searchBox = editable(await logged("find-search", (found: Match[]) => found.length > 0)(searchFields()));
   if (stopped()) return { kind: "stopped" };
   const inSearch = searchBox ? (await logged("focus-search", okResult)(exec("focus", [searchBox, HEADED_FLAG], KEY_MS))).ok : false;
   if (stopped()) return { kind: "stopped" };
@@ -342,6 +373,8 @@ export async function runTeamsRecipe(asked: TeamsMessage & { name: string }, dep
     if (!result.ok) return fallback("Bee could not pick the search result.");
   }
   done.push(pick === null ? "It pressed Down and Return to open the first result." : `It pressed Down ${downs === 1 ? "once" : `${downs} times`} and Return to open the result that names ${message.name}.`);
+  // The search popup closed with the chat opening: keys go to Teams' process again.
+  keyWindow = null;
   await pause(pauses.open);
   if (stopped()) return { kind: "stopped" };
 
