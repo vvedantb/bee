@@ -13,7 +13,7 @@ import {
   platformBinaryNames,
   resolveAgentDesktop,
   type ExecFile,
-  type ExecFileSync,
+  type RunTool,
 } from "./agent-desktop";
 
 const root = new URL("../../", import.meta.url);
@@ -229,7 +229,7 @@ describe("lockPrivateStateDirAcl", () => {
 
   const fakeSync = (listing: string, whoami = '"pc\\sam","S-1-5-21-1-2-3-1001"\r\n') => {
     const calls: { file: string; args: string[] }[] = [];
-    const run: ExecFileSync = (file, args) => {
+    const run: RunTool = (file, args) => {
       calls.push({ file, args });
       if (file.endsWith("whoami.exe")) return whoami;
       return args.length === 1 ? listing : "processed file";
@@ -237,16 +237,16 @@ describe("lockPrivateStateDirAcl", () => {
     return { run, calls };
   };
 
-  it("does nothing outside Windows", () => {
+  it("does nothing outside Windows", async () => {
     const fake = fakeSync(locked);
-    expect(lockPrivateStateDirAcl("/tmp/x", { platform: "darwin", execFileSync: fake.run })).toBe(true);
+    expect(await lockPrivateStateDirAcl("/tmp/x", { platform: "darwin", runTool: fake.run })).toBe(true);
     expect(fake.calls).toEqual([]);
   });
 
-  it("grants only the current user, SYSTEM and Administrators (inheritable), then removes inheritance and checks", () => {
+  it("grants only the current user, SYSTEM and Administrators (inheritable), then removes inheritance and checks", async () => {
     const fake = fakeSync(locked);
     const warn = vi.fn();
-    expect(lockPrivateStateDirAcl(dir, { platform: "win32", env, execFileSync: fake.run, warn })).toBe(true);
+    expect(await lockPrivateStateDirAcl(dir, { platform: "win32", env, runTool: fake.run, warn })).toBe(true);
     expect(warn).not.toHaveBeenCalled();
     const icaclsCalls = fake.calls.filter((call) => call.file === icacls).map((call) => call.args);
     expect(icaclsCalls).toEqual([
@@ -256,25 +256,43 @@ describe("lockPrivateStateDirAcl", () => {
     ]);
   });
 
-  it("falls back to USERDOMAIN\\USERNAME when whoami gives no SID", () => {
+  it("falls back to USERDOMAIN\\USERNAME when whoami gives no SID", async () => {
     const fake = fakeSync(locked, "");
-    lockPrivateStateDirAcl(dir, { platform: "win32", env, execFileSync: fake.run, warn: vi.fn() });
+    await lockPrivateStateDirAcl(dir, { platform: "win32", env, runTool: fake.run, warn: vi.fn() });
     expect(fake.calls.find((call) => call.args[1] === "/grant:r")?.args[4]).toBe("PC\\sam:(OI)(CI)F");
   });
 
-  it("warns, without throwing, when icacls fails or the ACL still has inherited or extra entries", () => {
-    const failing: ExecFileSync = () => {
+  it("warns, without throwing, when icacls fails or the ACL still has inherited or extra entries", async () => {
+    const failing: RunTool = () => {
       throw new Error("icacls exited 5");
     };
     const warn = vi.fn();
-    expect(lockPrivateStateDirAcl(dir, { platform: "win32", env, user: "PC\\sam", execFileSync: failing, warn })).toBe(false);
+    expect(await lockPrivateStateDirAcl(dir, { platform: "win32", env, user: "PC\\sam", runTool: failing, warn })).toBe(false);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("icacls exited 5"));
 
     const inherited = locked.replace("PC\\sam:(OI)(CI)(F)", "PC\\sam:(I)(OI)(CI)(F)");
-    expect(lockPrivateStateDirAcl(dir, { platform: "win32", env, user: "PC\\sam", execFileSync: fakeSync(inherited).run, warn })).toBe(false);
+    expect(await lockPrivateStateDirAcl(dir, { platform: "win32", env, user: "PC\\sam", runTool: fakeSync(inherited).run, warn })).toBe(false);
     const extra = locked.replace("\r\n\r\n", `\r\n${" ".repeat(dir.length + 1)}PC\\CodexSandboxUsers:(OI)(CI)(RX)\r\n\r\n`);
-    expect(lockPrivateStateDirAcl(dir, { platform: "win32", env, user: "PC\\sam", execFileSync: fakeSync(extra).run, warn })).toBe(false);
+    expect(await lockPrivateStateDirAcl(dir, { platform: "win32", env, user: "PC\\sam", runTool: fakeSync(extra).run, warn })).toBe(false);
     expect(warn).toHaveBeenCalledTimes(3);
+  });
+
+  it("never blocks the main process while it locks the folder: the window keeps running, and the command waits for it", async () => {
+    const temp = mkdtempSync(join(tmpdir(), "bee-ad-test-"));
+    try {
+      const order: string[] = [];
+      const lockAcl = () => new Promise<void>((resolve) => setTimeout(() => (order.push("locked"), resolve()), 30));
+      const exec: ExecFile = (_file, _args, _options, callback) => (order.push("command"), callback(null, ENVELOPE));
+      const runner = createAgentDesktopRunner({ path: "/bin/agent-desktop", macHelper: null }, { exec, env: {}, tempDir: () => temp, lockAcl });
+      const running = runner.run("version", []);
+      // Other work (the window's resize, a click) runs while the lock is in progress.
+      await new Promise<void>((resolve) => setTimeout(() => (order.push("window"), resolve()), 0));
+      await running;
+      expect(order).toEqual(["window", "locked", "command"]);
+      runner.cleanup();
+    } finally {
+      rmSync(temp, { recursive: true, force: true });
+    }
   });
 
   it("is applied to the runner's state folder once, before the first command", async () => {

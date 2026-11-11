@@ -1,4 +1,4 @@
-import { execFile, execFileSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, win32 } from "node:path";
@@ -123,12 +123,18 @@ export type AgentDesktopRunner = {
   cleanup: () => void;
 };
 
-type RunnerDeps = { exec?: ExecFile; env?: NodeJS.ProcessEnv; tempDir?: () => string; lockAcl?: (dir: string) => void };
+type RunnerDeps = { exec?: ExecFile; env?: NodeJS.ProcessEnv; tempDir?: () => string; lockAcl?: (dir: string) => unknown };
 
-export type ExecFileSync = (file: string, args: string[], options: { encoding: "utf8"; windowsHide: boolean; timeout: number }) => string;
+/** Runs a system tool and gives its stdout. Async in the app: a blocking run froze Bee's window (main process) for its length. */
+export type RunTool = (file: string, args: string[], options: { encoding: "utf8"; windowsHide: boolean; timeout: number }) => string | Promise<string>;
+
+const runTool: RunTool = (file, args, options) =>
+  new Promise((resolve, reject) => {
+    execFile(file, args, options, (error, stdout) => (error ? reject(error) : resolve(String(stdout))));
+  });
 
 export type AclDeps = {
-  execFileSync?: ExecFileSync;
+  runTool?: RunTool;
   platform?: NodeJS.Platform;
   env?: NodeJS.ProcessEnv;
   /** The current user as a SID or DOMAIN\name. Default: the SID from whoami, else USERDOMAIN\USERNAME. */
@@ -146,22 +152,22 @@ const ADMINISTRATORS_SID = "*S-1-5-32-544";
  * principal"). Grants full control (inherited by files and subfolders) to the current user, SYSTEM and Administrators only,
  * then removes inherited entries. Warns, never throws. Returns whether the ACL is locked and checked.
  */
-export function lockPrivateStateDirAcl(dir: string, deps: AclDeps = {}): boolean {
+export async function lockPrivateStateDirAcl(dir: string, deps: AclDeps = {}): Promise<boolean> {
   if ((deps.platform ?? process.platform) !== "win32") return true;
   const env = deps.env ?? process.env;
-  const run = deps.execFileSync ?? (execFileSync as unknown as ExecFileSync);
+  const run = deps.runTool ?? runTool;
   const warn = deps.warn ?? ((message: string) => console.warn(message));
   // Full paths, so a folder on PATH cannot stand in for the system tools.
   const system32 = win32.join(env.SystemRoot ?? env.windir ?? "C:\\Windows", "System32");
   const options = { encoding: "utf8" as const, windowsHide: true, timeout: 10_000 };
   try {
-    const user = deps.user ?? currentUserSid(run, win32.join(system32, "whoami.exe"), options) ?? accountName(env);
+    const user = deps.user ?? (await currentUserSid(run, win32.join(system32, "whoami.exe"), options)) ?? accountName(env);
     if (!user) throw new Error("current user unknown");
     const icacls = win32.join(system32, "icacls.exe");
     // Grant first, then drop inheritance, so the folder is never left with no entry for the user.
-    run(icacls, [dir, "/grant:r", `${SYSTEM_SID}:(OI)(CI)F`, `${ADMINISTRATORS_SID}:(OI)(CI)F`, `${user}:(OI)(CI)F`], options);
-    run(icacls, [dir, "/inheritance:r"], options);
-    const entries = aclEntries(run(icacls, [dir], options), dir);
+    await run(icacls, [dir, "/grant:r", `${SYSTEM_SID}:(OI)(CI)F`, `${ADMINISTRATORS_SID}:(OI)(CI)F`, `${user}:(OI)(CI)F`], options);
+    await run(icacls, [dir, "/inheritance:r"], options);
+    const entries = aclEntries(await run(icacls, [dir], options), dir);
     // Names in the listing are localised, so check the shape: no inherited entries, and only the three grants.
     if (entries.length === 0 || entries.length > 3 || entries.some((entry) => entry.includes("(I)"))) {
       throw new Error(`unexpected ACL (${entries.length} entries)`);
@@ -173,9 +179,9 @@ export function lockPrivateStateDirAcl(dir: string, deps: AclDeps = {}): boolean
   }
 }
 
-function currentUserSid(run: ExecFileSync, whoami: string, options: Parameters<ExecFileSync>[2]): string | null {
+async function currentUserSid(run: RunTool, whoami: string, options: Parameters<RunTool>[2]): Promise<string | null> {
   try {
-    const sid = /"(S-1-[\d-]+)"/.exec(run(whoami, ["/user", "/fo", "csv", "/nh"], options))?.[1];
+    const sid = /"(S-1-[\d-]+)"/.exec(await run(whoami, ["/user", "/fo", "csv", "/nh"], options))?.[1];
     return sid ? `*${sid}` : null;
   } catch {
     return null;
@@ -232,28 +238,27 @@ function queuedRunner<C extends string>(binary: AgentDesktopBinary, deps: Runner
   let home: string | null = null;
   let queue: Promise<unknown> = Promise.resolve();
 
-  const ensureHome = (): string => {
+  // The state folder, made private once (async: on Windows that is whoami and three icacls runs, which blocked Bee's window
+  // when they ran synchronously). Commands queue one at a time, so two never make it at once.
+  const ensureHome = async (): Promise<string> => {
     if (home) return home;
     const dir = mkdtempSync(join(deps.tempDir?.() ?? tmpdir(), "bee-agent-desktop-"));
-    (deps.lockAcl ?? lockPrivateStateDirAcl)(dir);
+    await (deps.lockAcl ?? lockPrivateStateDirAcl)(dir);
     home = dir;
     return home;
   };
 
-  const spawn = (command: C, args: string[], timeoutMs: number, signal?: AbortSignal, stdin?: string): Promise<AgentDesktopResult> =>
-    new Promise((resolve) => {
-      // Stopped while it waited its turn: it never starts.
-      if (signal?.aborted) {
-        resolve({ ok: false, code: "ABORTED" });
-        return;
-      }
-      let dir: string;
-      try {
-        dir = ensureHome();
-      } catch {
-        resolve({ ok: false, code: "SPAWN_FAILED" });
-        return;
-      }
+  const spawn = async (command: C, args: string[], timeoutMs: number, signal?: AbortSignal, stdin?: string): Promise<AgentDesktopResult> => {
+    // Stopped while it waited its turn: it never starts.
+    if (signal?.aborted) return { ok: false, code: "ABORTED" };
+    let dir: string;
+    try {
+      dir = await ensureHome();
+    } catch {
+      return { ok: false, code: "SPAWN_FAILED" };
+    }
+    if (signal?.aborted) return { ok: false, code: "ABORTED" };
+    return new Promise((resolve) => {
       try {
         const options = {
           timeout: timeoutMs,
@@ -276,6 +281,7 @@ function queuedRunner<C extends string>(binary: AgentDesktopBinary, deps: Runner
         resolve({ ok: false, code: "SPAWN_FAILED" });
       }
     });
+  };
 
   return {
     run: (command: C, args: string[], options: ComputerRunOptions = {}): Promise<AgentDesktopResult> => {

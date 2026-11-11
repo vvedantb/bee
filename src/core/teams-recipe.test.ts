@@ -156,6 +156,7 @@ function teams(
         return { ok: true, data: [{ id: "w-1", title: state.title, app_name: "ms-teams.exe", is_focused: true }] };
       case "find":
         // A header is not actionable: agent-desktop gives it no ref.
+        if (args.includes("--role=combobox")) return { ok: true, data: { matches: [] } };
         if (args.includes("--role=heading")) return { ok: true, data: { matches: state.heading ? [{ ref_id: null, role: "heading", name: state.heading }] : [] } };
         if (args.includes("--role=option")) return { ok: true, data: { matches: state.opened ? [] : (options.results ?? []).map((name) => ({ ref_id: null, role: "option", name })) } };
         if (args.includes("--role=treeitem") && args.includes("--name=(You)")) return { ok: true, data: { matches: options.ownRow ? [{ ref_id: "@s1:e9", role: "treeitem", name: options.ownRow }] : [] } };
@@ -259,11 +260,11 @@ describe("runTeamsRecipe", () => {
     expect(steps).toEqual(["Opening the chat with Sam…", "Writing the message…", "Waiting for you to confirm…", "Sending to Sam…"]);
     const line = (call: Call) => [call.command, ...call.args].join(" ");
     const keys = fake.calls.filter((call) => call.command === "press").map((call) => call.args[0]);
-    expect(keys).toEqual(["ctrl+e", "shift+s", "a", "m", "space", "shift+l", "e", "e", "down", "return", "ctrl+v", "return"]);
+    expect(keys).toEqual(["ctrl+a", "shift+s", "a", "m", "space", "shift+l", "e", "e", "down", "return", "ctrl+v", "return"]);
     // Every key is real input in Teams' process.
     for (const call of fake.calls.filter((item) => item.command === "press")) expect(call.args.slice(1), line(call)).toEqual(["--app=ms-teams.exe", "--headed"]);
     expect(fake.calls.map((call) => call.command).filter((command) => command !== "press")).toEqual([
-      "list-apps", "find", "find", "find", "list-windows", "find", "get", "focus", "clipboard-get", "clipboard-set", "wait", "clipboard-set", "get", "focus", "get",
+      "list-apps", "find", "find", "focus", "find", "find", "find", "find", "list-windows", "find", "get", "focus", "clipboard-get", "clipboard-set", "wait", "clipboard-set", "get", "focus", "get",
     ]);
     // The message travels on stdin only, never in argv.
     expect(fake.calls.flatMap((call) => call.args).join(" ")).not.toContain("Running late");
@@ -274,7 +275,7 @@ describe("runTeamsRecipe", () => {
     const { go } = recipe(fake, { platform: "mac" });
     expect((await go(SAM)).kind).toBe("sent");
     const presses = fake.calls.filter((call) => call.command === "press");
-    expect(presses[0]?.args).toEqual(["cmd+e", "--app=Microsoft Teams", "--headed"]);
+    expect(presses[0]?.args).toEqual(["cmd+a", "--app=Microsoft Teams", "--headed"]);
     expect(presses.map((call) => call.args[0])).toContain("cmd+v");
   });
 
@@ -325,11 +326,34 @@ describe("runTeamsRecipe", () => {
     expect(fake.calls.filter((call) => call.command === "press").map((call) => call.args[0])).toContain("ctrl+a");
   });
 
+  it("puts the cursor in the message box and presses ctrl+e when Teams refuses focus on its search box", async () => {
+    const fake = teams({ onCall: (call) => (call.command === "focus" && call.args[0] === "@s1:e1" ? { ok: false, code: "POLICY_DENIED" } : null) });
+    expect((await recipe(fake).go(SAM)).kind).toBe("sent");
+    const order = fake.calls.filter((call) => call.command === "focus" || call.command === "press").map((call) => `${call.command} ${call.args[0]}`);
+    expect(order.slice(0, 3)).toEqual(["focus @s1:e1", "focus @s1:e2", "press ctrl+e"]);
+  });
+
+  it("presses ctrl+e once more when Teams was not found just after it opened", async () => {
+    let first = true;
+    const fake = teams({
+      onCall: (call) => {
+        if (call.command === "focus" && call.args[0] === "@s1:e1") return { ok: false, code: "POLICY_DENIED" };
+        if (call.command === "press" && call.args[0] === "ctrl+e" && first) {
+          first = false;
+          return { ok: false, code: "APP_NOT_FOUND" };
+        }
+        return null;
+      },
+    });
+    expect((await recipe(fake).go(SAM)).kind).toBe("sent");
+    expect(fake.calls.filter((call) => call.command === "press" && call.args[0] === "ctrl+e")).toHaveLength(2);
+  });
+
   it("opens no chat when the name never reaches the search box", async () => {
     const fake = teams({ searchMisses: true, onCall: (call) => (call.command === "focus" || call.command === "click" ? { ok: false, code: "ACTION_NOT_SUPPORTED" } : null) });
     expect(await recipe(fake).go(SAM)).toEqual({
       kind: "fallback",
-      done: "Bee opened Microsoft Teams. Bee pressed ctrl+e and typed the name, but Teams' search box did not show it, so Bee opened no chat.",
+      done: "Bee opened Microsoft Teams. Bee typed the name, but Teams' search box did not show it, so Bee opened no chat.",
     });
     expect(fake.calls.filter((call) => call.command === "press").map((call) => call.args[0])).not.toContain("down");
   });
@@ -375,7 +399,7 @@ describe("runTeamsRecipe", () => {
     const outcome = await go(SAM);
     expect(outcome).toEqual({
       kind: "fallback",
-      done: 'Bee opened Microsoft Teams. Bee pressed ctrl+e and typed "Sam Lee" in Teams\' search. It pressed Down and Return to open the first result. Bee could not confirm the chat with Sam Lee opened, so it typed no message.',
+      done: 'Bee opened Microsoft Teams. Bee typed "Sam Lee" in Teams\' search. It pressed Down and Return to open the first result. Bee could not confirm the chat with Sam Lee opened, so it typed no message.',
     });
     expect(asked).toEqual([]);
     expect(fake.state.box).toBe("");

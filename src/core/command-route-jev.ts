@@ -4,14 +4,15 @@ import { debugLog, errorData, modelName, msSince } from "./debug-log";
 
 // Which path a direct request takes, asked of Jev (the Gateway evaluation API, as in jev.ts and link-jev.ts) in one choice
 // question. Only asked when the word rules leave it open (core/direct-command.ts: no quick open, and computer use is there), and
-// only for ROUTE_TIMEOUT_MS: Jev answers in about 100 to 200 ms, and a request must not wait on it. Any timeout, error, unknown
+// only for ROUTE_TIMEOUT_MS: Jev answers in about 100 to 200 ms in the US, but from the UK it took over 300 ms every time
+// (all timed out at 300), so the budget allows the round trip; a request must not wait longer. Any timeout, error, unknown
 // option or weak answer returns null, and the word rules (core/desktop-actions.ts routeCommand, core/computer-use.ts
 // wantsComputerUse) decide as before. Standard tier, not flex: it sits on the path to the user's answer.
 //
 // state: { request } — the request after the wake word.
 // questions: "route", a choice over ROUTE_OPTIONS.
 
-export const ROUTE_TIMEOUT_MS = 300;
+export const ROUTE_TIMEOUT_MS = 800;
 // Below this probability for the chosen option (when Jev gives one), the word rules decide.
 export const ROUTE_MIN_PROBABILITY = 0.55;
 
