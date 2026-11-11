@@ -19,6 +19,8 @@ export type DebugSource = "main" | "renderer";
 /** One event as written to the file, one per line. */
 export type DebugLine = {
   ts: string;
+  /** Bee's version on every line, so a pasted excerpt says which build wrote it. */
+  v?: string;
   seq: number;
   session: string;
   src: DebugSource;
@@ -75,6 +77,8 @@ export function debugLogFileName(when: Date, sessionId: string, attempt = 1): st
 export function createDebugLog(options: {
   dir: string;
   sessionId: string;
+  /** Bee's version, written on every line as v. */
+  version?: string;
   maxFileBytes?: number;
   maxLineBytes?: number;
   flushMs?: number;
@@ -139,6 +143,7 @@ export function createDebugLog(options: {
     const data = event.data === undefined ? undefined : redactDebugData(event.data);
     return {
       ts: Number.isNaN(at.getTime()) ? now().toISOString() : at.toISOString(),
+      ...(options.version ? { v: options.version } : {}),
       seq: ++seq,
       session: sessionId,
       src: event.src ?? "main",

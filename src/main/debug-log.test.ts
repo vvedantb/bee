@@ -58,6 +58,14 @@ describe("createDebugLog", () => {
     ]);
   });
 
+  it("puts Bee's version on every line, so an excerpt says which build wrote it", async () => {
+    const log = createDebugLog({ dir, sessionId: SESSION, version: "0.3.70" });
+    log.write({ level: "info", category: "ai", event: "command-start" });
+    log.write({ level: "warn", category: "computer", event: "exec-failed" });
+    await log.flush();
+    expect(allLines().map((line) => line.v)).toEqual(["0.3.70", "0.3.70", "0.3.70"]);
+  });
+
   it("queues writes and writes them in one batch later, never on the caller's turn", async () => {
     const log = createDebugLog({ dir, sessionId: SESSION, flushMs: 20 });
     for (let index = 0; index < 50; index += 1) log.write({ level: "debug", category: "ui", event: "state", data: { index } });
