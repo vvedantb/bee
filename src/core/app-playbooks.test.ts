@@ -24,8 +24,8 @@ describe("playbooksFor", () => {
 
 describe("playbookBlock", () => {
   it("gives the hint for this computer's keys", () => {
-    expect(playbookBlock("message Sam in Teams", "windows")).toContain("Microsoft Teams: To open a chat: press ctrl+e, type_text");
-    expect(playbookBlock("message Sam in Teams", "mac")).toContain("Microsoft Teams: To open a chat: press cmd+e, type_text");
+    expect(playbookBlock("message Sam in Teams", "windows")).toContain("Microsoft Teams: Write or send in a chat with teams_message");
+    expect(playbookBlock("message Sam in Teams", "mac")).toContain("Microsoft Teams: Write or send in a chat with teams_message");
     expect(playbookBlock("click Send", "mac")).toBe("");
   });
 
@@ -53,7 +53,7 @@ describe("Teams tip", () => {
   });
 
   it("gives the playbook's Teams hint for the OS", () => {
-    expect(teamsTip("windows")).toBe("Teams tip: To open a chat: press ctrl+e, type_text the person's or chat's name, press down, then press return. ctrl+n starts a new chat.");
-    expect(teamsTip("mac")).toMatch(/^Teams tip: To open a chat: press cmd\+e, type_text/);
+    expect(teamsTip("windows")).toBe('Teams tip: Write or send in a chat with teams_message (a person, a group, or "me"). Never click chat list rows: Teams refuses them. To only open a chat: ctrl+e, type_text the name, down, return.');
+    expect(teamsTip("mac")).toMatch(/^Teams tip: Write or send in a chat with teams_message.*cmd\+e/);
   });
 });

@@ -140,6 +140,15 @@ const tomorrow = () => {
 
 const SCENARIOS: Scenario[] = [
   {
+    // The request from the user's v0.3.65 log, word for word: Teams named first, and "myself".
+    name: "message-myself",
+    command: 'can you open teams and send a message to myself saying "hi"',
+    check: ({ sent, report }) => {
+      expect(sent).toEqual([{ chat: `${ME} (You)`, text: "hi" }]);
+      expect(report.confirms).toHaveLength(1);
+    },
+  },
+  {
     name: "act-on-chat",
     command: "Read Priya's latest message in the Bee testers group chat on Teams, do what she asks, and reply to her there.",
     check: ({ events, sent }) => {

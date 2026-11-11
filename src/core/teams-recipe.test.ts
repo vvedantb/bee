@@ -3,7 +3,7 @@ import type { AgentDesktopResult, ComputerRun, ComputerUseCommand } from "./agen
 import { createRunControl, type ComputerPlatform, type IrreversibleKind, type RunControl } from "./computer-control";
 import type { ConfirmRequest } from "./computer-tools";
 import type { DesktopActions } from "./desktop-actions";
-import { composeRef, nameWords, namesChat, parseTeamsMessage, pickResult, recipientName, runTeamsRecipe, type TeamsMessage } from "./teams-recipe";
+import { SELF_CHAT, composeRef, nameWords, namesChat, ownName, parseTeamsMessage, pickResult, recipientName, runTeamsRecipe, teamsRecipient, type TeamsMessage } from "./teams-recipe";
 
 describe("parseTeamsMessage", () => {
   it("reads who and what from the ways people ask", () => {
@@ -24,6 +24,11 @@ describe("parseTeamsMessage", () => {
       ["can you tell José on Teams that I'll call later", { to: "José", text: "I'll call later", send: true }],
       ["draft a message to Sam on Teams saying I'm out tomorrow", { to: "Sam", text: "I'm out tomorrow", send: false }],
       ["write a Teams message to Sam saying hello on Teams", { to: "Sam", text: "hello", send: false }],
+      // Teams named first ("open Teams and …"), and the user's own chat.
+      ['can you open teams and send a message to myself saying "hi"', { to: SELF_CHAT, text: "hi", send: true }],
+      ["open Teams, then message Sam saying running late", { to: "Sam", text: "running late", send: true }],
+      ["message me on Teams saying buy milk", { to: SELF_CHAT, text: "buy milk", send: true }],
+      ["send myself a Teams message: call the bank", { to: SELF_CHAT, text: "call the bank", send: true }],
     ];
     for (const [command, expected] of cases) expect(parseTeamsMessage(command), command).toEqual(expected);
   });
@@ -54,6 +59,16 @@ describe("names", () => {
     expect(recipientName("Kris", ["Chris Lee", "Krzysztof Nowak"])).toBe("Kris");
     expect(recipientName("Sam Lee", ["Sam Carter"])).toBe("Sam Lee");
     expect(recipientName("Dana", [])).toBe("Dana");
+    // "me" is the user's own chat, never a known name that sounds like it.
+    expect(recipientName(SELF_CHAT, ["Matthew Wright"])).toBe(SELF_CHAT);
+    expect(teamsRecipient("myself")).toBe(SELF_CHAT);
+    expect(teamsRecipient(" Sam Lee ")).toBe("Sam Lee");
+  });
+
+  it("reads the user's name from their own chat's row", () => {
+    expect(ownName("Chat Vedant Bhopatrao (You) You: btw you also have access to vvedantb/packages,…")).toBe("Vedant Bhopatrao");
+    expect(ownName("Vedant Bhatt (You)")).toBe("Vedant Bhatt");
+    expect(ownName("Chat George Dowling")).toBeNull();
   });
 
   it("finds the person in a chat title by first and last name, whatever the case or accents", () => {
@@ -109,6 +124,8 @@ function teams(
     results?: string[];
     selected?: string;
     searchMisses?: boolean;
+    /** The chat list's row for the user's own chat ("… (You) …"). */
+    ownRow?: string;
     onCall?: (call: Call, state: Teams) => AgentDesktopResult | null;
   } = {},
 ) {
@@ -141,6 +158,7 @@ function teams(
         // A header is not actionable: agent-desktop gives it no ref.
         if (args.includes("--role=heading")) return { ok: true, data: { matches: state.heading ? [{ ref_id: null, role: "heading", name: state.heading }] : [] } };
         if (args.includes("--role=option")) return { ok: true, data: { matches: state.opened ? [] : (options.results ?? []).map((name) => ({ ref_id: null, role: "option", name })) } };
+        if (args.includes("--role=treeitem") && args.includes("--name=(You)")) return { ok: true, data: { matches: options.ownRow ? [{ ref_id: "@s1:e9", role: "treeitem", name: options.ownRow }] : [] } };
         if (args.includes("--role=treeitem")) return { ok: true, data: { matches: state.opened && options.selected ? [{ ref_id: null, role: "treeitem", name: options.selected, states: ["selected"] }] : [] } };
         return {
           ok: true,
@@ -273,6 +291,24 @@ describe("runTeamsRecipe", () => {
     expect(keys.slice(keys.indexOf("down"))).toEqual(["down", "down", "down", "return", "ctrl+v", "return"]);
   });
 
+  it("counts only the search dropdown's options, not an open chat's messages", async () => {
+    const fake = teams({
+      onCall: (call, state) =>
+        call.command === "find" && call.args.includes("--role=option") && !state.opened
+          ? {
+              ok: true,
+              data: {
+                matches: [
+                  { ref_id: null, role: "option", name: "Sam Lee, are you joining?, 11:20", path: ["window:Teams", "list:Messages"] },
+                  { ref_id: null, role: "option", name: "Sam Lee", path: ["window:Teams", "banner", "listbox:Suggestions"] },
+                ],
+              },
+            }
+          : null,
+    });
+    expect((await recipe(fake).go(SAM)).kind).toBe("sent");
+  });
+
   it("asks for the full name when two people match, and opens no chat", async () => {
     const fake = teams({ results: ["Sam Lee", "Sam Carter"] });
     const { go, asked } = recipe(fake);
@@ -296,6 +332,24 @@ describe("runTeamsRecipe", () => {
       done: "Bee opened Microsoft Teams. Bee pressed ctrl+e and typed the name, but Teams' search box did not show it, so Bee opened no chat.",
     });
     expect(fake.calls.filter((call) => call.command === "press").map((call) => call.args[0])).not.toContain("down");
+  });
+
+  it("messages the user's own chat: reads its name from the (You) row, then searches and checks it like any chat", async () => {
+    const own = "Chat Vedant Bhopatrao (You) You: btw you also have access to vvedantb/packages,…";
+    const fake = teams({ ownRow: own, results: ['Search for "Vedant Bhopatrao"', "Vedant Bhopatrao (You)"], selected: own });
+    const { go, asked, steps } = recipe(fake);
+    expect(await go({ to: "myself", name: SELF_CHAT, text: "hi", send: true })).toEqual({ kind: "sent", line: "Sent to your own chat." });
+    expect(fake.state.sent).toBe("hi");
+    expect(fake.state.search).toBe("Vedant Bhopatrao");
+    expect(asked[0]?.detail).toBe("To your own chat in Teams — “hi”");
+    expect(steps[0]).toBe("Opening your own chat…");
+  });
+
+  it("types nothing when it cannot find the user's own chat", async () => {
+    const fake = teams();
+    const outcome = await recipe(fake).go({ to: "me", name: SELF_CHAT, text: "hi", send: true });
+    expect(outcome.kind).toBe("fallback");
+    expect(fake.calls.filter((call) => call.command === "press")).toEqual([]);
   });
 
   it("trusts the chat list's selected row over a window title that lags behind", async () => {

@@ -28,7 +28,7 @@ import type { BackgroundJobs } from "./background";
 import { answerEvidence, guardLine, replaceLastText, runEvidence, upgradeLine, withoutToolNames } from "./claim-guard";
 import { BROWSE_RULES } from "./browse";
 import type { ComputerVision } from "./computer-vision";
-import { parseTeamsMessage, recipientName, runTeamsRecipe, type TeamsMessage } from "./teams-recipe";
+import { parseTeamsMessage, recipientName, runTeamsRecipe, teamsRecipient, type RecipeOutcome, type TeamsMessage } from "./teams-recipe";
 
 // A direct request to Bee: a mic phrase that started with the wake word ("Bee, open Teams", core/wake-word.ts). Bee answers
 // the user, not the meeting. Every AI step here runs on the user's own Claude Code and its login (core/claude-agent.ts); without
@@ -139,6 +139,14 @@ export type ComputerHost = {
   maxMs?: number;
 };
 
+/** What the teams_message tool tells the AI. A failure is final; a fallback leaves the rest to it, never by clicking the chat list. */
+function teamsToolResult(outcome: RecipeOutcome): string {
+  if (outcome.kind === "sent" || outcome.kind === "drafted") return `Done: ${outcome.line}`;
+  if (outcome.kind === "failed") return `Error: ${outcome.line} Do not try again another way; tell the user.`;
+  if (outcome.kind === "stopped") return "Error: Bee stopped this task. Do not call any more tools.";
+  return `Not done: ${outcome.done} Do not click rows in Teams' chat list (Teams refuses them). Tell the user what happened, or try teams_message once more with the name exactly as Teams shows it.`;
+}
+
 const lineResult = (line: string, patch: Partial<PipelineResult["timingsMs"]> = {}): PipelineResult => ({
   notes: [],
   rankSource: "fallback",
@@ -209,18 +217,19 @@ async function runComputerCommand(args: {
     // A Teams message: the recipe's own steps first. Its line is the answer, unless it could not be sure of a step before any
     // text was written; then the AI carries on from what it did.
     let prior: string | null = null;
+    const recipeDeps = {
+      run: host.run,
+      desktop: args.actions,
+      control,
+      platform: host.platform,
+      confirm: host.confirm,
+      onStep: host.onStep,
+      yieldFocus: host.yieldFocus,
+      onEffect: (kind: IrreversibleKind) => committed.add(kind),
+    };
     if (args.recipe) {
       const recipe = args.recipe;
-      const outcome = await runTeamsRecipe(recipe, {
-        run: host.run,
-        desktop: args.actions,
-        control,
-        platform: host.platform,
-        confirm: host.confirm,
-        onStep: host.onStep,
-        yieldFocus: host.yieldFocus,
-        onEffect: (kind) => committed.add(kind),
-      });
+      const outcome = await runTeamsRecipe(recipe, recipeDeps);
       debugLog.info("computer", "teams-recipe-end", { outcome: outcome.kind, reason: control.reason(), ms: Math.round(performance.now() - started) });
       if (outcome.kind === "fallback") prior = outcome.done;
       else {
@@ -251,6 +260,24 @@ async function runComputerCommand(args: {
       }),
       // Memory changes nothing on screen, so its calls take no step of the run's budget.
       ...(args.memory ? memoryTools(args.memory, args.onMemory) : {}),
+      // The Teams recipe as a tool: any request that writes in Teams (a reply, a message, "message myself") goes the way that
+      // works there (search by keyboard, check the chat, paste, read back, Confirm), whatever words the user used.
+      teams_message: tool({
+        description:
+          "Open a chat in Microsoft Teams and write a message there, the reliable way: Bee searches by keyboard, checks the right chat opened, pastes, reads it back, and sends only after the user's Confirm. Use it for every message or reply in Teams instead of clicking: Teams refuses clicks on its chat list.",
+        inputSchema: z.object({
+          to: z.string().min(1).max(120).describe("The person's or group chat's name as Teams shows it, or \"me\" for the user's own chat."),
+          text: z.string().min(1).max(2000).describe("The exact message."),
+          send: z.boolean().describe("true: send it after the user's Confirm. false: leave it as a draft."),
+        }),
+        execute: async ({ to, text, send }) => {
+          if (!control.step()) return "Error: Bee stopped this task. Do not call any more tools.";
+          const name = recipientName(teamsRecipient(to), args.knownNames ?? [], args.resolvedNames ?? []);
+          const outcome = await runTeamsRecipe({ to, text, send, name }, recipeDeps);
+          debugLog.info("computer", "teams-tool-end", { outcome: outcome.kind });
+          return teamsToolResult(outcome);
+        },
+      }),
     };
     const remembered = args.memory ? memorySummary(args.memory.facts()) : "";
     const base = {
@@ -490,8 +517,8 @@ export async function runDirectCommand(args: {
     const result = await runComputerCommand({ ...computer, command: task, transcript: args.transcript, history, signal: args.signal, onActivity: args.onActivity, summarise, knownNames: args.knownNames, ...names, onMessages: record, memory, onMemory, screen: await screenRead, fast, browseConfirmed, ...(recipe ? { recipe } : {}) });
     return memoryNote && !result.guideNote ? { ...result, guideNote: memoryNote } : result;
   };
-  // "Message Sam on Teams saying hi": Bee's own Teams recipe runs first, before any AI call (Teams on Windows and macOS only).
-  const teams = computer && computer.host.platform !== "linux" ? parseTeamsMessage(command) : null;
+  // "Message Sam on Teams saying hi": Bee's own Teams recipe runs first, before any AI call.
+  const teams = computer ? parseTeamsMessage(command) : null;
   if (teams) {
     debugLog.info("ai", "command-path", { teamsRecipe: true, send: teams.send });
     return loop(false, { ...teams, name: recipientName(teams.to, args.knownNames ?? [], resolvedNames) });
