@@ -1321,7 +1321,8 @@ export function computerTools(deps: ComputerToolDeps) {
   const focusAction = ({ ref, physical }: { ref: string; physical?: boolean | undefined }): Action => ({
     name: "focus",
     label: label(ref, "Selecting", "Selecting a field…"),
-    work: onRef("focus", ref, physical ? [HEADED_FLAG] : []),
+    // agent-desktop never moves focus without --headed ("no focus change" headless), so a focus is always headed.
+    work: onRef("focus", ref, [HEADED_FLAG]),
     refuse: refuseRef("focus", ref),
   });
   const selectAction = ({ ref, option, effect }: { ref: string; option: string; effect: Effect }): Action => ({
@@ -1345,7 +1346,8 @@ export function computerTools(deps: ComputerToolDeps) {
       const keys = cleanKeys(input.keys);
       const headed = input.physical ? [HEADED_FLAG] : [];
       if (input.ref) {
-        const focused = await exec("focus", [input.ref, ...headed], ACT_MS);
+        // Focus is always headed: agent-desktop refuses a headless one (POLICY_DENIED), and the key then never goes out.
+        const focused = await exec("focus", [input.ref, HEADED_FLAG], ACT_MS);
         if (!focused.ok) return `Bee could not focus that field, so pressed nothing. ${errorLine(focused)}`;
         lastField = refs.get(input.ref) ?? lastField;
       }
@@ -1356,7 +1358,7 @@ export function computerTools(deps: ComputerToolDeps) {
       // is not (a field written with set_value need not hold focus). Focus the field written last, then press once more.
       const field = input.ref ? null : refOf(lastField);
       if (!result.ok && result.code === "ACTION_FAILED" && (NO_FOCUS.test(result.message ?? "") || /focus/.test(result.kind ?? "")) && field && !control.reason()) {
-        const focused = await exec("focus", [field, ...headed], ACT_MS);
+        const focused = await exec("focus", [field, HEADED_FLAG], ACT_MS);
         debugLog.info("computer", "press-after-focus", { focused: focused.ok });
         if (!focused.ok) note = `${note}Bee tried to focus the field first: ${errorLine(focused)} `;
         else if (!control.reason()) result = await press(app);

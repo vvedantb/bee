@@ -1105,7 +1105,7 @@ describe("computerTools: Teams on Windows (app names, focus for keys, ambiguous 
     await call("snapshot", { app: "ms-teams.exe" });
     await call("set_value", { ref: "@s7:e1", value: "Zuzanna", effect: "none" });
     expect(await call("press_key", { keys: "return", app: "ms-teams.exe", effect: "none" })).toMatch(/^Done/);
-    expect(lines(calls).slice(1)).toEqual(["set-value @s7:e1 --stdin", "press return --app=ms-teams.exe", "focus @s7:e1", "press return --app=ms-teams.exe"]);
+    expect(lines(calls).slice(1)).toEqual(["set-value @s7:e1 --stdin", "press return --app=ms-teams.exe", `focus @s7:e1 ${HEADED_FLAG}`, "press return --app=ms-teams.exe"]);
     // ref: focus it first, then press.
     expect(await call("press_key", { keys: "return", app: "ms-teams.exe", ref: "@s7:e1", effect: "none", physical: true })).toMatch(/^Done/);
     expect(lines(calls).slice(5)).toEqual([`focus @s7:e1 ${HEADED_FLAG}`, `press return --app=ms-teams.exe ${HEADED_FLAG}`]);
@@ -1370,7 +1370,8 @@ describe("computerTools: act runs a short batch in one step", () => {
       ["set-value", "@s1abc:e1", STDIN_FLAG],
       // The send's Confirm waits for a read-back of the field (the text it shows).
       ["get", "@s1abc:e1", "--property=value"],
-      ["focus", "@s1abc:e1"],
+      // agent-desktop moves focus only headed.
+      ["focus", "@s1abc:e1", HEADED_FLAG],
       ["press", "return", "--app=Discord"],
     ]);
     expect(calls[2]?.stdin).toBe("hi Sam");

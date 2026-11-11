@@ -32,6 +32,11 @@ import { unsupportedCalendarReader } from "../../src/core/calendar";
 import { CLERK_ISSUER } from "../../src/main/auth";
 import { registerMeetingIpc } from "../../src/main/meeting-ipc";
 import { createClaudeCode } from "../../src/main/claude-code";
+import { createAgentDesktopActionRunner, createAgentDesktopComputerRunner } from "../../src/main/agent-desktop";
+import { createDesktopActions } from "../../src/main/desktop-actions";
+import { labRun } from "../lab/lab-input";
+import { createBeeMemoryStore } from "../../src/main/bee-memory-store";
+import { setDebugSink } from "../../src/core/debug-log";
 import { ensureNotesDir } from "../../src/main/notes";
 import { NO_GATEWAY_KEY } from "../../src/core/gateway";
 import { IPC, pipelineResultSchema, type CopyGatewayKeyResult } from "../../src/shared/ipc";
@@ -211,7 +216,22 @@ void app.whenReady().then(async () => {
   if (mode && !fixturesDir) throw new Error("BEE_E2E_MODE needs BEE_E2E_FIXTURES_DIR");
   const liveKey = () => process.env.BEE_AI_GATEWAY_API_KEY?.trim() || undefined;
   reportPipelineRuns();
+  // BEE_E2E_COMPUTER=lab (test/scenarios.lab.test.ts): computer use and desktop actions on the lab's Linux desktop, with the
+  // bundled agent-desktop and the lab's input (test/lab/lab-input.ts).
+  const binary = { path: `${process.cwd()}/node_modules/agent-desktop/bin/agent-desktop-linux-${process.arch}`, macHelper: null };
+  const labComputer = process.env.BEE_E2E_COMPUTER === "lab" ? createAgentDesktopComputerRunner(binary) : null;
+  // The lab reads Bee's own log of each run (routes, tool calls, outcomes) from stdout.
+  if (labComputer) setDebugSink({ wants: () => true, write: (event) => process.stdout.write(`E2E_LOG ${JSON.stringify(event)}\n`) });
+  const labDesktop = labComputer
+    ? createDesktopActions({ platform: "linux", run: createAgentDesktopActionRunner(binary).run, openExternal: async () => undefined, openPath: async () => "" })
+    : undefined;
+  // BEE_E2E_MEMORY: facts Bee already remembers (one per line), in a memory folder of its own.
+  const memoryFacts = process.env.BEE_E2E_MEMORY?.split("\n").filter(Boolean) ?? [];
+  const memory = memoryFacts.length > 0 ? createBeeMemoryStore({ userDataDir: mkdtempSync(join(tmpdir(), "bee-e2e-memory-")) }) : null;
+  for (const fact of memoryFacts) memory?.write({ fact });
   registerMeetingIpc({
+    ...(memory ? { memory } : {}),
+    ...(labComputer && labDesktop ? { computer: { platform: "linux", run: labRun(labComputer.run), cleanup: labComputer.cleanup }, desktop: labDesktop } : {}),
     notesDir,
     mcpConfigs: mcpFile ? () => mcpConfigsFromFile(mcpFile) : () => [],
     mcpSignedOut: () => [],

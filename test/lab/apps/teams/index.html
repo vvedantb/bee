@@ -1,0 +1,98 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Microsoft Teams</title>
+<style>
+body{font:14px system-ui,sans-serif;margin:0;display:grid;grid-template:48px 1fr/280px 1fr;height:100vh;color:#242424}
+header{grid-column:1/3;background:#464775;display:flex;align-items:center;justify-content:center;position:relative}
+#search{width:420px;padding:6px;border-radius:4px;border:0}
+#drop{position:absolute;top:44px;background:#fff;border:1px solid #888;width:430px;display:none;z-index:2}
+#drop [role=option]{padding:6px}#drop [aria-selected=true]{background:#ccd}
+nav{border-right:1px solid #ddd;overflow:auto}nav [role=treeitem]{padding:10px;cursor:pointer}nav [aria-selected=true]{background:#e8e8f7;font-weight:600}
+main{display:flex;flex-direction:column;min-width:0}#head{padding:10px 16px;border-bottom:1px solid #ddd}#head h2{margin:0;font-size:18px}
+#msgs{flex:1;padding:12px 16px;overflow:auto;margin:0;list-style:none}#msgs li{margin:8px 0}#msgs b{display:block;font-size:12px;color:#616161}
+#box{margin:12px 16px;min-height:40px;border:1px solid #888;border-radius:4px;padding:8px}
+</style></head><body>
+<header><input id="search" aria-label="Search (Ctrl+E)" placeholder="Search (Ctrl+E)"><div id="drop" role="listbox" aria-label="Suggestions"></div></header>
+<nav><div role="tree" aria-label="Chat list" id="list"></div></nav>
+<main><div id="head"><h2 id="title"></h2></div><ul id="msgs" aria-label="Messages"></ul>
+<div id="box" role="textbox" contenteditable="true" aria-multiline="true" aria-label="Type a message" aria-placeholder="Type a message"></div></main>
+<script>
+const data = JSON.parse(decodeURIComponent(location.hash.slice(1)));
+const chats = data.chats;
+let current = data.current ?? chats[0].name;
+let sel = -1;
+const $ = (id) => document.getElementById(id);
+const list = $("list"), drop = $("drop"), search = $("search"), box = $("box");
+const event = (value) => console.log("LAB_EVENT " + JSON.stringify(value));
+const chat = () => chats.find((item) => item.name === current);
+function render() {
+  list.innerHTML = "";
+  for (const item of chats) {
+    const row = document.createElement("div");
+    row.setAttribute("role", "treeitem");
+    row.tabIndex = -1;
+    row.textContent = item.name;
+    row.setAttribute("aria-selected", String(item.name === current));
+    row.onclick = () => openChat(item.name);
+    list.appendChild(row);
+  }
+  $("title").textContent = current;
+  document.title = `Chat | ${current} | Microsoft Teams`;
+  const msgs = $("msgs");
+  msgs.innerHTML = "";
+  for (const message of chat().messages) {
+    const li = document.createElement("li");
+    li.innerHTML = `<b></b><span></span>`;
+    li.querySelector("b").textContent = `${message.from}${message.time ? ", " + message.time : ""}`;
+    li.querySelector("span").textContent = message.text;
+    // Like Teams: each message is labelled with its author, text and time.
+    li.setAttribute("aria-label", `${message.from}, ${message.text}${message.time ? ", " + message.time : ""}`);
+    msgs.appendChild(li);
+  }
+}
+function openChat(name) {
+  current = name;
+  drop.style.display = "none";
+  search.value = "";
+  render();
+  box.focus();
+  event({ type: "opened", chat: name });
+}
+const options = () => {
+  const q = search.value.trim().toLowerCase();
+  return q ? chats.filter((item) => item.name.toLowerCase().includes(q)) : [];
+};
+function renderDrop() {
+  const found = options();
+  drop.innerHTML = "";
+  found.forEach((item, i) => {
+    const row = document.createElement("div");
+    row.setAttribute("role", "option");
+    row.textContent = item.name;
+    row.setAttribute("aria-selected", String(i === sel));
+    row.onmousedown = (e) => { e.preventDefault(); openChat(item.name); };
+    row.onclick = () => openChat(item.name);
+    drop.appendChild(row);
+  });
+  drop.style.display = found.length ? "block" : "none";
+}
+search.addEventListener("input", () => { sel = -1; renderDrop(); });
+search.addEventListener("keydown", (e) => {
+  const found = options();
+  if (e.key === "ArrowDown") { sel = Math.min(sel + 1, found.length - 1); renderDrop(); e.preventDefault(); }
+  if (e.key === "Enter") { e.preventDefault(); const item = found[sel] ?? found[0]; if (item) openChat(item.name); }
+  if (e.key === "Escape") drop.style.display = "none";
+});
+document.addEventListener("keydown", (e) => {
+  if (e.ctrlKey && e.key.toLowerCase() === "e") { e.preventDefault(); search.focus(); search.select(); }
+});
+box.addEventListener("keydown", (e) => {
+  if (e.key !== "Enter" || e.shiftKey) return;
+  e.preventDefault();
+  const text = box.innerText.trim();
+  if (!text) return;
+  chat().messages.push({ from: data.me, text });
+  box.innerHTML = "";
+  render();
+  event({ type: "sent", chat: current, text });
+});
+render();
+</script></body></html>

@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentDesktopResult, ComputerRun } from "./agent-desktop-envelope";
 import { createRunControl, type RunControl } from "./computer-control";
 import { CANNOT_CONTROL, LOOK_THEN_STOP, computerTools } from "./computer-tools";
-import { COMPUTER_SYSTEM, FAST_MAX_TURNS, computerAccess, computerSkills, endedWhere, finalLine, runComputerUse, simpleComputerTask, trimSkill, wantsComputerUse } from "./computer-use";
+import { COMPUTER_SYSTEM, FAST_MAX_TURNS, computerAccess, computerSkills, endedWhere, finalLine, finalLines, runComputerUse, simpleComputerTask, trimSkill, wantsComputerUse } from "./computer-use";
 import type { DesktopActions } from "./desktop-actions";
 import { modelAgent } from "../../test/helpers/model-agent";
 
@@ -422,6 +422,8 @@ describe("finalLine", () => {
     expect(finalLine("- Sent the message and closed the tab.")).toBe("Sent the message and closed the tab.");
     expect(finalLine("~ plan: done\n\n“Closed the tab.”\nmore")).toBe("Closed the tab.");
     expect(finalLine("NONE")).toBe("");
+    expect(finalLines("- Sam asked for a PR review.\n- Priya asked for the contract.\n- Ended: ms-teams, Sam Lee chat")).toEqual(["Sam asked for a PR review.", "Priya asked for the contract."]);
+    expect(finalLines(["one", "two", "three", "four", "five", "six"].join("\n"))).toHaveLength(5);
     expect(finalLine("x".repeat(400)).length).toBeLessThanOrEqual(160);
   });
 });
