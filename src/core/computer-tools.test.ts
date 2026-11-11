@@ -263,12 +263,13 @@ describe("computerTools: what runs", () => {
     expect(await call("snapshot", { app: "Discord", window_id: "w-100" })).toContain("Discord");
   });
 
-  it("never reads or types into terminals, system settings, password managers or Bee", async () => {
+  it("never acts in terminals, system settings, password managers or Bee, nor reads the last three", async () => {
     for (const name of ["Terminal", "iTerm2", "Windows PowerShell", "System Settings", "Keychain Access", "1Password", "Bee"]) expect(offLimitsApp(name), name).toBe(true);
     expect(offLimitsApp("Discord")).toBe(false);
     const { call, calls } = setup();
-    expect(await call("snapshot", { app: "Terminal" })).toMatch(/does not use/);
+    expect(await call("snapshot", { app: "System Settings" })).toMatch(/does not use/);
     expect(await call("find", { app: "System Settings", role: "button" })).toMatch(/does not use/);
+    expect(await call("find", { app: "Terminal", role: "button" })).toMatch(/does not use/);
     expect(await call("press_key", { keys: "return", app: "Terminal", effect: "none" })).toMatch(/does not use/);
     expect(await call("open_app", { name: "Terminal" })).toMatch(/does not use/);
     expect(calls).toEqual([]);
@@ -293,11 +294,41 @@ describe("computerTools: what runs", () => {
   });
 
   it("drops a snapshot, and its refs, when the window turns out to be an app Bee never uses", async () => {
-    const run: ComputerRun = async (command) => (command === "snapshot" ? { ok: true, data: { ...SNAPSHOT, app: "Terminal" } } : { ok: true, data: {} });
+    const run: ComputerRun = async (command) => (command === "snapshot" ? { ok: true, data: { ...SNAPSHOT, app: "System Settings" } } : { ok: true, data: {} });
     const { call, asked } = setup({ run });
     expect(await call("snapshot", { app: "Discord" })).toMatch(/does not use/);
     expect(await call("type_text", { ref: "@s1abc:e1", text: "rm -rf ~\n", effect: "none" })).toMatch(/^Error: use a ref/);
     expect(await call("press_key", { keys: "return", app: "Discord", ref: "@s1abc:e1", effect: "send" })).toMatch(/^Error: use a ref/);
+    expect(asked).toEqual([]);
+  });
+
+  it("reads a terminal the user asks about as text only: keys hidden, no refs, nothing done in it", async () => {
+    const terminal = {
+      ...SNAPSHOT,
+      app: "gnome-terminal",
+      tree: {
+        role: "window",
+        name: "Terminal",
+        children: [
+          { role: "terminal", name: "TypeError: Cannot read properties of undefined (reading 'sessionToken')", ref_id: "@s1abc:e1" },
+          { role: "text", name: "export API_TOKEN=abc123secretvalue sk-ant-abcdefghijklmnopqrstuvwx" },
+        ],
+      },
+    };
+    const commands: string[] = [];
+    const run: ComputerRun = async (command) => (commands.push(command), command === "snapshot" ? { ok: true, data: terminal } : { ok: true, data: {} });
+    const { call, asked } = setup({ run });
+    const read = String(await call("snapshot", { app: "gnome-terminal" }));
+    expect(read).toContain("Cannot read properties of undefined (reading 'sessionToken')");
+    expect(read).not.toContain("abc123secretvalue");
+    expect(read).not.toContain("sk-ant-abcdefghijklmnopqrstuvwx");
+    expect(read).toMatch(/reads its text only/);
+    // Nothing from it can be clicked, focused or typed into, and keys never go to it.
+    expect(await call("type_text", { ref: "@s1abc:e1", text: "rm -rf ~\n", effect: "none" })).toMatch(/^Error: use a ref/);
+    expect(await call("click", { ref: "@s1abc:e1", effect: "none" })).toMatch(/^Error: use a ref/);
+    expect(await call("press_key", { keys: "return", app: "gnome-terminal", effect: "none" })).toMatch(/does not use/);
+    expect(await call("open_app", { name: "gnome-terminal" })).toMatch(/does not use/);
+    expect(commands.filter((command) => command !== "snapshot")).toEqual([]);
     expect(asked).toEqual([]);
   });
 

@@ -295,6 +295,15 @@ describe("runDirectCommand: computer use", () => {
     expect(result.tips).toEqual(["Sam asked for a PR review.", "Priya asked for the contract."]);
   });
 
+  it("guards each line of a list on its own: one unproven send never wipes the rest", async () => {
+    const { gateway } = bothModel({ stream: [toolCall("use_computer", {})], turns: [{ text: "- Sam asked for a PR review.\n- Sent Priya the contract." }] });
+    const { computer } = host();
+    const result = await run({ command: "what do I owe people? check Teams", snippets, gateway, actions: fakeActions().actions, computer });
+    expect(result.tips[0]).toBe("Sam asked for a PR review.");
+    expect(result.tips).toHaveLength(2);
+    expect(result.tips[1]).not.toBe("Sent Priya the contract.");
+  });
+
   it("reads the window at the front for a question about the screen, and never acts", async () => {
     const { gateway, streamCalls, generateCalls } = bothModel({
       stream: [toolCall("list_windows", {}), toolCall("snapshot", { app: "Discord", window_id: "w-1" }), text("- You are in Discord, on the Inbox and Help channels.\n")],

@@ -285,10 +285,15 @@ async function runComputerCommand(args: {
     // that doubts one it did prove says it plainly (core/claim-guard.ts). The history keeps the line the user saw.
     if (!outcome.stopped && !outcome.error) {
       const evidence = runEvidence(outcome.messages, committed, args.browseConfirmed);
-      const checked = guardLine(outcome.line, evidence);
-      const upgraded = checked.rewritten ? null : upgradeLine(outcome.line, evidence.proven, evidence.typed);
-      const line = withoutToolNames(checked.rewritten ? checked.line : upgraded?.upgraded ? upgraded.line : outcome.line);
-      if (checked.rewritten) debugLog.warn("computer", "claim-rewritten", { line: outcome.line, shown: line, reason: checked.reason });
+      // Each line on its own (a list of what Bee found has several): one unproven claim replaces only its own line.
+      const shown = outcome.line.split("\n").map((said) => {
+        const checked = guardLine(said, evidence);
+        const upgraded = checked.rewritten ? null : upgradeLine(said, evidence.proven, evidence.typed);
+        const line = withoutToolNames(checked.rewritten ? checked.line : upgraded?.upgraded ? upgraded.line : said);
+        if (checked.rewritten) debugLog.warn("computer", "claim-rewritten", { line: said, shown: line, reason: checked.reason });
+        return line;
+      });
+      const line = [...new Set(shown)].join("\n");
       if (line !== outcome.line) outcome = { ...outcome, line, messages: replaceLastText(outcome.messages, line) };
     }
     // What the AI did, tool calls and results included, then the line the island shows when it differs (a stop).

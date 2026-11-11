@@ -13,7 +13,8 @@ import {
 import {
   LOOKS_MAX, inPicture, lookScale, parseShot, parseWindowRows, pickWindow, refAt, sameBounds, screenPoint, xy, type ComputerVision, type ShotImage, type WindowLook,
 } from "./computer-vision";
-import { APP_NAME_MAX, WINDOW_TITLE_MAX, appKey, isBlockedApp, type DesktopActionResult, type DesktopActions } from "./desktop-actions";
+import { APP_NAME_MAX, WINDOW_TITLE_MAX, appKey, isBlockedApp, isTerminalApp, type DesktopActionResult, type DesktopActions } from "./desktop-actions";
+import { redactSecretValues } from "./debug-redact";
 import { debugLog, errorData, msSince } from "./debug-log";
 import type { ToolModelOutput } from "./claude-agent";
 import type { LunaToolActivity } from "./luna";
@@ -28,8 +29,8 @@ import { LOOK_PERMISSION } from "./screen-look";
 // (core/computer-control.ts), act included: it runs a short list of actions on known refs (click, type, Return) in one step,
 // to save the AI a round trip per action, and stops at the first that fails. Sending, deleting, buying and submitting wait
 // for the user's Confirm first, always, inside a batch too (core/computer-gate.ts, which reads where each ref
-// sits in the tree, not just what the AI says). Terminals, script tools, system settings and Bee itself are never read or
-// typed into. The tree comes first. When a control refuses its ref, or the tree stays empty or unusable once Bee has waited for it
+// sits in the tree, not just what the AI says). Terminals, script tools, system settings and Bee itself are never typed
+// into; of them, only a terminal's window may be read, as text with keys hidden (the error the user asks Bee to send). The tree comes first. When a control refuses its ref, or the tree stays empty or unusable once Bee has waited for it
 // and the AI has tried find, a skeleton and root (a canvas, a WebView2 compose box), the AI may look: take a picture of that one
 // window (core/computer-vision.ts) and click, drag or scroll at a point in it, in the picture's pixels, which Bee maps to the
 // screen. A point needs a fresh picture of a window that has not moved since, and Bee reads what sits under it in the tree
@@ -78,12 +79,16 @@ const OFF_LIMITS = new Set(
 );
 const OFF_LIMITS_MESSAGE = "Error: Bee does not use terminals, script tools, system settings, password managers or Bee itself.";
 
-/** An app computer use never reads or types into. */
+/** An app computer use never acts in. */
 export function offLimitsApp(name: string): boolean {
   return isBlockedApp(name) || OFF_LIMITS.has(appKey(name));
 }
 
+/** An app computer use never reads either: off limits, except a terminal, whose text Bee may read when the user asks. */
+export const unreadableApp = (name: string): boolean => offLimitsApp(name) && !isTerminalApp(name);
+
 const SHELL_MESSAGE = "Error: Bee does not type into terminals or consoles.";
+const TERMINAL_NOTE = "(A terminal: Bee reads its text only. Keys and passwords are hidden. Never type, click or press keys in it.)";
 // Ref commands that write to, or focus, an element: never on a terminal or console.
 const SHELL_COMMANDS = new Set<ComputerUseCommand>(["click", "type", "set-value", "clear", "focus"]);
 // Keys as press_key sends them: lower case, no spaces around +.
@@ -298,6 +303,25 @@ const focusedNode = (raw: Record<string, unknown>) => Array.isArray(raw.states) 
 
 type Place = { parent: Record<string, unknown> | null; grand: Record<string, unknown> | null; siblings: readonly unknown[]; index: number; ancestors: readonly Element[] };
 type FoundField = { field: Element; branch: unknown; depth: number };
+
+/**
+ * A terminal window's text, whole (a snapshot line clips each name): each leaf's text, or a field's value, in order, without the
+ * window's menus and buttons. The end is kept when it is long: the newest output is at the bottom.
+ */
+export function terminalText(data: unknown): string {
+  const lines: string[] = [];
+  const walk = (node: unknown, depth: number) => {
+    if (!isRecord(node) || depth > 40) return;
+    const kids = childrenOf(node);
+    const role = str(node.role);
+    const text = str(node.value) || (kids.length === 0 ? str(node.name) : "");
+    if (text && !WINDOW_ROLES.test(role) && !/menu|button|scroll/i.test(role)) lines.push(text);
+    for (const kid of kids) walk(kid, depth + 1);
+  };
+  walk(isRecord(data) ? data.tree : null, 0);
+  const text = lines.join("\n");
+  return text.length > SNAPSHOT_CHARS ? `…${text.slice(-SNAPSHOT_CHARS)}` : text;
+}
 
 /**
  * A snapshot as compact text lines, one per element, indented by depth, capped in size. Each ref seen is remembered with its
@@ -1004,6 +1028,11 @@ export function computerTools(deps: ComputerToolDeps) {
     if (!app) return "Error: that is not an app name. Check list_apps.";
     return offLimitsApp(app) ? OFF_LIMITS_MESSAGE : null;
   };
+  // For the read tools (snapshot, list_windows, wait): a terminal may be read, never acted in.
+  const badReadApp = (name: string | undefined): string | null => {
+    const app = name === undefined ? undefined : cleanApp(name);
+    return app && isTerminalApp(app) ? null : badApp(name);
+  };
   const badWindow = (id: string | undefined) => (id === undefined || windows.has(id) ? null : "Error: use a window id from list_windows.");
   const label = (ref: string, verb: string, fallback: string) => {
     const name = refs.get(ref)?.name;
@@ -1031,13 +1060,13 @@ export function computerTools(deps: ComputerToolDeps) {
     if (asked === undefined) return { result: await work(undefined), app: undefined, note: "", tip: "" };
     const name = cleanApp(asked) ?? asked;
     const known = matched.get(name) ?? (running ? matchApp(name, running) : null) ?? (deps.platform === "windows" ? windowsAlias(name) : null);
-    let app = known && !offLimitsApp(known) ? known : name;
+    let app = known && !unreadableApp(known) ? known : name;
     let result = await work(app);
     if (!result.ok && result.code === "APP_NOT_FOUND" && !control.reason()) {
       const listed = await exec("list-apps", [], READ_MS);
       if (listed.ok) running = parseApps(listed.data).map((item) => item.name);
       const found = running ? matchApp(name, running) : null;
-      if (found && found !== app && !offLimitsApp(found) && !control.reason()) {
+      if (found && found !== app && !unreadableApp(found) && !control.reason()) {
         debugLog.info("computer", "app-matched", { asked: name, app: found });
         app = found;
         result = await work(app);
@@ -1061,7 +1090,12 @@ export function computerTools(deps: ComputerToolDeps) {
       debugLog.warn("computer", "snapshot-unreadable", { error: errorData(error) });
       return { ok: false, text: UNREADABLE };
     }
-    if (shown.app && offLimitsApp(shown.app)) return { ok: false, text: OFF_LIMITS_MESSAGE };
+    if (shown.app && unreadableApp(shown.app)) return { ok: false, text: OFF_LIMITS_MESSAGE };
+    // A terminal is read as text only: no refs kept (nothing in it can be clicked, focused or typed into) and keys hidden.
+    if (shown.app && isTerminalApp(shown.app)) {
+      const title = isRecord(data) && isRecord(data.window) ? str(data.window.title) : "";
+      return { ok: true, text: `Terminal ${quoted(shown.app)}${title ? `, window ${quoted(title)}` : ""}:\n${redactSecretValues(terminalText(data))}\n${TERMINAL_NOTE}`, kept: new Map() };
+    }
     for (const [ref, item] of kept) remember(ref, item);
     if (shown.focused) lastField = shown.focused;
     const shownWindow = isRecord(data) && isRecord(data.window) ? str(data.window.id) : "";
@@ -1710,13 +1744,14 @@ export function computerTools(deps: ComputerToolDeps) {
       execute: (input) =>
         step("snapshot", input.app ? `Looking at ${shortName(input.app, 30)}…` : "Looking at the screen…", async () => {
           if (!input.app && !input.root) return "Error: give app (or a root ref).";
-          const invalid = badApp(input.app) ?? badWindow(input.window_id) ?? (input.root ? badRef(input.root) : null);
+          const invalid = badReadApp(input.app) ?? badWindow(input.window_id) ?? (input.root ? badRef(input.root) : null);
           if (invalid) return invalid;
           const skeleton = !!input.skeleton && !input.surface && !input.root;
           // Only a whole window can read thin; a region or a menu is small by nature.
           const whole = !input.root && !input.surface;
           const args = (app: string | undefined, root: string | undefined) => (budget: number, again: boolean) => [
-            "--interactive-only",
+            // A terminal's output is text, not controls: read it whole.
+            ...(app && isTerminalApp(app) ? [] : ["--interactive-only"]),
             "--compact",
             ...(root ? [`--root=${root}`] : scope({ app, window_id: input.window_id })),
             ...(input.surface && !root ? [`--surface=${input.surface}`] : []),
@@ -1830,12 +1865,12 @@ export function computerTools(deps: ComputerToolDeps) {
       inputSchema: z.object({ app: appSchema.optional() }),
       execute: (input) =>
         step("list_windows", "Checking open windows…", async () => {
-          const invalid = badApp(input.app);
+          const invalid = badReadApp(input.app);
           if (invalid) return invalid;
           const { result, note, tip } = await withApp(input.app, (app) => exec("list-windows", scope({ app }), READ_MS));
           if (!result.ok) return `${note}${errorLine(result, true)}`;
           const listed = parseWindows(result.data)
-            .filter((window) => !offLimitsApp(window.app))
+            .filter((window) => !unreadableApp(window.app))
             .slice(0, 40);
           for (const window of listed) windows.add(window.id);
           return `${note}${
