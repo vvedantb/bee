@@ -752,7 +752,7 @@ describe("computerTools: a slow or failing tree (a Chromium or WebView2 app such
   it("gives find a budget, and reads again once when that fails where a retry is safe", async () => {
     const { run, calls } = timedRun((_call, index) => (index === 0 ? { ok: false, code: "TIMEOUT", retry: "safe" } : { ok: true, data: { matches: [{ role: "textfield", name: "Type a message", ref_id: "@s8:e1" }] } }));
     const { call } = setup({ run });
-    expect(await call("find", { app: "Microsoft Teams", role: "textfield" })).toMatch(/^textfield "Type a message" @s8:e1 Teams tip: To open a chat: press cmd\+e, type_text/);
+    expect(await call("find", { app: "Microsoft Teams", role: "textfield" })).toMatch(/^textfield "Type a message" @s8:e1 Teams tip: Write or send in a chat with teams_message.*cmd\+e/);
     expect(calls.map(({ args, timeoutMs }) => [args.at(-1), timeoutMs])).toEqual([
       ["--timeout-ms=12000", 18_000],
       ["--timeout-ms=25000", 31_000],
@@ -1299,7 +1299,7 @@ describe("computerTools: Teams on Windows (app names, focus for keys, ambiguous 
     const tools = setup({ run: first.run, platform: "windows" });
     const listed = await tools.call("list_windows", { app: "Microsoft Teams" });
     expect(lines(first.calls)).toEqual(["list-windows --app=ms-teams.exe"]);
-    expect(listed).toMatch(/^Using ms-teams\.exe for Microsoft Teams\. No windows\. Teams tip: To open a chat: press ctrl\+e, type_text/);
+    expect(listed).toMatch(/^Using ms-teams\.exe for Microsoft Teams\. No windows\. Teams tip: Write or send in a chat with teams_message.*ctrl\+e/);
     expect(await tools.call("list_windows", { app: "Teams" })).not.toMatch(/Teams tip/);
     // Classic Teams: the alias misses, list-apps names the running one, and the call goes there.
     const classic = recorded(({ command, args }) =>
@@ -1316,10 +1316,10 @@ describe("computerTools: Teams on Windows (app names, focus for keys, ambiguous 
   it("gives the Teams tip when open_app or focus_window reaches Teams, once, and not for other apps", async () => {
     const opened = setup({ platform: "windows" });
     expect(await opened.call("open_app", { name: "Slack" })).toBe("Done: Opened Slack.");
-    expect(await opened.call("open_app", { name: "ms-teams.exe" })).toMatch(/^Done: Opened ms-teams\.exe\. Teams tip: To open a chat: press ctrl\+e, type_text/);
+    expect(await opened.call("open_app", { name: "ms-teams.exe" })).toMatch(/^Done: Opened ms-teams\.exe\. Teams tip: Write or send in a chat with teams_message.*ctrl\+e/);
     expect(await opened.call("focus_window", { app: "Teams" })).toBe("Done: Focused Teams.");
     const focused = setup({ platform: "mac" });
-    expect(await focused.call("focus_window", { app: "Microsoft Teams" })).toMatch(/Teams tip: To open a chat: press cmd\+e, type_text/);
+    expect(await focused.call("focus_window", { app: "Microsoft Teams" })).toMatch(/Teams tip: Write or send in a chat with teams_message.*cmd\+e/);
   });
 
   it("reads the window again when a saved ref is refused as ambiguous, and uses the same element there only when it is the only one", async () => {

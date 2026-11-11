@@ -31,7 +31,7 @@ function render() {
     row.tabIndex = -1;
     row.textContent = item.name;
     row.setAttribute("aria-selected", String(item.name === current));
-    row.onclick = () => openChat(item.name);
+    // Like Teams on Windows: a chat list row ignores clicks Bee sends (agent-desktop's click is refused there). Keys work.
     list.appendChild(row);
   }
   $("title").textContent = current;

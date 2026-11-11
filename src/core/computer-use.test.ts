@@ -507,10 +507,10 @@ describe("runComputerUse: batching, playbooks, memory and the fast pass", () => 
     });
     const tools = computerTools({ run: async () => ({ ok: true, data: {} }), desktop, control, platform: "windows", confirm: async () => true });
     await runComputerUse({ agent: modelAgent(model, { stream: false }), command: "message Priya in Teams", tools, control, platform: "windows", memory: "What Bee remembers:\n- Priya in Teams is Priya Shah" });
-    expect(prompts[0]).toContain("Microsoft Teams: To open a chat: press ctrl+e, type_text");
+    expect(prompts[0]).toContain("Microsoft Teams: Write or send in a chat with teams_message");
     expect(prompts[0]).toContain("Priya in Teams is Priya Shah");
     const system = JSON.parse(prompts[0] ?? "[]")[0] as { content: string };
-    expect(system.content).not.toContain("To open a chat: press ctrl+e");
+    expect(system.content).not.toContain("Write or send in a chat with teams_message");
     expect(system.content).not.toContain("Priya");
   });
 

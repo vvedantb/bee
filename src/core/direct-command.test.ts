@@ -295,6 +295,17 @@ describe("runDirectCommand: computer use", () => {
     expect(result.tips).toEqual(["Sam asked for a PR review.", "Priya asked for the contract."]);
   });
 
+  it("offers the Teams recipe to the loop as teams_message, for any wording, and tells the AI what it did", async () => {
+    const { gateway, generatePrompts } = bothModel({ turns: [{ tool: "teams_message", input: { to: "myself", text: "hi", send: true } }, { text: "Bee could not reach your own chat." }] });
+    const { computer, commands } = host();
+    await run({ command: "send a quick hi to my own chat over in Teams", snippets, gateway, actions: fakeActions().actions, computer });
+    expect(generatePrompts[0]).toContain("teams_message");
+    // The recipe ran (it looks for the (You) row; the fake has none) and the AI heard why nothing was typed.
+    expect(commands).toContain("find");
+    expect(generatePrompts[1]).toContain("Not done:");
+    expect(generatePrompts[1]).toContain("Do not click rows in Teams' chat list");
+  });
+
   it("guards each line of a list on its own: one unproven send never wipes the rest", async () => {
     const { gateway } = bothModel({ stream: [toolCall("use_computer", {})], turns: [{ text: "- Sam asked for a PR review.\n- Sent Priya the contract." }] });
     const { computer } = host();

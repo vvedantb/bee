@@ -54,15 +54,26 @@ const PATTERNS: readonly { pattern: RegExp; send: boolean }[] = [
 ];
 
 // Words that are no person to look up: pronouns, "everyone", and the app itself.
-const NOT_A_NAME = /^(?:him|her|them|me|us|it|this|that|everyone|everybody|all|someone|somebody|teams|microsoft|chat|group|channel|you)$/i;
+const NOT_A_NAME = /^(?:him|her|them|us|it|this|that|everyone|everybody|all|someone|somebody|teams|microsoft|chat|group|channel|you)$/i;
+// The user's own chat in Teams (the one marked "(You)"): "message myself", "send me a note".
+const SELF = /^(?:me|myself|my ?self|my own chat|my notes chat)$/i;
+/** The name Bee uses for the user's own chat until the recipe reads it from Teams' chat list. */
+export const SELF_CHAT = "me";
+/** Who a Teams message is for, as the AI or the user named it: "myself" and "me" are the user's own chat. */
+export const teamsRecipient = (to: string): string => (SELF.test(to.trim()) ? SELF_CHAT : to.trim());
+// "Open Teams and …" / "go to Teams, then …": Teams is named first, so the rest is read as if it ended "on Teams".
+const OPEN_TEAMS_FIRST = new RegExp(String.raw`^(?:open|go to|switch to|bring up)\s+${TEAMS}\s*(?:,|\band\b|\bthen\b)+\s*(?:then\s+)?(?<rest>.+)$`, "iu");
 const TEXT_MAX = 2000;
 
 /** "Bee, message Sam on Teams saying hi" as { to: "Sam", text: "hi", send: true }, or null for anything it is not sure of. */
 export function parseTeamsMessage(command: string): TeamsMessage | null {
-  const said = command.replace(/\s+/g, " ").trim().replace(/^["“](.*)["”]$/u, "$1").replace(POLITE, "").trim();
+  const asked = command.replace(/\s+/g, " ").trim().replace(/^["“](.*)["”]$/u, "$1").replace(POLITE, "").trim();
+  const rest = OPEN_TEAMS_FIRST.exec(asked)?.groups?.rest?.replace(/[.!]$/, "");
+  const said = rest ? `${rest} on Teams` : asked;
   for (const { pattern, send } of PATTERNS) {
     const match = pattern.exec(said);
-    const to = (match?.groups?.to ?? "").replace(/^the\s+/i, "").replace(/\s+(?:group\s+)?chat$/i, "").trim();
+    const named = (match?.groups?.to ?? "").replace(/^the\s+/i, "").trim();
+    const to = SELF.test(named) ? SELF_CHAT : named.replace(/\s+(?:group\s+)?chat$/i, "").trim();
     const text = (match?.groups?.text ?? "").trim().replace(/^["“‘']+(.*?)["”’']+$/u, "$1").trim();
     if (!match || !to || !text || text.length > TEXT_MAX) continue;
     if (to.split(" ").some((word) => NOT_A_NAME.test(word))) return null;
@@ -76,6 +87,7 @@ export function parseTeamsMessage(command: string): TeamsMessage | null {
  * (core/known-names.ts: "Zuzanna" for "Susannah"), else the name as said.
  */
 export function recipientName(to: string, known: readonly string[], resolved: readonly ResolvedName[] = []): string {
+  if (to === SELF_CHAT) return SELF_CHAT;
   const settled = resolved.find((item) => item.heard.toLowerCase() === to.toLowerCase() || item.heard.toLowerCase() === to.split(" ")[0]?.toLowerCase());
   if (settled) return settled.name;
   if (to.includes(" ")) return to;
@@ -99,6 +111,12 @@ export function namesChat(title: string, name: string): boolean {
   return words.length > 0 && words.every((word) => hay.includes(` ${word} `));
 }
 
+/** The user's name from their own chat's row: "Chat Vedant Bhopatrao (You) You: btw…" → "Vedant Bhopatrao". Null for any other row. */
+export function ownName(row: string): string | null {
+  const name = /^(?:chat\s+)?(.+?)\s*\(you\)/i.exec(row.trim())?.[1]?.trim();
+  return name && name.length <= 80 ? name : null;
+}
+
 /** Text as Bee compares a field with what it wrote: no zero-width marks, runs of space as one, trimmed. */
 const squash = (text: string) => text.replace(/[​-‍﻿]/g, "").replace(/\s+/g, " ").trim();
 
@@ -109,6 +127,8 @@ const matchSchema = z.object({
   name: z.string().nullish().catch(null),
   value: z.string().nullish().catch(null),
   states: z.array(z.string()).optional().catch(undefined),
+  // Where it sits: "window:…", "group", "listbox:Suggestions", …
+  path: z.array(z.string()).optional().catch(undefined),
 });
 const matchesSchema = z.object({ matches: z.array(matchSchema.nullable().catch(null)) });
 type Match = z.infer<typeof matchSchema>;
@@ -185,12 +205,15 @@ const NAME_KEYS_MAX = 60;
 const TEAMS_LABEL = "Microsoft Teams";
 
 /** Runs the recipe for one parsed request. Never throws. */
-export async function runTeamsRecipe(message: TeamsMessage & { name: string }, deps: RecipeDeps): Promise<RecipeOutcome> {
+export async function runTeamsRecipe(asked: TeamsMessage & { name: string }, deps: RecipeDeps): Promise<RecipeOutcome> {
+  const self = asked.name === SELF_CHAT;
+  // For the user's own chat, the name comes from Teams' chat list once Teams is open (step 1).
+  let message = asked;
   const { control, platform } = deps;
   const pauses = deps.pauseMs ?? PAUSES;
   const exec: Exec = createExec(deps);
   const started = performance.now();
-  const first = shortName(message.name.split(" ")[0] ?? message.name, 30);
+  let first = self ? "you" : shortName(message.name.split(" ")[0] ?? message.name, 30);
   const stopped = () => control.reason() !== null;
   /** One step's outcome in the log: its name, whether it worked, how long it took. Never the name or the message. */
   const logged = <T>(step: string, ok: (value: T) => boolean) => async (work: Promise<T>): Promise<T> => {
@@ -208,17 +231,29 @@ export async function runTeamsRecipe(message: TeamsMessage & { name: string }, d
   };
 
   // 1. Teams in front, and its name as agent-desktop knows it (ms-teams.exe on Windows).
-  deps.onStep?.(`Opening the chat with ${first}…`);
+  deps.onStep?.(self ? "Opening your own chat…" : `Opening the chat with ${first}…`);
   const opened = await logged("open", (result: { ok: boolean }) => result.ok)(deps.desktop.openApp(TEAMS_LABEL, control.signal));
   if (stopped()) return { kind: "stopped" };
-  if (!opened.ok) return fallback("Bee could not open Microsoft Teams.");
-  done.push("Bee opened Microsoft Teams.");
   const listed = await logged("list-apps", okResult)(exec("list-apps", [], READ_MS));
   const running = listed.ok ? parseApps(listed.data).map((app) => app.name) : [];
-  const app = matchApp(TEAMS_LABEL, running.filter(isTeamsApp)) ?? (platform === "windows" ? windowsAlias(TEAMS_LABEL) : null) ?? TEAMS_LABEL;
+  const teamsApps = running.filter(isTeamsApp);
+  // A launch that failed is fine when Teams is already running (the keys below go to it).
+  if (!opened.ok && teamsApps.length === 0) return fallback("Bee could not open Microsoft Teams.");
+  done.push("Bee opened Microsoft Teams.");
+  const app = matchApp(TEAMS_LABEL, teamsApps) ?? (teamsApps.length === 1 ? teamsApps[0] : null) ?? (platform === "windows" ? windowsAlias(TEAMS_LABEL) : null) ?? TEAMS_LABEL;
   const where = [`--app=${app}`];
   const press = (keys: string) => exec("press", [keys, ...where, HEADED_FLAG], KEY_MS);
   if (stopped()) return { kind: "stopped" };
+
+  // The user's own chat: the chat list's row marked "(You)" gives the name to search for ("Chat Vedant Bhopatrao (You) You: …").
+  if (self) {
+    const rows = await logged("self-row", okResult)(exec("find", [...where, "--role=treeitem", "--name=(You)", "--limit=5", `--timeout-ms=${LOOK_MS}`], LOOK_MS + 6000));
+    if (stopped()) return { kind: "stopped" };
+    const own = (rows.ok ? findMatches(rows.data) : []).map((match) => ownName(match.name ?? "")).find((name) => name !== null);
+    if (!own) return fallback("Bee could not find your own chat (the one marked (You)) in Teams' chat list, so it typed no message.");
+    message = { ...asked, name: own };
+    first = "you";
+  }
 
   // 2. ctrl+e (cmd+e) and the name with real keys. Teams' search box must then hold the name: keys that missed it move through
   // the chat list instead (Down and Return then open the chat at the top, often the user's own). Once more by focusing the box.
@@ -269,7 +304,10 @@ export async function runTeamsRecipe(message: TeamsMessage & { name: string }, d
   // result it can read: the first, as before. Step 4 checks the chat either way.
   const results = await logged("results", okResult)(exec("find", [...where, "--role=option", "--limit=20", `--timeout-ms=${LOOK_MS}`], LOOK_MS + 6000));
   if (stopped()) return { kind: "stopped" };
-  const pick = pickResult(results.ok ? findMatches(results.data).map((match) => match.name ?? "") : [], message.name);
+  // Search suggestions sit in a dropdown list; an open chat's messages can be options too ("George Dowling, is it merged?").
+  const options = results.ok ? findMatches(results.data) : [];
+  const inDropdown = options.filter((match) => match.path?.some((part) => /^listbox\b/i.test(part)));
+  const pick = pickResult((inDropdown.length > 0 ? inDropdown : options).map((match) => match.name ?? ""), message.name);
   if (pick === "several") return { kind: "failed", line: `More than one person or chat in Teams matches "${message.name}". Say the full name. Nothing was sent.` };
   const downs = (pick ?? 0) + 1;
   for (const key of [...Array.from({ length: downs }, () => "down"), "return"]) {
@@ -336,7 +374,7 @@ export async function runTeamsRecipe(message: TeamsMessage & { name: string }, d
 
   // 7. The user's Confirm, then Return, then the box must be empty.
   deps.onStep?.(CONFIRM_LABEL);
-  const request: ConfirmRequest = { kind: "send", question: "Send this?", detail: `To ${shortName(message.name, 30)} in Teams — “${shortName(message.text, 70)}”` };
+  const request: ConfirmRequest = { kind: "send", question: "Send this?", detail: `To ${self ? "your own chat" : shortName(message.name, 30)} in Teams — “${shortName(message.text, 70)}”` };
   debugLog.info("computer", "teams-recipe-confirm", { chars: message.text.length });
   const confirmed = await control.paused(() => awaitAnswer((signal) => deps.confirm(request, signal), control.signal, deps.confirmTimeoutMs ?? CONFIRM_TIMEOUT_MS));
   debugLog.info("computer", "teams-recipe", { step: "confirm", ok: confirmed });
@@ -353,7 +391,7 @@ export async function runTeamsRecipe(message: TeamsMessage & { name: string }, d
   if (left === null) return { kind: "sent", line: `Pressed Enter to send to ${first}; Bee could not check that it went.` };
   if (!empty(left)) return { kind: "failed", line: "Bee pressed Enter, but the message is still in the box, so it may not have been sent." };
   deps.onEffect?.("send");
-  return { kind: "sent", line: `Sent to ${message.name}.` };
+  return { kind: "sent", line: `Sent to ${self ? "your own chat" : message.name}.` };
 }
 
 /**
