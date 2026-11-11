@@ -752,7 +752,7 @@ describe("computerTools: a slow or failing tree (a Chromium or WebView2 app such
   it("gives find a budget, and reads again once when that fails where a retry is safe", async () => {
     const { run, calls } = timedRun((_call, index) => (index === 0 ? { ok: false, code: "TIMEOUT", retry: "safe" } : { ok: true, data: { matches: [{ role: "textfield", name: "Type a message", ref_id: "@s8:e1" }] } }));
     const { call } = setup({ run });
-    expect(await call("find", { app: "Microsoft Teams", role: "textfield" })).toMatch(/^textfield "Type a message" @s8:e1 Teams tip: Write or send in a chat with teams_message.*cmd\+e/);
+    expect(await call("find", { app: "Microsoft Teams", role: "textfield" })).toMatch(/^textfield "Type a message" @s8:e1 Teams tip: Write or send in a chat with teams_message.*teams_open_chat/);
     expect(calls.map(({ args, timeoutMs }) => [args.at(-1), timeoutMs])).toEqual([
       ["--timeout-ms=12000", 18_000],
       ["--timeout-ms=25000", 31_000],
@@ -1299,7 +1299,7 @@ describe("computerTools: Teams on Windows (app names, focus for keys, ambiguous 
     const tools = setup({ run: first.run, platform: "windows" });
     const listed = await tools.call("list_windows", { app: "Microsoft Teams" });
     expect(lines(first.calls)).toEqual(["list-windows --app=ms-teams.exe"]);
-    expect(listed).toMatch(/^Using ms-teams\.exe for Microsoft Teams\. No windows\. Teams tip: Write or send in a chat with teams_message.*ctrl\+e/);
+    expect(listed).toMatch(/^Using ms-teams\.exe for Microsoft Teams\. No windows\. Teams tip: Write or send in a chat with teams_message.*teams_open_chat/);
     expect(await tools.call("list_windows", { app: "Teams" })).not.toMatch(/Teams tip/);
     // Classic Teams: the alias misses, list-apps names the running one, and the call goes there.
     const classic = recorded(({ command, args }) =>
@@ -1316,10 +1316,10 @@ describe("computerTools: Teams on Windows (app names, focus for keys, ambiguous 
   it("gives the Teams tip when open_app or focus_window reaches Teams, once, and not for other apps", async () => {
     const opened = setup({ platform: "windows" });
     expect(await opened.call("open_app", { name: "Slack" })).toBe("Done: Opened Slack.");
-    expect(await opened.call("open_app", { name: "ms-teams.exe" })).toMatch(/^Done: Opened ms-teams\.exe\. Teams tip: Write or send in a chat with teams_message.*ctrl\+e/);
+    expect(await opened.call("open_app", { name: "ms-teams.exe" })).toMatch(/^Done: Opened ms-teams\.exe\. Teams tip: Write or send in a chat with teams_message.*teams_open_chat/);
     expect(await opened.call("focus_window", { app: "Teams" })).toBe("Done: Focused Teams.");
     const focused = setup({ platform: "mac" });
-    expect(await focused.call("focus_window", { app: "Microsoft Teams" })).toMatch(/Teams tip: Write or send in a chat with teams_message.*cmd\+e/);
+    expect(await focused.call("focus_window", { app: "Microsoft Teams" })).toMatch(/Teams tip: Write or send in a chat with teams_message.*teams_open_chat/);
   });
 
   it("reads the window again when a saved ref is refused as ambiguous, and uses the same element there only when it is the only one", async () => {
@@ -1401,7 +1401,8 @@ describe("computerTools: act runs a short batch in one step", () => {
       ["set-value", "@s1abc:e1", STDIN_FLAG],
       // The send's Confirm waits for a read-back of the field (the text it shows).
       ["get", "@s1abc:e1", "--property=value"],
-      // agent-desktop moves focus only headed.
+      // The Confirm tap moved the keyboard to Bee: the field gets it back, then press_key focuses its ref (always headed).
+      ["focus", "@s1abc:e1", HEADED_FLAG],
       ["focus", "@s1abc:e1", HEADED_FLAG],
       ["press", "return", "--app=Discord"],
     ]);
@@ -1523,6 +1524,23 @@ describe("computerTools: replace, don't append (PR #80 e2e D: \"hi Krzys\" becam
     };
     return { run, log, sent, value: () => value };
   }
+
+  it("after a confirmed send that never went out, its retry another way does not ask again; a later send does", async () => {
+    const f = field("");
+    const run: ComputerRun = async (command, args, options) =>
+      command === "press" && args[0] === "return" ? { ok: false, code: "ACTION_FAILED", message: "Application has no verified keyboard focus for key delivery", retry: "safe" } : f.run(command, args, options);
+    const { call, asked } = setup({ run });
+    await call("snapshot", { app: "Discord" });
+    await call("set_value", { ref: FIELD, value: "hi", effect: "none" });
+    expect(await call("press_key", { keys: "return", app: "Discord", ref: FIELD, effect: "send", physical: true })).toMatch(/not delivered/);
+    expect(await call("click", { ref: SEND, effect: "send" })).toMatch(/^Done/);
+    expect(f.sent).toEqual(["hi"]);
+    expect(asked.map((request) => request.kind)).toEqual(["send"]);
+    // The grant is spent: the next send asks.
+    await call("set_value", { ref: FIELD, value: "again", effect: "none" });
+    await call("click", { ref: SEND, effect: "send" });
+    expect(asked.map((request) => request.kind)).toEqual(["send", "send"]);
+  });
 
   it("clears a field that holds other text before it types, reads it back, then shows the Confirm with the exact text", async () => {
     const f = field("hi Krzys");

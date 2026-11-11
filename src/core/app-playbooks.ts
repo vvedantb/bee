@@ -18,8 +18,8 @@ export const APP_PLAYBOOKS: readonly AppPlaybook[] = [
     app: "Microsoft Teams",
     names: ["teams", "microsoft teams", "ms teams"],
     hints: {
-      windows: "Write or send in a chat with teams_message (a person, a group, or \"me\"). Never click chat list rows: Teams refuses them. To only open a chat: ctrl+e, type_text the name, down, return.",
-      mac: "Write or send in a chat with teams_message (a person, a group, or \"me\"). Never click chat list rows: Teams refuses them. To only open a chat: cmd+e, type_text the name, down, return.",
+      windows: "Write or send in a chat with teams_message (a person, a group, or \"me\"). Never click chat list rows: Teams refuses them. To read one, call teams_open_chat.",
+      mac: "Write or send in a chat with teams_message (a person, a group, or \"me\"). Never click chat list rows: Teams refuses them. To read one, call teams_open_chat.",
     },
   },
   {

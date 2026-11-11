@@ -20,7 +20,7 @@ import { nameMatches, type ResolvedName } from "./known-names";
 // is ever typed into a chat Bee could not check, a box that already holds the user's own draft is left alone, and Stop ends it
 // between any two steps. Logs carry step names, outcomes and times, never the name or the message.
 
-export type TeamsMessage = { to: string; text: string; send: boolean };
+export type TeamsMessage = { to: string; text: string; send: boolean; /** Only open and check the chat: write nothing (text is ignored). */ openOnly?: boolean };
 
 // Polite padding before the request, and quotes around it.
 const POLITE = /^(?:(?:please|hey|ok|okay|so|now|just|can you|could you|would you|will you)[\s,]+)+/i;
@@ -191,6 +191,7 @@ export type RecipeDeps = {
 export type RecipeOutcome =
   | { kind: "sent"; line: string }
   | { kind: "drafted"; line: string }
+  | { kind: "opened"; line: string }
   | { kind: "failed"; line: string }
   | { kind: "fallback"; done: string }
   | { kind: "stopped" };
@@ -324,6 +325,7 @@ export async function runTeamsRecipe(asked: TeamsMessage & { name: string }, dep
   if (stopped()) return { kind: "stopped" };
   if (!verified) return fallback(`Bee could not confirm the chat with ${message.name} opened, so it typed no message.`);
   done.push(`The chat with ${message.name} is open.`);
+  if (asked.openOnly) return { kind: "opened", line: `The chat with ${self ? "yourself" : message.name} is open. Read it with a snapshot of Teams.` };
 
   // 5. The message box, empty (or showing only its placeholder): a draft of the user's own is never touched.
   deps.onStep?.("Writing the message…");
@@ -381,6 +383,9 @@ export async function runTeamsRecipe(asked: TeamsMessage & { name: string }, dep
   if (stopped()) return { kind: "stopped" };
   if (!confirmed) return { kind: "drafted", line: "Drafted, not sent." };
   deps.onStep?.(`Sending to ${first}…`);
+  // Tapping Confirm put the keyboard in Bee's island: the cursor goes back into the message box before Return.
+  await logged("refocus-box", okResult)(exec("focus", [box, HEADED_FLAG], KEY_MS));
+  if (stopped()) return { kind: "stopped" };
   const sent = await logged("send", okResult)(press("return"));
   if (!sent.ok) return { kind: "failed", line: `Bee could not press Enter in Teams. The message is still in the box, not sent.` };
   // Once Return went out the run must not stop before it checks: the check runs even after a Stop.

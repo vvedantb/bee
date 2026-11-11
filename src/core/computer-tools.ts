@@ -708,6 +708,8 @@ export function matchApp(name: string, running: readonly string[]): string | nul
 }
 
 const NO_FOCUS = /keyboard focus/i;
+// A tool result that says agent-desktop delivered nothing (errorLine), or that Bee pressed or pasted nothing.
+const NOTHING_WENT = /not delivered|pressed nothing|pasted nothing|typed nothing/i;
 const sidOf = (ref: string) => ref.slice(1, ref.indexOf(":"));
 type Scope = { app?: string | undefined; window_id?: string | undefined };
 
@@ -877,6 +879,12 @@ export function computerTools(deps: ComputerToolDeps) {
   // A send or submit that follows asks for that text, and Bee checks the field first: a message is never what a field happened to
   // hold ("hi Krzyshi" for "hi"). failed: Bee could not make the field hold it.
   let lastWrite: { ref: string; text: string; failed: boolean } | null = null;
+  // A send (delete, buy, submit) the user confirmed that agent-desktop says never went out: its retry, for the same text, does
+  // not ask again. One retry only.
+  let retryGrant: { kind: IrreversibleKind; message: string | null } | null = null;
+  // Apps where the user confirmed a click at a spot Bee cannot read: later plain clicks there (no send, delete, buy or submit)
+  // do not ask again in this run.
+  const spotGranted = new Set<string>();
 
   /** What a field holds now (get --property=value), or null when agent-desktop cannot say. */
   const readField = async (ref: string): Promise<string | null> => {
@@ -968,7 +976,16 @@ export function computerTools(deps: ComputerToolDeps) {
       let before = prepared ? prepared.before : gate ? gate() : null;
       const committed = before ? irreversibleKind(before) : null;
       const spot = prepared?.spot ?? null;
-      if (before && (committed || spot)) {
+      const granted =
+        !!before &&
+        ((committed !== null && retryGrant?.kind === committed && (retryGrant.message === null || retryGrant.message === (before.message ?? lastWrite?.text ?? null))) ||
+          (committed === null && spot !== null && currentApp !== null && spotGranted.has(currentApp)));
+      if (granted) {
+        debugLog.info("computer", "confirm-granted", { tool: name, kind: committed ?? "click" });
+        if (committed) retryGrant = null;
+      }
+      let confirmedNow = false;
+      if (before && (committed || spot) && !granted) {
         // The exact text goes in the Confirm, once the field is shown to hold it; when it cannot be made to, no Confirm shows.
         const message = committed === "send" || committed === "submit" ? await checkMessage(before) : { text: null };
         if ("error" in message) {
@@ -988,10 +1005,20 @@ export function computerTools(deps: ComputerToolDeps) {
           return STOPPED;
         }
         console.debug(`computer confirmed ${kind}`);
+        confirmedNow = true;
+        if (!committed && currentApp) spotGranted.add(currentApp);
         deps.onStep?.(clip(label, 60));
+        // Tapping Confirm put the keyboard in Bee's island: a key goes back into the field it was meant for first.
+        const field = before.command === "press" ? refOf(before.lastField ?? null) : null;
+        if (field) {
+          const refocused = await exec("focus", [field, HEADED_FLAG], ACT_MS);
+          debugLog.info("computer", "refocus-after-confirm", { ok: refocused.ok });
+        }
       }
       if (control.reason()) return STOPPED;
       const output = await work();
+      // Confirmed, and agent-desktop says nothing went out: the user agreed to this send once, so its retry does not ask again.
+      if (confirmedNow && committed && !actionDone(output) && NOTHING_WENT.test(output)) retryGrant = { kind: committed, message: before?.message ?? null };
       debugLog.debug("computer", "step-done", { n: control.steps(), tool: name, ms: msSince(started), output });
       if (committed && actionDone(output)) {
         deps.onEffect?.(committed);
