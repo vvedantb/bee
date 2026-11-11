@@ -256,12 +256,10 @@ export async function runTeamsRecipe(asked: TeamsMessage & { name: string }, dep
     first = "you";
   }
 
-  // 2. ctrl+e (cmd+e) and the name with real keys. Teams' search box must then hold the name: keys that missed it move through
-  // the chat list instead (Down and Return then open the chat at the top, often the user's own). Once more by focusing the box.
-  const search = await logged("search", okResult)(press(modKey(platform, "e")));
-  if (stopped()) return { kind: "stopped" };
-  if (!search.ok) return fallback("Bee could not open Teams' search with the keyboard.");
-  await pause(pauses.search);
+  // 2. Teams' search box, then the name with real keys. On Windows a key reaches Teams only while an element in it holds the
+  // keyboard (else "no verified keyboard focus"), so Bee puts the cursor in the search box itself and types there; when it cannot,
+  // it puts the cursor in the message box and presses ctrl+e (cmd+e); else ctrl+e alone. Then the box must hold the name: keys
+  // that missed it move through the chat list instead (Down and Return then open the chat at the top, often the user's own).
   const keys = keyPresses(message.name);
   const typeName = async (): Promise<AgentDesktopResult> => {
     if (!keys || keys.length > NAME_KEYS_MAX) return (await pasteText(exec, { text: message.name, platform, scope: where })).result;
@@ -272,10 +270,37 @@ export async function runTeamsRecipe(asked: TeamsMessage & { name: string }, dep
     }
     return { ok: true, data: null };
   };
+  // Teams' search box is a text field or a combobox, named like "Search".
   const searchFields = async (): Promise<Match[]> => {
-    const fields = await exec("find", [...where, "--role=textfield", "--limit=15", `--timeout-ms=${LOOK_MS}`], LOOK_MS + 6000);
-    return fields.ok ? findMatches(fields.data).filter((match) => SEARCH_NAME.test(match.name ?? "")) : [];
+    const found: Match[] = [];
+    for (const role of ["textfield", "combobox"]) {
+      const fields = await exec("find", [...where, `--role=${role}`, "--limit=15", `--timeout-ms=${LOOK_MS}`], LOOK_MS + 6000);
+      if (fields.ok) found.push(...findMatches(fields.data).filter((match) => SEARCH_NAME.test(match.name ?? "")));
+    }
+    return found;
   };
+  const editable = (fields: readonly Match[]) => fields.find((field) => field.ref_id && REF_PATTERN.test(field.ref_id) && !field.states?.includes("readonly"))?.ref_id ?? null;
+  const searchBox = editable(await logged("find-search", (found: Match[]) => found.length > 0)(searchFields()));
+  if (stopped()) return { kind: "stopped" };
+  const inSearch = searchBox ? (await logged("focus-search", okResult)(exec("focus", [searchBox, HEADED_FLAG], KEY_MS))).ok : false;
+  if (stopped()) return { kind: "stopped" };
+  if (inSearch) await press(modKey(platform, "a"));
+  else {
+    // Something in Teams must hold the keyboard for ctrl+e: the message box, when Bee can find it.
+    const boxes = await exec("find", [...where, "--role=textfield", "--limit=15", `--timeout-ms=${LOOK_MS}`], LOOK_MS + 6000);
+    const compose = boxes.ok ? composeRef(findMatches(boxes.data)) : null;
+    if (compose && !stopped()) await logged("focus-compose", okResult)(exec("focus", [compose, HEADED_FLAG], KEY_MS));
+    if (stopped()) return { kind: "stopped" };
+    let search = await logged("search", okResult)(press(modKey(platform, "e")));
+    // Just after Teams opens, agent-desktop can miss its process for a moment: once more.
+    if (!search.ok && search.code === "APP_NOT_FOUND" && !stopped()) {
+      await pause(pauses.search);
+      search = await logged("search", okResult)(press(modKey(platform, "e")));
+    }
+    if (stopped()) return { kind: "stopped" };
+    if (!search.ok) return fallback("Bee could not put the cursor in Teams' search box or open it with the keyboard.");
+    await pause(pauses.search);
+  }
   // A box holds the name when its text has it, or when it has the keyboard (Teams may not report the text). A miss only when no box
   // holds it and some box said what it holds or that it lacks the keyboard. No box, or nothing reported: Bee cannot tell, and
   // step 4 still checks the chat.
@@ -283,7 +308,7 @@ export async function runTeamsRecipe(asked: TeamsMessage & { name: string }, dep
   const missed = (fields: readonly Match[]) => !fields.some(hasName) && fields.some((field) => typeof field.value === "string" || field.states !== undefined);
   const typed = await logged("name", okResult)(typeName());
   if (stopped()) return { kind: "stopped" };
-  if (!typed.ok) return fallback(`Bee pressed ${modKey(platform, "e")} in Teams but could not type the name to search for.`);
+  if (!typed.ok) return fallback("Bee opened Teams' search but could not type the name to search for.");
   let searched = await logged("search-box", (found: Match[]) => !missed(found))(searchFields());
   if (stopped()) return { kind: "stopped" };
   const target = missed(searched) ? searched.find((field) => field.ref_id && !field.states?.includes("readonly"))?.ref_id : undefined;
@@ -296,8 +321,8 @@ export async function runTeamsRecipe(asked: TeamsMessage & { name: string }, dep
     if (again.ok) searched = await logged("search-box", (found: Match[]) => !missed(found))(searchFields());
     if (stopped()) return { kind: "stopped" };
   }
-  if (missed(searched)) return fallback(`Bee pressed ${modKey(platform, "e")} and typed the name, but Teams' search box did not show it, so Bee opened no chat.`);
-  done.push(`Bee pressed ${modKey(platform, "e")} and typed "${message.name}" in Teams' search.`);
+  if (missed(searched)) return fallback("Bee typed the name, but Teams' search box did not show it, so Bee opened no chat.");
+  done.push(`Bee typed "${message.name}" in Teams' search.`);
   await pause(pauses.results);
   if (stopped()) return { kind: "stopped" };
 

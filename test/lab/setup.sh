@@ -16,14 +16,17 @@ if [ ! -f "$state/dbus.env" ]; then
   dbus-launch --sh-syntax | grep DBUS_SESSION_BUS_ADDRESS >"$state/dbus.env"
 fi
 . "$state/dbus.env"
-export DISPLAY=$display
+export DBUS_SESSION_BUS_ADDRESS DISPLAY=$display
+# Chromium apps (the lab apps, Bee) publish their accessibility tree only when asked to.
+export ACCESSIBILITY_ENABLED=1 GTK_MODULES=gail:atk-bridge NO_AT_BRIDGE=0
 pgrep -x openbox >/dev/null || (openbox >"$state/openbox.log" 2>&1 &)
-pgrep -f at-spi-bus-launcher >/dev/null || (/usr/libexec/at-spi-bus-launcher --launch-immediately >"$state/atspi.log" 2>&1 &)
+pgrep -x at-spi-bus-laun >/dev/null || (/usr/libexec/at-spi-bus-launcher --launch-immediately >"$state/atspi.log" 2>&1 &)
 dist=$(dirname "$(readlink -f "$root/node_modules/electron/dist/electron")")
 for name in ms-teams gnome-terminal; do [ -x "$dist/$name" ] || cp "$dist/electron" "$dist/$name"; done
 sleep 1
 cat <<ENV
 export DISPLAY=$display
 export DBUS_SESSION_BUS_ADDRESS='$DBUS_SESSION_BUS_ADDRESS'
+export ACCESSIBILITY_ENABLED=1 GTK_MODULES=gail:atk-bridge NO_AT_BRIDGE=0
 export BEE_LAB=1
 ENV

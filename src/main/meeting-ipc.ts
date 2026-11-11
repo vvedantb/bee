@@ -545,8 +545,9 @@ export function registerMeetingIpc(args: { notesDir: string;
       debugLog.warn("computer", "access-failed", { platform, error: errorData(error) });
       return { supported: true, platform, accessibility: "unknown", screenRecording: "unknown", ...screen };
     } finally {
+      // The state folder stays: Settings checks access each time it shows, and making a new private folder each time froze the
+      // window on Windows. It holds no snapshot refs from a check; the next request's end clears it as before.
       computerRuns -= 1;
-      releaseComputer();
     }
   });
 
