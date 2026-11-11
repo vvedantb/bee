@@ -141,7 +141,7 @@ export type ComputerHost = {
 
 /** What the teams_message tool tells the AI. A failure is final; a fallback leaves the rest to it, never by clicking the chat list. */
 function teamsToolResult(outcome: RecipeOutcome): string {
-  if (outcome.kind === "sent" || outcome.kind === "drafted") return `Done: ${outcome.line}`;
+  if (outcome.kind === "sent" || outcome.kind === "drafted" || outcome.kind === "opened") return `Done: ${outcome.line}`;
   if (outcome.kind === "failed") return `Error: ${outcome.line} Do not try again another way; tell the user.`;
   if (outcome.kind === "stopped") return "Error: Bee stopped this task. Do not call any more tools.";
   return `Not done: ${outcome.done} Do not click rows in Teams' chat list (Teams refuses them). Tell the user what happened, or try teams_message once more with the name exactly as Teams shows it.`;
@@ -275,6 +275,18 @@ async function runComputerCommand(args: {
           const name = recipientName(teamsRecipient(to), args.knownNames ?? [], args.resolvedNames ?? []);
           const outcome = await runTeamsRecipe({ to, text, send, name }, recipeDeps);
           debugLog.info("computer", "teams-tool-end", { outcome: outcome.kind });
+          return teamsToolResult(outcome);
+        },
+      }),
+      teams_open_chat: tool({
+        description:
+          "Open a chat in Microsoft Teams to read it, the reliable way (search by keyboard, then check the right chat opened). Writes nothing. Then snapshot Teams to read its messages. Use it instead of clicking Teams' chat list.",
+        inputSchema: z.object({ to: z.string().min(1).max(120).describe("The person's or group chat's name as Teams shows it, or \"me\" for the user's own chat.") }),
+        execute: async ({ to }) => {
+          if (!control.step()) return "Error: Bee stopped this task. Do not call any more tools.";
+          const name = recipientName(teamsRecipient(to), args.knownNames ?? [], args.resolvedNames ?? []);
+          const outcome = await runTeamsRecipe({ to, text: "", send: false, openOnly: true, name }, recipeDeps);
+          debugLog.info("computer", "teams-tool-end", { outcome: outcome.kind, open: true });
           return teamsToolResult(outcome);
         },
       }),

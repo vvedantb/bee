@@ -263,7 +263,7 @@ describe("runTeamsRecipe", () => {
     // Every key is real input in Teams' process.
     for (const call of fake.calls.filter((item) => item.command === "press")) expect(call.args.slice(1), line(call)).toEqual(["--app=ms-teams.exe", "--headed"]);
     expect(fake.calls.map((call) => call.command).filter((command) => command !== "press")).toEqual([
-      "list-apps", "find", "find", "find", "list-windows", "find", "get", "focus", "clipboard-get", "clipboard-set", "wait", "clipboard-set", "get", "get",
+      "list-apps", "find", "find", "find", "list-windows", "find", "get", "focus", "clipboard-get", "clipboard-set", "wait", "clipboard-set", "get", "focus", "get",
     ]);
     // The message travels on stdin only, never in argv.
     expect(fake.calls.flatMap((call) => call.args).join(" ")).not.toContain("Running late");
@@ -343,6 +343,15 @@ describe("runTeamsRecipe", () => {
     expect(fake.state.search).toBe("Vedant Bhopatrao");
     expect(asked[0]?.detail).toBe("To your own chat in Teams — “hi”");
     expect(steps[0]).toBe("Opening your own chat…");
+  });
+
+  it("opens a chat to read it, checks it, and writes nothing", async () => {
+    const fake = teams();
+    const { go, asked } = recipe(fake);
+    expect(await go({ ...SAM, text: "", openOnly: true })).toEqual({ kind: "opened", line: "The chat with Sam Lee is open. Read it with a snapshot of Teams." });
+    expect(asked).toEqual([]);
+    expect(fake.calls.map((call) => call.command)).not.toContain("clipboard-set");
+    expect(fake.state.opened).toBe(true);
   });
 
   it("types nothing when it cannot find the user's own chat", async () => {

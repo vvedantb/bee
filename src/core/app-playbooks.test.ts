@@ -53,7 +53,7 @@ describe("Teams tip", () => {
   });
 
   it("gives the playbook's Teams hint for the OS", () => {
-    expect(teamsTip("windows")).toBe('Teams tip: Write or send in a chat with teams_message (a person, a group, or "me"). Never click chat list rows: Teams refuses them. To only open a chat: ctrl+e, type_text the name, down, return.');
-    expect(teamsTip("mac")).toMatch(/^Teams tip: Write or send in a chat with teams_message.*cmd\+e/);
+    expect(teamsTip("windows")).toBe('Teams tip: Write or send in a chat with teams_message (a person, a group, or "me"). Never click chat list rows: Teams refuses them. To read one, call teams_open_chat.');
+    expect(teamsTip("mac")).toMatch(/^Teams tip: Write or send in a chat with teams_message.*teams_open_chat/);
   });
 });

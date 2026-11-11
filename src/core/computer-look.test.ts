@@ -251,6 +251,18 @@ describe("click_at", () => {
     expect(stopLine("declined", { declined: control.declined() })).toBe("Cancelled.");
   });
 
+  it("asks once about unreadable spots in an app: a later plain click there goes ahead, a send still asks", async () => {
+    const { look, call, asked } = setup();
+    await look();
+    expect(await call("click_at", { app: "Microsoft Teams", ...pixel(2000, 1650), effect: "none" })).toMatch(/^Done/);
+    await look();
+    expect(await call("click_at", { app: "Microsoft Teams", ...pixel(2000, 1650), effect: "none" })).toMatch(/^Done/);
+    expect(asked).toEqual([{ kind: "click", question: "Click here?", detail: "A spot in ms-teams.exe Bee cannot read" }]);
+    await look();
+    expect(await call("click_at", { app: "Microsoft Teams", ...pixel(2000, 1650), effect: "send" })).toMatch(/^Done/);
+    expect(asked.map((request) => request.kind)).toEqual(["click", "send"]);
+  });
+
   it("asks about an unreadable spot with the AI's own effect when it gives one, and when the tree cannot be read at all", async () => {
     const { look, call, asked, effects } = setup({ reply: (call) => (call.command === "snapshot" ? { ok: false, code: "TIMEOUT", retry: "safe" } : null) });
     await look();
