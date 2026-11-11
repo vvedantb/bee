@@ -162,7 +162,7 @@ describe("createAgentDesktopRunner", () => {
 
   const make = (exec: ExecFile) => {
     temp = mkdtempSync(join(tmpdir(), "bee-ad-test-"));
-    return createAgentDesktopRunner({ path: "/bin/agent-desktop", macHelper: null }, { exec, env: { PATH: "/bin", SECRET_KEY: "FAKE" }, tempDir: () => temp });
+    return createAgentDesktopRunner({ path: "/bin/agent-desktop", macHelper: null }, { exec, env: { PATH: "/bin", SECRET_KEY: "FAKE" }, tempDir: () => temp, lockAcl: () => true });
   };
 
   it("runs a read-only command headless in a private state folder, and parses the envelope", async () => {
@@ -348,7 +348,7 @@ describe("createAgentDesktopActionRunner", () => {
       calls.push({ args, env: options.env });
       setTimeout(() => callback(null, ENVELOPE), 0);
     };
-    const runner = createAgentDesktopActionRunner({ path: "/bin/agent-desktop", macHelper: null }, { exec, env: { PATH: "/bin", GITHUB_TOKEN: "FAKE" }, tempDir: () => temp });
+    const runner = createAgentDesktopActionRunner({ path: "/bin/agent-desktop", macHelper: null }, { exec, env: { PATH: "/bin", GITHUB_TOKEN: "FAKE" }, tempDir: () => temp, lockAcl: () => true });
     return { runner, calls };
   };
 
@@ -396,7 +396,7 @@ describe("createAgentDesktopComputerRunner", () => {
         callback(Object.assign(new Error("aborted"), { name: "AbortError", code: "ABORT_ERR" }), "");
       });
     };
-    const runner = createAgentDesktopComputerRunner({ path: "/bin/agent-desktop", macHelper: null }, { exec, env: { PATH: "/bin", BEE_AI_GATEWAY_API_KEY: "vck_FAKE" }, tempDir: () => temp });
+    const runner = createAgentDesktopComputerRunner({ path: "/bin/agent-desktop", macHelper: null }, { exec, env: { PATH: "/bin", BEE_AI_GATEWAY_API_KEY: "vck_FAKE" }, tempDir: () => temp, lockAcl: () => true });
     return { runner, calls };
   };
 
