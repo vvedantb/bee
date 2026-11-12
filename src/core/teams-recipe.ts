@@ -220,7 +220,17 @@ export async function runTeamsRecipe(asked: TeamsMessage & { name: string }, dep
   let message = asked;
   const { control, platform } = deps;
   const pauses = deps.pauseMs ?? PAUSES;
-  const exec: Exec = createExec(deps);
+  const direct: Exec = createExec(deps);
+  // Just after Teams opens or comes to the front, agent-desktop can miss its process for a moment (APP_NOT_FOUND, safe to
+  // retry): the same command goes twice more, a short wait before each.
+  const exec: Exec = async (...call) => {
+    let result = await direct(...call);
+    for (let again = 0; again < 2 && !result.ok && result.code === "APP_NOT_FOUND" && control.reason() === null; again += 1) {
+      if (pauses.search > 0) await direct("wait", [String(pauses.search)], pauses.search + 5000);
+      result = await direct(...call);
+    }
+    return result;
+  };
   const started = performance.now();
   let first = self ? "you" : shortName(message.name.split(" ")[0] ?? message.name, 30);
   const stopped = () => control.reason() !== null;
@@ -423,7 +433,26 @@ export async function runTeamsRecipe(asked: TeamsMessage & { name: string }, dep
   const empty = (held: string | null) => held !== null && (squash(held) === "" || placeholderOf(held));
   const before = await read();
   if (stopped()) return { kind: "stopped" };
-  if (before !== null && !empty(before)) return { kind: "failed", line: `The chat with ${first} already has a draft in the message box, so Bee left it alone. Nothing was sent.` };
+  if (before !== null && !empty(before)) {
+    // The box holds a draft: Bee asks, and only on Confirm clears it. It never stops without asking, and never clears unasked.
+    const kept: RecipeOutcome = { kind: "failed", line: `The chat with ${first} already has a draft in the message box, so Bee left it alone. Nothing was sent.` };
+    deps.onStep?.(CONFIRM_LABEL);
+    const replace: ConfirmRequest = { kind: "delete", question: "Replace your draft?", detail: `The message box holds “${shortName(squash(before), 60)}”. Bee will delete it and write its own message.` };
+    const agreed = await control.paused(() => awaitAnswer((signal) => deps.confirm(replace, signal), control.signal, deps.confirmTimeoutMs ?? CONFIRM_TIMEOUT_MS));
+    debugLog.info("computer", "teams-recipe", { step: "replace-draft", ok: agreed });
+    if (stopped()) return { kind: "stopped" };
+    if (!agreed) return kept;
+    deps.onStep?.("Writing the message…");
+    await logged("clear-draft", okResult)(exec("clear", [box], KEY_MS));
+    if (!empty(await read()) && !stopped()) {
+      // clear did not empty it: select all and delete with real keys, cursor in the box.
+      await exec("focus", [box, HEADED_FLAG], KEY_MS);
+      await press(modKey(platform, "a"));
+      await press("delete");
+    }
+    if (stopped()) return { kind: "stopped" };
+    if (!empty(await read())) return { kind: "failed", line: `Bee could not clear the draft in the chat with ${first}, so it wrote nothing. Nothing was sent.` };
+  }
   const focused = await logged("focus-box", okResult)(exec("focus", [box, HEADED_FLAG], KEY_MS));
   if (stopped()) return { kind: "stopped" };
   if (!focused.ok) return fallback("Bee found the message box but could not put the cursor in it.");

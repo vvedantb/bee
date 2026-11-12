@@ -424,6 +424,20 @@ describe("runTeamsRecipe", () => {
     expect(steps[0]).toBe("Opening your own chat…");
   });
 
+  it("looks for the own chat again when agent-desktop misses Teams just after it opens", async () => {
+    const own = "Chat Vedant Bhopatrao (You) You: hello";
+    let missed = 0;
+    const fake = teams({
+      ownRow: own,
+      results: ['Search for "Vedant Bhopatrao"', "Vedant Bhopatrao (You)"],
+      selected: own,
+      onCall: (call) => (call.command === "find" && call.args.includes("--name=(You)") && missed++ === 0 ? { ok: false, code: "APP_NOT_FOUND" } : null),
+    });
+    const { go } = recipe(fake);
+    expect(await go({ to: "myself", name: SELF_CHAT, text: "hi", send: true })).toEqual({ kind: "sent", line: "Sent to your own chat." });
+    expect(fake.state.sent).toBe("hi");
+  });
+
   it("opens a chat to read it, checks it, and writes nothing", async () => {
     const fake = teams();
     const { go, asked } = recipe(fake);
@@ -517,10 +531,21 @@ describe("runTeamsRecipe", () => {
     expect(fake.state.sent).toBeNull();
   });
 
-  it("leaves a draft of the user's own alone", async () => {
+  it("asks before it touches a draft of the user's own, and leaves it alone on Cancel", async () => {
     const fake = teams({ box: "half a thought" });
-    expect(await recipe(fake).go(SAM)).toEqual({ kind: "failed", line: "The chat with Sam already has a draft in the message box, so Bee left it alone. Nothing was sent." });
+    const { go, asked } = recipe(fake, { confirm: false });
+    expect(await go(SAM)).toEqual({ kind: "failed", line: "The chat with Sam already has a draft in the message box, so Bee left it alone. Nothing was sent." });
+    expect(asked).toEqual([{ kind: "delete", question: "Replace your draft?", detail: "The message box holds “half a thought”. Bee will delete it and write its own message." }]);
     expect(fake.state.box).toBe("half a thought");
+    expect(fake.calls.some((call) => call.command === "clear")).toBe(false);
+  });
+
+  it("replaces a draft on Confirm, then asks again before it sends", async () => {
+    const fake = teams({ box: "half a thought" });
+    const { go, asked } = recipe(fake);
+    expect(await go(SAM)).toEqual({ kind: "sent", line: "Sent to Sam Lee." });
+    expect(asked.map((request) => request.question)).toEqual(["Replace your draft?", "Send this?"]);
+    expect(fake.state.sent).toBe("Running late, 5 min");
   });
 
   it("on Cancel leaves the message in the box and says it is drafted, not sent", async () => {
