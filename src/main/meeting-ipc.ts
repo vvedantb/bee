@@ -34,8 +34,9 @@ import { GUIDE_MODEL, NO_GATEWAY_KEY, STT_MODEL, createBeeGateway, type BeeGatew
 import { runPipeline } from "../core/pipeline";
 import { searchLocation } from "../core/web-search";
 import { conversationTranscript, meetingTranscript } from "../core/session-transcript";
-import { peopleBlock, type Person } from "../core/people";
-import { buildLocalSummary, generateMeetingSummary } from "../core/summary";
+import { peopleBlock, type LearnedPerson, type Person } from "../core/people";
+import { buildLocalSummary, generateMeetingSummary, transcriptSpeakers } from "../core/summary";
+import { TEAMS_AUDIO_SPEAKER } from "../core/teams-audio";
 import { sttVocabulary, transcribeSpeech } from "../core/transcribe";
 import {
   COMPUTER_LINE_MAX,
@@ -128,6 +129,8 @@ export function registerMeetingIpc(args: { notesDir: string;
   /** What Bee knows about those people (core/people.ts): emails for Teams chat links, topics for meeting notes. */
   people?: () => Person[];
   learnNames?: (names: string[]) => void;
+  /** Files what a meeting's notes say about its speakers (main/settings.ts learnPeople): names and their topics. */
+  learnPeople?: (people: LearnedPerson[]) => void;
   /** Briefings shown before meetings (main/briefing-watcher.ts), by key, for "Dig deeper". */
   briefings?: (key: string) => Briefing | undefined;
   /** look_at_screen's picture of the front window (main/screen-capture.ts). Absent: no look_at_screen tool. */
@@ -643,8 +646,18 @@ export function registerMeetingIpc(args: { notesDir: string;
     const started = performance.now();
     debugLog.info("meeting", "summary-start", { lines: input.transcript.length, notesCited: input.notesCited.length, tips: input.tips.length, meetingId: input.meetingId, hasKey: Boolean(apiKey), teamsAudioLines, captionLines, micLines });
     const summary = apiKey
-      ? await generateMeetingSummary({ ...input, people: peopleBlock(args.knownNames?.() ?? [], args.people?.() ?? []), model: createGateway(apiKey).languageModel(GUIDE_MODEL), when })
-      : { markdown: buildLocalSummary({ ...input, when }), usedLlm: false, error: NO_GATEWAY_KEY };
+      ? await generateMeetingSummary({ ...input, learnPeople: Boolean(args.learnPeople), people: peopleBlock(args.knownNames?.() ?? [], args.people?.() ?? []), model: createGateway(apiKey).languageModel(GUIDE_MODEL), when })
+      : { markdown: buildLocalSummary({ ...input, when }), usedLlm: false, error: NO_GATEWAY_KEY, people: [] };
+    // Bee's own memory of people: every speaker the call named, with the topics the notes AI gave for them. "Meeting" is the label
+    // for call audio with no name. The log gets counts only, never names.
+    try {
+      const topics = new Map(summary.people.map((person) => [person.name, person.topics]));
+      const speakers = transcriptSpeakers(input.transcript).filter((name) => name !== TEAMS_AUDIO_SPEAKER);
+      args.learnPeople?.(speakers.map((name) => ({ name, topics: topics.get(name) })));
+      debugLog.info("meeting", "people-learned", { speakers: speakers.length, withTopics: summary.people.length });
+    } catch (error) {
+      debugLog.warn("meeting", "people-learn-failed", { error: errorData(error) });
+    }
     const path = writeMeetingSummaryFile(args.notesDir, summary.markdown, when);
     debugLog.info("meeting", "summary-written", { path, usedLlm: summary.usedLlm, error: summary.error, ms: msSince(started), markdown: summary.markdown });
     // Structured fields go to meeting memory too (when it is on and the meeting has a name). Failing to save never loses the note.

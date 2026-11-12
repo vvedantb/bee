@@ -1,6 +1,7 @@
 import { generateText, type LanguageModel, type SystemModelMessage, type UserModelMessage } from "ai";
 import { debugLog, errorData, modelName, msSince, onceText } from "./debug-log";
 import { ANTHROPIC_CACHE, guideProviderOptions } from "./gateway";
+import { PEOPLE_SECTION_RULES, splitPeopleSection, type LearnedPerson } from "./people";
 
 const SUMMARY_TIMEOUT_MS = 60_000;
 
@@ -48,6 +49,8 @@ export type SummaryInput = {
   attributionUnknown?: boolean;
   /** The people the user knows, as a block for the AI (core/people.ts peopleBlock). Names and topics only. */
   people?: string;
+  /** Ask for each speaker's topics too (core/people.ts PEOPLE_SECTION_RULES). Only used when the transcript names its speakers. */
+  learnPeople?: boolean;
 };
 
 const PLACEHOLDER_OWNER = /^\s*(?:\*\*)?speaker(?:\s*#?\d+)?(?:\*\*)?\s*:\s*/i;
@@ -111,7 +114,8 @@ export function buildSummaryPrompt(args: SummaryInput): { system: string; prompt
     "",
     "Summary:",
   ].join("\n");
-  const system = speakers.length > 0 ? `${SUMMARY_SYSTEM}\n${SPEAKER_RULES}` : SUMMARY_SYSTEM;
+  const labelled = speakers.length > 0 ? `${SUMMARY_SYSTEM}\n${SPEAKER_RULES}` : SUMMARY_SYSTEM;
+  const system = speakers.length > 0 && args.learnPeople ? `${labelled}\n${PEOPLE_SECTION_RULES}` : labelled;
   const rules = args.attributionUnknown && speakers.length === 0 ? `${system}\n${ATTRIBUTION_UNKNOWN_RULES}` : system;
   // After the fixed rules, so those stay one cached prefix when the list changes.
   return { system: args.people ? `${rules}\n\n${args.people}` : rules, prompt };
@@ -195,7 +199,7 @@ export function buildLocalSummary(args: SummaryInput & { when?: Date }): string 
 /** Luna writes the summary. Fails open: on any error the local summary is returned with the reason. */
 export async function generateMeetingSummary(
   args: SummaryInput & { model: LanguageModel; when?: Date; timeoutMs?: number },
-): Promise<{ markdown: string; usedLlm: boolean; error: string | null }> {
+): Promise<{ markdown: string; usedLlm: boolean; error: string | null; people: LearnedPerson[] }> {
   const when = args.when ?? new Date();
   const started = performance.now();
   try {
@@ -212,14 +216,17 @@ export async function generateMeetingSummary(
       providerOptions: guideProviderOptions("flex", { web: false }),
     });
     debugLog.info("ai", "summary-response", { ms: msSince(started), finishReason: result.finishReason, text: result.text, usage: result.totalUsage });
-    const body = parseSummaryMarkdown(result.text);
-    if (!body) throw new Error("reply did not have the expected sections");
-    return { markdown: assemble(when, body, args), usedLlm: true, error: null };
+    const reply = parseSummaryMarkdown(result.text);
+    if (!reply) throw new Error("reply did not have the expected sections");
+    // The People section is for Bee's own memory of people: filed by the caller, never part of the note.
+    const { body, people } = splitPeopleSection(reply, transcriptSpeakers(args.transcript));
+    return { markdown: assemble(when, body, args), usedLlm: true, error: null, people };
   } catch (error) {
     debugLog.warn("ai", "summary-failed", { ms: msSince(started), error: errorData(error) });
     return {
       markdown: buildLocalSummary({ ...args, when }),
       usedLlm: false,
+      people: [],
       error: `AI summary failed: ${error instanceof Error ? error.message : String(error)}`,
     };
   }

@@ -24,7 +24,7 @@ import { ClaudeCodeSection } from "./ClaudeCodeSection";
 import { BrowseSection } from "./BrowseSection";
 import { MeetingButton } from "./MeetingButton";
 import { MeetingSection } from "./MeetingSection";
-import { ClearMeetingNotes, KnownNamesField } from "./MemoryFields";
+import { ClearMeetingNotes } from "./MemoryFields";
 import { MemorySection } from "./MemorySection";
 import { NotchStatus } from "./NotchStatus";
 import { PANEL_TABS } from "./panel-tabs";
@@ -318,10 +318,7 @@ function LiveTab({ state }: { state: BeeState }) {
 function MemoryTab({ state, settings }: { state: BeeState; settings: SettingsView }) {
   return (
     <div className="tab-body">
-      <div>
-        <KnownNamesField names={settings.knownNames} people={settings.people} onSave={(knownNames, people) => actions.saveSettings({ knownNames, people })} />
-        {state.error ? <p className="error">{state.error}</p> : null}
-      </div>
+      {state.error ? <p className="error">{state.error}</p> : null}
       <MemorySection onLoad={() => actions.listMemory()} onClear={() => actions.clearMemory()} />
       <section>
         <h2>Notes</h2>

@@ -1,9 +1,10 @@
-import { KNOWN_NAMES_MAX, normalizeNames } from "./known-names";
+import { KNOWN_NAMES_MAX, isPerson, normalizeNames } from "./known-names";
 
-// What Bee knows about a person beyond the name (core/known-names.ts holds the names): a work email and the topics the user
-// usually talks to them about. Typed in Settings → Memory, one person per line ("Zuzanna Moody, zuzanna@example.com, pricing,
-// contracts"), and kept on this computer. The email opens the person's Teams chat by link, with no search to mishear or mistype;
-// it is never sent to the AI. The topics go with the names to the AI that writes meeting notes. Pure: no Electron, no fs.
+// What Bee knows about a person beyond the name (core/known-names.ts holds the names): the topics they usually talk about, and a
+// work email when Bee has one. Bee keeps this by itself, in its settings file on this computer; no screen shows or edits it. The
+// topics come from meetings whose transcript names its speakers (live captions): the notes AI lists each speaker's topics, Bee
+// files them here and leaves them out of the note. They go with the names to the AI that writes the next notes. An email opens the
+// person's Teams chat by link; it is never sent to the AI. Pure: no Electron, no fs.
 
 export type Person = { name: string; email?: string; topics?: string };
 
@@ -42,31 +43,73 @@ export function normalizePeople(people: readonly Person[]): Person[] {
   return [...byName.values()].slice(-KNOWN_NAMES_MAX);
 }
 
-/**
- * The Memory tab's text as the lists to save. Each line is a name, then (after commas) an email and the usual topics, in any
- * order: "Sam Lee", "Sam Lee, sam@example.com", "Sam Lee, sam@example.com, rotas, invoices".
- */
-export function peopleFromText(text: string): { names: string[]; people: Person[] } {
-  const rows = text.split(/\r?\n/).map((line) => {
-    const [name = "", ...rest] = line.split(",").map((part) => part.trim());
-    const email = rest.find((part) => cleanEmail(part) !== null);
-    const topics = rest.filter((part) => part !== email && part !== "").join(", ");
-    return { name, ...(email ? { email } : {}), ...(topics ? { topics } : {}) };
-  });
-  const names = normalizeNames(rows.map((row) => row.name));
-  const kept = new Set(names.map(key));
-  return { names, people: normalizePeople(rows).filter((person) => kept.has(key(person.name))) };
+const TOPICS_PER_MEETING = 3;
+const TOPIC_MAX_CHARS = 40;
+
+const topicList = (topics: string) =>
+  topics
+    .split(/[;,]/)
+    .map((topic) => topic.replace(/\s+/g, " ").trim().replace(/[.]+$/, ""))
+    .filter((topic) => topic.length > 0);
+
+/** The person's topics with fresh ones put first: no repeats (any case), whole topics only, within TOPICS_MAX_CHARS. The oldest drop off. */
+export function mergeTopics(known: string | undefined, fresh: string): string {
+  const seen = new Set<string>();
+  const kept: string[] = [];
+  for (const topic of [...topicList(fresh), ...topicList(known ?? "")]) {
+    if (topic.length > TOPIC_MAX_CHARS || seen.has(key(topic))) continue;
+    if ([...kept, topic].join(", ").length > TOPICS_MAX_CHARS) break;
+    seen.add(key(topic));
+    kept.push(topic);
+  }
+  return kept.join(", ");
 }
 
-/** The lists as the Memory tab's text: every known name on its own line, with its email and topics when Bee has them. */
-export function peopleText(names: readonly string[], people: readonly Person[]): string {
-  const details = new Map(people.map((person) => [key(person.name), person]));
-  return names
-    .map((name) => {
-      const person = details.get(key(name));
-      return [name, person?.email, person?.topics].filter(Boolean).join(", ");
-    })
-    .join("\n");
+/** What a meeting taught Bee about one person: the name as the call showed it, and what they talked about. */
+export type LearnedPerson = { name: string; topics?: string };
+
+/** The details with what Bee just learned merged in: topics added to the person's own, an email never touched. */
+export function learnedPeople(people: readonly Person[], learned: readonly LearnedPerson[]): Person[] {
+  const byName = new Map(normalizePeople(people).map((person) => [key(person.name), person]));
+  for (const raw of learned) {
+    const [name] = normalizeNames([raw.name]);
+    if (!name || !raw.topics) continue;
+    const old = byName.get(key(name));
+    if (!old && !isPerson(name)) continue;
+    const topics = mergeTopics(old?.topics, raw.topics);
+    if (!topics) continue;
+    byName.delete(key(name));
+    byName.set(key(name), { ...old, name: old?.name ?? name, topics });
+  }
+  return [...byName.values()].slice(-KNOWN_NAMES_MAX);
+}
+
+/** Added to the notes AI's rules when the transcript names its speakers: one more section, which Bee files and never shows. */
+export const PEOPLE_SECTION_RULES = [
+  'After Topics, add a fourth section, "## People": one bullet for each speaker who said something of substance, as "- Name: topic; topic".',
+  "Use the speaker's name exactly as the transcript gives it. Give at most three topics of one to four words each, taken only from what that speaker said. Leave out a speaker with nothing of substance.",
+].join("\n");
+
+/**
+ * The notes AI's reply without its People section, and what that section says about the meeting's own speakers. A name that is not
+ * a speaker in the transcript is dropped: Bee learns only about people the call itself named.
+ */
+export function splitPeopleSection(body: string, speakers: readonly string[]): { body: string; people: LearnedPerson[] } {
+  const lines = body.replace(/\r\n/g, "\n").split("\n");
+  const start = lines.findIndex((line) => /^##\s+people\s*$/i.test(line));
+  if (start === -1) return { body, people: [] };
+  const next = lines.findIndex((line, index) => index > start && line.startsWith("## "));
+  const end = next === -1 ? lines.length : next;
+  const named = new Map(speakers.map((speaker) => [key(speaker.trim()), speaker.trim()]));
+  const people: LearnedPerson[] = [];
+  for (const line of lines.slice(start + 1, end)) {
+    const match = /^\s*[-*]\s+(?:\*\*)?([^:*]+?)(?:\*\*)?\s*:\s*(.+)$/.exec(line);
+    const name = match ? named.get(key((match[1] ?? "").trim())) : undefined;
+    if (!name || !match) continue;
+    const topics = topicList(match[2] ?? "").filter((topic) => topic.length <= TOPIC_MAX_CHARS).slice(0, TOPICS_PER_MEETING).join(", ");
+    if (topics) people.push({ name, topics });
+  }
+  return { body: [...lines.slice(0, start), ...lines.slice(end)].join("\n").trim(), people };
 }
 
 /** The email saved for exactly this name (any case), else null. A name that only sounds or starts alike is someone else. */

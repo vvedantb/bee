@@ -152,6 +152,16 @@ describe("speaker-labelled summaries (captions or Teams audio)", () => {
     expect(prompt).toContain("- Alice: Let's pick up the Acme renewal.\n- Bob: I'll send the quote by Friday.");
   });
 
+  it("asks for each speaker's topics when Bee is learning people, and keeps that section out of the note", async () => {
+    expect(buildSummaryPrompt({ transcript: labelled, learnPeople: true }).system).toContain('"## People"');
+    expect(buildSummaryPrompt({ transcript, learnPeople: true }).system).toBe(SUMMARY_SYSTEM);
+    const result = await generateMeetingSummary({ model: mockModel(`${MODEL_REPLY}\n## People\n- Bob: quote; Acme renewal\n- Carol: budget`), transcript: labelled, learnPeople: true, when });
+    expect(result.people).toEqual([{ name: "Bob", topics: "quote, Acme renewal" }]);
+    expect(result.markdown).not.toContain("People");
+    expect(result.markdown).not.toContain("Carol");
+    expect(result.markdown).toContain("## Topics\n- Acme renewal: discount and timing.\n\n## Speakers");
+  });
+
   it("lists labelled lines under Topics and the speakers in the local summary", () => {
     const markdown = buildLocalSummary({ transcript: labelled, notesCited, when });
     expect(markdown).toContain("## Topics\n- Alice: Let's pick up the Acme renewal.\n- Bob: I'll send the quote by Friday.");

@@ -6,8 +6,8 @@ import { join } from "node:path";
 import { z } from "zod";
 import { clampInterfaceScale, type SavedPosition } from "../core/interface-scale";
 import { clampMotionPreference } from "../core/motion-preference";
-import { mergeNames, normalizeNames } from "../core/known-names";
-import { normalizePeople, type Person } from "../core/people";
+import { isPerson, mergeNames, normalizeNames } from "../core/known-names";
+import { learnedPeople, normalizePeople, type LearnedPerson, type Person } from "../core/people";
 import { createMcpOAuthProvider, hasMcpOAuthTokens, mcpOAuthStateSchema, type McpOAuthStorage } from "../core/mcp-oauth";
 import { canSubmitTranscripts } from "../core/vmem-transcript";
 import type { TranscriptSettings } from "./vmem-transcript-queue";
@@ -45,9 +45,9 @@ const fileSchema = z.object({
   // Send finished sessions to vmem (main/vmem-transcript-queue.ts). Like personalisedLinks: stored only once the user sets it;
   // until then on only while an enabled vmem connector exists. A bad value reads as unset.
   sendSessionsToVmem: z.boolean().optional().catch(undefined),
-  // Names Bee should know (core/known-names.ts): typed in Settings or learned from corrections and the screen. A bad value reads as none.
+  // Names Bee should know (core/known-names.ts): learned from corrections, the screen and meeting speakers. A bad value reads as none.
   knownNames: z.array(z.string()).default([]).catch([]),
-  // What Bee knows about those people (core/people.ts): a work email and usual topics. This computer only. A bad value reads as none.
+  // What Bee knows about those people (core/people.ts): usual topics learned from meetings, and a work email when there is one. This computer only. A bad value reads as none.
   people: z.array(z.object({ name: z.string(), email: z.string().optional(), topics: z.string().optional() })).default([]).catch([]),
   // Call audio, "Hear other people in calls" (core/teams-audio.ts; the key is from the Teams-only version). Off until switched
   // on: it sends other people's words to speech-to-text. When on, it hears the call app alone (Teams, Zoom or the Meet browser).
@@ -514,13 +514,24 @@ export function createSettingsStore(args: {
     return normalizePeople(read().people);
   }
 
-  /** Adds names Bee learned (a spelling correction, a chat name on screen). Main only; the list stays editable in Settings. */
+  /** Adds names Bee learned (a spelling correction, a chat name on screen). Main only. */
   function learnNames(names: readonly string[]): void {
     if (names.length === 0) return;
     const file = read();
     const merged = mergeNames(file.knownNames, names);
     if (JSON.stringify(merged) === JSON.stringify(file.knownNames)) return;
     write({ ...file, knownNames: merged });
+  }
+
+  /** Files what a meeting taught Bee: each speaker's name, and their topics added to what Bee already has. Main only. */
+  function learnPeople(learned: readonly LearnedPerson[]): void {
+    const real = learned.filter((person) => isPerson(person.name));
+    if (real.length === 0) return;
+    const file = read();
+    const knownNames = mergeNames(file.knownNames, real.map((person) => person.name));
+    const people = learnedPeople(file.people ?? [], real);
+    if (JSON.stringify([knownNames, people]) === JSON.stringify([file.knownNames, file.people ?? []])) return;
+    write({ ...file, knownNames, people });
   }
 
   function overlayPosition(): SavedPosition | undefined {
@@ -531,5 +542,5 @@ export function createSettingsStore(args: {
     write({ ...read(), overlayPosition: position });
   }
 
-  return { view, save, allowRemoteAi, teamsAudioFallback, overlayPosition, saveOverlayPosition, gatewayApiKey, savedGatewayApiKey, linkSettings, vmemConfig, transcriptSettings, knownNames, people, learnNames, mcpList, mcpSave, mcpRemove, mcpSignOut, mcpSetEnabled, mcpRecordTools, mcpConfigs, mcpSignedOut, mcpConfig, mcpOAuthStorage };
+  return { view, save, allowRemoteAi, teamsAudioFallback, overlayPosition, saveOverlayPosition, gatewayApiKey, savedGatewayApiKey, linkSettings, vmemConfig, transcriptSettings, knownNames, people, learnNames, learnPeople, mcpList, mcpSave, mcpRemove, mcpSignOut, mcpSetEnabled, mcpRecordTools, mcpConfigs, mcpSignedOut, mcpConfig, mcpOAuthStorage };
 }

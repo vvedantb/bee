@@ -1,7 +1,7 @@
-// Names Bee should know: people and chats the user cares about, spelled the way the user spells them. A local list in Settings
-// that the user can edit, plus names Bee learns by itself: a spelling the user gives ("It's Z U Z A N N A") and chat names it
-// reads on screen during computer use ("Chat | Zuzanna Szczepaniak-Moody | …" in Teams), and a correction the user says ("I meant
-// Krzysztof"). Sent with each direct request so the AI spells them right and can match a misheard name ("Susannah") to a known
+// Names Bee should know: people and chats the user cares about, spelled the way the user spells them. A local list that
+// Bee keeps by itself, in its settings file; no screen shows or edits it. Bee learns a spelling the user gives ("It's Z U Z A N N
+// A"), chat names it reads on screen during computer use ("Chat | Zuzanna Szczepaniak-Moody | …" in Teams), a correction the user
+// says ("I meant Krzysztof"), and the speakers a meeting's captions name (core/people.ts). Sent with each direct request so the AI spells them right and can match a misheard name ("Susannah") to a known
 // one. A name spelled like a known person is that person (Chris: Chris Lee; Krzys: Krzysztof Nowak), and a sound-alike never
 // competes with it. When a heard name only sounds like more than one known person (Kris: Chris Lee or Krzysztof Nowak), or is
 // spelled like two (Sara: Sara Kim or Sarah Ode), Bee asks which one: no name is ever mapped to another for good. Pure: no Electron, no fs.
@@ -33,11 +33,6 @@ export function normalizeNames(names: readonly string[]): string[] {
   return out.slice(-KNOWN_NAMES_MAX);
 }
 
-/** The names typed in the Memory tab, one per line, as the list to save. */
-export function namesFromText(text: string): string[] {
-  return normalizeNames(text.split(/\r?\n/));
-}
-
 /** The list with newly learned names added at the end. A name already there (any case) stays where it is. */
 export function mergeNames(known: readonly string[], learned: readonly string[]): string[] {
   return normalizeNames([...known, ...learned]);
@@ -50,7 +45,8 @@ const PERSON = new RegExp(`^${NAME_WORD}(?: ${NAME_WORD}){0,3}$`, "u");
 // Words that look like names but are Bee, the user, an app or a place on screen.
 const NOT_A_NAME = /^(?:bee|you|me|chat|chats|teams|microsoft teams|search|activity|calendar|general|people|messages|files|new chat|copilot)$/i;
 
-const isPerson = (name: string) => PERSON.test(name) && !NOT_A_NAME.test(name) && !/\(you\)/i.test(name);
+/** A person's name as a screen or a call shows it, and not Bee, the user, an app or a place. */
+export const isPerson = (name: string) => PERSON.test(name) && !NOT_A_NAME.test(name) && !/\(you\)/i.test(name);
 
 // "It's Z U Z A N N A", "spelt Z-U-Z-A-N-N-A": letters one by one, right after the cue.
 const SPELLED_LETTERS = /\b(?:it's|it is|its|spelt|spelled|spelling is|spell it|name is|that's|written)\s*[:,]?\s*((?:\p{L}[\s.,-]+){2,}\p{L})(?![\p{L}])/iu;

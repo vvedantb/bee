@@ -577,6 +577,7 @@ if (clerk.isPrimaryInstance) {
       knownNames: settings.knownNames,
       people: settings.people,
       learnNames: settings.learnNames,
+      learnPeople: settings.learnPeople,
       notesDir,
       mcpConfigs: settings.mcpConfigs,
       mcpSignedOut: settings.mcpSignedOut,

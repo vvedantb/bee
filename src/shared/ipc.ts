@@ -127,7 +127,7 @@ export const settingsViewSchema = z.object({
   notesDir: z.string(),
   // The local debug log folder (main/debug-log.ts), beside the notes folder. Logs stay on this computer and are never deleted.
   logsDir: z.string(),
-  // Names Bee should know (core/known-names.ts): typed here or learned from spelling corrections and chat names on screen.
+  // Names Bee should know (core/known-names.ts): learned from spelling corrections, chat names on screen and meeting speakers.
   knownNames: z.array(z.string()),
   // What Bee knows about those people (core/people.ts): a work email and usual topics, for the names that have either.
   people: z.array(personSchema).optional(),

@@ -834,22 +834,6 @@ p {
   color: inherit;
 }
 
-/* Memory → "Names Bee should know": collapsed until opened. */
-.known-names-trigger {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  cursor: pointer;
-}
-
-.known-names-trigger .chevron-icon {
-  transition: transform 160ms var(--spring, ease);
-}
-
-.known-names-trigger[data-state="open"] .chevron-icon {
-  transform: rotate(90deg);
-}
-
 .error-text {
   color: var(--danger);
 }
