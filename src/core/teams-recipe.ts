@@ -24,6 +24,8 @@ export type TeamsMessage = {
   to: string;
   text: string;
   send: boolean;
+  /** The person's saved email (core/people.ts): the chat opens by Teams' link first, by search when that fails. Never logged. */
+  email?: string;
   /** Only open and check the chat: write nothing (text is ignored). */
   openOnly?: boolean;
   /** With openOnly: also read the open chat's latest messages (the Bee MCP server's teams_read_chat). */
@@ -305,105 +307,128 @@ export async function runTeamsRecipe(asked: TeamsMessage & { name: string }, dep
     first = "you";
   }
 
-  // 2. Teams' search box, then the name with real keys. On Windows a key reaches Teams only while an element in it holds the
-  // keyboard (else "no verified keyboard focus"), so Bee puts the cursor in the search box itself and types there; when it cannot,
-  // it puts the cursor in the message box and presses ctrl+e (cmd+e); else ctrl+e alone. Then the box must hold the name: keys
-  // that missed it move through the chat list instead (Down and Return then open the chat at the top, often the user's own).
-  const keys = keyPresses(message.name);
-  let searchBox: string | null = null;
-  const typeName = async (): Promise<AgentDesktopResult> => {
-    if (!keys || keys.length > NAME_KEYS_MAX) return (await pasteText(exec, { text: message.name, platform, scope: where })).result;
-    for (const [index, key] of keys.entries()) {
-      if (stopped()) return { ok: false, code: "ABORTED" };
-      const result = await press(key);
-      if (result.ok) continue;
-      // Keys refused at the first one, with the search box known: type the name into the box itself instead.
-      if (index === 0 && searchBox && NO_KEYBOARD.test(result.message ?? "") && !stopped()) {
-        return logged("type-name", okResult)(exec("type", [searchBox, HEADED_FLAG, STDIN_FLAG], TYPE_MS, message.name));
-      }
-      return result;
-    }
-    return { ok: true, data: null };
-  };
-  // Teams' search box is a text field or a combobox, named like "Search".
-  const searchFields = async (): Promise<Match[]> => {
-    const found: Match[] = [];
-    for (const role of ["textfield", "combobox"]) {
-      const fields = await exec("find", [...where, `--role=${role}`, "--limit=15", `--timeout-ms=${LOOK_MS}`], LOOK_MS + 6000);
-      if (fields.ok) found.push(...findMatches(fields.data).filter((match) => SEARCH_NAME.test(match.name ?? "")));
-    }
-    return found;
-  };
-  const editable = (fields: readonly Match[]) => fields.find((field) => field.ref_id && REF_PATTERN.test(field.ref_id) && !field.states?.includes("readonly"))?.ref_id ?? null;
-  searchBox = editable(await logged("find-search", (found: Match[]) => found.length > 0)(searchFields()));
-  if (stopped()) return { kind: "stopped" };
-  const inSearch = searchBox ? (await logged("focus-search", okResult)(exec("focus", [searchBox, HEADED_FLAG], KEY_MS))).ok : false;
-  if (stopped()) return { kind: "stopped" };
-  if (inSearch) await press(modKey(platform, "a"));
-  else {
-    // Something in Teams must hold the keyboard for ctrl+e: the message box, when Bee can find it.
-    const boxes = await exec("find", [...where, "--role=textfield", "--limit=15", `--timeout-ms=${LOOK_MS}`], LOOK_MS + 6000);
-    const compose = boxes.ok ? composeRef(findMatches(boxes.data)) : null;
-    if (compose && !stopped()) await logged("focus-compose", okResult)(exec("focus", [compose, HEADED_FLAG], KEY_MS));
+  // 2. With the person's email (core/people.ts), Teams' own link opens the chat: no search to mistype. Step 4's check still
+  // decides: a link that opened nothing, or another chat, leaves the search below to do it.
+  let linked = false;
+  if (!self && asked.email && deps.desktop.openTeamsChat) {
+    const link = await logged("chat-link", (result: { ok: boolean }) => result.ok)(deps.desktop.openTeamsChat(asked.email));
     if (stopped()) return { kind: "stopped" };
-    let search = await logged("search", okResult)(press(modKey(platform, "e")));
-    // Just after Teams opens, agent-desktop can miss its process for a moment: once more.
-    if (!search.ok && search.code === "APP_NOT_FOUND" && !stopped()) {
-      await pause(pauses.search);
-      search = await logged("search", okResult)(press(modKey(platform, "e")));
+    if (link.ok) {
+      await pause(pauses.open);
+      if (stopped()) return { kind: "stopped" };
+      linked = await logged("verify-link", (value: boolean) => value)(chatOpen(exec, where, message.name));
+      if (stopped()) return { kind: "stopped" };
     }
-    if (stopped()) return { kind: "stopped" };
-    if (!search.ok) return fallback("Bee could not put the cursor in Teams' search box or open it with the keyboard.");
-    await pause(pauses.search);
+    if (linked) done.push(`Bee opened the chat with ${message.name} by its Teams link.`);
   }
-  // A box holds the name when its text has it, or when it has the keyboard (Teams may not report the text). A miss only when no box
-  // holds it and some box said what it holds or that it lacks the keyboard. No box, or nothing reported: Bee cannot tell, and
-  // step 4 still checks the chat.
-  const hasName = (field: Match) => (typeof field.value === "string" && fold(field.value).includes(fold(message.name))) || field.states?.includes("focused") === true;
-  const missed = (fields: readonly Match[]) => !fields.some(hasName) && fields.some((field) => typeof field.value === "string" || field.states !== undefined);
-  const typed = await logged("name", okResult)(typeName());
-  if (stopped()) return { kind: "stopped" };
-  if (!typed.ok) return fallback("Bee opened Teams' search but could not type the name to search for.");
-  let searched = await logged("search-box", (found: Match[]) => !missed(found))(searchFields());
-  if (stopped()) return { kind: "stopped" };
-  const target = missed(searched) ? searched.find((field) => field.ref_id && !field.states?.includes("readonly"))?.ref_id : undefined;
-  if (target) {
-    // The keys missed the box: put the cursor in it (a click when Teams refuses focus), select what it holds, type again.
-    let into = await logged("focus-search", okResult)(exec("focus", [target, HEADED_FLAG], KEY_MS));
-    if (!into.ok && !stopped()) into = await logged("click-search", okResult)(exec("click", [target, HEADED_FLAG], KEY_MS));
-    const again = into.ok && !stopped() && (await press(modKey(platform, "a"))).ok ? await logged("name-again", okResult)(typeName()) : into;
-    if (stopped()) return { kind: "stopped" };
-    if (again.ok) searched = await logged("search-box", (found: Match[]) => !missed(found))(searchFields());
-    if (stopped()) return { kind: "stopped" };
-  }
-  if (missed(searched)) return fallback("Bee typed the name, but Teams' search box did not show it, so Bee opened no chat.");
-  done.push(`Bee typed "${message.name}" in Teams' search.`);
-  await pause(pauses.results);
-  if (stopped()) return { kind: "stopped" };
 
-  // 3. The result that names the person, by its place in the list (keys only). Two people match: Bee asks for the full name. No
-  // result it can read: the first, as before. Step 4 checks the chat either way.
-  const results = await logged("results", okResult)(exec("find", [...where, "--role=option", "--limit=20", `--timeout-ms=${LOOK_MS}`], LOOK_MS + 6000));
-  if (stopped()) return { kind: "stopped" };
-  // Search suggestions sit in a dropdown list; an open chat's messages can be options too ("George Dowling, is it merged?").
-  const options = results.ok ? findMatches(results.data) : [];
-  const inDropdown = options.filter((match) => match.path?.some((part) => /^listbox\b/i.test(part)));
-  const pick = pickResult((inDropdown.length > 0 ? inDropdown : options).map((match) => match.name ?? ""), message.name);
-  if (pick === "several") return { kind: "failed", line: `More than one person or chat in Teams matches "${message.name}". Say the full name. Nothing was sent.` };
-  const downs = (pick ?? 0) + 1;
-  for (const key of [...Array.from({ length: downs }, () => "down"), "return"]) {
-    const result = await logged(key, okResult)(press(key));
+  /** Steps 2 and 3 by search. Null: a result was opened, and step 4 checks it. */
+  const bySearch = async (): Promise<RecipeOutcome | null> => {
+    // 2. Teams' search box, then the name with real keys. On Windows a key reaches Teams only while an element in it holds the
+    // keyboard (else "no verified keyboard focus"), so Bee puts the cursor in the search box itself and types there; when it cannot,
+    // it puts the cursor in the message box and presses ctrl+e (cmd+e); else ctrl+e alone. Then the box must hold the name: keys
+    // that missed it move through the chat list instead (Down and Return then open the chat at the top, often the user's own).
+    const keys = keyPresses(message.name);
+    let searchBox: string | null = null;
+    const typeName = async (): Promise<AgentDesktopResult> => {
+      if (!keys || keys.length > NAME_KEYS_MAX) return (await pasteText(exec, { text: message.name, platform, scope: where })).result;
+      for (const [index, key] of keys.entries()) {
+        if (stopped()) return { ok: false, code: "ABORTED" };
+        const result = await press(key);
+        if (result.ok) continue;
+        // Keys refused at the first one, with the search box known: type the name into the box itself instead.
+        if (index === 0 && searchBox && NO_KEYBOARD.test(result.message ?? "") && !stopped()) {
+          return logged("type-name", okResult)(exec("type", [searchBox, HEADED_FLAG, STDIN_FLAG], TYPE_MS, message.name));
+        }
+        return result;
+      }
+      return { ok: true, data: null };
+    };
+    // Teams' search box is a text field or a combobox, named like "Search".
+    const searchFields = async (): Promise<Match[]> => {
+      const found: Match[] = [];
+      for (const role of ["textfield", "combobox"]) {
+        const fields = await exec("find", [...where, `--role=${role}`, "--limit=15", `--timeout-ms=${LOOK_MS}`], LOOK_MS + 6000);
+        if (fields.ok) found.push(...findMatches(fields.data).filter((match) => SEARCH_NAME.test(match.name ?? "")));
+      }
+      return found;
+    };
+    const editable = (fields: readonly Match[]) => fields.find((field) => field.ref_id && REF_PATTERN.test(field.ref_id) && !field.states?.includes("readonly"))?.ref_id ?? null;
+    searchBox = editable(await logged("find-search", (found: Match[]) => found.length > 0)(searchFields()));
     if (stopped()) return { kind: "stopped" };
-    if (!result.ok) return fallback("Bee could not pick the search result.");
+    const inSearch = searchBox ? (await logged("focus-search", okResult)(exec("focus", [searchBox, HEADED_FLAG], KEY_MS))).ok : false;
+    if (stopped()) return { kind: "stopped" };
+    if (inSearch) await press(modKey(platform, "a"));
+    else {
+      // Something in Teams must hold the keyboard for ctrl+e: the message box, when Bee can find it.
+      const boxes = await exec("find", [...where, "--role=textfield", "--limit=15", `--timeout-ms=${LOOK_MS}`], LOOK_MS + 6000);
+      const compose = boxes.ok ? composeRef(findMatches(boxes.data)) : null;
+      if (compose && !stopped()) await logged("focus-compose", okResult)(exec("focus", [compose, HEADED_FLAG], KEY_MS));
+      if (stopped()) return { kind: "stopped" };
+      let search = await logged("search", okResult)(press(modKey(platform, "e")));
+      // Just after Teams opens, agent-desktop can miss its process for a moment: once more.
+      if (!search.ok && search.code === "APP_NOT_FOUND" && !stopped()) {
+        await pause(pauses.search);
+        search = await logged("search", okResult)(press(modKey(platform, "e")));
+      }
+      if (stopped()) return { kind: "stopped" };
+      if (!search.ok) return fallback("Bee could not put the cursor in Teams' search box or open it with the keyboard.");
+      await pause(pauses.search);
+    }
+    // A box holds the name when its text has it, or when it has the keyboard (Teams may not report the text). A miss only when no box
+    // holds it and some box said what it holds or that it lacks the keyboard. No box, or nothing reported: Bee cannot tell, and
+    // step 4 still checks the chat.
+    const hasName = (field: Match) => (typeof field.value === "string" && fold(field.value).includes(fold(message.name))) || field.states?.includes("focused") === true;
+    const missed = (fields: readonly Match[]) => !fields.some(hasName) && fields.some((field) => typeof field.value === "string" || field.states !== undefined);
+    const typed = await logged("name", okResult)(typeName());
+    if (stopped()) return { kind: "stopped" };
+    if (!typed.ok) return fallback("Bee opened Teams' search but could not type the name to search for.");
+    let searched = await logged("search-box", (found: Match[]) => !missed(found))(searchFields());
+    if (stopped()) return { kind: "stopped" };
+    const target = missed(searched) ? searched.find((field) => field.ref_id && !field.states?.includes("readonly"))?.ref_id : undefined;
+    if (target) {
+      // The keys missed the box: put the cursor in it (a click when Teams refuses focus), select what it holds, type again.
+      let into = await logged("focus-search", okResult)(exec("focus", [target, HEADED_FLAG], KEY_MS));
+      if (!into.ok && !stopped()) into = await logged("click-search", okResult)(exec("click", [target, HEADED_FLAG], KEY_MS));
+      const again = into.ok && !stopped() && (await press(modKey(platform, "a"))).ok ? await logged("name-again", okResult)(typeName()) : into;
+      if (stopped()) return { kind: "stopped" };
+      if (again.ok) searched = await logged("search-box", (found: Match[]) => !missed(found))(searchFields());
+      if (stopped()) return { kind: "stopped" };
+    }
+    if (missed(searched)) return fallback("Bee typed the name, but Teams' search box did not show it, so Bee opened no chat.");
+    done.push(`Bee typed "${message.name}" in Teams' search.`);
+    await pause(pauses.results);
+    if (stopped()) return { kind: "stopped" };
+
+    // 3. The result that names the person, by its place in the list (keys only). Two people match: Bee asks for the full name. No
+    // result it can read: the first, as before. Step 4 checks the chat either way.
+    const results = await logged("results", okResult)(exec("find", [...where, "--role=option", "--limit=20", `--timeout-ms=${LOOK_MS}`], LOOK_MS + 6000));
+    if (stopped()) return { kind: "stopped" };
+    // Search suggestions sit in a dropdown list; an open chat's messages can be options too ("George Dowling, is it merged?").
+    const options = results.ok ? findMatches(results.data) : [];
+    const inDropdown = options.filter((match) => match.path?.some((part) => /^listbox\b/i.test(part)));
+    const pick = pickResult((inDropdown.length > 0 ? inDropdown : options).map((match) => match.name ?? ""), message.name);
+    if (pick === "several") return { kind: "failed", line: `More than one person or chat in Teams matches "${message.name}". Say the full name. Nothing was sent.` };
+    const downs = (pick ?? 0) + 1;
+    for (const key of [...Array.from({ length: downs }, () => "down"), "return"]) {
+      const result = await logged(key, okResult)(press(key));
+      if (stopped()) return { kind: "stopped" };
+      if (!result.ok) return fallback("Bee could not pick the search result.");
+    }
+    done.push(pick === null ? "It pressed Down and Return to open the first result." : `It pressed Down ${downs === 1 ? "once" : `${downs} times`} and Return to open the result that names ${message.name}.`);
+    // The search popup closed with the chat opening: keys go to Teams' process again.
+    keyWindow = null;
+    await pause(pauses.open);
+    if (stopped()) return { kind: "stopped" };
+    return null;
+  };
+  if (!linked) {
+    const ended = await bySearch();
+    if (ended) return ended;
   }
-  done.push(pick === null ? "It pressed Down and Return to open the first result." : `It pressed Down ${downs === 1 ? "once" : `${downs} times`} and Return to open the result that names ${message.name}.`);
-  // The search popup closed with the chat opening: keys go to Teams' process again.
-  keyWindow = null;
-  await pause(pauses.open);
-  if (stopped()) return { kind: "stopped" };
 
   // 4. The right chat is open: the chat list's selected row, the window's title or a heading names the person. Else nothing is written.
-  const verified = await logged("verify", (value: boolean) => value)(chatOpen(exec, where, message.name));
+  const verified = linked || (await logged("verify", (value: boolean) => value)(chatOpen(exec, where, message.name)));
   if (stopped()) return { kind: "stopped" };
   if (!verified) return fallback(`Bee could not confirm the chat with ${message.name} opened, so it typed no message.`);
   done.push(`The chat with ${message.name} is open.`);

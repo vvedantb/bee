@@ -319,7 +319,7 @@ function MemoryTab({ state, settings }: { state: BeeState; settings: SettingsVie
   return (
     <div className="tab-body">
       <div>
-        <KnownNamesField names={settings.knownNames} onSave={(knownNames) => actions.saveSettings({ knownNames })} />
+        <KnownNamesField names={settings.knownNames} people={settings.people} onSave={(knownNames, people) => actions.saveSettings({ knownNames, people })} />
         {state.error ? <p className="error">{state.error}</p> : null}
       </div>
       <MemorySection onLoad={() => actions.listMemory()} onClear={() => actions.clearMemory()} />

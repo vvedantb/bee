@@ -28,6 +28,7 @@ import type { BackgroundJobs } from "./background";
 import { answerEvidence, guardLine, replaceLastText, runEvidence, upgradeLine, withoutToolNames } from "./claim-guard";
 import { BROWSE_RULES } from "./browse";
 import type { ComputerVision } from "./computer-vision";
+import { chatEmail, type Person } from "./people";
 import { parseTeamsMessage, recipientName, runTeamsRecipe, teamsRecipient, type RecipeDeps, type RecipeOutcome, type TeamsMessage } from "./teams-recipe";
 
 // A direct request to Bee: a mic phrase that started with the wake word ("Bee, open Teams", core/wake-word.ts). Bee answers
@@ -199,6 +200,8 @@ async function runComputerCommand(args: {
   onActivity?: (activity: LunaToolActivity) => void;
   summarise?: Summarise;
   knownNames?: readonly string[];
+  /** What Bee knows about those people (core/people.ts): the email opens a Teams chat by link. */
+  people?: readonly Person[];
   /** Names in the request Bee settled from the user's recent requests (core/known-names.ts recentChoice). */
   resolvedNames?: readonly ResolvedName[];
   /** The run's messages for Bee's history (core/bee-history.ts), without the request. */
@@ -282,7 +285,7 @@ async function runComputerCommand(args: {
         execute: async ({ to, text, send }) => {
           if (!control.step()) return "Error: Bee stopped this task. Do not call any more tools.";
           const name = recipientName(teamsRecipient(to), args.knownNames ?? [], args.resolvedNames ?? []);
-          const outcome = await runTeamsRecipe({ to, text, send, name }, recipeDeps);
+          const outcome = await runTeamsRecipe({ to, text, send, name, ...chatEmail(name, args.people) }, recipeDeps);
           debugLog.info("computer", "teams-tool-end", { outcome: outcome.kind });
           return teamsToolResult(outcome);
         },
@@ -294,7 +297,7 @@ async function runComputerCommand(args: {
         execute: async ({ to }) => {
           if (!control.step()) return "Error: Bee stopped this task. Do not call any more tools.";
           const name = recipientName(teamsRecipient(to), args.knownNames ?? [], args.resolvedNames ?? []);
-          const outcome = await runTeamsRecipe({ to, text: "", send: false, openOnly: true, name }, recipeDeps);
+          const outcome = await runTeamsRecipe({ to, text: "", send: false, openOnly: true, name, ...chatEmail(name, args.people) }, recipeDeps);
           debugLog.info("computer", "teams-tool-end", { outcome: outcome.kind, open: true });
           return teamsToolResult(outcome);
         },
@@ -402,6 +405,8 @@ export async function runDirectCommand(args: {
   onTurn?: (messages: ModelMessage[]) => void;
   /** Names Bee should know (core/known-names.ts), for the AI. */
   knownNames?: readonly string[];
+  /** What Bee knows about those people (core/people.ts). The emails stay on this computer: they only open Teams chats. */
+  people?: readonly Person[];
   /** Names learned from this request: a spelling the user gave, chat names read on screen. Main adds them to Settings. */
   onLearnNames?: (names: string[]) => void;
   meetingBrief?: string;
@@ -535,14 +540,15 @@ export async function runDirectCommand(args: {
     if (!computer) throw new Error("no computer use");
     // A handover from the answer (use_computer) brings what it already found, so the loop need not look again.
     const task = brief ? `${command}\n\nWhat Bee already found: ${brief}` : command;
-    const result = await runComputerCommand({ ...computer, command: task, transcript: args.transcript, history, signal: args.signal, onActivity: args.onActivity, summarise, knownNames: args.knownNames, ...names, onMessages: record, memory, onMemory, screen: await screenRead, fast, browseConfirmed, ...(recipe ? { recipe } : {}) });
+    const result = await runComputerCommand({ ...computer, command: task, transcript: args.transcript, history, signal: args.signal, onActivity: args.onActivity, summarise, knownNames: args.knownNames, people: args.people, ...names, onMessages: record, memory, onMemory, screen: await screenRead, fast, browseConfirmed, ...(recipe ? { recipe } : {}) });
     return memoryNote && !result.guideNote ? { ...result, guideNote: memoryNote } : result;
   };
   // "Message Sam on Teams saying hi": Bee's own Teams recipe runs first, before any AI call.
   const teams = computer ? parseTeamsMessage(command) : null;
   if (teams) {
     debugLog.info("ai", "command-path", { teamsRecipe: true, send: teams.send });
-    return loop(false, { ...teams, name: recipientName(teams.to, args.knownNames ?? [], resolvedNames) });
+    const name = recipientName(teams.to, args.knownNames ?? [], resolvedNames);
+    return loop(false, { ...teams, name, ...chatEmail(name, args.people) });
   }
   if (computer && (await wantsLoop(command, gateway, args.signal))) {
     console.debug("perf command computer");

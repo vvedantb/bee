@@ -575,6 +575,7 @@ if (clerk.isPrimaryInstance) {
       history: beeHistory,
       memory: beeMemory,
       knownNames: settings.knownNames,
+      people: settings.people,
       learnNames: settings.learnNames,
       notesDir,
       mcpConfigs: settings.mcpConfigs,

@@ -15,6 +15,8 @@ export type DesktopActions = {
   openApp: (name: string, signal?: AbortSignal) => Promise<DesktopActionResult>;
   focusWindow: (target: { app: string; title?: string }, signal?: AbortSignal) => Promise<DesktopActionResult>;
   openUrl: (url: string) => Promise<DesktopActionResult>;
+  /** Opens the one-to-one Teams chat with this email in the Teams app (core/people.ts teamsChatLink). Windows and Mac. */
+  openTeamsChat?: (email: string) => Promise<DesktopActionResult>;
 };
 
 export const APP_NAME_MAX = 60;

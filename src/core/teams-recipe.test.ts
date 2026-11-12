@@ -219,7 +219,7 @@ const desktop: DesktopActions = {
   openUrl: async () => ({ ok: true, message: "Opened" }),
 };
 
-function recipe(fake: ReturnType<typeof teams>, options: { confirm?: boolean; control?: RunControl; platform?: ComputerPlatform } = {}) {
+function recipe(fake: ReturnType<typeof teams>, options: { confirm?: boolean; control?: RunControl; platform?: ComputerPlatform; desktop?: DesktopActions } = {}) {
   const control = options.control ?? createRunControl();
   const asked: ConfirmRequest[] = [];
   const steps: string[] = [];
@@ -227,7 +227,7 @@ function recipe(fake: ReturnType<typeof teams>, options: { confirm?: boolean; co
   const go = (message: TeamsMessage & { name: string }) =>
     runTeamsRecipe(message, {
       run: fake.run,
-      desktop,
+      desktop: options.desktop ?? desktop,
       control,
       platform: options.platform ?? "windows",
       confirm: async (request) => {
@@ -282,6 +282,33 @@ describe("runTeamsRecipe", () => {
   it("accepts the chat when a heading names the person though the title does not", async () => {
     const fake = teams({ chat: "Chat", heading: "Sam Lee" });
     expect((await recipe(fake).go(SAM)).kind).toBe("sent");
+  });
+
+  it("opens the chat by Teams' link when it has the person's email, with no search, and still asks before it sends", async () => {
+    const fake = teams();
+    const links: string[] = [];
+    const openTeamsChat: NonNullable<DesktopActions["openTeamsChat"]> = async (email) => {
+      links.push(email);
+      fake.state.opened = true;
+      fake.state.title = "Chat | Sam Lee | Microsoft Teams";
+      return { ok: true, message: "Opened the Teams chat" };
+    };
+    const { go, asked } = recipe(fake, { desktop: { ...desktop, openTeamsChat } });
+    expect(await go({ ...SAM, email: "sam.lee@example.com" })).toEqual({ kind: "sent", line: "Sent to Sam Lee." });
+    expect(links).toEqual(["sam.lee@example.com"]);
+    expect(fake.state.sent).toBe("Running late, 5 min");
+    expect(asked.map((request) => request.question)).toEqual(["Send this?"]);
+    // Nothing typed into search: the only keys are the paste and the send.
+    expect(fake.calls.filter((call) => call.command === "press").map((call) => call.args[0])).toEqual(["ctrl+v", "return"]);
+  });
+
+  it("searches by name when the link opens no chat it can confirm", async () => {
+    const fake = teams();
+    const openTeamsChat: NonNullable<DesktopActions["openTeamsChat"]> = async () => ({ ok: true, message: "Opened the Teams chat" });
+    const { go } = recipe(fake, { desktop: { ...desktop, openTeamsChat } });
+    expect(await go({ ...SAM, email: "old.address@example.com" })).toEqual({ kind: "sent", line: "Sent to Sam Lee." });
+    expect(fake.state.search).toBe("Sam Lee");
+    expect(fake.state.sent).toBe("Running late, 5 min");
   });
 
   it("opens the result that names the person, past Teams' own Search row and other names", async () => {

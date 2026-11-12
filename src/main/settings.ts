@@ -7,6 +7,7 @@ import { z } from "zod";
 import { clampInterfaceScale, type SavedPosition } from "../core/interface-scale";
 import { clampMotionPreference } from "../core/motion-preference";
 import { mergeNames, normalizeNames } from "../core/known-names";
+import { normalizePeople, type Person } from "../core/people";
 import { createMcpOAuthProvider, hasMcpOAuthTokens, mcpOAuthStateSchema, type McpOAuthStorage } from "../core/mcp-oauth";
 import { canSubmitTranscripts } from "../core/vmem-transcript";
 import type { TranscriptSettings } from "./vmem-transcript-queue";
@@ -46,6 +47,8 @@ const fileSchema = z.object({
   sendSessionsToVmem: z.boolean().optional().catch(undefined),
   // Names Bee should know (core/known-names.ts): typed in Settings or learned from corrections and the screen. A bad value reads as none.
   knownNames: z.array(z.string()).default([]).catch([]),
+  // What Bee knows about those people (core/people.ts): a work email and usual topics. This computer only. A bad value reads as none.
+  people: z.array(z.object({ name: z.string(), email: z.string().optional(), topics: z.string().optional() })).default([]).catch([]),
   // Call audio, "Hear other people in calls" (core/teams-audio.ts; the key is from the Teams-only version). Off until switched
   // on: it sends other people's words to speech-to-text. When on, it hears the call app alone (Teams, Zoom or the Meet browser).
   teamsAudioFallbackEnabled: z.boolean().default(false).catch(false),
@@ -125,6 +128,7 @@ export function createSettingsStore(args: {
       interfaceScale: 1,
       motionPreference: "on",
       knownNames: [],
+      people: [],
       teamsAudioFallbackEnabled: false,
       toggleShortcut: DEFAULT_TOGGLE_SHORTCUT,
       askShortcut: DEFAULT_ASK_SHORTCUT,
@@ -461,6 +465,7 @@ export function createSettingsStore(args: {
       notesDir: args.notesDir,
       logsDir: args.logsDir,
       knownNames: normalizeNames(file.knownNames),
+      people: normalizePeople(file.people),
       teamsAudioFallbackEnabled: file.teamsAudioFallbackEnabled,
       toggleShortcut: file.toggleShortcut,
       // Main fills in whether it holds the shortcut (main/index.ts).
@@ -494,6 +499,7 @@ export function createSettingsStore(args: {
     if (update.toggleShortcut !== undefined) file = { ...file, toggleShortcut: update.toggleShortcut };
     if (update.askShortcut !== undefined) file = { ...file, askShortcut: update.askShortcut };
     if (update.knownNames !== undefined) file = { ...file, knownNames: normalizeNames(update.knownNames) };
+    if (update.people !== undefined) file = { ...file, people: normalizePeople(update.people) };
     write(file);
     return view();
   }
@@ -501,6 +507,11 @@ export function createSettingsStore(args: {
   // Read on each direct request, so a name typed in Settings or learned a moment ago is used at once.
   function knownNames(): string[] {
     return normalizeNames(read().knownNames);
+  }
+
+  // Read on each direct request and each meeting summary, like the names.
+  function people(): Person[] {
+    return normalizePeople(read().people);
   }
 
   /** Adds names Bee learned (a spelling correction, a chat name on screen). Main only; the list stays editable in Settings. */
@@ -520,5 +531,5 @@ export function createSettingsStore(args: {
     write({ ...read(), overlayPosition: position });
   }
 
-  return { view, save, allowRemoteAi, teamsAudioFallback, overlayPosition, saveOverlayPosition, gatewayApiKey, savedGatewayApiKey, linkSettings, vmemConfig, transcriptSettings, knownNames, learnNames, mcpList, mcpSave, mcpRemove, mcpSignOut, mcpSetEnabled, mcpRecordTools, mcpConfigs, mcpSignedOut, mcpConfig, mcpOAuthStorage };
+  return { view, save, allowRemoteAi, teamsAudioFallback, overlayPosition, saveOverlayPosition, gatewayApiKey, savedGatewayApiKey, linkSettings, vmemConfig, transcriptSettings, knownNames, people, learnNames, mcpList, mcpSave, mcpRemove, mcpSignOut, mcpSetEnabled, mcpRecordTools, mcpConfigs, mcpSignedOut, mcpConfig, mcpOAuthStorage };
 }

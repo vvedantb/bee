@@ -34,6 +34,7 @@ import { GUIDE_MODEL, NO_GATEWAY_KEY, STT_MODEL, createBeeGateway, type BeeGatew
 import { runPipeline } from "../core/pipeline";
 import { searchLocation } from "../core/web-search";
 import { conversationTranscript, meetingTranscript } from "../core/session-transcript";
+import { peopleBlock, type Person } from "../core/people";
 import { buildLocalSummary, generateMeetingSummary } from "../core/summary";
 import { sttVocabulary, transcribeSpeech } from "../core/transcribe";
 import {
@@ -124,6 +125,8 @@ export function registerMeetingIpc(args: { notesDir: string;
   memory?: BeeMemory;
   /** Names Bee should know (Settings, core/known-names.ts), read per request, and the names a request taught it. */
   knownNames?: () => string[];
+  /** What Bee knows about those people (core/people.ts): emails for Teams chat links, topics for meeting notes. */
+  people?: () => Person[];
   learnNames?: (names: string[]) => void;
   /** Briefings shown before meetings (main/briefing-watcher.ts), by key, for "Dig deeper". */
   briefings?: (key: string) => Briefing | undefined;
@@ -443,6 +446,7 @@ export function registerMeetingIpc(args: { notesDir: string;
           void args.history.append(turn, apiKey ? historySummariser(createGateway(apiKey).languageModel(GUIDE_MODEL)) : undefined);
         },
         knownNames: args.knownNames?.(),
+        people: args.people?.(),
         onLearnNames: args.learnNames,
         memory: args.memory ?? null,
         background: background.start,
@@ -522,7 +526,7 @@ export function registerMeetingIpc(args: { notesDir: string;
     // What the asking AI hears if the run throws; the island shows the error itself.
     let result: Omit<JobResult, "id"> = { ok: false, text: "Bee hit an error on the user's computer." };
     try {
-      const outcome = await runRemoteJobHere(waiting.job, { host, actions: args.desktop, signal: controller.signal, knownNames: args.knownNames?.() });
+      const outcome = await runRemoteJobHere(waiting.job, { host, actions: args.desktop, signal: controller.signal, knownNames: args.knownNames?.(), people: args.people?.() });
       result = { ok: outcome.ok, text: outcome.text };
       return lineResult(outcome.island);
     } catch (error) {
@@ -639,7 +643,7 @@ export function registerMeetingIpc(args: { notesDir: string;
     const started = performance.now();
     debugLog.info("meeting", "summary-start", { lines: input.transcript.length, notesCited: input.notesCited.length, tips: input.tips.length, meetingId: input.meetingId, hasKey: Boolean(apiKey), teamsAudioLines, captionLines, micLines });
     const summary = apiKey
-      ? await generateMeetingSummary({ ...input, model: createGateway(apiKey).languageModel(GUIDE_MODEL), when })
+      ? await generateMeetingSummary({ ...input, people: peopleBlock(args.knownNames?.() ?? [], args.people?.() ?? []), model: createGateway(apiKey).languageModel(GUIDE_MODEL), when })
       : { markdown: buildLocalSummary({ ...input, when }), usedLlm: false, error: NO_GATEWAY_KEY };
     const path = writeMeetingSummaryFile(args.notesDir, summary.markdown, when);
     debugLog.info("meeting", "summary-written", { path, usedLlm: summary.usedLlm, error: summary.error, ms: msSince(started), markdown: summary.markdown });

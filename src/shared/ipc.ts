@@ -104,6 +104,9 @@ const motionPreferenceSchema = z.enum(MOTION_PREFERENCES);
 
 export const secretStorageSchema = z.enum(["os", "weak", "memory"]);
 
+// One person's details (core/people.ts Person).
+const personSchema = z.object({ name: z.string().max(200), email: z.string().max(254).optional(), topics: z.string().max(400).optional() });
+
 export const settingsViewSchema = z.object({
   gatewayKeySource: z.enum(["saved", "env", "none"]),
   // Personalised link suggestions: the effective toggle, and whether an enabled vmem connector (Connectors tab) exists.
@@ -126,6 +129,8 @@ export const settingsViewSchema = z.object({
   logsDir: z.string(),
   // Names Bee should know (core/known-names.ts): typed here or learned from spelling corrections and chat names on screen.
   knownNames: z.array(z.string()),
+  // What Bee knows about those people (core/people.ts): a work email and usual topics, for the names that have either.
+  people: z.array(personSchema).optional(),
   // Call audio ("Hear other people in calls"; key kept from the Teams-only version): with the mic on in a call, hear the call
   // app alone (Teams, Zoom or the Meet browser; never all system audio). Off by default; only platforms with a per-app capture
   // path listen (core/teams-audio.ts).
@@ -151,6 +156,8 @@ export const settingsUpdateSchema = z.object({
   sendSessionsToVmem: z.boolean().optional(),
   // Names Bee should know; replaces the saved list (core/known-names.ts KNOWN_NAMES_MAX, NAME_MAX_CHARS).
   knownNames: z.array(z.string().max(200)).max(400).optional(),
+  // The details for those names; replaces the saved list (core/people.ts).
+  people: z.array(personSchema).max(400).optional(),
   teamsAudioFallbackEnabled: z.boolean().optional(),
   toggleShortcut: acceleratorSchema.optional(),
   askShortcut: acceleratorSchema.optional(),

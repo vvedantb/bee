@@ -13,6 +13,7 @@ import {
   type DesktopActionResult,
   type DesktopActions,
 } from "../core/desktop-actions";
+import { teamsChatLink } from "../core/people";
 import { safeExternalUrl } from "../core/url-safety";
 import { withoutSecrets, type AgentDesktopActionRun } from "./agent-desktop";
 
@@ -335,6 +336,18 @@ export function createDesktopActions(deps: DesktopActionDeps): DesktopActions {
       const opened = deps.platform === "darwin" ? await openMac(app) : deps.platform === "linux" ? !noBus && (await openLinux(app, signal)) : await openWindows(app);
       if (opened) return ok(`Opened ${app.label}`);
       return signal?.aborted ? fail(`Stopped before ${app.label} came forward`) : notOpened(app, "a window for ");
+    },
+
+    async openTeamsChat(email) {
+      const link = teamsChatLink(email);
+      if (!link) return fail("That is not an email address Bee can use");
+      if (deps.platform !== "win32" && deps.platform !== "darwin") return fail("Bee opens Teams chats by link on Windows and Mac only");
+      try {
+        await deps.openExternal(link);
+        return ok("Opened the Teams chat");
+      } catch {
+        return fail("Could not open that Teams chat");
+      }
     },
 
     async openUrl(raw) {

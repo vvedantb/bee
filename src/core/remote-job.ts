@@ -3,6 +3,7 @@ import { createRunControl, stopLine } from "./computer-control";
 import { debugLog } from "./debug-log";
 import type { DesktopActions } from "./desktop-actions";
 import { accessStopLine, teamsRecipeDeps, type ComputerHost } from "./direct-command";
+import { chatEmail, type Person } from "./people";
 import { SELF_CHAT, recipientName, runTeamsRecipe, teamsRecipient, type RecipeOutcome } from "./teams-recipe";
 
 // A job from another AI through the Bee MCP server (shared/bee-mcp.ts), run on this computer with the Teams recipe: the same
@@ -44,7 +45,7 @@ export function remoteOutcome(outcome: RecipeOutcome, name: string, stopped: str
 /** Runs one job. Never throws for a step that fails; the outcome says what happened. */
 export async function runRemoteJob(
   job: RemoteJob,
-  deps: { host: ComputerHost; actions: DesktopActions; signal?: AbortSignal; knownNames?: readonly string[] },
+  deps: { host: ComputerHost; actions: DesktopActions; signal?: AbortSignal; knownNames?: readonly string[]; people?: readonly Person[] },
 ): Promise<RemoteJobOutcome> {
   const { host } = deps;
   const control = createRunControl({ maxMs: REMOTE_MAX_MS, signal: deps.signal });
@@ -54,11 +55,12 @@ export async function runRemoteJob(
     const denied = await accessStopLine(host, control);
     if (denied) return { ok: false, text: denied, island: denied };
     const name = recipientName(teamsRecipient(job.input.to), deps.knownNames ?? []);
+    const email = chatEmail(name, deps.people);
     const recipeDeps = teamsRecipeDeps(host, deps.actions, control);
     const outcome =
       job.tool === TEAMS_SEND_TOOL
-        ? await runTeamsRecipe({ to: job.input.to, text: job.input.text, send: job.input.send, name }, recipeDeps)
-        : await runTeamsRecipe({ to: job.input.to, text: "", send: false, openOnly: true, read: true, name }, recipeDeps);
+        ? await runTeamsRecipe({ to: job.input.to, text: job.input.text, send: job.input.send, name, ...email }, recipeDeps)
+        : await runTeamsRecipe({ to: job.input.to, text: "", send: false, openOnly: true, read: true, name, ...email }, recipeDeps);
     debugLog.info("remote", "job-ran", { id: job.id, tool: job.tool, outcome: outcome.kind, ms: Math.round(performance.now() - started) });
     return remoteOutcome(outcome, name === SELF_CHAT ? "the user themself" : name, stopLine(control.reason() ?? "user", { platform: host.platform }));
   } finally {

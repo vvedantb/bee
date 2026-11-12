@@ -46,6 +46,8 @@ export type SummaryInput = {
   tips?: string[];
   /** A meeting or call heard only through the mic: nobody can be named as speaker or owner. */
   attributionUnknown?: boolean;
+  /** The people the user knows, as a block for the AI (core/people.ts peopleBlock). Names and topics only. */
+  people?: string;
 };
 
 const PLACEHOLDER_OWNER = /^\s*(?:\*\*)?speaker(?:\s*#?\d+)?(?:\*\*)?\s*:\s*/i;
@@ -110,7 +112,9 @@ export function buildSummaryPrompt(args: SummaryInput): { system: string; prompt
     "Summary:",
   ].join("\n");
   const system = speakers.length > 0 ? `${SUMMARY_SYSTEM}\n${SPEAKER_RULES}` : SUMMARY_SYSTEM;
-  return { system: args.attributionUnknown && speakers.length === 0 ? `${system}\n${ATTRIBUTION_UNKNOWN_RULES}` : system, prompt };
+  const rules = args.attributionUnknown && speakers.length === 0 ? `${system}\n${ATTRIBUTION_UNKNOWN_RULES}` : system;
+  // After the fixed rules, so those stay one cached prefix when the list changes.
+  return { system: args.people ? `${rules}\n\n${args.people}` : rules, prompt };
 }
 
 /** The system first, with a cache breakpoint (gateway.ts ANTHROPIC_CACHE), then the transcript. */
