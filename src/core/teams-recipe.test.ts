@@ -414,15 +414,15 @@ describe("runTeamsRecipe", () => {
   it("reads the open chat's messages for another AI, oldest first, without the chat list or search rows", async () => {
     const fake = teams({
       onCall: (call) =>
-        call.command === "find" && call.args.includes("--role=listitem")
+        call.command === "find" && call.args.includes("--role=option")
           ? {
               ok: true,
               data: {
                 matches: [
-                  { ref_id: null, role: "listitem", name: "Priya Shah, lunch?", path: ["window:Teams", "tree:Chat list"] },
-                  { ref_id: null, role: "listitem", name: "Sam Lee, Running late,   5 min, 10:02", path: ["window:Teams", "list:Messages"] },
-                  { ref_id: null, role: "listitem", name: "", path: ["window:Teams", "list:Messages"] },
-                  { ref_id: null, role: "listitem", name: "You, ok, 10:03", path: ["window:Teams", "list:Messages"] },
+                  { ref_id: null, role: "option", name: "Priya Shah, lunch?", path: ["window:Teams", "tree:Chat list"] },
+                  { ref_id: null, role: "option", name: "Sam Lee, Running late,   5 min, 10:02", path: ["window:Teams", "list:Messages"] },
+                  { ref_id: null, role: "option", name: "", path: ["window:Teams", "list:Messages"] },
+                  { ref_id: null, role: "option", name: "You, ok, 10:03", path: ["window:Teams", "list:Messages"] },
                 ],
               },
             }

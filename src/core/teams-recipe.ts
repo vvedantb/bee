@@ -393,8 +393,9 @@ export async function runTeamsRecipe(asked: TeamsMessage & { name: string }, dep
   done.push(`The chat with ${message.name} is open.`);
   if (asked.openOnly && asked.read) {
     deps.onStep?.("Reading the chat…");
-    // Teams labels each message with its author, text and time; only listitems outside the chat list and search are messages.
-    const items = await logged("read-chat", okResult)(exec("find", [...where, "--role=listitem", `--limit=${CHAT_FIND_MAX}`, `--timeout-ms=${LOOK_MS}`], LOOK_MS + 6000));
+    // Teams labels each message with its author, text and time. agent-desktop reports a list's items as role "option" (it has no
+    // "listitem" role: that query is INVALID_ARGS); only those outside the chat list and the search dropdown are messages.
+    const items = await logged("read-chat", okResult)(exec("find", [...where, "--role=option", `--limit=${CHAT_FIND_MAX}`, `--timeout-ms=${LOOK_MS}`], LOOK_MS + 6000));
     if (stopped()) return { kind: "stopped" };
     const messages = items.ok ? chatMessages(findMatches(items.data)) : [];
     debugLog.info("computer", "teams-recipe", { step: "messages", ok: messages.length > 0, count: messages.length });
@@ -474,13 +475,13 @@ export async function runTeamsRecipe(asked: TeamsMessage & { name: string }, dep
   return { kind: "sent", line: `Sent to ${self ? "your own chat" : message.name}.` };
 }
 
-/** How many listitems one read asks agent-desktop for, how many messages it keeps (the newest), and how long each may be. */
+/** How many list items one read asks agent-desktop for, how many messages it keeps (the newest), and how long each may be. */
 const CHAT_FIND_MAX = 200;
 export const CHAT_MESSAGES_MAX = 20;
 export const CHAT_MESSAGE_MAX = 400;
 
 /**
- * The open chat's messages from find's listitems: in order (oldest first), the newest CHAT_MESSAGES_MAX, each as Teams labels it
+ * The open chat's messages from find's list items (role option): in order (oldest first), the newest CHAT_MESSAGES_MAX, each as Teams labels it
  * (author, text, time) on one line. Rows inside the chat list (a tree), search suggestions (a listbox) or a menu are not messages.
  */
 export function chatMessages(matches: readonly { name?: string | null; path?: string[] | undefined }[]): string[] {
