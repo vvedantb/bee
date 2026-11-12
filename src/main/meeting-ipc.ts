@@ -20,7 +20,9 @@ import type { Browse } from "./browse";
 
 const claudeCodeView = (status: ClaudeCodeStatus): ClaudeCodeView => ({ state: status.state, version: "version" in status ? status.version : null, message: claudeCodeMessage(status) });
 import type { CommandAgent } from "../core/claude-agent";
-import { runDirectCommand, type ComputerHost } from "../core/direct-command";
+import { lineResult, runDirectCommand, type ComputerHost } from "../core/direct-command";
+import { runRemoteJob as runRemoteJobHere } from "../core/remote-job";
+import type { JobResult, RemoteJob } from "../shared/bee-mcp";
 import type { ScreenCapture } from "../core/screen-look";
 import type { ScreenGlance } from "../core/screen-context";
 import type { ComputerVision } from "../core/computer-vision";
@@ -65,11 +67,24 @@ import {
   type LunaPartial,
   type MeetingSummaryResult,
   type MeetingWindowStatus,
+  remoteJobRunSchema,
+  type PipelineResult,
+  type RemoteJobNotice,
 } from "../shared/ipc";
 import { assertSignedIn } from "./auth";
 import { isNotePath, loadSnippets, writeMeetingSummaryFile } from "./notes";
 import type { BeeHistoryStore } from "./bee-history-store";
 import type { VmemTranscripts } from "./vmem-transcript-queue";
+
+/** Runs a job from another AI on the island: notify tells the renderer (false: no window). Resolves with the result for the AI. */
+export type RunRemoteJob = (job: RemoteJob, notify: (notice: RemoteJobNotice) => boolean) => Promise<Omit<JobResult, "id">>;
+
+// Results for the asking AI when Bee cannot run its job now.
+export const REMOTE_NO_COMPUTER = "Bee can't control apps on this computer.";
+export const REMOTE_BUSY = "Bee is busy with another task on the user's computer. Try again in a minute.";
+export const REMOTE_NOT_SHOWN = "Bee is running but could not show the request on screen. The user may need to sign in to Bee.";
+// How long the renderer has to start a noticed job.
+const REMOTE_START_MS = 15_000;
 
 /**
  * Mic phrases → speech-to-text, lines → retrieve → Jev → Luna, and the end-of-meeting summary into the notes folder.
@@ -119,7 +134,7 @@ export function registerMeetingIpc(args: { notesDir: string;
   /** The user's screen for meeting tips (core/screen-context.ts createScreenReader). Absent: tips never see the screen. */
   screen?: { read: () => Promise<ScreenGlance | null> };
   /** A meeting is active now (the renderer's auto-meeting machine, IPC.meetingAutoOverlay). Only then do tips read the screen. */
-  meetingActive?: () => boolean }): void {
+  meetingActive?: () => boolean }): { runRemoteJob: RunRemoteJob } {
   const createGateway = args.gateway ?? createBeeGateway;
   // One controller per run in flight. The renderer cancels a run when a newer line supersedes it.
   const runs = new Map<string, AbortController>();
@@ -195,7 +210,7 @@ export function registerMeetingIpc(args: { notesDir: string;
    * The island's Confirm prompt for one request, for computer use and browse steps alike. Settled by the island's Confirm or Cancel
    * (computerAnswer), or false once the run stops or the wait times out.
    */
-  const islandConfirm = (sender: Sender, runId: string | number | undefined): ComputerHost["confirm"] => {
+  const islandConfirm = (sender: Sender, runId: string | number | undefined, logText = true): ComputerHost["confirm"] => {
     const send = islandSend(sender, runId);
     return (request, signal) =>
       new Promise((resolve) => {
@@ -211,13 +226,14 @@ export function registerMeetingIpc(args: { notesDir: string;
         confirms.set(id, { runId: String(runId), resolve: (confirmed) => settle(confirmed, "answer") });
         // A stop, the 60 s timeout or a newer request: the prompt closes as Cancel.
         signal.addEventListener("abort", () => settle(false, "closed"), { once: true });
-        debugLog.info("computer", "confirm-asked", { runId, id, ...request });
+        // A job from another AI logs no name or message text (logText false).
+        debugLog.info("computer", "confirm-asked", { runId, id, ...(logText ? request : { kind: request.kind }) });
         send({ runId, type: "confirm", id, kind: request.kind, question: request.question.slice(0, COMPUTER_LINE_MAX), detail: request.detail.slice(0, COMPUTER_LINE_MAX) });
       });
   };
 
   /** Main's side of one request's computer use: step lines and Confirm prompts go to the window that asked. */
-  const computerHost = (computer: NonNullable<typeof args.computer>, sender: Sender, runId: string | number | undefined, confirm: ComputerHost["confirm"]): ComputerHost => {
+  const computerHost = (computer: NonNullable<typeof args.computer>, sender: Sender, runId: string | number | undefined, confirm: ComputerHost["confirm"], logText = true): ComputerHost => {
     const key = runId === undefined ? null : String(runId);
     const send = islandSend(sender, runId);
     return {
@@ -227,7 +243,7 @@ export function registerMeetingIpc(args: { notesDir: string;
       ...(computer.yieldFocus ? { yieldFocus: computer.yieldFocus } : {}),
       ...(computer.vision ? { vision: computer.vision } : {}),
       onStep: (label) => {
-        debugLog.info("computer", "step-line", { runId, label });
+        debugLog.info("computer", "step-line", { runId, ...(logText ? { label } : {}) });
         if (runId !== undefined) send({ runId, type: "step", label: label.slice(0, COMPUTER_LINE_MAX) });
       },
       confirm,
@@ -465,6 +481,62 @@ export function registerMeetingIpc(args: { notesDir: string;
     }
   });
 
+  // Jobs from other AIs (Bee MCP server, core/remote-loop.ts). Main tells the renderer (notify); the renderer starts a run with its
+  // own run id (IPC.runRemoteJob), so step lines, Confirm and Stop work as for "Bee, …". Only one at a time, and never beside a
+  // request of the user's own.
+  const remoteWaiting = new Map<string, { job: RemoteJob; resolve: (result: Omit<JobResult, "id">) => void; timer: ReturnType<typeof setTimeout> }>();
+
+  const runRemoteJob: RunRemoteJob = (job, notify) =>
+    new Promise((resolve) => {
+      const decline = (text: string) => {
+        debugLog.info("remote", "job-declined", { id: job.id, tool: job.tool, reason: text });
+        resolve({ ok: false, text });
+      };
+      if (!args.computer || !args.desktop) return decline(REMOTE_NO_COMPUTER);
+      if (computerRuns > 0 || remoteWaiting.size > 0) return decline(REMOTE_BUSY);
+      // The renderer starts the run at once; no start means no window or no sign-in.
+      const timer = setTimeout(() => {
+        if (remoteWaiting.delete(job.id)) decline(REMOTE_NOT_SHOWN);
+      }, REMOTE_START_MS);
+      remoteWaiting.set(job.id, { job, resolve, timer });
+      if (!notify({ jobId: job.id, clientName: job.clientName })) {
+        clearTimeout(timer);
+        remoteWaiting.delete(job.id);
+        decline(REMOTE_NOT_SHOWN);
+      }
+    });
+
+  ipcMain.handle(IPC.runRemoteJob, async (event, payload): Promise<PipelineResult> => {
+    const request = remoteJobRunSchema.parse(payload);
+    assertSignedIn(request.sessionToken);
+    const waiting = remoteWaiting.get(request.jobId);
+    if (!waiting || !args.computer || !args.desktop) throw new Error("That request from another AI has ended.");
+    remoteWaiting.delete(request.jobId);
+    clearTimeout(waiting.timer);
+    lastSender = event.sender;
+    const { controller, done } = track(request.runId);
+    const key = String(request.runId);
+    const host = computerHost(args.computer, event.sender, request.runId, islandConfirm(event.sender, request.runId, false), false);
+    computerRuns += 1;
+    const started = performance.now();
+    // What the asking AI hears if the run throws; the island shows the error itself.
+    let result: Omit<JobResult, "id"> = { ok: false, text: "Bee hit an error on the user's computer." };
+    try {
+      const outcome = await runRemoteJobHere(waiting.job, { host, actions: args.desktop, signal: controller.signal, knownNames: args.knownNames?.() });
+      result = { ok: outcome.ok, text: outcome.text };
+      return lineResult(outcome.island);
+    } catch (error) {
+      debugLog.error("remote", "job-failed", { id: waiting.job.id, tool: waiting.job.tool, ms: msSince(started), error: errorData(error) });
+      throw error;
+    } finally {
+      waiting.resolve(result);
+      done();
+      controls.delete(key);
+      computerRuns -= 1;
+      releaseComputer();
+    }
+  });
+
   // The conversation window's one small call (core/follow-up.ts): is an unclear own mic phrase for Bee or the meeting? Null
   // without a key, or on any failure, so the phrase stays a meeting line.
   ipcMain.handle(IPC.classifyFollowUp, async (_event, payload): Promise<FollowUpResult> => {
@@ -616,4 +688,6 @@ export function registerMeetingIpc(args: { notesDir: string;
     if (!isNotePath(args.notesDir, path)) throw new Error("Not a note in the notes folder");
     return shell.openPath(path);
   });
+
+  return { runRemoteJob };
 }

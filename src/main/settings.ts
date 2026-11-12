@@ -30,6 +30,8 @@ const fileSchema = z.object({
   meetingMode: z.boolean().default(false),
   // Automatic meeting detection: on until the user turns it off.
   autoMeetingDetection: z.boolean().default(true),
+  // "Let other AIs use Bee" (core/remote-loop.ts): on until the user turns it off. A bad value reads as on.
+  allowRemoteAi: z.boolean().default(true).catch(true),
   // Interface size factor. Anything unlisted reads as 1 (100%).
   interfaceScale: z.unknown().optional().transform(clampInterfaceScale),
   // Animations: system, on or off. Anything else reads as on.
@@ -119,6 +121,7 @@ export function createSettingsStore(args: {
     return {
       meetingMode: false,
       autoMeetingDetection: true,
+      allowRemoteAi: true,
       interfaceScale: 1,
       motionPreference: "on",
       knownNames: [],
@@ -451,6 +454,7 @@ export function createSettingsStore(args: {
       gatewayKeySource: saved ? "saved" : args.envGatewayKey?.trim() ? "env" : "none",
       meetingMode: file.meetingMode,
       autoMeetingDetection: file.autoMeetingDetection,
+      allowRemoteAi: file.allowRemoteAi,
       interfaceScale: file.interfaceScale,
       motionPreference: file.motionPreference,
       secretStorage: storageMode(),
@@ -466,6 +470,11 @@ export function createSettingsStore(args: {
     };
   }
 
+  /** "Let other AIs use Bee", read before each poll of the Bee MCP server's jobs. Main only. */
+  function allowRemoteAi(): boolean {
+    return read().allowRemoteAi;
+  }
+
   /** The call audio switch, read on each status poll so Settings changes apply at once. Main only. */
   function teamsAudioFallback(): boolean {
     return read().teamsAudioFallbackEnabled;
@@ -476,6 +485,7 @@ export function createSettingsStore(args: {
     if (update.gatewayApiKey !== undefined) file = setSecret(file, "gatewayApiKey", update.gatewayApiKey);
     if (update.meetingMode !== undefined) file = { ...file, meetingMode: update.meetingMode };
     if (update.autoMeetingDetection !== undefined) file = { ...file, autoMeetingDetection: update.autoMeetingDetection };
+    if (update.allowRemoteAi !== undefined) file = { ...file, allowRemoteAi: update.allowRemoteAi };
     if (update.interfaceScale !== undefined) file = { ...file, interfaceScale: clampInterfaceScale(update.interfaceScale) };
     if (update.motionPreference !== undefined) file = { ...file, motionPreference: clampMotionPreference(update.motionPreference) };
     if (update.personalisedLinks !== undefined) file = { ...file, personalisedLinks: update.personalisedLinks };
@@ -510,5 +520,5 @@ export function createSettingsStore(args: {
     write({ ...read(), overlayPosition: position });
   }
 
-  return { view, save, teamsAudioFallback, overlayPosition, saveOverlayPosition, gatewayApiKey, savedGatewayApiKey, linkSettings, vmemConfig, transcriptSettings, knownNames, learnNames, mcpList, mcpSave, mcpRemove, mcpSignOut, mcpSetEnabled, mcpRecordTools, mcpConfigs, mcpSignedOut, mcpConfig, mcpOAuthStorage };
+  return { view, save, allowRemoteAi, teamsAudioFallback, overlayPosition, saveOverlayPosition, gatewayApiKey, savedGatewayApiKey, linkSettings, vmemConfig, transcriptSettings, knownNames, learnNames, mcpList, mcpSave, mcpRemove, mcpSignOut, mcpSetEnabled, mcpRecordTools, mcpConfigs, mcpSignedOut, mcpConfig, mcpOAuthStorage };
 }

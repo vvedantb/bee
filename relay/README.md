@@ -18,6 +18,9 @@ the client.
 | `CLERK_AUTHORIZED_PARTIES` | Convex env | No | Comma-separated `azp` allowlist. Empty skips the check. |
 | `BEE_RELAY_URL` | Bee app (main process env, run time) | For Teams mode | Convex HTTP site URL, e.g. `https://<deployment>.eu-west-1.convex.site`. |
 | `MAIN_VITE_BEE_RELAY_URL` | Bee build (`npm run dist:win` / release workflow) | For installers | Same URL baked into the build. `BEE_RELAY_URL` overrides it. |
+| `CLERK_FRONTEND_API_URL` | Convex env | No | Bee MCP server: the Clerk issuer for OAuth (vmem's name). Default `CLERK_ISSUER`, then `https://clerk.vedantb.com`. |
+| `CLERK_SECRET_KEY` | Convex env | Only for opaque OAuth tokens | Bee MCP server: verifies opaque Clerk OAuth access tokens with Clerk's Backend API. Not needed when Clerk issues JWT access tokens. |
+| `WEB_APP_URL` | Convex env | No | Bee MCP server: `resource_documentation` in the protected resource metadata. Default `https://github.com/vvedantb/bee`. |
 
 Display names come from a `name` claim if the Clerk session token has one (Dashboard → Sessions →
 Customize session token: `{"name": "{{user.full_name}}"}`). Otherwise the relay uses the name each
@@ -69,6 +72,20 @@ for clock offsets. Errors are `{ "error": "…" }` with 400, 401, 403, 404 or 40
 | `POST /v1/rooms/:id/merge` | `targetRoomId` | `room`, `cursor`. Merges when both rooms have asked. |
 | `POST /v1/rooms/:id/phrases` | `text`, `spokenAt` (server time) | `phrase` with `speakerId`, `speakerName` stamped |
 | `GET /v1/rooms/:id/phrases?after=<seq>` | | `room`, `phrases` |
+
+## Bee MCP server
+
+The same deployment serves the Bee MCP server (`convex/beeMcp.ts`, ARCHITECTURE.md "Bee MCP server"). Add
+`https://<deployment>.convex.site/mcp` as a custom connector in Claude.ai, Claude Code or Grok; it signs in with Bee's Clerk
+instance (OAuth, as vmem). The Clerk instance needs OAuth applications with dynamic client registration on, as for vmem.
+
+| Method and path | Auth | Body | Returns |
+| --- | --- | --- | --- |
+| `POST /mcp` | Clerk OAuth access token | MCP JSON-RPC (stateless Streamable HTTP, JSON responses) | `teams_send_message`, `teams_read_chat` |
+| `GET /.well-known/oauth-protected-resource` (also `/mcp` suffix) | none | | resource metadata |
+| `GET /.well-known/oauth-authorization-server` | none | | Clerk's metadata, proxied |
+| `POST /bee/jobs/next` | Bee's Clerk session token | | `{ job }` (oldest pending, now running) or `{ job: null }` after up to 25 s. Records that Bee runs. |
+| `POST /bee/jobs/result` | Bee's Clerk session token | `id`, `ok`, `text` | `{ ok: true }`, or 404 when the job is not the caller's or not running |
 
 ## Rules
 

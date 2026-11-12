@@ -40,6 +40,7 @@ const SETTINGS: SettingsView = {
   sendSessionsToVmem: false,
   meetingMode: false,
   autoMeetingDetection: true,
+  allowRemoteAi: false,
   interfaceScale: 1,
   motionPreference: "on",
   secretStorage: "os",

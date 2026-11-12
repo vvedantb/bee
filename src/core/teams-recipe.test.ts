@@ -3,7 +3,7 @@ import type { AgentDesktopResult, ComputerRun, ComputerUseCommand } from "./agen
 import { createRunControl, type ComputerPlatform, type IrreversibleKind, type RunControl } from "./computer-control";
 import type { ConfirmRequest } from "./computer-tools";
 import type { DesktopActions } from "./desktop-actions";
-import { SELF_CHAT, composeRef, nameWords, namesChat, ownName, parseTeamsMessage, pickResult, recipientName, runTeamsRecipe, teamsRecipient, type TeamsMessage } from "./teams-recipe";
+import { CHAT_MESSAGE_MAX, CHAT_MESSAGES_MAX, SELF_CHAT, chatMessages, composeRef, nameWords, namesChat, ownName, parseTeamsMessage, pickResult, recipientName, runTeamsRecipe, teamsRecipient, type TeamsMessage } from "./teams-recipe";
 
 describe("parseTeamsMessage", () => {
   it("reads who and what from the ways people ask", () => {
@@ -409,6 +409,46 @@ describe("runTeamsRecipe", () => {
     expect(asked).toEqual([]);
     expect(fake.calls.map((call) => call.command)).not.toContain("clipboard-set");
     expect(fake.state.opened).toBe(true);
+  });
+
+  it("reads the open chat's messages for another AI, oldest first, without the chat list or search rows", async () => {
+    const fake = teams({
+      onCall: (call) =>
+        call.command === "find" && call.args.includes("--role=listitem")
+          ? {
+              ok: true,
+              data: {
+                matches: [
+                  { ref_id: null, role: "listitem", name: "Priya Shah, lunch?", path: ["window:Teams", "tree:Chat list"] },
+                  { ref_id: null, role: "listitem", name: "Sam Lee, Running late,   5 min, 10:02", path: ["window:Teams", "list:Messages"] },
+                  { ref_id: null, role: "listitem", name: "", path: ["window:Teams", "list:Messages"] },
+                  { ref_id: null, role: "listitem", name: "You, ok, 10:03", path: ["window:Teams", "list:Messages"] },
+                ],
+              },
+            }
+          : null,
+    });
+    const { go, asked, steps } = recipe(fake);
+    expect(await go({ ...SAM, text: "", openOnly: true, read: true })).toEqual({
+      kind: "opened",
+      line: "Read the chat with Sam Lee.",
+      messages: ["Sam Lee, Running late, 5 min, 10:02", "You, ok, 10:03"],
+    });
+    expect(steps.at(-1)).toBe("Reading the chat…");
+    expect(asked).toEqual([]);
+    expect(fake.calls.map((call) => call.command)).not.toContain("clipboard-set");
+  });
+
+  it("keeps the newest messages, each cut to a line", () => {
+    const many = Array.from({ length: CHAT_MESSAGES_MAX + 5 }, (_, index) => ({ name: `Sam, message ${index}` }));
+    const read = chatMessages(many);
+    expect(read).toHaveLength(CHAT_MESSAGES_MAX);
+    expect(read[0]).toBe("Sam, message 5");
+    expect(read.at(-1)).toBe(`Sam, message ${CHAT_MESSAGES_MAX + 4}`);
+    const [long] = chatMessages([{ name: `Sam, ${"word ".repeat(200)}` }]);
+    expect(long).toHaveLength(CHAT_MESSAGE_MAX);
+    expect(long?.endsWith("…")).toBe(true);
+    expect(chatMessages([{ name: "Sam Lee", path: ["listbox:Suggestions"] }])).toEqual([]);
   });
 
   it("types nothing when it cannot find the user's own chat", async () => {

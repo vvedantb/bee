@@ -28,7 +28,7 @@ import type { BackgroundJobs } from "./background";
 import { answerEvidence, guardLine, replaceLastText, runEvidence, upgradeLine, withoutToolNames } from "./claim-guard";
 import { BROWSE_RULES } from "./browse";
 import type { ComputerVision } from "./computer-vision";
-import { parseTeamsMessage, recipientName, runTeamsRecipe, teamsRecipient, type RecipeOutcome, type TeamsMessage } from "./teams-recipe";
+import { parseTeamsMessage, recipientName, runTeamsRecipe, teamsRecipient, type RecipeDeps, type RecipeOutcome, type TeamsMessage } from "./teams-recipe";
 
 // A direct request to Bee: a mic phrase that started with the wake word ("Bee, open Teams", core/wake-word.ts). Bee answers
 // the user, not the meeting. Every AI step here runs on the user's own Claude Code and its login (core/claude-agent.ts); without
@@ -147,7 +147,7 @@ function teamsToolResult(outcome: RecipeOutcome): string {
   return `Not done: ${outcome.done} Do not click rows in Teams' chat list (Teams refuses them). Tell the user what happened, or try teams_message once more with the name exactly as Teams shows it.`;
 }
 
-const lineResult = (line: string, patch: Partial<PipelineResult["timingsMs"]> = {}): PipelineResult => ({
+export const lineResult = (line: string, patch: Partial<PipelineResult["timingsMs"]> = {}): PipelineResult => ({
   notes: [],
   rankSource: "fallback",
   rankError: null,
@@ -158,6 +158,34 @@ const lineResult = (line: string, patch: Partial<PipelineResult["timingsMs"]> = 
   guideError: null,
   timingsMs: timings(patch),
 });
+
+/**
+ * On a Mac or Linux, the line to stop on when computer use cannot run: Accessibility is denied, or the run was stopped during the
+ * check. Null when it may go on (Windows needs no check).
+ */
+export async function accessStopLine(host: ComputerHost, control: RunControl): Promise<string | null> {
+  if (host.platform !== "mac" && host.platform !== "linux") return null;
+  const access = await computerAccess(host.run, control.signal);
+  debugLog.info("computer", "access", access);
+  if (control.reason()) return stopLine(control.reason() ?? "user", { platform: host.platform });
+  if (access.accessibility !== "denied") return null;
+  console.debug("perf computer access=denied");
+  return stopLine("permission", { platform: host.platform });
+}
+
+/** What the Teams recipe (core/teams-recipe.ts) needs from one run: the host's runner, Confirm and step line, and the desktop. */
+export function teamsRecipeDeps(host: ComputerHost, actions: DesktopActions, control: RunControl, onEffect?: (kind: IrreversibleKind) => void): RecipeDeps {
+  return {
+    run: host.run,
+    desktop: actions,
+    control,
+    platform: host.platform,
+    confirm: host.confirm,
+    onStep: host.onStep,
+    yieldFocus: host.yieldFocus,
+    onEffect,
+  };
+}
 
 /** The computer-use loop for one request, ending with one line for the island. On a Mac without Accessibility, no loop runs. */
 async function runComputerCommand(args: {
@@ -197,36 +225,17 @@ async function runComputerCommand(args: {
   host.onStep?.("Starting…");
   try {
     debugLog.info("computer", "run-start", { platform: host.platform, maxSteps: maxSteps ?? null, maxMs: host.maxMs ?? null, command: args.command });
-    if (host.platform === "mac" || host.platform === "linux") {
-      const access = await computerAccess(host.run, control.signal);
-      debugLog.info("computer", "access", access);
-      if (control.reason()) {
-        const line = stopLine(control.reason() ?? "user", { platform: host.platform });
-        args.onMessages?.([assistantMessage(line)]);
-        return lineResult(line);
-      }
-      if (access.accessibility === "denied") {
-        console.debug("perf computer access=denied");
-        const line = stopLine("permission", { platform: host.platform });
-        args.onMessages?.([assistantMessage(line)]);
-        return lineResult(line);
-      }
+    const denied = await accessStopLine(host, control);
+    if (denied) {
+      args.onMessages?.([assistantMessage(denied)]);
+      return lineResult(denied);
     }
     // Sends, deletes, purchases and submits the confirm gate counted as done: proof for the last line (core/claim-guard.ts).
     const committed = new Set<IrreversibleKind>();
     // A Teams message: the recipe's own steps first. Its line is the answer, unless it could not be sure of a step before any
     // text was written; then the AI carries on from what it did.
     let prior: string | null = null;
-    const recipeDeps = {
-      run: host.run,
-      desktop: args.actions,
-      control,
-      platform: host.platform,
-      confirm: host.confirm,
-      onStep: host.onStep,
-      yieldFocus: host.yieldFocus,
-      onEffect: (kind: IrreversibleKind) => committed.add(kind),
-    };
+    const recipeDeps = teamsRecipeDeps(host, args.actions, control, (kind) => committed.add(kind));
     if (args.recipe) {
       const recipe = args.recipe;
       const outcome = await runTeamsRecipe(recipe, recipeDeps);

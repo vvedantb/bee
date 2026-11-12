@@ -5,6 +5,7 @@ import { INTERFACE_SCALES } from "../core/interface-scale";
 import { MOTION_PREFERENCES } from "../core/motion-preference";
 import { WINDOW_SIZES } from "../core/overlay-size";
 import { TEAMS_AUDIO_FAILURES } from "../core/teams-audio-protocol";
+import { CLIENT_NAME_MAX, JOB_ID_MAX } from "./bee-mcp";
 import { MCP_ICON_MAX_CHARS } from "./mcp-icons";
 
 // One place for every channel name and payload shape crossing the IPC boundary.
@@ -81,6 +82,12 @@ export const IPC = {
   // "What did I miss?" (core/recap.ts): the AI's short take on the missed meeting lines, and main → renderer when the user is back.
   recapSummary: "bee:recap:summary",
   userReturned: "bee:presence:returned",
+  // Bee MCP server (core/remote-loop.ts): main asks the renderer for a Clerk session token and the renderer answers (send); main
+  // tells the renderer a job from another AI came, and the renderer runs it with a run id so the island shows it.
+  remoteTokenRequest: "bee:remote:token-request",
+  remoteToken: "bee:remote:token",
+  remoteJob: "bee:remote:job",
+  runRemoteJob: "bee:remote:run",
 };
 
 // Collapsed notch, notch plus the island response, or the full panel.
@@ -108,6 +115,8 @@ export const settingsViewSchema = z.object({
   meetingMode: z.boolean(),
   // Automatic meeting detection (core/auto-meeting-detection.ts): the only way a meeting starts or stops. Off means no meetings. On by default.
   autoMeetingDetection: z.boolean(),
+  // "Let other AIs use Bee": the Bee MCP server's jobs (core/remote-loop.ts). On by default; off stops the loop and presence.
+  allowRemoteAi: z.boolean(),
   // Zoom factor for the whole overlay, always an allowed value.
   interfaceScale: interfaceScaleSchema,
   motionPreference: motionPreferenceSchema,
@@ -135,6 +144,7 @@ export const settingsUpdateSchema = z.object({
   gatewayApiKey: z.string().max(500).optional(),
   meetingMode: z.boolean().optional(),
   autoMeetingDetection: z.boolean().optional(),
+  allowRemoteAi: z.boolean().optional(),
   interfaceScale: interfaceScaleSchema.optional(),
   motionPreference: motionPreferenceSchema.optional(),
   personalisedLinks: z.boolean().optional(),
@@ -253,6 +263,17 @@ export type RecapResult = z.infer<typeof recapResultSchema>;
 // Main → renderer: the user is back after core/recap.ts AWAY_MS with no input, a locked screen or sleep. since: when they left.
 export const userReturnedSchema = z.object({ since: z.number() });
 export type UserReturned = z.infer<typeof userReturnedSchema>;
+
+// Bee MCP server (core/remote-loop.ts). Main → renderer: a token request and a job notice. Renderer → main: the token (null while
+// signed out) and the run of a noticed job, which returns a PipelineResult like runCommand.
+export const remoteTokenRequestSchema = z.object({ id: z.number().int().positive() });
+export type RemoteTokenRequest = z.infer<typeof remoteTokenRequestSchema>;
+export const remoteTokenSchema = z.object({ id: z.number().int().positive(), token: z.string().max(8000).nullable() });
+export type RemoteToken = z.infer<typeof remoteTokenSchema>;
+export const remoteJobNoticeSchema = z.object({ jobId: z.string().min(1).max(JOB_ID_MAX), clientName: z.string().max(CLIENT_NAME_MAX).nullable() });
+export type RemoteJobNotice = z.infer<typeof remoteJobNoticeSchema>;
+export const remoteJobRunSchema = z.object({ jobId: z.string().min(1).max(JOB_ID_MAX), runId: runIdSchema, sessionToken: z.string().max(8000) });
+export type RemoteJobRun = z.infer<typeof remoteJobRunSchema>;
 
 export const pipelineCancelSchema = z.object({ runId: runIdSchema });
 export type PipelineCancel = z.infer<typeof pipelineCancelSchema>;

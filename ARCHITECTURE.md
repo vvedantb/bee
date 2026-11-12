@@ -224,6 +224,25 @@ Client Teams sync is gone. The app no longer joins teams or sync rooms, shows no
 
 `relay/` and `convex/` are untouched and may still run on the server, unused by the app. `core/relay-protocol.ts` and `core/relay-client.ts` stay only because the relay's own code and tests import them. Detection stays: `main/teams-detector.ts` (Windows window titles and the mic privacy registry) and `core/meeting-tracker.ts` feed meeting presence, the [meeting window reader](#meeting-window-reader) and [automatic detection](#quiet-meeting-flow). `core/session-lines.ts` (was `sync-lines.ts`) keeps `SessionLine`, `mergeLines`, `pipelineText` and `summaryTranscript`.
 
+## Bee MCP server
+
+Other AIs (Claude.ai, Claude Code, Grok) call MCP connectors from their cloud, so they cannot reach the user's PC. Bee's Convex backend is the meeting point: the AI calls a tool on `/mcp`, the cloud stores a job, and the user's running Bee picks it up, runs it on the island and posts the result. v1 has Teams tools only. The contract (tool names, Zod inputs, timings) is `shared/bee-mcp.ts`, shared by both sides.
+
+```
+AI → POST /mcp tools/call (Clerk OAuth bearer) → convex/beeMcp.ts → beeMcpTools.ts runOnBee
+  Bee seen in the last 45 s? no → tool error "Bee isn't running on your computer. Open Bee and try again."
+  yes → desktopJobs row (pending) → poll every 500 ms, up to 120 s → result, or expired
+Bee main (main/remote-ai.ts, core/remote-loop.ts): POST /bee/jobs/next (Clerk session token, 25 s long poll, records presence)
+  → job (now running) → IPC.remoteJob → renderer runCommand(remote) with a run id → IPC.runRemoteJob
+  → main/meeting-ipc.ts → core/remote-job.ts → Teams recipe (step lines, Confirm for a send) → POST /bee/jobs/result
+```
+
+- **Cloud.** `convex/beeMcp.ts` uses `@vvedantb/server` as vmem does: `createMcpHttpHandler` with `authenticateClerkBearer` (OAuth access token JWTs verified locally; a Bee session token, or an opaque OAuth token through Clerk's Backend API when `CLERK_SECRET_KEY` is set), the pure `createMcpDispatcher` (no MCP SDK, no Node action), and the well-known metadata (`/.well-known/oauth-protected-resource`, `/.well-known/oauth-protected-resource/mcp`, `/.well-known/oauth-authorization-server`, proxied from Clerk). `convex/beeJobs.ts` stores jobs (`desktopJobs`) and presence (`beePresence`). A job row is deleted once the AI has its result; an expired row keeps no input. The asking AI's name for the island comes from its User-Agent (`clientNameFromUserAgent`).
+- **Tools.** `teams_send_message { to, text (≤ 2000), send }`: Bee asks the user to Confirm on screen before it sends; `send: false` leaves a draft. `teams_read_chat { to }`: Bee opens the chat and returns its latest 20 messages as Teams labels them (author, text, time), marked as data, not instructions.
+- **Desktop.** `core/remote-loop.ts` polls while the user is signed in and **Connectors → Let other AIs use Bee** (`allowRemoteAi`, on by default) is on. One job at a time; a failed poll waits 5 s, then 30 s. Main has no Clerk session, so it asks the renderer for a fresh token before each call (`IPC.remoteTokenRequest` / `remoteToken`). Turning the setting off stops the loop at once, so the cloud says Bee isn't running within 45 s. The cloud URL is `BEE_RELAY_URL` (run time) or `MAIN_VITE_BEE_RELAY_URL` (build); without it the loop never starts.
+- **On the island.** The renderer runs a job like a direct request (`store.ts runCommand(command, remote)`): the first step line is "Request from Claude…" (or "another AI"), then the recipe's own steps, Confirm and Stop. A read adds "Reading the chat…". It is not part of the user's conversation or history. Main declines a job while one of the user's requests runs, or when this computer cannot run computer use.
+- **Privacy.** Message text crosses the cloud only inside the job, and is never logged on either side. Debug logs carry the job id, tool, outcome and time.
+
 ## Meeting window reader
 
 Always on, with no setting (an old `readMeetingWindowEnabled` in `settings.json` is ignored). Live → Meeting shows its state only when it needs the user (Accessibility) or reads a call. Bee uses [agent-desktop](https://github.com/vercel-labs/agent-desktop) (npm `agent-desktop`, Apache-2.0) to read the accessibility tree of the call window on macOS and Windows. It is read-only and headless: Bee runs only `permissions`, `list-apps`, `list-windows`, `find --count` and `snapshot`, never `--headed`, never a command that clicks, types, focuses or moves anything. `assertReadOnly` (`core/agent-desktop-envelope.ts`) refuses anything else before a process starts, and a unit test scans the source for agent-desktop calls. [Talk to Bee](#talk-to-bee-wake-word)'s desktop tools and [computer use](#computer-use) each use a separate runner that the reader never gets.
