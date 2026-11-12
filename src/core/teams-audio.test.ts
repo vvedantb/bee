@@ -6,10 +6,7 @@ import {
   TEAMS_AUDIO_SPEAKER,
   TEAMS_AUDIO_SPEAKER_ID,
   TEAMS_APP_AUDIO,
-  callAudioHelperArgs,
-  callAudioTarget,
   micEchoesCallAudio,
-  sameCallAudioTarget,
   teamsAudioEcho,
   teamsAudioOsSupported,
   teamsAudioPlan,
@@ -59,11 +56,11 @@ describe("teamsAudioSupport", () => {
     expect(teamsAudioSupport("mac", { windows: true, mac: false }, host(false, false))).toEqual({ supported: false, reason: "needs-app-audio" });
   });
 
-  it("checks the OS floor from os.release(): Windows 10 build 19041, macOS 13 (Darwin 22)", () => {
+  it("checks the OS floor from os.release(): Windows 10, macOS 13 (Darwin 22)", () => {
     expect(teamsAudioOsSupported("windows", "10.0.19041")).toBe(true);
     expect(teamsAudioOsSupported("windows", "10.0.22631")).toBe(true);
-    expect(teamsAudioOsSupported("windows", "10.0.19045")).toBe(true);
-    expect(teamsAudioOsSupported("windows", "10.0.18363")).toBe(false);
+    expect(teamsAudioOsSupported("windows", "10.0.18363")).toBe(true);
+    expect(teamsAudioOsSupported("windows", "10.0.10240")).toBe(true);
     expect(teamsAudioOsSupported("windows", "6.3.9600")).toBe(false);
     expect(teamsAudioOsSupported("windows", "")).toBe(false);
     expect(teamsAudioOsSupported("mac", "22.1.0")).toBe(true);
@@ -74,95 +71,21 @@ describe("teamsAudioSupport", () => {
 });
 
 describe("teamsAudioPlan", () => {
-  const ready = { enabled: true, supported: true, inCall: true, micOn: true };
+  const ready = { enabled: true, supported: true, micOn: true };
 
-  // Client sync is gone, so no call is ever covered by a teammate's Bee: a call with the mic on always listens.
-  it("listens in a call with the mic on, with no sync or coverage to ask", () => {
+  // All system audio: no call app needs to be found, so the mic on is enough.
+  it("listens whenever the mic is on: no call app needs to be found", () => {
     expect(teamsAudioPlan(ready)).toBe("listen");
   });
 
-  it("does not listen when off, unsupported, outside a call or with the mic off", () => {
+  it("does not listen when off, unsupported or with the mic off", () => {
     expect(teamsAudioPlan({ ...ready, enabled: false })).toBe("off");
     expect(teamsAudioPlan({ ...ready, supported: false })).toBe("unavailable");
-    expect(teamsAudioPlan({ ...ready, inCall: false })).toBe("waiting");
     expect(teamsAudioPlan({ ...ready, micOn: false })).toBe("waiting");
   });
 
   it("reports off before unavailable, so a switched-off setting says nothing about the platform", () => {
     expect(teamsAudioPlan({ ...ready, enabled: false, supported: false })).toBe("off");
-  });
-});
-
-describe("callAudioTarget", () => {
-  const window = (app: "teams" | "zoom" | "meet", appName: string, patch: { pid?: number | null; bundleId?: string | null } = {}) => ({
-    app,
-    appName,
-    pid: patch.pid ?? null,
-    bundleId: patch.bundleId ?? null,
-  });
-
-  it("hears the Teams app for a Teams call, from the reader or the built-in Windows detector", () => {
-    const teams = { kind: "teams", processes: ["ms-teams.exe", "teams.exe"], bundleIds: ["com.microsoft.teams2", "com.microsoft.teams"], pid: null };
-    expect(callAudioTarget({ window: window("teams", "Microsoft Teams", { pid: 42 }), teamsDetector: false })).toEqual(teams);
-    expect(callAudioTarget({ window: null, teamsDetector: true })).toEqual(teams);
-  });
-
-  it("hears the Zoom app for a Zoom call", () => {
-    expect(callAudioTarget({ window: window("zoom", "zoom.us", { pid: 7, bundleId: "us.zoom.xos" }), teamsDetector: false })).toEqual({
-      kind: "zoom",
-      processes: ["zoom.exe"],
-      bundleIds: ["us.zoom.xos"],
-      pid: null,
-    });
-  });
-
-  it("hears the browser that owns a Meet window, by bundle id or by name, with the window's process", () => {
-    expect(callAudioTarget({ window: window("meet", "Google Chrome", { pid: 900, bundleId: "com.google.Chrome" }), teamsDetector: false })).toEqual({
-      kind: "meet",
-      processes: ["chrome.exe"],
-      bundleIds: ["com.google.chrome"],
-      pid: 900,
-    });
-    // A channel build counts as its browser.
-    expect(callAudioTarget({ window: window("meet", "Google Chrome Beta", { bundleId: "com.google.Chrome.beta" }), teamsDetector: false })?.bundleIds).toEqual(["com.google.chrome"]);
-    // Windows: agent-desktop names the process; no bundle id.
-    expect(callAudioTarget({ window: window("meet", "msedge.exe", { pid: 31 }), teamsDetector: false })).toEqual({ kind: "meet", processes: ["msedge.exe"], bundleIds: ["com.microsoft.edgemac"], pid: 31 });
-    expect(callAudioTarget({ window: window("meet", "Firefox"), teamsDetector: false })?.processes).toEqual(["firefox.exe"]);
-    expect(callAudioTarget({ window: window("meet", "Arc", { bundleId: "company.thebrowser.Browser" }), teamsDetector: false })?.processes).toEqual(["arc.exe"]);
-  });
-
-  it("hears nothing for Meet in Safari or an unknown browser, never the whole system; the Teams detector still counts", () => {
-    expect(callAudioTarget({ window: window("meet", "Safari", { bundleId: "com.apple.Safari" }), teamsDetector: false })).toBeNull();
-    // A Safari bundle id is never guessed from a name that looks like Chrome.
-    expect(callAudioTarget({ window: window("meet", "Google Chrome", { bundleId: "com.apple.Safari" }), teamsDetector: false })).toBeNull();
-    expect(callAudioTarget({ window: window("meet", "Some Browser"), teamsDetector: false })).toBeNull();
-    expect(callAudioTarget({ window: window("meet", "Safari"), teamsDetector: true })?.kind).toBe("teams");
-    expect(callAudioTarget({ window: null, teamsDetector: false })).toBeNull();
-  });
-
-  it("tells a different app or process apart from the same one", () => {
-    const zoom = callAudioTarget({ window: window("zoom", "Zoom"), teamsDetector: false });
-    const teams = callAudioTarget({ window: null, teamsDetector: true });
-    const chrome = (pid: number) => callAudioTarget({ window: window("meet", "chrome", { pid }), teamsDetector: false });
-    expect(sameCallAudioTarget(zoom, callAudioTarget({ window: window("zoom", "zoom.us"), teamsDetector: false }))).toBe(true);
-    expect(sameCallAudioTarget(zoom, teams)).toBe(false);
-    expect(sameCallAudioTarget(chrome(1), chrome(1))).toBe(true);
-    expect(sameCallAudioTarget(chrome(1), chrome(2))).toBe(false);
-    expect(sameCallAudioTarget(null, null)).toBe(true);
-    expect(sameCallAudioTarget(zoom, null)).toBe(false);
-  });
-});
-
-describe("callAudioHelperArgs", () => {
-  it("names the target to the helper: --image and --pid on Windows, --bundle-id on macOS, nothing elsewhere", () => {
-    const meet = { kind: "meet" as const, processes: ["chrome.exe"], bundleIds: ["com.google.chrome"], pid: 900 };
-    expect(callAudioHelperArgs(meet, "windows")).toEqual(["--image", "chrome.exe", "--pid", "900"]);
-    expect(callAudioHelperArgs(meet, "mac")).toEqual(["--bundle-id", "com.google.chrome"]);
-    expect(callAudioHelperArgs({ ...meet, pid: null }, "windows")).toEqual(["--image", "chrome.exe"]);
-    expect(callAudioHelperArgs(meet, "linux")).toEqual([]);
-    const teams = callAudioTarget({ window: null, teamsDetector: true });
-    expect(teams && callAudioHelperArgs(teams, "windows")).toEqual(["--image", "ms-teams.exe", "--image", "teams.exe"]);
-    expect(teams && callAudioHelperArgs(teams, "mac")).toEqual(["--bundle-id", "com.microsoft.teams2", "--bundle-id", "com.microsoft.teams"]);
   });
 });
 

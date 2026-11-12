@@ -110,8 +110,8 @@ export function MeetingSection({
           <SettingRow
             id="teams-audio-fallback"
             label="Hear other people in calls"
-            description="Call audio only."
-            info="With your mic on in a call, Bee hears the call app only (Teams, Zoom, or the browser running Google Meet), never all system audio."
+            description="Hears your computer's sound."
+            info="With your mic on, Bee also hears everything your computer plays, so it hears the other people in any call app."
             checked={audioOn}
             onCheckedChange={(teamsAudioFallbackEnabled) => onChange({ teamsAudioFallbackEnabled })}
           />

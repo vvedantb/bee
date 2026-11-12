@@ -1,22 +1,20 @@
 import { ipcMain, shell } from "electron";
 import { debugLog } from "../core/debug-log";
-import { sameCallAudioTarget } from "../core/teams-audio";
-import { IPC, teamsAudioStartRequestSchema, teamsAudioStatusRequestSchema, type TeamsAudioStartResult } from "../shared/ipc";
+import { IPC, teamsAudioStartRequestSchema, teamsAudioStatusRequestSchema, type TeamsAudioStartResult, type TeamsAudioStatus } from "../shared/ipc";
 import { assertSignedIn } from "./auth";
-import { teamsAudioAllowed, type TeamsAudioReading } from "./teams-audio";
+import { teamsAudioAllowed } from "./teams-audio";
 import type { TeamsAudioCapture } from "./teams-audio-capture";
 
 // System Settings → Privacy & Security → Screen Recording (macOS 13+: "Screen & System Audio Recording" on macOS 15).
 const MAC_SCREEN_RECORDING_SETTINGS = "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture";
 
 /**
- * Call audio IPC. status: codes only, and a lease that keeps a running capture alive; a capture main would not start now, or
- * one on another app than the call's (the user moved from Teams to Zoom, say), is stopped, and the renderer's next tick starts
- * the right one. start: main checks the plan itself and picks the target before the helper runs. stop: the renderer's mic
+ * Call audio IPC. status: codes only, and a lease that keeps a running capture alive; a capture main would not start now is
+ * stopped. start: main checks the plan itself before the helper runs (all system audio: no target). stop: the renderer's mic
  * went off, or its plan changed. The macOS Screen Recording button asks the system once, then opens the pane.
  */
 export function registerTeamsAudioIpc(args: {
-  status: () => Promise<TeamsAudioReading>;
+  status: () => Promise<TeamsAudioStatus>;
   enabled: () => boolean;
   capture: TeamsAudioCapture;
   isMac: boolean;
@@ -25,7 +23,7 @@ export function registerTeamsAudioIpc(args: {
   let lastStatus = "";
   ipcMain.handle(IPC.teamsAudioStatus, async (_event, payload) => {
     assertSignedIn(teamsAudioStatusRequestSchema.parse(payload).sessionToken);
-    const { status, target } = await args.status();
+    const status = await args.status();
     const seen = JSON.stringify(status);
     if (seen !== lastStatus) {
       lastStatus = seen;
@@ -35,22 +33,19 @@ export function registerTeamsAudioIpc(args: {
     if (args.capture.running() && !teamsAudioAllowed(status, args.enabled())) {
       debugLog.info("teams-audio", "stop", { reason: "policy" });
       args.capture.stop("policy");
-    } else if (args.capture.running() && !sameCallAudioTarget(args.capture.target(), target)) {
-      debugLog.info("teams-audio", "stop", { reason: "app-changed", call: status.call });
-      args.capture.stop("policy");
     }
     return status;
   });
 
   ipcMain.handle(IPC.teamsAudioStart, async (_event, payload): Promise<TeamsAudioStartResult> => {
     assertSignedIn(teamsAudioStartRequestSchema.parse(payload).sessionToken);
-    const { status, target } = await args.status();
-    if (!target || !teamsAudioAllowed(status, args.enabled())) {
+    const status = await args.status();
+    if (!teamsAudioAllowed(status, args.enabled())) {
       debugLog.info("teams-audio", "start", { ok: false, failure: "refused", status });
       return { ok: false, failure: "refused" };
     }
-    const result = await args.capture.start(target);
-    debugLog.info("teams-audio", "start", { ...result, call: target.kind });
+    const result = await args.capture.start();
+    debugLog.info("teams-audio", "start", { ...result, source: "system" });
     return result;
   });
 

@@ -7,44 +7,34 @@ import type { TeamsAudioStatus } from "../../shared/ipc";
 export type TeamsAudioView = { status: TeamsAudioStatus | null; plan: TeamsAudioPlan; listening: boolean; failed: boolean; failure?: TeamsAudioFailure | null };
 
 const MIC_ONLY = "Bee uses your mic only.";
-/** The Live → Meeting line while Bee hears the call app. Not "Meeting in progress": only a started meeting says that (notch.ts). */
-export const TEAMS_AUDIO_LISTENING = "Listening to call audio.";
+/** The Live → Meeting line while Bee hears the computer's sound. Not "Meeting in progress": only a started meeting says that (notch.ts). */
+export const TEAMS_AUDIO_LISTENING = "Listening to your computer's sound.";
 const CARRIES_ON = "Bee carries on with your mic.";
 const MISSING = `The call audio helper is missing. Reinstall Bee. ${MIC_ONLY}`;
 
-/** macOS counts any app's audio as Screen Recording. Bee's helper records the call app's sound only, never the screen. */
-export const TEAMS_AUDIO_SCREEN_RECORDING =
-  "Turn on Screen Recording for Bee to hear other people in calls. Bee records the call app's sound only, never your screen or other apps.";
-
-/** The call app is not running (the helper's no-teams code), by the app main saw. */
-const NOT_FOUND: Record<NonNullable<TeamsAudioStatus["call"]> | "none", string> = {
-  teams: "Could not find the Teams desktop app. Bee hears the Teams app only, not Teams in a browser.",
-  zoom: "Could not find the Zoom app.",
-  meet: "Could not find the browser that runs Google Meet.",
-  none: "Could not find the call app.",
-};
+/** macOS counts any app's audio as Screen Recording. Bee's helper records the Mac's sound only, never the screen. */
+export const TEAMS_AUDIO_SCREEN_RECORDING = "Turn on Screen Recording for Bee to hear other people in calls. Bee records your Mac's sound only, never your screen.";
 
 function unavailable(status: TeamsAudioStatus): string {
   const { platform, reason } = status;
   if (platform === "linux") return `Call audio is not available on Linux. ${MIC_ONLY}`;
   if (platform === "other") return `Call audio is not available on this device. ${MIC_ONLY}`;
   if (reason === "os-too-old") {
-    return platform === "mac" ? `Call audio needs macOS 13 or later. ${MIC_ONLY}` : `Call audio needs Windows 10 version 2004 or later. ${MIC_ONLY}`;
+    return platform === "mac" ? `Call audio needs macOS 13 or later. ${MIC_ONLY}` : `Call audio needs Windows 10 or later. ${MIC_ONLY}`;
   }
   if (reason === "helper-missing") return MISSING;
-  return `Call audio is not available in this version of Bee. Bee never records all system audio, so it uses your mic only.`;
+  return `Call audio is not available in this version of Bee. ${MIC_ONLY}`;
 }
 
 function failed(status: TeamsAudioStatus, failure: TeamsAudioFailure | null | undefined): string {
   const { platform } = status;
   if (failure === "missing") return MISSING;
-  if (failure === "denied") return platform === "mac" ? TEAMS_AUDIO_SCREEN_RECORDING : `Windows would not let Bee hear the call app. ${CARRIES_ON}`;
+  if (failure === "denied") return platform === "mac" ? TEAMS_AUDIO_SCREEN_RECORDING : `Windows would not let Bee hear the computer's sound. ${CARRIES_ON}`;
   if (failure === "unsupported") {
     const device = platform === "mac" ? "This Mac" : "This version of Windows";
-    return `${device} cannot share one app's sound on its own, so Bee uses your mic only.`;
+    return `${device} cannot share its sound with Bee, so Bee uses your mic only.`;
   }
-  if (failure === "no-teams") return `${NOT_FOUND[status.call ?? "none"]} ${CARRIES_ON}`;
-  return `Could not hear the call app in this call. ${CARRIES_ON}`;
+  return `Could not hear the computer's sound. Bee tries again shortly. ${CARRIES_ON}`;
 }
 
 /** macOS: the helper needs Screen Recording, so Live → Meeting shows the button that asks for it. */

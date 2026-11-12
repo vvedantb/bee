@@ -75,10 +75,10 @@ const SETTINGS: SettingsView = {
   askShortcutActive: true,
 };
 
-// What Windows reports with the helper installed, in a Teams call.
-const LISTEN: TeamsAudioStatus = { platform: "windows", supported: true, reason: null, call: "teams", permission: "not-needed" };
-// What a copy of Bee without the helper reports: no Teams-only capture here.
-const NO_HELPER: TeamsAudioStatus = { platform: "windows", supported: false, reason: "helper-missing", call: null, permission: "not-needed" };
+// What Windows reports with the helper installed: Bee can hear the computer's sound.
+const LISTEN: TeamsAudioStatus = { platform: "windows", supported: true, reason: null, permission: "not-needed" };
+// What a copy of Bee without the helper reports.
+const NO_HELPER: TeamsAudioStatus = { platform: "windows", supported: false, reason: "helper-missing", permission: "not-needed" };
 
 /** A capture main started: lines() delivers text as main would, end() stops it from main's side. */
 function fakeCapture() {
@@ -296,7 +296,7 @@ describe("store: Teams audio capture", () => {
     expect(store.getBeeState().teamsAudio.listening).toBe(false);
   });
 
-  it("fails open: a capture that will not open leaves the mic on and is not retried until the next call", async () => {
+  it("fails open: a capture that will not open leaves the mic on, and is tried again after 30 s", async () => {
     capture.open = async () => {
       throw new Error("no handler");
     };
@@ -307,10 +307,9 @@ describe("store: Teams audio capture", () => {
     expect(capture.opened).toBe(1);
     expect(store.getBeeState().mic.on).toBe(true);
     expect(store.getBeeState().teamsAudio).toMatchObject({ listening: false, failed: true, failure: "failed" });
-    audio.status = { ...LISTEN, call: null };
     await poll();
-    expect(store.getBeeState().teamsAudio).toMatchObject({ failed: false, failure: null });
-    audio.status = LISTEN;
+    expect(capture.opened).toBe(1);
+    await vi.advanceTimersByTimeAsync(30_000);
     await poll();
     expect(capture.opened).toBe(2);
   });
@@ -342,19 +341,19 @@ describe("store: Teams audio capture", () => {
     expect(capture.opened).toBe(2);
   });
 
-  it("does not reopen in this call when the helper fails (Teams closed), but tries again when the call moves to another app", async () => {
+  it("does not reopen at once when the helper fails, but tries again after 30 s", async () => {
     const fake = fakeCapture();
     capture.open = async () => fake.opened;
-    const { store, poll, audio } = await loadStore();
+    const { store, poll } = await loadStore();
     await store.actions.toggleMic();
     await poll();
-    fake.end("no-teams");
-    expect(store.getBeeState().teamsAudio).toMatchObject({ listening: false, failed: true, failure: "no-teams" });
+    fake.end("failed");
+    expect(store.getBeeState().teamsAudio).toMatchObject({ listening: false, failed: true, failure: "failed" });
     expect(capture.stopped).toBe(1);
     await poll();
     expect(capture.opened).toBe(1);
     expect(store.getBeeState().mic.on).toBe(true);
-    audio.status = { ...LISTEN, call: "zoom" };
+    await vi.advanceTimersByTimeAsync(30_000);
     await poll();
     expect(capture.opened).toBe(2);
     expect(store.getBeeState().teamsAudio).toMatchObject({ listening: true, failed: false });
