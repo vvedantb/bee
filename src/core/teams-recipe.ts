@@ -20,7 +20,15 @@ import { nameMatches, type ResolvedName } from "./known-names";
 // is ever typed into a chat Bee could not check, a box that already holds the user's own draft is left alone, and Stop ends it
 // between any two steps. Logs carry step names, outcomes and times, never the name or the message.
 
-export type TeamsMessage = { to: string; text: string; send: boolean; /** Only open and check the chat: write nothing (text is ignored). */ openOnly?: boolean };
+export type TeamsMessage = {
+  to: string;
+  text: string;
+  send: boolean;
+  /** Only open and check the chat: write nothing (text is ignored). */
+  openOnly?: boolean;
+  /** With openOnly: also read the open chat's latest messages (the Bee MCP server's teams_read_chat). */
+  read?: boolean;
+};
 
 // Polite padding before the request, and quotes around it.
 const POLITE = /^(?:(?:please|hey|ok|okay|so|now|just|can you|could you|would you|will you)[\s,]+)+/i;
@@ -196,7 +204,7 @@ export type RecipeDeps = {
 export type RecipeOutcome =
   | { kind: "sent"; line: string }
   | { kind: "drafted"; line: string }
-  | { kind: "opened"; line: string }
+  | { kind: "opened"; line: string; /** With read: the latest messages, oldest first, as Teams labels them. */ messages?: string[] }
   | { kind: "failed"; line: string }
   | { kind: "fallback"; done: string }
   | { kind: "stopped" };
@@ -383,6 +391,15 @@ export async function runTeamsRecipe(asked: TeamsMessage & { name: string }, dep
   if (stopped()) return { kind: "stopped" };
   if (!verified) return fallback(`Bee could not confirm the chat with ${message.name} opened, so it typed no message.`);
   done.push(`The chat with ${message.name} is open.`);
+  if (asked.openOnly && asked.read) {
+    deps.onStep?.("Reading the chat…");
+    // Teams labels each message with its author, text and time; only listitems outside the chat list and search are messages.
+    const items = await logged("read-chat", okResult)(exec("find", [...where, "--role=listitem", `--limit=${CHAT_FIND_MAX}`, `--timeout-ms=${LOOK_MS}`], LOOK_MS + 6000));
+    if (stopped()) return { kind: "stopped" };
+    const messages = items.ok ? chatMessages(findMatches(items.data)) : [];
+    debugLog.info("computer", "teams-recipe", { step: "messages", ok: messages.length > 0, count: messages.length });
+    return { kind: "opened", line: `Read the chat with ${self ? "yourself" : message.name}.`, messages };
+  }
   if (asked.openOnly) return { kind: "opened", line: `The chat with ${self ? "yourself" : message.name} is open. Read it with a snapshot of Teams.` };
 
   // 5. The message box, empty (or showing only its placeholder): a draft of the user's own is never touched.
@@ -455,6 +472,24 @@ export async function runTeamsRecipe(asked: TeamsMessage & { name: string }, dep
   if (!empty(left)) return { kind: "failed", line: "Bee pressed Enter, but the message is still in the box, so it may not have been sent." };
   deps.onEffect?.("send");
   return { kind: "sent", line: `Sent to ${self ? "your own chat" : message.name}.` };
+}
+
+/** How many listitems one read asks agent-desktop for, how many messages it keeps (the newest), and how long each may be. */
+const CHAT_FIND_MAX = 200;
+export const CHAT_MESSAGES_MAX = 20;
+export const CHAT_MESSAGE_MAX = 400;
+
+/**
+ * The open chat's messages from find's listitems: in order (oldest first), the newest CHAT_MESSAGES_MAX, each as Teams labels it
+ * (author, text, time) on one line. Rows inside the chat list (a tree), search suggestions (a listbox) or a menu are not messages.
+ */
+export function chatMessages(matches: readonly { name?: string | null; path?: string[] | undefined }[]): string[] {
+  const messages = matches
+    .filter((match) => !match.path?.some((part) => /^(?:tree|treeitem|listbox|menu|menubar)\b/i.test(part)))
+    .map((match) => squash(match.name ?? ""))
+    .filter((text) => text !== "")
+    .map((text) => (text.length > CHAT_MESSAGE_MAX ? `${text.slice(0, CHAT_MESSAGE_MAX - 1)}…` : text));
+  return messages.slice(-CHAT_MESSAGES_MAX);
 }
 
 /**

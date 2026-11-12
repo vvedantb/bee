@@ -265,6 +265,7 @@ describe("settingsChange", () => {
     sendSessionsToVmem: false,
     meetingMode: false,
     autoMeetingDetection: false,
+    allowRemoteAi: false,
     interfaceScale: 1,
     motionPreference: "on",
     secretStorage: "os",

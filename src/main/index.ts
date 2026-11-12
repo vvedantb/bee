@@ -18,6 +18,7 @@ import { createAwayTracker } from "../core/recap";
 import { teamsAudioOsSupported, teamsAudioPlatform } from "../core/teams-audio";
 import { sttVocabulary, transcribeSpeech } from "../core/transcribe";
 import { createMcpPool } from "../core/mcp";
+import type { RemoteLoop } from "../core/remote-loop";
 import { createMeetingContext } from "../core/meeting-context";
 import { createMeetingMemoryStore } from "../core/meeting-memory";
 import { searchMcpNotes } from "../core/meeting-search";
@@ -43,6 +44,7 @@ import { AGENT_CALENDAR_SYSTEM, agentCalendarPrompt, createAgentCalendarReader, 
 import { registerMcpIpc } from "./mcp-ipc";
 import { registerOpenUrlIpc } from "./open-url";
 import { registerMeetingIpc } from "./meeting-ipc";
+import { cloudUrlFrom, startRemoteAi } from "./remote-ai";
 import { createScreenCapture, macScreenRecording, shrinkShot } from "./screen-capture";
 import { createScreenReader } from "../core/screen-context";
 import { createVmemTranscripts } from "./vmem-transcript-queue";
@@ -76,6 +78,8 @@ let interfaceScale = 1;
 let tray: Tray | null = null;
 // Set at start-up, before the first window.
 let settings: SettingsStore;
+// The Bee MCP server's job loop (main/remote-ai.ts); null without a cloud URL.
+let remoteAi: RemoteLoop | null = null;
 
 function displayInfos(): DisplayInfo[] {
   return screen.getAllDisplays().map(({ id, bounds, workArea, scaleFactor }) => ({ id, bounds, workArea, scaleFactor }));
@@ -481,6 +485,8 @@ if (clerk.isPrimaryInstance) {
       void meetingWindow.read();
       if (win) applyMeetingMode(win, view.meetingMode || autoOverlay);
       applyInterfaceScale(view.interfaceScale);
+      // "Let other AIs use Bee" starts or stops the loop at once.
+      remoteAi?.sync();
       return view;
     });
 
@@ -564,7 +570,7 @@ if (clerk.isPrimaryInstance) {
     const beeMemory = createBeeMemoryStore({ userDataDir });
     // Memory → Saved memory lists and clears this same store, so a clear reaches the next direct request at once.
     registerBeeMemoryIpc(beeMemory);
-    registerMeetingIpc({
+    const meetingIpc = registerMeetingIpc({
       transcripts,
       history: beeHistory,
       memory: beeMemory,
@@ -666,6 +672,18 @@ if (clerk.isPrimaryInstance) {
     ipcMain.handle(IPC.installUpdate, () => updater.install());
 
     win = createWindow(settings.view().meetingMode || autoOverlay, settings.view().interfaceScale);
+    // Bee MCP server: other AIs ask this Bee to act in Teams (main/remote-ai.ts). Off without the cloud URL or the setting.
+    remoteAi = startRemoteAi({
+      baseUrl: cloudUrlFrom(process.env.BEE_RELAY_URL || import.meta.env.MAIN_VITE_BEE_RELAY_URL),
+      enabled: settings.allowRemoteAi,
+      send: (channel, payload) => {
+        if (!win || win.isDestroyed()) return false;
+        win.webContents.send(channel, payload);
+        return true;
+      },
+      runRemoteJob: meetingIpc.runRemoteJob,
+    });
+    app.on("will-quit", () => remoteAi?.stop());
     createTray(notesDir, logsDir);
     shortcuts.set("toggle", settings.view().toggleShortcut);
     shortcuts.set("ask", settings.view().askShortcut);

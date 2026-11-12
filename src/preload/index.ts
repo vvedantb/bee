@@ -35,6 +35,12 @@ import {
   followUpResultSchema,
   recapResultSchema,
   userReturnedSchema,
+  remoteJobNoticeSchema,
+  remoteTokenRequestSchema,
+  type RemoteJobNotice,
+  type RemoteJobRun,
+  type RemoteToken,
+  type RemoteTokenRequest,
   revealGatewayKeyResultSchema,
   settingsViewSchema,
   teamsAudioEndedSchema,
@@ -147,6 +153,32 @@ const api = {
     return () => {
       ipcRenderer.removeListener(IPC.userReturned, handler);
     };
+  },
+  // Bee MCP server (main/remote-ai.ts): main asks for a session token and says a job from another AI came; the renderer runs it
+  // like a direct request, so it returns the same result shape.
+  remoteAi: {
+    onTokenRequest: (listener: (request: RemoteTokenRequest) => void): (() => void) => {
+      const handler = (_event: unknown, payload: unknown) => {
+        const parsed = remoteTokenRequestSchema.safeParse(payload);
+        if (parsed.success) listener(parsed.data);
+      };
+      ipcRenderer.on(IPC.remoteTokenRequest, handler);
+      return () => {
+        ipcRenderer.removeListener(IPC.remoteTokenRequest, handler);
+      };
+    },
+    token: (answer: RemoteToken) => ipcRenderer.send(IPC.remoteToken, answer),
+    onJob: (listener: (notice: RemoteJobNotice) => void): (() => void) => {
+      const handler = (_event: unknown, payload: unknown) => {
+        const parsed = remoteJobNoticeSchema.safeParse(payload);
+        if (parsed.success) listener(parsed.data);
+      };
+      ipcRenderer.on(IPC.remoteJob, handler);
+      return () => {
+        ipcRenderer.removeListener(IPC.remoteJob, handler);
+      };
+    },
+    run: async (request: RemoteJobRun) => pipelineResultSchema.parse(await ipcRenderer.invoke(IPC.runRemoteJob, request)),
   },
   // Bee's history cleared after idle: main may send that finished conversation to vmem. Fire and forget; main checks the setting.
   conversationEnded: async (request: ConversationEnded) => {

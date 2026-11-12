@@ -587,6 +587,17 @@ describe("settings: the type-to-Bee shortcut", () => {
   });
 });
 
+describe("settings: let other AIs use Bee", () => {
+  it("is on by default, also for a file from before the switch, and keeps the user's off", () => {
+    expect(create().view().allowRemoteAi).toBe(true);
+    writeFileSync(join(dir, "settings.json"), JSON.stringify({ meetingMode: true }));
+    expect(create().allowRemoteAi()).toBe(true);
+    create().save({ allowRemoteAi: false });
+    expect(create().allowRemoteAi()).toBe(false);
+    expect(create().view().allowRemoteAi).toBe(false);
+  });
+});
+
 describe("settings: automatic meeting detection", () => {
   it("is on by default, for a new install and for a settings file from before the toggle", () => {
     expect(create().view().autoMeetingDetection).toBe(true);

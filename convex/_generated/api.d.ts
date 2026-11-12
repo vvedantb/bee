@@ -8,6 +8,9 @@
  * @module
  */
 
+import type * as beeJobs from "../beeJobs.js";
+import type * as beeMcp from "../beeMcp.js";
+import type * as beeMcpTools from "../beeMcpTools.js";
 import type * as clerkAuth from "../clerkAuth.js";
 import type * as http from "../http.js";
 import type * as relay from "../relay.js";
@@ -19,6 +22,9 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  beeJobs: typeof beeJobs;
+  beeMcp: typeof beeMcp;
+  beeMcpTools: typeof beeMcpTools;
   clerkAuth: typeof clerkAuth;
   http: typeof http;
   relay: typeof relay;

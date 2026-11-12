@@ -19,6 +19,7 @@ import {
   type TeamsAudioPlan,
 } from "../../core/teams-audio";
 import { RECAP_AI_MIN_LINES, RECAP_LINES_SENT, RECAP_WINDOW_MS, beeLines, isRecapRequest, localMeetingLines, missedLines, recapBody, speakerText, type RecapEvent } from "../../core/recap";
+import { remoteRequestLine } from "../../shared/bee-mcp";
 import { CONVERSATION_IDLE_MS, addExchange, commandFallbackReply, type BeeExchange } from "../../core/bee-history";
 import { CONVERSATION_QUESTION_MS, CONVERSATION_WINDOW_MS, OTHERS_QUIET_MS, REOPEN_WINDOW_MS, WAKE_FOLLOW_MS, isConfirmWords, isForBee, replyInvitesAnswer, routeLine } from "../../core/wake-word";
 import type { TeamsAudioFailure } from "../../core/teams-audio-protocol";
@@ -44,6 +45,7 @@ import {
   type MeetingSummaryResult,
   type MemoryFactView,
   type PipelineResult,
+  type RemoteJobNotice,
   type SettingsUpdate,
   type SettingsView,
   type TeamsAudioLine,
@@ -1084,8 +1086,11 @@ async function stopCommand(): Promise<void> {
  * not a meeting answer: it is not kept for the summary or meeting memory, nor sent as context for later tips. Main adds it to
  * Bee's own history (bee-history.json), sent whole with the next requests; here it joins the conversation for vmem
  * (rememberExchange) and opens the conversation window.
+ *
+ * remote: a job from another AI (Bee MCP server, main/remote-ai.ts). It shows the same way, its first step line "Request from
+ * Claude…" (the command), but main runs the job instead of the AI, and it is not part of the user's conversation.
  */
-async function runCommand(command: string): Promise<void> {
+async function runCommand(command: string, remote?: RemoteJobNotice): Promise<void> {
   // "Bee, what did I miss?": the recap card, made here from what the store already has, instead of an AI request.
   if (isRecapRequest(command)) {
     debugLog.info("ai", "recap-request", { command });
@@ -1130,6 +1135,8 @@ async function runCommand(command: string): Promise<void> {
     dismissedChipIds: [],
     dismissed: false,
     islandClosing: false,
+    // A job from another AI is computer use from its first line, so the island shows the step and its Stop button at once.
+    ...(remote ? { computer: { runId: run, step: command, confirm: null } } : {}),
   });
   void applyWindowSize();
   const stopActivity = window.bee.onLunaActivity(({ runId, tool, phase }) => {
@@ -1145,7 +1152,8 @@ async function runCommand(command: string): Promise<void> {
   // Computer use: the step line, and a Confirm prompt that opens the island (the panel folds so the island shows it).
   const stopComputer = window.bee.computer.onUpdate((update) => {
     if (run !== latestRun || update.runId !== run) return;
-    debugLog.info("computer", "update", { ...update });
+    // A job from another AI logs no name or message text.
+    debugLog.info("computer", "update", remote ? { runId: update.runId, type: update.type } : { ...update });
     const step = update.type === "step" ? update.label : (state.computer?.step ?? "");
     set({ computer: { runId: run, step, confirm: update.type === "confirm" ? update : null }, dismissed: false, islandClosing: false });
     if (update.type === "confirm" && state.expanded) void actions.setExpanded(false);
@@ -1155,18 +1163,20 @@ async function runCommand(command: string): Promise<void> {
   try {
     // The meeting so far, as background for a request about it ("what did Priya just say").
     const recent = state.session.lines.slice(-PIPELINE_WINDOW).map(pipelineText);
-    const reply = await window.bee.runCommand({
-      command: command.slice(0, COMMAND_MAX_CHARS),
-      ...(recent.length > 0 ? { transcript: recent } : {}),
-      runId: run,
-      sessionToken: await sessionToken(),
-    });
-    debugLog.info("ai", "command-result", { run, latest: latestRun, ms: Math.round(performance.now() - started), tips: reply.tips, sources: reply.sources, guideError: reply.guideError, actions: reply.actions ?? [], endedWhere: reply.endedWhere ?? null, timingsMs: reply.timingsMs });
+    const reply = remote
+      ? await window.bee.remoteAi.run({ jobId: remote.jobId, runId: run, sessionToken: await sessionToken() })
+      : await window.bee.runCommand({
+          command: command.slice(0, COMMAND_MAX_CHARS),
+          ...(recent.length > 0 ? { transcript: recent } : {}),
+          runId: run,
+          sessionToken: await sessionToken(),
+        });
+    debugLog.info("ai", "command-result", { run, latest: latestRun, ms: Math.round(performance.now() - started), tips: remote ? reply.tips.length : reply.tips, sources: reply.sources, guideError: reply.guideError, actions: reply.actions ?? [], endedWhere: reply.endedWhere ?? null, timingsMs: reply.timingsMs });
     if (run !== latestRun) return;
     // Main already fills in a line for a silent reply; this guards an older main. An error shows as itself.
     const result = reply.tips.length === 0 && !reply.guideError ? { ...reply, tips: [commandFallbackReply(command)], tipSources: [null] } : reply;
     const actionLines = new Set(result.actions ?? []);
-    rememberExchange({
+    if (!remote) rememberExchange({
       request: command,
       reply: result.tips.filter((tip) => !actionLines.has(tip)).join(" "),
       ...(result.actions?.length ? { actions: result.actions } : {}),
@@ -1194,7 +1204,7 @@ async function runCommand(command: string): Promise<void> {
       // Electron prefixes a handler's error with "Error invoking remote method …".
       const message = error instanceof Error ? error.message.replace(/^Error invoking remote method '[^']*': (Error: )?/, "") : "";
       set({ busy: false, partialTips: null, tools: [], computer: null, error: message || "The AI could not answer" });
-      rememberExchange({ request: command, reply: "", error: message || "The AI could not answer", at: Date.now() });
+      if (!remote) rememberExchange({ request: command, reply: "", error: message || "The AI could not answer", at: Date.now() });
     }
   } finally {
     stopActivity();
@@ -1204,7 +1214,7 @@ async function runCommand(command: string): Promise<void> {
       commandRun = null;
       commandHold = setTimeout(endCommandHold, COMMAND_HOLD_MS);
       // A follow-up needs no "Bee" for a while, unless the user said "Bee, stop".
-      if (stoppedRun !== run && run === latestRun) openConversation();
+      if (stoppedRun !== run && run === latestRun && !remote) openConversation();
     }
     if (stoppedRun === run) stoppedRun = null;
     void applyWindowSize();
@@ -2446,3 +2456,14 @@ setInterval(() => void autoMeetingTick(), AUTO_MEETING_TICK_MS);
 window.bee.meetingWindow?.onCaptions(({ lines }) => actions.captionLines(lines));
 // The user is back after a while away. Test stubs of window.bee may leave it out.
 window.bee.onUserReturned?.(({ since }) => actions.userReturned(since));
+// Bee MCP server (main/remote-ai.ts): main's loop asks for a fresh session token, and hands over jobs from other AIs to show and
+// run like a request of the user's own. Test stubs of window.bee may leave it out.
+window.bee.remoteAi?.onTokenRequest(({ id }) => {
+  void getToken()
+    .catch(() => null)
+    .then((token) => window.bee.remoteAi.token({ id, token: token ?? null }));
+});
+window.bee.remoteAi?.onJob((notice) => {
+  debugLog.info("remote", "job-shown", { jobId: notice.jobId });
+  void runCommand(remoteRequestLine(notice.clientName), notice);
+});

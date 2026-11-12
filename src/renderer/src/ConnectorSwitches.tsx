@@ -1,12 +1,15 @@
 import type { SettingsUpdate, SettingsView } from "../../shared/ipc";
 import { SettingRow } from "./SettingRow";
 
-/** The Connectors tab's switches, under the list: both act on what Bee sends to connectors. Props only, so the screenshot page renders them. */
+/**
+ * The Connectors tab's switches, under the list: what Bee sends to connectors, and whether other AIs may use Bee (the Bee MCP
+ * server, main/remote-ai.ts). Props only, so the screenshot page renders them.
+ */
 export function ConnectorSwitches({
   settings,
   onSave,
 }: {
-  settings: Pick<SettingsView, "personalisedLinks" | "sendSessionsToVmem">;
+  settings: Pick<SettingsView, "personalisedLinks" | "sendSessionsToVmem" | "allowRemoteAi">;
   onSave: (update: SettingsUpdate) => void;
 }) {
   return (
@@ -24,6 +27,13 @@ export function ConnectorSwitches({
         info="Finished meetings and conversations, so vmem can learn from them."
         checked={settings.sendSessionsToVmem}
         onCheckedChange={(sendSessionsToVmem) => onSave({ sendSessionsToVmem })}
+      />
+      <SettingRow
+        id="allow-remote-ai"
+        label="Let other AIs use Bee"
+        description="Claude or Grok can ask Bee to act in Teams."
+        checked={settings.allowRemoteAi}
+        onCheckedChange={(allowRemoteAi) => onSave({ allowRemoteAi })}
       />
     </>
   );

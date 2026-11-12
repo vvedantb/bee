@@ -1,0 +1,18 @@
+{
+  // Convex typechecks this folder with it on deploy; `npx tsc --noEmit -p convex` runs the same check locally.
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": ["ES2023", "DOM"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "isolatedModules": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "allowJs": true,
+    "types": ["node"],
+    "noEmit": true
+  },
+  "include": ["./**/*"]
+}

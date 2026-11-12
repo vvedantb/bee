@@ -1,7 +1,9 @@
 import { httpRouter } from "convex/server";
 import { httpAction } from "./_generated/server";
 import { internal } from "./_generated/api";
-import { AuthError, createJwksVerifier } from "./clerkAuth";
+import { registerMcpRoutes } from "@vvedantb/server";
+import { beeJobsNext, beeJobsResult, mcpHandler, oauthMetadata, protectedResourceMetadata } from "./beeMcp";
+import { AuthError, sessionVerifier } from "./clerkAuth";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -14,19 +16,6 @@ function jsonResponse(status: number, body: string | object): Response {
   return new Response(text, {
     status,
     headers: { "content-type": "application/json", ...CORS },
-  });
-}
-
-function verifier() {
-  const issuer = process.env.CLERK_ISSUER || "https://clerk.vedantb.com";
-  const parties = (process.env.CLERK_AUTHORIZED_PARTIES || "")
-    .split(",")
-    .map((party) => party.trim())
-    .filter(Boolean);
-  return createJwksVerifier({
-    issuer,
-    jwksUrl: process.env.CLERK_JWKS_URL,
-    authorizedParties: parties,
   });
 }
 
@@ -45,7 +34,7 @@ const relayHttp = httpAction(async (ctx, request) => {
 
   let identity;
   try {
-    identity = await verifier()(token);
+    identity = await sessionVerifier()(token);
   } catch (error) {
     return jsonResponse(401, {
       error: error instanceof AuthError ? error.message : "Could not verify sign-in",
@@ -81,5 +70,14 @@ for (const method of ["GET", "POST", "PUT", "OPTIONS"] as const) {
   http.route({ pathPrefix: "/v1/", method, handler: relayHttp });
   http.route({ path: "/health", method, handler: relayHttp });
 }
+
+// Bee MCP server (beeMcp.ts): /mcp and its OAuth metadata for other AIs, and the job routes the Bee app polls.
+registerMcpRoutes(http, {
+  authorizationServerMetadata: oauthMetadata,
+  protectedResourceMetadata,
+  endpoints: [{ handler: mcpHandler, protectedResourceMetadata }],
+});
+http.route({ path: "/bee/jobs/next", method: "POST", handler: beeJobsNext });
+http.route({ path: "/bee/jobs/result", method: "POST", handler: beeJobsResult });
 
 export default http;
