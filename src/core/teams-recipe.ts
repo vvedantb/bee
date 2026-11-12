@@ -2,7 +2,7 @@ import { z } from "zod";
 import { HEADED_FLAG, REF_PATTERN, STDIN_FLAG, parseApps, type AgentDesktopData, type AgentDesktopResult, type ComputerRun } from "./agent-desktop-envelope";
 import { isTeamsApp } from "./app-playbooks";
 import { awaitAnswer, CONFIRM_TIMEOUT_MS, type ComputerPlatform, type IrreversibleKind, type RunControl } from "./computer-control";
-import { createExec, modKey, pasteText, type Exec, type PasteOutcome } from "./computer-exec";
+import { NO_KEYBOARD, createExec, focusedWindow, modKey, pasteText, type Exec, type PasteOutcome } from "./computer-exec";
 import { shortName } from "./computer-gate";
 import { CONFIRM_LABEL, fieldValue, keyPresses, matchApp, windowsAlias, type ConfirmRequest } from "./computer-tools";
 import { debugLog, msSince } from "./debug-log";
@@ -147,11 +147,6 @@ function findMatches(data: AgentDesktopData): Match[] {
   return parsed.success ? parsed.data.matches.filter((match) => match !== null) : [];
 }
 
-// agent-desktop's refusal when no element of the app holds the keyboard.
-const NO_KEYBOARD = /keyboard focus/i;
-const windowRowSchema = z.object({ id: z.string(), is_focused: z.boolean().optional().catch(undefined) }).nullable().catch(null);
-const windowRowsSchema = z.union([z.array(windowRowSchema), z.object({ windows: z.array(windowRowSchema) }).transform((data) => data.windows)]);
-
 const windowsSchema = z.union([
   z.array(z.object({ title: z.string().optional().catch(undefined) }).nullable().catch(null)),
   z.object({ windows: z.array(z.object({ title: z.string().optional().catch(undefined) }).nullable().catch(null)) }).transform((data) => data.windows),
@@ -260,7 +255,15 @@ export async function runTeamsRecipe(asked: TeamsMessage & { name: string }, dep
   // refuses them for that scope ("no verified keyboard focus"): they go once more to the Teams window that holds focus, which
   // is kept for the next keys until it fails.
   let keyWindow: string | null = null;
+  // On Windows agent-desktop refuses every key scoped to Teams (its content runs in WebView2's process), in front or not. Once a
+  // key had to go to the foreground instead, the next ones go there at once, each only after Teams is seen to hold the focus.
+  let front = false;
   const press = async (keys: string): Promise<AgentDesktopResult> => {
+    if (front) {
+      if (await focusedWindow(exec, where)) return exec("press", [keys, HEADED_FLAG], KEY_MS);
+      front = false;
+      if (stopped()) return { ok: false, code: "ABORTED" };
+    }
     if (keyWindow) {
       const result = await exec("press", [keys, `--window-id=${keyWindow}`, HEADED_FLAG], KEY_MS);
       if (result.ok || stopped()) return result;
@@ -268,14 +271,17 @@ export async function runTeamsRecipe(asked: TeamsMessage & { name: string }, dep
     }
     const result = await exec("press", [keys, ...where, HEADED_FLAG], KEY_MS);
     if (result.ok || stopped() || !NO_KEYBOARD.test(result.message ?? "")) return result;
-    const listed = await exec("list-windows", [...where], READ_MS);
-    const rows = listed.ok ? windowRowsSchema.safeParse(listed.data) : null;
-    const windows = rows?.success ? rows.data.filter((row) => row !== null) : [];
-    const focused = windows.find((row) => row.is_focused)?.id ?? null;
-    debugLog.info("computer", "teams-recipe", { step: "key-window", ok: focused !== null, windows: windows.length });
+    const focused = await focusedWindow(exec, where);
+    debugLog.info("computer", "teams-recipe", { step: "key-window", ok: focused !== null });
     if (!focused || stopped()) return result;
-    keyWindow = focused;
-    return exec("press", [keys, `--window-id=${focused}`, HEADED_FLAG], KEY_MS);
+    const inWindow = await exec("press", [keys, `--window-id=${focused}`, HEADED_FLAG], KEY_MS);
+    if (inWindow.ok) keyWindow = focused;
+    if (inWindow.ok || stopped() || !NO_KEYBOARD.test(inWindow.message ?? "")) return inWindow;
+    // Teams holds the focus (seen just now), so the foreground is Teams: the key goes there.
+    const sent = await exec("press", [keys, HEADED_FLAG], KEY_MS);
+    front = sent.ok;
+    debugLog.info("computer", "teams-recipe", { step: "key-front", ok: sent.ok });
+    return sent;
   };
   if (stopped()) return { kind: "stopped" };
 

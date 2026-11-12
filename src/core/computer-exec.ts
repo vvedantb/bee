@@ -41,6 +41,38 @@ export function createExec(deps: ExecDeps): Exec {
   };
 }
 
+/** agent-desktop's refusal when it cannot prove an element of the app holds the keyboard. Nothing was sent. */
+export const NO_KEYBOARD = /keyboard focus/i;
+
+const WINDOWS_MS = 15_000;
+const windowRowSchema = z.object({ id: z.string(), is_focused: z.boolean().optional().catch(undefined) }).nullable().catch(null);
+const windowRowsSchema = z.union([z.array(windowRowSchema), z.object({ windows: z.array(windowRowSchema) }).transform((data) => data.windows)]);
+
+/** The app's window that holds the focus now (list-windows for the scope's --app), or null: none does, or the scope names no app. */
+export async function focusedWindow(exec: Exec, scope: readonly string[]): Promise<string | null> {
+  const app = scope.filter((arg) => arg.startsWith("--app="));
+  if (app.length === 0) return null;
+  const listed = await exec("list-windows", app, WINDOWS_MS);
+  const rows = listed.ok ? windowRowsSchema.safeParse(listed.data) : null;
+  const windows = rows?.success ? rows.data.filter((row) => row !== null) : [];
+  return windows.find((row) => row.is_focused)?.id ?? null;
+}
+
+/**
+ * One real key press in an app (scope: --app or --window-id). agent-desktop refuses a scoped press when it cannot prove the
+ * app's own process holds the keyboard, and for an app whose content runs in another process (Teams: WebView2) it refuses every
+ * one, even with the app's window in front and the cursor in its message box. So when the press is refused that way and one of
+ * the app's windows holds the focus, the key goes out unscoped: to the foreground, which is that window. Any other window in
+ * front: nothing is sent, and the refusal comes back.
+ */
+export async function pressKeys(exec: Exec, keys: string, scope: readonly string[], timeoutMs: number): Promise<AgentDesktopResult> {
+  const result = await exec("press", [keys, ...scope, HEADED_FLAG], timeoutMs);
+  if (result.ok || scope.length === 0 || !NO_KEYBOARD.test(result.message ?? "")) return result;
+  const front = (await focusedWindow(exec, scope)) !== null;
+  debugLog.info("computer", "press-front", { ok: front });
+  return front ? exec("press", [keys, HEADED_FLAG], timeoutMs) : result;
+}
+
 const CLIPBOARD_MS = 8000;
 const PASTE_MS = 12_000;
 /** How long the app gets to read the clipboard after ctrl+v before Bee puts the old text back. */
@@ -69,7 +101,7 @@ export async function pasteText(exec: Exec, args: { text: string; platform: Comp
   const old = kept?.success ? kept.data.text : null;
   let result = await exec("clipboard-set", [STDIN_FLAG], CLIPBOARD_MS, args.text);
   if (result.ok) {
-    result = await exec("press", [modKey(args.platform, "v"), ...args.scope, HEADED_FLAG], PASTE_MS);
+    result = await pressKeys(exec, modKey(args.platform, "v"), args.scope, PASTE_MS);
     // Exec never throws, and the wait runs detached: the old text goes back even when Stop came during the press.
     if (result.ok) await exec("wait", [String(PASTE_SETTLE_MS)], PASTE_SETTLE_MS + 5000, undefined, true);
   }

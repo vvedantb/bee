@@ -5,7 +5,7 @@ import {
 } from "./agent-desktop-envelope";
 import { isTeamsApp, teamsTip } from "./app-playbooks";
 import { awaitAnswer, CONFIRM_TIMEOUT_MS, type ComputerPlatform, type IrreversibleKind, type RunControl } from "./computer-control";
-import { createExec, pasteText } from "./computer-exec";
+import { createExec, pasteText, pressKeys } from "./computer-exec";
 import {
   EFFECTS, LABEL_MAX, WINDOW_ROLES, confirmDetail, confirmQuestion, focusAfterClick, insideOf, irreversibleKind, isNavField, isTextEntry, keepsFocus, keysLabel, shellElement,
   shortName, spotQuestion, spotDetail, type ConfirmKind, type Effect, type Element, type GateAction, type TreeContext,
@@ -1412,7 +1412,8 @@ export function computerTools(deps: ComputerToolDeps) {
         if (!focused.ok) return `Bee could not focus that field, so pressed nothing. ${errorLine(focused)}`;
         lastField = refs.get(input.ref) ?? lastField;
       }
-      const press = (app: string | undefined) => exec("press", [keys, ...scope({ app, window_id: input.window_id }), ...headed], ACT_MS);
+      // A physical press an app refuses for want of proven keyboard focus goes to the foreground when that app's window holds it (pressKeys).
+      const press = (app: string | undefined) => (input.physical ? pressKeys(exec, keys, scope({ app, window_id: input.window_id }), ACT_MS) : exec("press", [keys, ...scope({ app, window_id: input.window_id }), ...headed], ACT_MS));
       let { result, app, note } = await withApp(input.app, press);
       currentApp = app ?? currentApp;
       // agent-desktop sends keys only where the app's keyboard focus is proven, and refuses before sending anything when it

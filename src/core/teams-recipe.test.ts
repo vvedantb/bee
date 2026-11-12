@@ -350,6 +350,28 @@ describe("runTeamsRecipe", () => {
     expect(last?.args).toEqual(["return", "--app=ms-teams.exe", "--headed"]);
   });
 
+  it("sends keys to the foreground when Teams holds the focus but refuses every key scoped to it", async () => {
+    const noKeyboard: AgentDesktopResult = { ok: false, code: "ACTION_FAILED", message: "Application has no verified keyboard focus for key delivery" };
+    const scoped = (args: readonly string[]) => args.some((arg) => arg.startsWith("--app=") || arg.startsWith("--window-id="));
+    const fake = teams({ onCall: (call) => (call.command === "press" && scoped(call.args) ? noKeyboard : null) });
+    expect((await recipe(fake).go(SAM)).kind).toBe("sent");
+    expect(fake.calls.filter((call) => call.command === "press").at(-1)?.args).toEqual(["return", "--headed"]);
+  });
+
+  it("sends no key to the foreground when another app's window holds the focus", async () => {
+    const noKeyboard: AgentDesktopResult = { ok: false, code: "ACTION_FAILED", message: "Application has no verified keyboard focus for key delivery" };
+    const fake = teams({
+      onCall: (call) => {
+        if (call.command === "press") return noKeyboard;
+        if (call.command === "type") return { ok: false, code: "ACTION_FAILED" };
+        if (call.command === "list-windows") return { ok: true, data: [{ id: "w-1", title: "Microsoft Teams", is_focused: false }] };
+        return null;
+      },
+    });
+    expect((await recipe(fake).go(SAM)).kind).toBe("fallback");
+    expect(fake.calls.filter((call) => call.command === "press" && !call.args.some((arg) => arg.startsWith("--app=") || arg.startsWith("--window-id=")))).toEqual([]);
+  });
+
   it("types the name into the search box itself when no key reaches Teams", async () => {
     const noKeyboard: AgentDesktopResult = { ok: false, code: "ACTION_FAILED", message: "Application has no verified keyboard focus for key delivery" };
     const fake = teams({
