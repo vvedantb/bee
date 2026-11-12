@@ -156,7 +156,7 @@ export type BeeState = {
   // A short meeting notice ("Meeting ended, notes have been saved") the pill shows for MEETING_NOTICE_MS (notch.ts notchLine).
   meetingNotice: string | null;
   // Call audio (core/teams-audio.ts): main's status (support and the call's app; codes only, null until the first poll), and
-  // whether Bee hears the call app now. failed: the capture would not open or ended in this call; Bee carries on with the mic
+  // whether Bee hears the computer's sound now. failed: the capture would not open or ended in this call; Bee carries on with the mic
   // and tries again in the next call, or when the call moves to another app. failure: why (core/teams-audio-protocol.ts), for
   // the Live line.
   teamsAudio: { status: TeamsAudioStatus | null; listening: boolean; failed: boolean; failure: TeamsAudioFailure | null };
@@ -1633,13 +1633,21 @@ function setTeamsAudio(patch: Partial<BeeState["teamsAudio"]>): void {
   set({ teamsAudio: { ...state.teamsAudio, ...patch } });
 }
 
+/** A plain call audio failure is tried again after this long (teamsAudioTick). */
+const TEAMS_AUDIO_RETRY_MS = 30_000;
+let teamsAudioFailedAt = 0;
+
+function failTeamsAudio(failure: TeamsAudioFailure): void {
+  teamsAudioFailedAt = Date.now();
+  setTeamsAudio({ failed: true, failure });
+}
+
 /** What call audio should do now, from the setting, main's status and the mic. */
 export function teamsAudioNow(current: Pick<BeeState, "settings" | "teamsAudio" | "mic">): TeamsAudioPlan {
   const status = current.teamsAudio.status;
   return teamsAudioPlan({
     enabled: current.settings?.teamsAudioFallbackEnabled ?? false,
     supported: status?.supported ?? false,
-    inCall: (status?.call ?? null) !== null,
     micOn: current.mic.on,
   });
 }
@@ -1665,7 +1673,7 @@ function endTeamsAudio(): void {
 async function syncTeamsAudio(): Promise<void> {
   if (teamsAudioNow(state) !== "listen") {
     endTeamsAudio();
-    // The call ended or the mic went off: the next call tries again.
+    // The mic went off: the next time it is on, Bee tries again.
     if (state.teamsAudio.failed) setTeamsAudio({ failed: false, failure: null });
     return;
   }
@@ -1678,7 +1686,7 @@ async function syncTeamsAudio(): Promise<void> {
     if (!opened.capture) {
       // Main saw no reason to listen now (its status moved on): no failure, the next tick decides again.
       if (opened.failure === "refused") return;
-      setTeamsAudio({ failed: true, failure: opened.failure });
+      failTeamsAudio(opened.failure);
       console.debug(`teams-audio open=0 ${opened.failure}`);
       return;
     }
@@ -1694,16 +1702,15 @@ async function syncTeamsAudio(): Promise<void> {
     capture.start(
       (lines) => actions.teamsAudioLines(lines),
       (failure) => {
-        // Stopped by main: a failure (the call app closed, permission) is not retried in this call; a plain stop (the call
-        // moved to another app) may restart.
+        // Stopped by main: a failure waits (failTeamsAudio); a plain stop may restart on the next tick.
         endTeamsAudio();
-        if (failure) setTeamsAudio({ failed: true, failure });
+        if (failure) failTeamsAudio(failure);
         console.debug(`teams-audio end ${failure ?? "stopped"}`);
       },
     );
   } catch {
     endTeamsAudio();
-    setTeamsAudio({ failed: true, failure: "failed" });
+    failTeamsAudio("failed");
     console.debug("teams-audio open=0 failed");
   } finally {
     teamsAudioOpening = false;
@@ -1711,8 +1718,9 @@ async function syncTeamsAudio(): Promise<void> {
 }
 
 /**
- * Main's call audio status, on the meeting tick, then start or stop to match. Signed out: no status, so no call audio. A call
- * that moved to another app (Teams to Zoom, say) clears an earlier failure: the new app gets its own try.
+ * Main's call audio status, on the meeting tick, then start or stop to match. Signed out: no status, so no call audio. A plain
+ * failure (a lost playback device, a helper that stopped) is tried again after TEAMS_AUDIO_RETRY_MS; denied, missing and
+ * unsupported wait for the mic to go off and on, or the user to act.
  */
 async function teamsAudioTick(): Promise<void> {
   if (teamsAudioTicking) return;
@@ -1721,10 +1729,8 @@ async function teamsAudioTick(): Promise<void> {
     const token = await getToken().catch(() => null);
     // Test stubs of window.bee may leave teamsAudio out.
     const status = token ? await window.bee.teamsAudio?.status(token) : null;
-    const before = state.teamsAudio.status?.call ?? null;
-    const call = status?.call ?? null;
-    const moved = state.teamsAudio.failed && call !== null && call !== before;
-    setTeamsAudio(moved ? { status: status ?? null, failed: false, failure: null } : { status: status ?? null });
+    const retry = state.teamsAudio.failed && state.teamsAudio.failure === "failed" && Date.now() - teamsAudioFailedAt >= TEAMS_AUDIO_RETRY_MS;
+    setTeamsAudio(retry ? { status: status ?? null, failed: false, failure: null } : { status: status ?? null });
   } catch {
     // Main failed this tick; the last status stands until the next one.
   } finally {
@@ -2072,7 +2078,7 @@ export const actions = {
   },
 
   /**
-   * Phrases heard from the call app (call audio). They join the session as "Meeting: …" (another person, not the user) and
+   * Phrases heard from the computer's sound (call audio). They join the session as "Meeting: …" (another person, not the user) and
    * follow the same steering rules as captions. A phrase that repeats a caption from the last 20 s is dropped; one that repeats
    * the user's mic line from the last 10 s replaces it (the mic heard the speakers; addLines, teamsAudioReplaced). An early
    * line (final false) shows at once, pending; its final revises it (reviseLine), and an early line dropped as an echo stays

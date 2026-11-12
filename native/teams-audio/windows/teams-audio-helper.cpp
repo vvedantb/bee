@@ -1,18 +1,16 @@
-// Bee call audio helper for Windows. Hears one call app alone (Teams by default; Zoom or a browser running Google Meet when Bee
-// names it with --image), never all system audio, and writes it to stdout as raw 16 kHz mono signed 16-bit little-endian PCM.
-// Protocol: native/teams-audio/README.md.
+// Bee call audio helper for Windows. Hears everything this computer plays (all system audio, as Cluely does), and writes it
+// to stdout as raw 16 kHz mono signed 16-bit little-endian PCM. Protocol: native/teams-audio/README.md.
 //
-// How: WASAPI process loopback (ActivateAudioInterfaceAsync on VAD\Process_Loopback with
-// AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK and PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE) on the top process of the
-// target app (ms-teams.exe or Teams.exe by default). Only that process and its children are heard. The helper refuses to start,
-// and stops, if the tree holds a program that is not the target app (a browser Teams launched, say), because it would be heard
-// too. --image accepts call apps only (kTargetImages): never a music or video app.
+// How: WASAPI loopback on the default playback device (IMMDeviceEnumerator::GetDefaultAudioEndpoint(eRender, eConsole),
+// AUDCLNT_STREAMFLAGS_LOOPBACK): the mix the speakers or headphones play, whichever app plays it. Windows converts the mix to
+// 16 kHz mono (AUTOCONVERTPCM), or to 48 kHz stereo that this helper downmixes. When the default device changes (headphones
+// plugged in) or goes away, the helper opens the new default one and carries on. Loopback gives no data while nothing plays,
+// so the helper writes silence for that time: Bee's speech-to-text keeps its clock.
 //
-// Floor: Windows 10 build 19041 (version 2004). Microsoft documents process loopback from build 20348; it is used from 19041
-// elsewhere, and below a build that supports it activation fails and the helper reports "unsupported".
+// Floor: Windows 10. Permission: none.
 //
 // stderr carries status codes only (`status=<code>`, maybe ` hr=0x…`): never audio, names or titles. Exit codes: 0 clean stop,
-// 2 usage, 3 unsupported, 4 denied, 5 target app not running ("no-teams", the code's old name), 6 failed.
+// 2 usage, 3 unsupported, 4 denied, 6 failed (5, "no-teams", is not used since protocol 3: there is no target app).
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -26,23 +24,20 @@
 
 #include <windows.h>
 #include <objbase.h>
-#include <propidl.h>
 #include <audioclient.h>
 #include <mmdeviceapi.h>
-#include <tlhelp32.h>
 
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <cwchar>
-#include <cwctype>
 #include <string>
 #include <vector>
 
 namespace {
 
-constexpr int kProtocol = 2;
+constexpr int kProtocol = 3;
 constexpr int kExitOk = 0;
 constexpr int kExitUsage = 2;
 constexpr int kExitUnsupported = 3;
@@ -50,74 +45,21 @@ constexpr int kExitDenied = 4;
 constexpr int kExitNoTeams = 5;
 constexpr int kExitFailed = 6;
 
-constexpr DWORD kMinBuild = 19041;
+constexpr DWORD kMinBuild = 10240;
 constexpr DWORD kSampleRate = 16000;
 // The fallback format if Windows will not convert to 16 kHz mono itself: 48 kHz stereo, downmixed and decimated here.
 constexpr DWORD kFallbackRate = 48000;
 constexpr WORD kFallbackChannels = 2;
-// 100 ms of buffer in 100 ns units.
-constexpr REFERENCE_TIME kBufferDuration = 1000000;
-constexpr DWORD kActivateTimeoutMs = 10000;
-constexpr ULONGLONG kTreeCheckMs = 2000;
+// 200 ms of buffer in 100 ns units; the helper reads every 10 ms.
+constexpr REFERENCE_TIME kBufferDuration = 2000000;
+constexpr DWORD kPollMs = 10;
+// How often the helper checks that the default playback device is still the one it hears.
+constexpr ULONGLONG kDeviceCheckMs = 2000;
+// Silence is written only once the stream is this far behind the clock (nothing played), so real audio is never padded.
+constexpr ULONGLONG kSilenceLagMs = 200;
+// Device lost or changed: how many times in a row the helper tries to open the default device before it gives up.
+constexpr int kReopenTries = 10;
 
-// Teams desktop apps by image name: the default target. Their process trees are what Bee hears.
-const wchar_t* const kTeamsImages[] = {L"ms-teams.exe", L"teams.exe"};
-// Every image --image accepts: Teams, Zoom and the browsers that may run a Google Meet call. Same list and order as
-// src/core/teams-audio-protocol.ts CALL_AUDIO_WINDOWS_IMAGES (CI compares --protocol).
-const wchar_t* const kTargetImages[] = {L"ms-teams.exe", L"teams.exe", L"zoom.exe",    L"chrome.exe",  L"msedge.exe",
-                                        L"brave.exe",    L"arc.exe",   L"firefox.exe", L"vivaldi.exe", L"opera.exe"};
-// Programs that may run inside the target's process tree: the target's own (an image that starts with its name, such as
-// ms-teams*, zoom*, chrome*), the extra helpers below for that target, WebView2 and crash or console helpers. Anything else in
-// the tree (a browser Teams started, a media player) stops the capture.
-const wchar_t* const kTreeImages[] = {L"msedgewebview2.exe", L"crashpad_handler.exe", L"conhost.exe", L"werfault.exe"};
-struct TreeExtra {
-  const wchar_t* target;
-  const wchar_t* prefix;
-};
-const TreeExtra kTreeExtras[] = {
-    {L"zoom.exe", L"cpthost"},
-    {L"zoom.exe", L"zwebview2"},
-    {L"zoom.exe", L"aomhost"},
-    {L"zoom.exe", L"airhost"},
-    {L"zoom.exe", L"zcrash"},
-    {L"zoom.exe", L"ztscoder"},
-    {L"chrome.exe", L"notification_helper"},
-    {L"chrome.exe", L"software_reporter_tool"},
-    {L"msedge.exe", L"identity_helper"},
-    {L"msedge.exe", L"notification_helper"},
-    {L"msedge.exe", L"cookie_exporter"},
-    {L"msedge.exe", L"pwahelper"},
-    {L"brave.exe", L"notification_helper"},
-    {L"vivaldi.exe", L"notification_helper"},
-    {L"firefox.exe", L"crashreporter"},
-    {L"firefox.exe", L"pingsender"},
-    {L"firefox.exe", L"minidump-analyzer"},
-};
-
-// The target: the images Bee asked for (Teams when none), and the tree prefixes they allow. Set once in wmain.
-std::vector<std::wstring> g_images;
-std::vector<std::wstring> g_treePrefixes;
-
-// AUDIOCLIENT_ACTIVATION_PARAMS and AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS (audioclientactivationparams.h), declared here so
-// the file builds with older SDKs and MinGW. Enums are 32-bit, so the layout matches.
-constexpr DWORD kActivationTypeProcessLoopback = 1;   // AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK
-constexpr DWORD kLoopbackIncludeTargetProcessTree = 0;  // PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE
-struct LoopbackParams {
-  DWORD TargetProcessId;
-  DWORD ProcessLoopbackMode;
-};
-struct ActivationParams {
-  DWORD ActivationType;
-  LoopbackParams ProcessLoopbackParams;
-};
-static_assert(sizeof(ActivationParams) == 12, "AUDIOCLIENT_ACTIVATION_PARAMS layout");
-const wchar_t* const kProcessLoopbackDevice = L"VAD\\Process_Loopback";  // VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK
-
-// IAgileObject: ActivateAudioInterfaceAsync needs an agile completion handler.
-const IID kIIDAgileObject = {0x94ea2b94, 0xe9cc, 0x49e0, {0xc0, 0xff, 0xee, 0x64, 0xca, 0x8f, 0x5b, 0x90}};
-
-using ActivateAudioInterfaceAsyncFn = HRESULT(WINAPI*)(LPCWSTR, REFIID, PROPVARIANT*, IActivateAudioInterfaceCompletionHandler*,
-                                                       IActivateAudioInterfaceAsyncOperation**);
 using RtlGetVersionFn = LONG(WINAPI*)(PRTL_OSVERSIONINFOW);
 
 HANDLE g_stop = nullptr;
@@ -170,236 +112,6 @@ DWORD WindowsBuild() {
   return info.dwMajorVersion == 10 ? info.dwBuildNumber : 0;
 }
 
-// ---- Finding the target ----
-
-struct Process {
-  DWORD pid;
-  DWORD parent;
-  std::wstring image;
-};
-
-std::vector<Process> Processes() {
-  std::vector<Process> list;
-  HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-  if (snapshot == INVALID_HANDLE_VALUE) return list;
-  PROCESSENTRY32W entry{};
-  entry.dwSize = sizeof entry;
-  for (BOOL more = Process32FirstW(snapshot, &entry); more; more = Process32NextW(snapshot, &entry)) {
-    list.push_back({entry.th32ProcessID, entry.th32ParentProcessID, entry.szExeFile});
-  }
-  CloseHandle(snapshot);
-  return list;
-}
-
-bool SameImage(const std::wstring& image, const wchar_t* name) { return _wcsicmp(image.c_str(), name) == 0; }
-
-bool IsAllowedTarget(const std::wstring& image) {
-  for (const wchar_t* name : kTargetImages) {
-    if (SameImage(image, name)) return true;
-  }
-  return false;
-}
-
-// Sets the target: the images Bee named (already checked against kTargetImages), or Teams. Each image allows its own name
-// (without ".exe") and its extras as prefixes in the tree.
-void SetTarget(const std::vector<std::wstring>& requested) {
-  g_images.clear();
-  if (requested.empty()) {
-    for (const wchar_t* name : kTeamsImages) g_images.push_back(name);
-  } else {
-    g_images = requested;
-  }
-  g_treePrefixes.clear();
-  for (const auto& image : g_images) {
-    const size_t dot = image.rfind(L'.');
-    g_treePrefixes.push_back(dot == std::wstring::npos ? image : image.substr(0, dot));
-    for (const auto& extra : kTreeExtras) {
-      if (SameImage(image, extra.target)) g_treePrefixes.push_back(extra.prefix);
-    }
-  }
-}
-
-int TargetRank(const std::wstring& image) {
-  for (int rank = 0; rank < static_cast<int>(g_images.size()); ++rank) {
-    if (SameImage(image, g_images[rank].c_str())) return rank;
-  }
-  return -1;
-}
-
-const Process* FindPid(const std::vector<Process>& list, DWORD pid) {
-  for (const auto& process : list) {
-    if (process.pid == pid) return &process;
-  }
-  return nullptr;
-}
-
-bool IsTargetPid(const std::vector<Process>& list, DWORD pid) {
-  const Process* process = FindPid(list, pid);
-  return process && TargetRank(process->image) >= 0;
-}
-
-// The top of the target's process tree: a target process whose parent is not the target. Earlier images first (new Teams
-// before classic).
-DWORD FindTargetRoot(const std::vector<Process>& list) {
-  DWORD best = 0;
-  int bestRank = 1000;
-  for (const auto& process : list) {
-    const int rank = TargetRank(process.image);
-    if (rank < 0 || process.pid == 0) continue;
-    if (IsTargetPid(list, process.parent)) continue;
-    if (rank < bestRank) {
-      best = process.pid;
-      bestRank = rank;
-    }
-  }
-  return best;
-}
-
-// From a process Bee named (the call window's): up to the top of its tree while the parent is the target too, so a browser
-// is heard from its main process down. 0 if pid is not the target.
-DWORD RootOf(const std::vector<Process>& list, DWORD pid) {
-  if (!IsTargetPid(list, pid)) return 0;
-  for (int depth = 0; depth < 64; ++depth) {
-    const Process* process = FindPid(list, pid);
-    if (!process || process->parent == 0 || process->parent == pid || !IsTargetPid(list, process->parent)) break;
-    pid = process->parent;
-  }
-  return pid;
-}
-
-bool AllowedInTree(const std::wstring& image) {
-  for (const auto& prefix : g_treePrefixes) {
-    if (_wcsnicmp(image.c_str(), prefix.c_str(), prefix.size()) == 0) return true;
-  }
-  for (const wchar_t* name : kTreeImages) {
-    if (SameImage(image, name)) return true;
-  }
-  return false;
-}
-
-ULONGLONG CreationTime(DWORD pid) {
-  HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
-  if (!process) return 0;
-  FILETIME created{}, exited{}, kernel{}, user{};
-  ULONGLONG value = 0;
-  if (GetProcessTimes(process, &created, &exited, &kernel, &user)) {
-    value = (static_cast<ULONGLONG>(created.dwHighDateTime) << 32) | created.dwLowDateTime;
-  }
-  CloseHandle(process);
-  return value;
-}
-
-// Whether every process in root's tree is the target or one of its helpers. A child must start after its parent, so a reused
-// parent id does not pull an unrelated process in. A process whose start time cannot be read counts as a child.
-bool TreeIsTargetOnly(const std::vector<Process>& list, DWORD root) {
-  std::vector<DWORD> tree{root};
-  for (size_t index = 0; index < tree.size(); ++index) {
-    const DWORD parent = tree[index];
-    const ULONGLONG parentCreated = CreationTime(parent);
-    for (const auto& process : list) {
-      if (process.parent != parent || process.pid == parent || process.pid == 0) continue;
-      bool seen = false;
-      for (DWORD pid : tree) seen = seen || pid == process.pid;
-      if (seen) continue;
-      const ULONGLONG created = CreationTime(process.pid);
-      if (parentCreated != 0 && created != 0 && created < parentCreated) continue;
-      if (!AllowedInTree(process.image)) return false;
-      tree.push_back(process.pid);
-    }
-  }
-  return true;
-}
-
-// ---- Activation ----
-
-class ActivationHandler final : public IActivateAudioInterfaceCompletionHandler {
- public:
-  ActivationHandler() : done_(CreateEventW(nullptr, TRUE, FALSE, nullptr)) {}
-  ActivationHandler(const ActivationHandler&) = delete;
-  ActivationHandler& operator=(const ActivationHandler&) = delete;
-
-  STDMETHODIMP QueryInterface(REFIID riid, void** out) override {
-    if (!out) return E_POINTER;
-    if (IsEqualIID(riid, __uuidof(IUnknown)) || IsEqualIID(riid, __uuidof(IActivateAudioInterfaceCompletionHandler)) ||
-        IsEqualIID(riid, kIIDAgileObject)) {
-      *out = static_cast<IActivateAudioInterfaceCompletionHandler*>(this);
-      AddRef();
-      return S_OK;
-    }
-    *out = nullptr;
-    return E_NOINTERFACE;
-  }
-  STDMETHODIMP_(ULONG) AddRef() override { return static_cast<ULONG>(InterlockedIncrement(&refs_)); }
-  STDMETHODIMP_(ULONG) Release() override {
-    const LONG count = InterlockedDecrement(&refs_);
-    if (count == 0) delete this;
-    return static_cast<ULONG>(count);
-  }
-
-  STDMETHODIMP ActivateCompleted(IActivateAudioInterfaceAsyncOperation* operation) override {
-    HRESULT activated = E_FAIL;
-    IUnknown* unknown = nullptr;
-    HRESULT hr = operation->GetActivateResult(&activated, &unknown);
-    if (SUCCEEDED(hr)) hr = activated;
-    if (SUCCEEDED(hr) && unknown) hr = unknown->QueryInterface(__uuidof(IAudioClient), reinterpret_cast<void**>(&client_));
-    if (SUCCEEDED(hr) && !client_) hr = E_NOINTERFACE;
-    if (unknown) unknown->Release();
-    result_ = hr;
-    SetEvent(done_);
-    return S_OK;
-  }
-
-  HANDLE done() const { return done_; }
-  HRESULT result() const { return result_; }
-  IAudioClient* TakeClient() {
-    IAudioClient* client = client_;
-    client_ = nullptr;
-    return client;
-  }
-
- private:
-  ~ActivationHandler() {
-    if (client_) client_->Release();
-    if (done_) CloseHandle(done_);
-  }
-  LONG refs_ = 1;
-  HANDLE done_;
-  HRESULT result_ = E_PENDING;
-  IAudioClient* client_ = nullptr;
-};
-
-HRESULT ActivateProcessLoopback(DWORD pid, IAudioClient** client) {
-  *client = nullptr;
-  HMODULE mmdevapi = LoadLibraryExW(L"Mmdevapi.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
-  auto activate = LoadProc<ActivateAudioInterfaceAsyncFn>(mmdevapi, "ActivateAudioInterfaceAsync");
-  if (!activate) return E_NOTIMPL;
-
-  ActivationParams params{};
-  params.ActivationType = kActivationTypeProcessLoopback;
-  params.ProcessLoopbackParams.TargetProcessId = pid;
-  params.ProcessLoopbackParams.ProcessLoopbackMode = kLoopbackIncludeTargetProcessTree;
-  PROPVARIANT activation;
-  std::memset(&activation, 0, sizeof activation);
-  activation.vt = VT_BLOB;
-  activation.blob.cbSize = sizeof params;
-  activation.blob.pBlobData = reinterpret_cast<BYTE*>(&params);
-
-  auto* handler = new ActivationHandler();
-  IActivateAudioInterfaceAsyncOperation* operation = nullptr;
-  HRESULT hr = activate(kProcessLoopbackDevice, __uuidof(IAudioClient), &activation, handler, &operation);
-  if (SUCCEEDED(hr)) {
-    if (WaitForSingleObject(handler->done(), kActivateTimeoutMs) != WAIT_OBJECT_0) {
-      hr = HRESULT_FROM_WIN32(ERROR_TIMEOUT);
-    } else {
-      hr = handler->result();
-      if (SUCCEEDED(hr)) *client = handler->TakeClient();
-    }
-  }
-  if (operation) operation->Release();
-  handler->Release();
-  return hr;
-}
-
 WAVEFORMATEX Format(DWORD rate, WORD channels) {
   WAVEFORMATEX format{};
   format.wFormatTag = WAVE_FORMAT_PCM;
@@ -410,40 +122,6 @@ WAVEFORMATEX Format(DWORD rate, WORD channels) {
   format.nAvgBytesPerSec = rate * format.nBlockAlign;
   format.cbSize = 0;
   return format;
-}
-
-// Activates and initialises a capture client in format. Windows converts the target's mix to it (AUTOCONVERTPCM).
-HRESULT OpenClient(DWORD pid, const WAVEFORMATEX& format, IAudioClient** client) {
-  HRESULT hr = ActivateProcessLoopback(pid, client);
-  if (FAILED(hr)) return hr;
-  const DWORD flags = AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_EVENTCALLBACK | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM |
-                      AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY;
-  hr = (*client)->Initialize(AUDCLNT_SHAREMODE_SHARED, flags, kBufferDuration, 0, &format, nullptr);
-  if (FAILED(hr)) {
-    (*client)->Release();
-    *client = nullptr;
-  }
-  return hr;
-}
-
-// Errors that mean this Windows has no process loopback: the API or the VAD\Process_Loopback device is missing.
-bool IsUnsupported(HRESULT hr) {
-  return hr == E_NOTIMPL || hr == E_INVALIDARG || hr == E_NOINTERFACE || hr == REGDB_E_CLASSNOTREG ||
-         hr == HRESULT_FROM_WIN32(ERROR_NOT_SUPPORTED) || hr == HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND) ||
-         hr == AUDCLNT_E_UNSUPPORTED_FORMAT;
-}
-
-int ExitForActivation(HRESULT hr) {
-  if (hr == E_ACCESSDENIED) {
-    Status("denied", hr);
-    return kExitDenied;
-  }
-  if (IsUnsupported(hr)) {
-    Status("unsupported", hr);
-    return kExitUnsupported;
-  }
-  Status("failed", hr);
-  return kExitFailed;
 }
 
 // ---- Conversion to 16 kHz mono s16le ----
@@ -524,10 +202,78 @@ DWORD WINAPI WatchStdin(LPVOID) {
   return 0;
 }
 
+// ---- The default playback device ----
+
+// The default render (playback) endpoint and its id, or a failure. The caller releases the device and frees the id.
+HRESULT DefaultDevice(IMMDevice** device, LPWSTR* id) {
+  *device = nullptr;
+  *id = nullptr;
+  IMMDeviceEnumerator* enumerator = nullptr;
+  HRESULT hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL, __uuidof(IMMDeviceEnumerator), reinterpret_cast<void**>(&enumerator));
+  if (FAILED(hr)) return hr;
+  hr = enumerator->GetDefaultAudioEndpoint(eRender, eConsole, device);
+  enumerator->Release();
+  if (FAILED(hr)) return hr;
+  hr = (*device)->GetId(id);
+  if (FAILED(hr)) {
+    (*device)->Release();
+    *device = nullptr;
+  }
+  return hr;
+}
+
+// Whether the default playback device is still this one (a failed read counts as the same: the stream's own errors decide).
+bool SameDefaultDevice(const std::wstring& id) {
+  IMMDevice* device = nullptr;
+  LPWSTR now = nullptr;
+  if (FAILED(DefaultDevice(&device, &now))) return true;
+  const bool same = id == now;
+  CoTaskMemFree(now);
+  device->Release();
+  return same;
+}
+
+// A loopback capture client on device in format. Windows converts the device's mix to it (AUTOCONVERTPCM).
+HRESULT OpenClient(IMMDevice* device, const WAVEFORMATEX& format, IAudioClient** client) {
+  HRESULT hr = device->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr, reinterpret_cast<void**>(client));
+  if (FAILED(hr)) return hr;
+  const DWORD flags = AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY;
+  hr = (*client)->Initialize(AUDCLNT_SHAREMODE_SHARED, flags, kBufferDuration, 0, &format, nullptr);
+  if (FAILED(hr)) {
+    (*client)->Release();
+    *client = nullptr;
+  }
+  return hr;
+}
+
+bool IsUnsupported(HRESULT hr) {
+  return hr == E_NOTIMPL || hr == E_NOINTERFACE || hr == REGDB_E_CLASSNOTREG || hr == HRESULT_FROM_WIN32(ERROR_NOT_SUPPORTED) ||
+         hr == AUDCLNT_E_UNSUPPORTED_FORMAT;
+}
+
+// The device went away or changed under the stream: open the default one again.
+bool IsDeviceGone(HRESULT hr) {
+  return hr == AUDCLNT_E_DEVICE_INVALIDATED || hr == AUDCLNT_E_SERVICE_NOT_RUNNING || hr == AUDCLNT_E_ENDPOINT_CREATE_FAILED ||
+         hr == E_NOTFOUND || hr == HRESULT_FROM_WIN32(ERROR_NOT_FOUND);
+}
+
+int ExitFor(HRESULT hr) {
+  if (hr == E_ACCESSDENIED) {
+    Status("denied", hr);
+    return kExitDenied;
+  }
+  if (IsUnsupported(hr)) {
+    Status("unsupported", hr);
+    return kExitUnsupported;
+  }
+  Status("failed", hr);
+  return kExitFailed;
+}
+
 void Usage(bool error) {
   const char* text =
-      "Usage: teams-audio-helper [--image <call app image>]... [--pid <process id>] [--request-permission] [--protocol] [--version] [--help]\n"
-      "Writes one call app's audio alone (Microsoft Teams unless --image names Zoom or a browser) to stdout as raw 16 kHz mono\n"
+      "Usage: teams-audio-helper [--request-permission] [--protocol] [--version] [--help]\n"
+      "Writes everything this computer plays (all system audio, from the default playback device) to stdout as raw 16 kHz mono\n"
       "s16le PCM. Status codes go to stderr.\n";
   if (error) {
     DWORD written = 0;
@@ -537,92 +283,64 @@ void Usage(bool error) {
   }
 }
 
-// Appends an ASCII wide string as a JSON string (escaping backslash and quote). Image names and the device name are ASCII.
-void AppendJsonString(std::string& out, const wchar_t* text) {
-  out += '"';
-  for (; *text; ++text) {
-    if (*text == L'\\' || *text == L'"') out += '\\';
-    out += static_cast<char>(*text);
-  }
-  out += '"';
-}
-
 // --protocol: the protocol constants as one JSON object, so CI can compare them with core/teams-audio-protocol.ts.
 // Never opens audio.
 void PrintProtocol() {
-  char head[512];
-  std::snprintf(head, sizeof head,
+  char line[512];
+  std::snprintf(line, sizeof line,
                 "{\"protocol\":%d,\"sampleRate\":%lu,"
                 "\"exit\":{\"ok\":%d,\"usage\":%d,\"unsupported\":%d,\"denied\":%d,\"noTeams\":%d,\"failed\":%d},"
-                "\"capture\":{\"activationTypeProcessLoopback\":%lu,\"loopbackIncludeTargetProcessTree\":%lu,"
-                "\"processLoopbackDevice\":",
+                "\"capture\":{\"source\":\"system\",\"device\":\"default-render-loopback\"}}\n",
                 kProtocol, static_cast<unsigned long>(kSampleRate), kExitOk, kExitUsage, kExitUnsupported, kExitDenied,
-                kExitNoTeams, kExitFailed, static_cast<unsigned long>(kActivationTypeProcessLoopback),
-                static_cast<unsigned long>(kLoopbackIncludeTargetProcessTree));
-  std::string out = head;
-  AppendJsonString(out, kProcessLoopbackDevice);
-  out += "},\"teamsImages\":[";
-  const int count = static_cast<int>(sizeof kTeamsImages / sizeof kTeamsImages[0]);
-  for (int rank = 0; rank < count; ++rank) {
-    if (rank > 0) out += ',';
-    AppendJsonString(out, kTeamsImages[rank]);
-  }
-  out += "],\"targetImages\":[";
-  const int targets = static_cast<int>(sizeof kTargetImages / sizeof kTargetImages[0]);
-  for (int index = 0; index < targets; ++index) {
-    if (index > 0) out += ',';
-    AppendJsonString(out, kTargetImages[index]);
-  }
-  out += "]}\n";
-  Print(out.c_str());
+                kExitNoTeams, kExitFailed);
+  Print(line);
 }
 
-int Capture(DWORD pid) {
+// ---- Capture ----
+
+enum class Ended { Stopped, Closed, DeviceChanged, Failed };
+
+// One stream on the default device until Bee stops it, the device changes or goes away, or it fails. hr: the failure.
+Ended CaptureDevice(IMMDevice* device, const std::wstring& id, bool& announced, HRESULT& hr) {
   IAudioClient* client = nullptr;
   WAVEFORMATEX format = Format(kSampleRate, 1);
-  HRESULT hr = OpenClient(pid, format, &client);
+  hr = OpenClient(device, format, &client);
   if (hr == AUDCLNT_E_UNSUPPORTED_FORMAT || hr == E_INVALIDARG) {
     format = Format(kFallbackRate, kFallbackChannels);
-    hr = OpenClient(pid, format, &client);
+    hr = OpenClient(device, format, &client);
   }
-  if (FAILED(hr)) return ExitForActivation(hr);
+  if (FAILED(hr)) return IsDeviceGone(hr) ? Ended::DeviceChanged : Ended::Failed;
 
-  HANDLE audio = CreateEventW(nullptr, FALSE, FALSE, nullptr);
   IAudioCaptureClient* capture = nullptr;
-  hr = client->SetEventHandle(audio);
-  if (SUCCEEDED(hr)) hr = client->GetService(__uuidof(IAudioCaptureClient), reinterpret_cast<void**>(&capture));
+  hr = client->GetService(__uuidof(IAudioCaptureClient), reinterpret_cast<void**>(&capture));
   if (SUCCEEDED(hr)) hr = client->Start();
   if (FAILED(hr)) {
     if (capture) capture->Release();
     client->Release();
-    CloseHandle(audio);
-    Status("failed", hr);
-    return kExitFailed;
+    return IsDeviceGone(hr) ? Ended::DeviceChanged : Ended::Failed;
+  }
+  if (!announced) {
+    Status("ready");
+    announced = true;
   }
 
-  Status("ready");
   HANDLE output = GetStdHandle(STD_OUTPUT_HANDLE);
-  HANDLE target = OpenProcess(SYNCHRONIZE, FALSE, pid);
-  HANDLE waits[3] = {g_stop, audio, target};
-  const DWORD waitCount = target ? 3 : 2;
   Converter converter(format.nSamplesPerSec, format.nChannels);
   std::vector<int16_t> pcm;
-  ULONGLONG lastTreeCheck = GetTickCount64();
-  int exitCode = kExitOk;
+  const ULONGLONG started = GetTickCount64();
+  ULONGLONG lastDeviceCheck = started;
+  // Samples written since this stream started, against the clock, to fill silence while nothing plays.
+  unsigned long long written = 0;
+  Ended ended = Ended::Stopped;
 
   for (;;) {
-    const DWORD signalled = WaitForMultipleObjects(waitCount, waits, FALSE, 200);
-    if (signalled == WAIT_OBJECT_0) {
+    if (WaitForSingleObject(g_stop, kPollMs) == WAIT_OBJECT_0) {
       Status("stopped");
+      ended = Ended::Stopped;
       break;
     }
-    if (target && signalled == WAIT_OBJECT_0 + 2) {
-      Status("no-teams");
-      exitCode = kExitNoTeams;
-      break;
-    }
-    bool closed = false;
     UINT32 packet = 0;
+    bool closed = false;
     while (SUCCEEDED(hr = capture->GetNextPacketSize(&packet)) && packet > 0) {
       BYTE* data = nullptr;
       UINT32 frames = 0;
@@ -632,26 +350,31 @@ int Capture(DWORD pid) {
       const bool silent = (flags & AUDCLNT_BUFFERFLAGS_SILENT) != 0;
       converter.Push(silent ? nullptr : reinterpret_cast<const int16_t*>(data), frames, pcm);
       capture->ReleaseBuffer(frames);
-      if (!pcm.empty()) {
-        closed = !WriteAll(output, pcm.data(), pcm.size() * sizeof(int16_t));
-        pcm.clear();
-        if (closed) break;
-      }
+    }
+    if (FAILED(hr)) {
+      ended = IsDeviceGone(hr) ? Ended::DeviceChanged : Ended::Failed;
+      break;
+    }
+    // Nothing played for a while: silence up to the clock, so the stream keeps time.
+    const ULONGLONG now = GetTickCount64();
+    const unsigned long long due = (now - started) * kSampleRate / 1000;
+    const unsigned long long lag = kSilenceLagMs * kSampleRate / 1000;
+    if (pcm.empty() && due > written + lag) pcm.insert(pcm.end(), static_cast<size_t>(due - written - lag / 2), 0);
+    if (!pcm.empty()) {
+      closed = !WriteAll(output, pcm.data(), pcm.size() * sizeof(int16_t));
+      written += pcm.size();
+      pcm.clear();
     }
     if (closed) {
       // Bee stopped reading: a clean stop.
+      ended = Ended::Closed;
       break;
     }
-    if (FAILED(hr)) {
-      Status("failed", hr);
-      exitCode = kExitFailed;
-      break;
-    }
-    if (GetTickCount64() - lastTreeCheck >= kTreeCheckMs) {
-      lastTreeCheck = GetTickCount64();
-      if (!TreeIsTargetOnly(Processes(), pid)) {
-        Status("failed", S_OK, "tree=not-target");
-        exitCode = kExitFailed;
+    if (now - lastDeviceCheck >= kDeviceCheckMs) {
+      lastDeviceCheck = now;
+      if (!SameDefaultDevice(id)) {
+        Status("device-changed");
+        ended = Ended::DeviceChanged;
         break;
       }
     }
@@ -660,16 +383,44 @@ int Capture(DWORD pid) {
   client->Stop();
   capture->Release();
   client->Release();
-  CloseHandle(audio);
-  if (target) CloseHandle(target);
-  return exitCode;
+  return ended;
+}
+
+int Capture() {
+  bool announced = false;
+  int tries = 0;
+  for (;;) {
+    IMMDevice* device = nullptr;
+    LPWSTR raw = nullptr;
+    HRESULT hr = DefaultDevice(&device, &raw);
+    if (FAILED(hr)) {
+      // No playback device right now (unplugged): wait and look again, then give up.
+      if (++tries > kReopenTries) return ExitFor(hr);
+      if (WaitForSingleObject(g_stop, 1000) == WAIT_OBJECT_0) {
+        Status("stopped");
+        return kExitOk;
+      }
+      continue;
+    }
+    const std::wstring id = raw;
+    CoTaskMemFree(raw);
+    const Ended ended = CaptureDevice(device, id, announced, hr);
+    device->Release();
+    if (ended == Ended::Stopped || ended == Ended::Closed) return kExitOk;
+    if (ended == Ended::Failed) return ExitFor(hr);
+    // The device changed or went away: open the default one again.
+    if (++tries > kReopenTries) return ExitFor(hr);
+    if (WaitForSingleObject(g_stop, 300) == WAIT_OBJECT_0) {
+      Status("stopped");
+      return kExitOk;
+    }
+    if (ended == Ended::DeviceChanged) tries = announced ? 0 : tries;
+  }
 }
 
 }  // namespace
 
 int wmain(int argc, wchar_t** argv) {
-  DWORD requested = 0;
-  std::vector<std::wstring> images;
   for (int index = 1; index < argc; ++index) {
     const wchar_t* arg = argv[index];
     if (std::wcscmp(arg, L"--version") == 0) {
@@ -687,24 +438,9 @@ int wmain(int argc, wchar_t** argv) {
       return kExitOk;
     }
     if (std::wcscmp(arg, L"--request-permission") == 0) {
-      // Windows asks for no permission to hear one app.
+      // Windows asks for no permission to hear its own playback.
       Status("granted");
       return kExitOk;
-    }
-    if (std::wcscmp(arg, L"--image") == 0 && index + 1 < argc) {
-      // Call apps only: an image outside kTargetImages is a usage error, so Bee can never point the helper elsewhere.
-      std::wstring image = argv[++index];
-      if (!IsAllowedTarget(image)) {
-        Usage(true);
-        return kExitUsage;
-      }
-      for (auto& c : image) c = static_cast<wchar_t>(towlower(c));
-      images.push_back(image);
-      continue;
-    }
-    if (std::wcscmp(arg, L"--pid") == 0 && index + 1 < argc) {
-      requested = static_cast<DWORD>(std::wcstoul(argv[++index], nullptr, 10));
-      continue;
     }
     Usage(true);
     return kExitUsage;
@@ -713,19 +449,6 @@ int wmain(int argc, wchar_t** argv) {
   if (WindowsBuild() < kMinBuild) {
     Status("unsupported");
     return kExitUnsupported;
-  }
-
-  SetTarget(images);
-  const std::vector<Process> list = Processes();
-  // An id from Bee must still be the target: the helper never hears anything else.
-  const DWORD pid = requested != 0 ? RootOf(list, requested) : FindTargetRoot(list);
-  if (pid == 0) {
-    Status("no-teams");
-    return kExitNoTeams;
-  }
-  if (!TreeIsTargetOnly(list, pid)) {
-    Status("failed", S_OK, "tree=not-target");
-    return kExitFailed;
   }
 
   g_stop = CreateEventW(nullptr, TRUE, FALSE, nullptr);
@@ -744,7 +467,7 @@ int wmain(int argc, wchar_t** argv) {
     Status("failed", com);
     return kExitFailed;
   }
-  const int code = Capture(pid);
+  const int code = Capture();
   CoUninitialize();
   return code;
 }

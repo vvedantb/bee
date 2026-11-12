@@ -209,8 +209,8 @@
       "extendInfo": {
         "LSUIElement": true,
         "NSMicrophoneUsageDescription": "Bee listens to your microphone during meetings to transcribe speech and suggest tips. Audio is sent only for transcription.",
-        "NSAudioCaptureUsageDescription": "Bee can hear the call app, and only that app (Teams, Zoom, or the browser running Google Meet), during a call, to transcribe other people. Optional; turn it off in Settings.",
-        "NSScreenCaptureUsageDescription": "Bee hears the call app's sound, and only that app (Teams, Zoom, or the browser running Google Meet), during a call. macOS counts app audio as Screen Recording. Bee never records video of your screen."
+        "NSAudioCaptureUsageDescription": "While Bee's mic is on, Bee can hear your Mac's sound to transcribe other people in calls. Optional; turn it off in Settings.",
+        "NSScreenCaptureUsageDescription": "While Bee's mic is on, Bee hears your Mac's sound to transcribe other people in calls. macOS counts system audio as Screen Recording. Bee never records video of your screen."
       }
     },
     "linux": {

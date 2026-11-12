@@ -1,7 +1,7 @@
-// Call audio capture (core/teams-audio.ts). Bee hears the call app (Teams, Zoom or the Meet browser) alone or nothing: never
-// the screen's or all system audio, and never mixed into the mic. Main picks the app and runs the native helper (WASAPI
-// process loopback on the app's process tree on Windows, ScreenCaptureKit filtered to the app on macOS) and speech-to-text;
-// this side only receives text lines, never audio. See ARCHITECTURE.md.
+// Call audio capture (core/teams-audio.ts). Bee hears everything the computer plays (all system audio, not Bee's own sound)
+// while its mic is on, never mixed into the mic. Main runs the native helper (WASAPI loopback on the default playback device on
+// Windows, ScreenCaptureKit for every app but Bee on macOS) and speech-to-text; this side only receives text lines, never audio.
+// See ARCHITECTURE.md.
 import type { TeamsAudioFailure } from "../../core/teams-audio-protocol";
 import type { TeamsAudioLine } from "../../shared/ipc";
 
@@ -16,7 +16,7 @@ export type TeamsAudioCapture = {
 
 export type TeamsAudioOpen = { capture: TeamsAudioCapture; failure: null } | { capture: null; failure: TeamsAudioFailure };
 
-/** Asks main to start hearing the call app. Resolves with the capture once the helper is ready, or with why it did not start. */
+/** Asks main to start hearing the computer's sound. Resolves with the capture once the helper is ready, or with why it did not start. */
 export async function openTeamsAudio(sessionToken: string): Promise<TeamsAudioOpen> {
   const bee = window.bee.teamsAudio;
   let id: number | null = null;

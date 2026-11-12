@@ -637,8 +637,6 @@ if (clerk.isPrimaryInstance) {
     app.on("will-quit", () => teamsAudioCapture.stop());
     const teamsAudioStatus = createTeamsAudioStatus({
       enabled: settings.teamsAudioFallback,
-      readTeamsDetector: teamsDetector.read,
-      reader: meetingWindow,
       host: { osSupported: teamsAudioOsSupported(teamsAudioPlatform(process.platform), release()), helperFound: teamsAudioHelper !== null },
       permission: teamsAudioCapture.permission,
     });

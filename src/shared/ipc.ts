@@ -403,14 +403,11 @@ export type MeetingWindowCaptions = z.infer<typeof meetingWindowCaptionsSchema>;
 export const teamsAudioStatusRequestSchema = z.object({ sessionToken: z.string().max(8000) });
 export const teamsAudioStatusSchema = z.object({
   platform: z.enum(["windows", "mac", "linux", "other"]),
-  // This build can capture one app's audio alone here (the call app). Bee never captures all system audio instead.
+  // This build can capture the computer's sound here (all system audio, while Bee's mic is on).
   supported: z.boolean(),
-  // Why not: unsupported-platform (Linux and others), needs-app-audio (no per-app path in this build), os-too-old (below
-  // the helper's floor: Windows 10 2004, macOS 13), helper-missing (the native helper is not installed).
+  // Why not: unsupported-platform (Linux and others), needs-app-audio (no capture path in this build), os-too-old (below the
+  // helper's floor: Windows 10, macOS 13), helper-missing (the native helper is not installed).
   reason: z.enum(["unsupported-platform", "needs-app-audio", "os-too-old", "helper-missing"]).nullable(),
-  // The call Bee can hear now, by app: the meeting window reader's call (Teams, Zoom, or Google Meet in a browser Bee knows), or
-  // the built-in Windows Teams detector. Null: no call, or one Bee cannot hear alone. Process names and ids stay in main.
-  call: z.enum(["teams", "zoom", "meet"]).nullable(),
   // macOS Screen Recording for the helper, as the last capture found it. not-needed on Windows and elsewhere. unknown until
   // the first capture; denied stays until a capture starts or the user asks for access again.
   permission: z.enum(["not-needed", "unknown", "granted", "denied"]),

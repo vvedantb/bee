@@ -9,14 +9,12 @@ import {
   type HelperStatus,
   type TeamsAudioFailure,
 } from "../core/teams-audio-protocol";
-import { callAudioHelperArgs, sameCallAudioTarget, teamsAudioPlatform, type CallAudioTarget } from "../core/teams-audio";
 import type { TranscribeOutcome } from "../core/transcribe";
 import type { TeamsAudioStartResult } from "../shared/ipc";
 import { withoutSecrets } from "./agent-desktop";
 
-// Main side of call audio: starts the native helper (main/teams-audio-helper.ts) on the call app's target (Teams, Zoom or the
-// Meet browser; core/teams-audio.ts callAudioTarget), reads its 16 kHz PCM from
-// stdout, cuts it into phrases (core/speech.ts, the mic's segmenter) and sends each phrase to speech-to-text. Only the text
+// Main side of call audio: starts the native helper (main/teams-audio-helper.ts), which hears all system audio (every app but
+// Bee), reads its 16 kHz PCM from stdout, cuts it into phrases (core/speech.ts, the mic's segmenter) and sends each phrase to speech-to-text. Only the text
 // leaves this file, to the renderer. Audio stays in memory and is dropped once transcribed. Console lines carry codes and counts
 // only: never samples, never words, never the helper's own stderr text. No Electron imports, so tests inject the process.
 
@@ -50,16 +48,11 @@ const STDERR_LINE_MAX = 200;
 export type TeamsAudioPermission = "unknown" | "granted" | "denied";
 
 export type TeamsAudioCapture = {
-  /**
-   * Starts the helper on this target and resolves once it reports ready, or with why it did not. A capture already running on
-   * the same target is reused; one on another target is stopped first (ended with no failure) and a new one starts.
-   */
-  start: (target: CallAudioTarget) => Promise<TeamsAudioStartResult>;
+  /** Starts the helper and resolves once it reports ready, or with why it did not. A capture already running is reused. */
+  start: () => Promise<TeamsAudioStartResult>;
   /** Stops the capture. by "renderer": the renderer asked, so no ended event; "policy": main's own check, so ended(null). */
   stop: (by?: "renderer" | "policy") => void;
   running: () => boolean;
-  /** The target of the running capture, or null. */
-  target: () => CallAudioTarget | null;
   /** A signed-in renderer polled the status: the capture may keep running. */
   touch: () => void;
   /** macOS Screen Recording as the last capture found it. */
@@ -76,7 +69,6 @@ export function createTeamsAudioCapture(deps: {
   onEnded: (id: number, failure: TeamsAudioFailure | null) => void;
   spawn?: SpawnHelper;
   env?: NodeJS.ProcessEnv;
-  platform?: string;
   now?: () => number;
   readyTimeoutMs?: number;
   stopGraceMs?: number;
@@ -94,11 +86,9 @@ export function createTeamsAudioCapture(deps: {
   let nextId = 0;
   let lastTouch = now();
   let permission: TeamsAudioPermission = "unknown";
-  const platform = teamsAudioPlatform(deps.platform ?? process.platform);
 
   type Session = {
     id: number;
-    target: CallAudioTarget;
     child: HelperProcess;
     ready: boolean;
     stopped: boolean;
@@ -145,7 +135,7 @@ export function createTeamsAudioCapture(deps: {
     if (notify && session.ready) deps.onEnded(session.id, failure);
   }
 
-  function begin(path: string, target: CallAudioTarget): Session {
+  function begin(path: string): Session {
     nextId += 1;
     const id = nextId;
     let settle: (result: TeamsAudioStartResult) => void = () => undefined;
@@ -159,14 +149,15 @@ export function createTeamsAudioCapture(deps: {
     });
     let child: HelperProcess;
     try {
-      child = spawn(path, callAudioHelperArgs(target, platform), { stdio: ["pipe", "pipe", "pipe"], windowsHide: true, env: env() });
+      // No arguments: the helper hears all system audio (protocol 3).
+      child = spawn(path, [], { stdio: ["pipe", "pipe", "pipe"], windowsHide: true, env: env() });
     } catch {
       console.debug("teams-audio helper spawn=0");
       settle({ ok: false, failure: "failed" });
-      return { id, target, child: nullChild, ready: false, stopped: true, reported: null, settle, started, timers: [] };
+      return { id, child: nullChild, ready: false, stopped: true, reported: null, settle, started, timers: [] };
     }
-    const session: Session = { id, target, child, ready: false, stopped: false, reported: null, settle, started, timers: [] };
-    console.debug(`teams-audio helper kind=${target.kind}`);
+    const session: Session = { id, child, ready: false, stopped: false, reported: null, settle, started, timers: [] };
+    console.debug("teams-audio helper source=system");
 
     const framer = createPcmFramer();
     let lastAudioAt = now();
@@ -239,7 +230,7 @@ export function createTeamsAudioCapture(deps: {
         setInterval(() => {
           if (session.stopped) return;
           const rms = beat.samples === 0 ? 0 : Math.sqrt(beat.sumSquares / beat.samples);
-          console.debug(`teams-audio beat kind=${target.kind} bytes=${beat.bytes} frames=${beat.frames} rms=${rms.toFixed(4)} peak=${beat.peak.toFixed(4)} phrases=${phrases}`);
+          console.debug(`teams-audio beat bytes=${beat.bytes} frames=${beat.frames} rms=${rms.toFixed(4)} peak=${beat.peak.toFixed(4)} phrases=${phrases}`);
           beat = { bytes: 0, frames: 0, sumSquares: 0, samples: 0, peak: 0 };
         }, heartbeatMs),
       );
@@ -271,14 +262,12 @@ export function createTeamsAudioCapture(deps: {
   }
 
   return {
-    start: (target) => {
+    start: () => {
       lastTouch = now();
-      if (current && sameCallAudioTarget(current.target, target)) return current.started;
-      // Another call app: the old capture ends (no failure) before the new one starts.
-      if (current) finish(current, null, true);
+      if (current) return current.started;
       const path = deps.helperPath();
       if (!path) return Promise.resolve({ ok: false, failure: "missing" });
-      const session = begin(path, target);
+      const session = begin(path);
       if (!session.stopped) current = session;
       return session.started;
     },
@@ -289,7 +278,6 @@ export function createTeamsAudioCapture(deps: {
       finish(session, null, by === "policy");
     },
     running: () => current !== null,
-    target: () => current?.target ?? null,
     touch: () => {
       lastTouch = now();
     },

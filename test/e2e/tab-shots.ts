@@ -31,7 +31,7 @@ const section = (title: string, ...children: ReactNode[]) => createElement("sect
 
 // Call audio on a Mac where Screen Recording is still off for Bee: the line and the button that asks.
 const teamsAudio: TeamsAudioView = {
-  status: { platform: "mac", supported: true, reason: null, call: null, permission: "denied" },
+  status: { platform: "mac", supported: true, reason: null, permission: "denied" },
   plan: "waiting",
   listening: false,
   failed: false,

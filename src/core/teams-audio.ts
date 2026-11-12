@@ -1,39 +1,26 @@
-import { appKind, echoesOwnLine, type MeetingApp } from "./agent-desktop-meeting";
+import { echoesOwnLine } from "./agent-desktop-meeting";
 import type { SessionLine } from "./session-lines";
-import {
-  MEET_BROWSERS,
-  TEAMS_MAC_BUNDLE_IDS,
-  TEAMS_WINDOWS_IMAGES,
-  ZOOM_MAC_BUNDLE_IDS,
-  ZOOM_WINDOWS_IMAGES,
-  isCallAudioBundleId,
-} from "./teams-audio-protocol";
 
-// Call audio (internally still "Teams audio"), pure parts: whether this build can hear one app on its own, which app to hear
-// for the call Bee detected (Teams, Zoom, or the browser running Google Meet), when to listen, and which lines repeat speech
-// Bee already has. Bee hears the call app alone or nothing: never all system audio, never a music or video app.
+// Call audio (internally still "Teams audio"), pure parts: whether this build can hear the computer's sound here, when to
+// listen, and which lines repeat speech Bee already has. Bee hears everything the computer plays (all system audio, as Cluely
+// does) while its mic is on, through the native helper (native/teams-audio): never the screen, and never Bee's own sound.
 
 export type TeamsAudioPlatform = "windows" | "mac" | "linux" | "other";
 /**
- * Why Bee cannot hear the call app here. unsupported-platform: Linux and others (no fallback). needs-app-audio: this build has
- * no per-app capture path for the platform. os-too-old: below the helper's OS floor. helper-missing: the native helper is not
+ * Why Bee cannot hear the computer's sound here. unsupported-platform: Linux and others (no fallback). needs-app-audio: this
+ * build has no capture path for the platform. os-too-old: below the helper's OS floor. helper-missing: the native helper is not
  * in this install (a development checkout that has not built it, or a damaged install).
  */
 export type TeamsAudioReason = "unsupported-platform" | "needs-app-audio" | "os-too-old" | "helper-missing";
 export type TeamsAudioSupport = { supported: boolean; reason: TeamsAudioReason | null };
 
-// Platforms with a per-app capture path in this build: Windows (WASAPI process loopback on the call app's process tree) and
-// macOS (ScreenCaptureKit filtered to the call app), both through the in-repo helper in native/teams-audio. Electron's own
-// display media audio is the whole system, so Bee never uses it. A platform here still reports unsupported at run time when
-// its helper is missing or the OS is too old. See ARCHITECTURE.md.
+// Platforms with a capture path in this build: Windows (WASAPI loopback on the default playback device) and macOS
+// (ScreenCaptureKit, every app but Bee), both through the in-repo helper in native/teams-audio. A platform here still reports
+// unsupported at run time when its helper is missing or the OS is too old. See ARCHITECTURE.md.
 export const TEAMS_APP_AUDIO: Readonly<Record<"windows" | "mac", boolean>> = { windows: true, mac: true };
 
-/**
- * OS floors for the helpers. Windows: build 19041 (Windows 10 version 2004). Microsoft documents process loopback from build
- * 20348; it is used from 19041 elsewhere (GStreamer), so Bee tries from there and reports "unsupported" if Windows refuses.
- * macOS: ScreenCaptureKit audio needs macOS 13 (Darwin 22).
- */
-export const TEAMS_AUDIO_MIN_WINDOWS_BUILD = 19_041;
+/** OS floors for the helpers. Windows 10 (build 10240): loopback capture is older still. macOS: ScreenCaptureKit audio needs macOS 13 (Darwin 22). */
+export const TEAMS_AUDIO_MIN_WINDOWS_BUILD = 10_240;
 export const TEAMS_AUDIO_MIN_DARWIN = 22;
 
 export function teamsAudioPlatform(platform: string): TeamsAudioPlatform {
@@ -57,8 +44,8 @@ export function teamsAudioOsSupported(platform: TeamsAudioPlatform, release: str
 export type TeamsAudioHost = { osSupported: boolean; helperFound: boolean };
 
 /**
- * Whether Bee can hear one app alone here. Linux has no fallback; Windows and macOS need a per-app capture path in this
- * build, an OS at the helper's floor and the helper itself. Without host, only the build is checked.
+ * Whether Bee can hear the computer's sound here. Linux has no fallback; Windows and macOS need a capture path in this build,
+ * an OS at the helper's floor and the helper itself. Without host, only the build is checked.
  */
 export function teamsAudioSupport(
   platform: TeamsAudioPlatform,
@@ -75,74 +62,16 @@ export function teamsAudioSupport(
 // ---- When to listen ----
 
 /**
- * off: setting off. unavailable: no per-app capture here. waiting: no call Bee can hear, or the mic is off. listen: hear the
- * call app. Client sync is gone, so no one is ever "covered" by a teammate's Bee: a call with the mic on always listens.
+ * off: setting off. unavailable: no capture here. waiting: the mic is off (Bee is not listening). listen: hear the computer's
+ * sound. Bee hears it whenever its mic is on: no call app needs to be found first.
  */
 export type TeamsAudioPlan = "off" | "unavailable" | "waiting" | "listen";
 
-export function teamsAudioPlan(args: { enabled: boolean; supported: boolean; inCall: boolean; micOn: boolean }): TeamsAudioPlan {
+export function teamsAudioPlan(args: { enabled: boolean; supported: boolean; micOn: boolean }): TeamsAudioPlan {
   if (!args.enabled) return "off";
   if (!args.supported) return "unavailable";
-  if (!args.inCall || !args.micOn) return "waiting";
+  if (!args.micOn) return "waiting";
   return "listen";
-}
-
-// ---- Which app to hear ----
-
-/**
- * The app the helper hears. processes: Windows image names (the helper includes each one's process tree). bundleIds: macOS
- * bundle ids (and their `<id>.…` helper apps). pid: the call window's process, if known (Windows: the helper climbs to the top
- * of that app's tree). Names stay in main; the renderer only sees kind.
- */
-export type CallAudioTarget = { kind: MeetingApp; processes: string[]; bundleIds: string[]; pid: number | null };
-
-/** What main knows about the call window the meeting window reader found. Names never leave main. */
-export type CallWindow = { app: MeetingApp; appName: string; pid: number | null; bundleId: string | null };
-
-const TEAMS_TARGET: CallAudioTarget = { kind: "teams", processes: [...TEAMS_WINDOWS_IMAGES], bundleIds: [...TEAMS_MAC_BUNDLE_IDS], pid: null };
-const ZOOM_TARGET: CallAudioTarget = { kind: "zoom", processes: [...ZOOM_WINDOWS_IMAGES], bundleIds: [...ZOOM_MAC_BUNDLE_IDS], pid: null };
-
-/** The browser that owns a Meet window: by bundle id first (exact or a channel such as "com.google.chrome.beta"), then by name. */
-function meetBrowser(window: CallWindow): (typeof MEET_BROWSERS)[number] | null {
-  const bundle = (window.bundleId ?? "").toLowerCase();
-  const byBundle = bundle ? MEET_BROWSERS.find((browser) => isCallAudioBundleId(bundle, [browser.bundleId])) : undefined;
-  if (byBundle) return byBundle;
-  // A bundle id that is some other browser (Safari, an unknown one) is never guessed from the name.
-  if (bundle && appKind("", bundle) === "browser") return null;
-  const name = window.appName.trim().toLowerCase().replace(/\.exe$/, "");
-  return MEET_BROWSERS.find((browser) => browser.names.test(name)) ?? null;
-}
-
-/**
- * The app to hear for the call Bee sees. The meeting window reader's call wins (it names the app); else the built-in Windows
- * detector's Teams call. A Meet call is heard through its browser only when Bee knows that browser (not Safari). Null: no call,
- * or a call Bee cannot hear on its own.
- */
-export function callAudioTarget(args: { window: CallWindow | null; teamsDetector: boolean }): CallAudioTarget | null {
-  const window = args.window;
-  if (window?.app === "teams") return { ...TEAMS_TARGET };
-  if (window?.app === "zoom") return { ...ZOOM_TARGET };
-  if (window?.app === "meet") {
-    const browser = meetBrowser(window);
-    if (browser) return { kind: "meet", processes: [browser.image], bundleIds: [browser.bundleId], pid: window.pid };
-  }
-  return args.teamsDetector ? { ...TEAMS_TARGET } : null;
-}
-
-/** Two targets are the same capture: same app, same process. A different one restarts the helper. */
-export function sameCallAudioTarget(a: CallAudioTarget | null, b: CallAudioTarget | null): boolean {
-  if (!a || !b) return a === b;
-  return a.kind === b.kind && a.pid === b.pid && a.processes.join() === b.processes.join() && a.bundleIds.join() === b.bundleIds.join();
-}
-
-/**
- * The helper's arguments for a target (native/teams-audio/README.md). Windows: --image for each process name, and --pid for the
- * call window's process. macOS: --bundle-id for each bundle id. The helper refuses anything outside its own allowlist.
- */
-export function callAudioHelperArgs(target: CallAudioTarget, platform: TeamsAudioPlatform): string[] {
-  if (platform === "windows") return [...target.processes.flatMap((image) => ["--image", image]), ...(target.pid !== null ? ["--pid", String(target.pid)] : [])];
-  if (platform === "mac") return target.bundleIds.flatMap((id) => ["--bundle-id", id]);
-  return [];
 }
 
 // ---- Dedupe ----
