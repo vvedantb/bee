@@ -36,6 +36,6 @@ host="$(uname -m)"
 host_arch="$([ "$host" = "arm64" ] && echo arm64 || echo x64)"
 if [ -x "$root/native/teams-audio/dist/darwin-$host_arch/teams-audio-helper" ]; then
   version="$("$root/native/teams-audio/dist/darwin-$host_arch/teams-audio-helper" --version)"
-  if [ "$version" != "teams-audio-helper protocol=2" ]; then echo "Teams audio helper --version failed: $version" >&2; exit 1; fi
+  if [ "$version" != "teams-audio-helper protocol=3" ]; then echo "Teams audio helper --version failed: $version" >&2; exit 1; fi
   echo "$version"
 fi
