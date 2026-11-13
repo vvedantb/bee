@@ -25,6 +25,8 @@ export const IPC = {
   // Renderer → main (send): the pointer is over something Bee paints (true) or the clear window area (false). Main turns
   // click-through off or on (core/overlay-size.ts ignoresMouse).
   setWindowInteractive: "bee:window:interactive",
+  // Renderer → main (send): a drag of the window by the pill starts, moves or ends (renderer/src/window-drag.ts).
+  dragWindow: "bee:window:drag",
   openNotesFolder: "bee:notes:open-folder",
   openLogsFolder: "bee:logs:open-folder",
   debugLog: "bee:debug:log",
@@ -95,6 +97,9 @@ export const windowSizeSchema = z.enum(WINDOW_SIZES);
 export type WindowSize = z.infer<typeof windowSizeSchema>;
 // The pointer is over one of Bee's surfaces (IPC.setWindowInteractive).
 export const windowInteractiveSchema = z.boolean();
+// A step of a drag by the pill (IPC.dragWindow). Main reads the pointer itself, so a step carries no position.
+export const windowDragSchema = z.enum(["start", "move", "end"]);
+export type WindowDrag = z.infer<typeof windowDragSchema>;
 
 // The allowed Interface size factors (core/interface-scale.ts); a save with any other number is rejected.
 const interfaceScaleSchema = z.number().refine((value) => (INTERFACE_SCALES as readonly number[]).includes(value), { message: "Unsupported interface size" });

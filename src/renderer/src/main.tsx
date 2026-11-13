@@ -9,6 +9,7 @@ import { App } from "./App";
 import { watchClickThrough } from "./click-through";
 import { logStateChanges } from "./debug-log";
 import { actions, getBeeState, subscribe } from "./store";
+import { watchWindowDrag } from "./window-drag";
 import "./styles.css";
 
 // Island and panel state changes for the debug log.
@@ -19,6 +20,8 @@ window.addEventListener("blur", () => actions.clickedOutside());
 
 // The clear window area lets clicks through to the app below; Bee's surfaces take them (click-through.ts).
 watchClickThrough((interactive) => window.bee.setWindowInteractive(interactive));
+// The pill drags the window. Linux keeps the CSS drag area (window-drag.ts).
+if (!navigator.userAgent.includes("Linux")) watchWindowDrag((step) => window.bee.dragWindow(step));
 
 const root = document.getElementById("root");
 if (root) {

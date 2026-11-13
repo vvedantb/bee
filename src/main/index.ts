@@ -10,7 +10,7 @@ import { RENDERER_HOST, RENDERER_SCHEME, RENDERER_URL } from "../shared/clerk";
 import { shortcutLabel } from "../core/shortcut";
 import { displayMatching, placeInWorkArea, restoreOverlayBounds, scaleSize, type DisplayInfo } from "../core/interface-scale";
 import { OVERLAY_SIZES, ignoresMouse } from "../core/overlay-size";
-import { IPC, TEAMS_AUDIO_LINE_MAX, settingsUpdateSchema, windowInteractiveSchema, windowSizeSchema, type MeetingWindowCaptions, type TeamsAudioEnded, type TeamsAudioLines, type UserReturned, type WindowSize } from "../shared/ipc";
+import { IPC, TEAMS_AUDIO_LINE_MAX, settingsUpdateSchema, windowDragSchema, windowInteractiveSchema, windowSizeSchema, type MeetingWindowCaptions, type TeamsAudioEnded, type TeamsAudioLines, type UserReturned, type WindowDrag, type WindowSize } from "../shared/ipc";
 import { debugLog, errorData, msSince, setDebugSink, teeConsole } from "../core/debug-log";
 import { GUIDE_MODEL, NO_GATEWAY_KEY, STT_MODEL, createBeeGateway } from "../core/gateway";
 import { AGENT_MODEL } from "../core/claude-agent";
@@ -124,6 +124,25 @@ let overlayInteractive = false;
 function setInteractive(window: BrowserWindow, interactive: boolean): void {
   overlayInteractive = interactive;
   window.setIgnoreMouseEvents(ignoresMouse(process.platform, interactive), { forward: true });
+}
+
+// A drag of the window by the pill (renderer/src/window-drag.ts): where the pointer and the window were when it started.
+let overlayDrag: { pointer: Electron.Point; origin: Electron.Point } | null = null;
+
+// The window keeps its offset from the pointer. The size is set each time (always the mode's own), so repeated moves cannot
+// make the window creep at a fractional display scale.
+function dragOverlay(window: BrowserWindow, step: WindowDrag): void {
+  if (step === "start") {
+    const { x, y } = window.getBounds();
+    overlayDrag = { pointer: screen.getCursorScreenPoint(), origin: { x, y } };
+    return;
+  }
+  if (!overlayDrag) return;
+  const pointer = screen.getCursorScreenPoint();
+  window.setBounds({ x: overlayDrag.origin.x + pointer.x - overlayDrag.pointer.x, y: overlayDrag.origin.y + pointer.y - overlayDrag.pointer.y, ...currentSize() });
+  if (step === "move") return;
+  overlayDrag = null;
+  rememberPosition(window);
 }
 
 // An automatic meeting session turns meeting mode on for its length without saving it. Main only.
@@ -659,6 +678,11 @@ if (clerk.isPrimaryInstance) {
     ipcMain.on(IPC.setWindowInteractive, (event, payload) => {
       const interactive = windowInteractiveSchema.safeParse(payload);
       if (win && !win.isDestroyed() && event.sender === win.webContents && interactive.success) setInteractive(win, interactive.data);
+    });
+    // Sent on every pointer move of a drag: no log line, and a bad payload is dropped.
+    ipcMain.on(IPC.dragWindow, (event, payload) => {
+      const step = windowDragSchema.safeParse(payload);
+      if (win && !win.isDestroyed() && event.sender === win.webContents && step.success) dragOverlay(win, step.data);
     });
 
     ipcMain.handle(IPC.openNotesFolder, () => shell.openPath(notesDir));

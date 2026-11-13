@@ -50,6 +50,7 @@ import {
   transcribeResultSchema,
   updateActionSchema,
   updateCheckSchema,
+  windowDragSchema,
   windowInteractiveSchema,
   windowSizeSchema,
   type BackgroundJobView,
@@ -76,6 +77,7 @@ import {
   type TeamsAudioLines,
   type TranscribeCancel,
   type TranscribeRequest,
+  type WindowDrag,
   type WindowSize,
 } from "../shared/ipc";
 
@@ -241,6 +243,10 @@ const api = {
   // The pointer is over one of Bee's surfaces, or the clear window area (renderer/src/click-through.ts). Fire and forget.
   setWindowInteractive: (interactive: boolean) => {
     ipcRenderer.send(IPC.setWindowInteractive, windowInteractiveSchema.parse(interactive));
+  },
+  // A drag of the window by the pill (renderer/src/window-drag.ts). Fire and forget.
+  dragWindow: (step: WindowDrag) => {
+    ipcRenderer.send(IPC.dragWindow, windowDragSchema.parse(step));
   },
   openNotesFolder: async () => {
     z.string().parse(await ipcRenderer.invoke(IPC.openNotesFolder));

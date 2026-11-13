@@ -204,15 +204,20 @@ body {
   border-radius: inherit;
   overflow: hidden;
   padding: 0 10px 0 16px;
+}
+
+/* Linux only: the notch is a CSS drag area. Elsewhere the page moves the window itself (window-drag.ts sets .page-drag),
+   because a drag area sends no pointer events and the click-through would never turn off over it. */
+:root:not(.page-drag) .notch {
   -webkit-app-region: drag;
 }
 
-.notch button {
+:root:not(.page-drag) .notch button {
   -webkit-app-region: no-drag;
 }
 
 /* Status text with nothing to open (NotchStatus.tsx) drags like the rest of the notch. */
-.notch .notch-status.inert {
+:root:not(.page-drag) .notch .notch-status.inert {
   -webkit-app-region: drag;
 }
 
