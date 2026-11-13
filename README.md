@@ -37,7 +37,7 @@ npm run dist:mac
 
 Signing is off by default. To sign and notarise, set `CSC_LINK` and `CSC_KEY_PASSWORD` for electron-builder, and set `build.mac.notarize` to `true` (it is `false` now), with `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD` and `APPLE_TEAM_ID` in the environment.
 
-Bee is a desktop overlay for meetings. It sits as a small "notch" at the top centre of the screen. It listens to the meeting, finds relevant local notes, ranks them with Jev and shows one or two short tips from the AI (Claude Haiku 5.5). When a question is about a public or current fact that the notes do not cover, the AI can search the web, and the Live tab lists the source links under the tips. This uses the same Gateway key. The search is Anthropic's own web search tool, so the Gateway sends those calls only to the Anthropic provider.
+Bee is a desktop overlay for meetings. It sits as a small "notch" at the top centre of the screen. It listens to the meeting, finds relevant local notes, ranks them with Jev and shows one or two short tips from the AI (Claude Sonnet 5.5). When a question is about a public or current fact that the notes do not cover, the AI can search the web, and the Live tab lists the source links under the tips. This uses the same Gateway key. The search is Anthropic's own web search tool, so the Gateway sends those calls only to the Anthropic provider.
 
 Windows and macOS are supported. The Teams detector is Windows only.
 
@@ -47,7 +47,7 @@ Typical use: in a weekly meeting someone says "last time we discussed the Acme r
 
 - Windows 10 or 11 (x64), or macOS (Apple Silicon arm64 or Intel x64). Linux runs in development.
 - Node.js 22 or later, with npm.
-- A Vercel AI Gateway API key with access to `mistral/voxtral-small-transcribe-3`, `anthropic/claude-haiku-5.5` and `typesafe-ai/jev`.
+- A Vercel AI Gateway API key with access to `mistral/voxtral-small-transcribe-3`, `anthropic/claude-sonnet-5.5` and `typesafe-ai/jev`.
 - For "Bee, …" requests and computer use: [Claude Code](https://claude.com/claude-code) 2.1.318 or later, installed and signed in to your Claude account (run `claude`, then `/login`). Bee uses that install and its login through the Claude Agent SDK, not the Gateway, and ships no copy of its own. Settings shows whether Bee found it; without it, Bee says to install, update or sign in.
 - A Bee account. Sign-in uses Clerk (the vedantb.com instance). See [Sign-in (Clerk)](#sign-in-clerk).
 
@@ -105,7 +105,7 @@ While a meeting is active (the notch says "Meeting in progress"), each tip reque
 - **Text first.** Bee reads the text of the window at the front (its accessibility text, through agent-desktop), up to 1,500 characters, page text before button labels. It never reads Bee, terminals, password managers or system settings, and never reads password fields.
 - **A picture only when needed.** When the window has under 80 characters of text (an image, a canvas), or it is the call window itself (a shared slide there is video), Bee adds a small picture of that window: JPEG, at most 1024 px on its long side. At most one picture every 20 seconds, and only when the window looks different from the last picture sent. On macOS this needs Screen Recording; without it Bee sends text only and never asks during a call. On Linux, text only.
 - **Tips stay fast.** The screen is read while notes are ranked. A tip waits at most 0.4 s for the text and 0.8 s in all, then goes on without it. A text read is reused for 5 seconds.
-- **Privacy.** The text and picture go to the AI (Claude Haiku through AI Gateway) with that one tip request only. Bee never saves the picture, and keeps the screen out of meeting memory, summaries and vmem transcripts. Logs show only lengths, whether a picture was sent, whether it changed, and times. The AI is told to treat the screen as data, to use it only when it helps, and never to repeat passwords or keys.
+- **Privacy.** The text and picture go to the AI (Claude Sonnet through AI Gateway) with that one tip request only. Bee never saves the picture, and keeps the screen out of meeting memory, summaries and vmem transcripts. Logs show only lengths, whether a picture was sent, whether it changed, and times. The AI is told to treat the screen as data, to use it only when it helps, and never to repeat passwords or keys.
 - **Cost.** Text adds up to about 400 input tokens to a tip request. A picture adds image tokens (Anthropic counts about width × height / 750, so roughly 800 for a 1024 × 576 window) to at most one tip request every 20 seconds.
 
 ### Link suggestions and personalised links
@@ -306,10 +306,10 @@ npm run build:teams-audio:mac   # call audio helpers (macOS only; needs Xcode)
 
 1. `mistral/voxtral-small-transcribe-3`: transcribes `test/fixtures/sso-question.wav` (a synthesised question with silence either side).
 2. `mistral/voxtral-small-transcribe-3` with an invalid key: checks for a short `Speech-to-text failed:` error.
-3. `anthropic/claude-haiku-5.5`: one short guidance completion.
-4. `anthropic/claude-haiku-5.5`: a current-events question ("who is the current Prime Minister of the UK?"), checked for a tip and at least one `https://` source.
-5. `anthropic/claude-haiku-5.5`: a question about a local note (a room number in a temp notes folder), checked that the tip holds the answer, so the AI used the file tools.
-6. `anthropic/claude-haiku-5.5`: a meeting summary from a short transcript, checked for every section and the named owner.
+3. `anthropic/claude-sonnet-5.5`: one short guidance completion.
+4. `anthropic/claude-sonnet-5.5`: a current-events question ("who is the current Prime Minister of the UK?"), checked for a tip and at least one `https://` source.
+5. `anthropic/claude-sonnet-5.5`: a question about a local note (a room number in a temp notes folder), checked that the tip holds the answer, so the AI used the file tools.
+6. `anthropic/claude-sonnet-5.5`: a meeting summary from a short transcript, checked for every section and the named owner.
 7. `typesafe-ai/jev`: scores three note snippets against a fake transcript and checks that the relevant note ranks first.
 8. `typesafe-ai/jev` with an invalid key: checks that ranking fails open, keeps the original order, and returns a clear error.
 
