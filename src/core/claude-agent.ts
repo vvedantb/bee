@@ -34,7 +34,7 @@ import { noProgress } from "./loop-guard";
 /** A request's model. "plan" thinks first (adaptive, medium effort); "fast" is the fast pass for a simple task, thinking off. */
 export type AgentTier = "plan" | "fast";
 
-export const AGENT_MODEL: Record<AgentTier, string> = { plan: "claude-sonnet-5-5", fast: "claude-haiku-5-5" };
+export const AGENT_MODEL: Record<AgentTier, string> = { plan: "claude-opus-5-5", fast: "claude-sonnet-5-5" };
 
 /** What happens during a run, in order. Tool names are Bee's own (open_app, web_search), never the SDK's mcp__bee__… names. */
 export type AgentEvent =

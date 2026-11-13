@@ -533,12 +533,12 @@ describe("runDirectCommand: Bee's history and no blank replies", () => {
 });
 
 describe("runDirectCommand: the agent tier", () => {
-  it("answers on the planning tier (Sonnet, adaptive thinking at medium effort in the SDK)", async () => {
+  it("answers on the planning tier (Opus, adaptive thinking at medium effort in the SDK)", async () => {
     const { model } = stepsModel([text("- 15% of 18,000 is 2,700.\n")]);
     const agent = modelAgent(model);
     await runDirectCommand({ command: "what's 15% of 18000?", snippets, agent, gateway: null, actions: null });
     expect(agent.requests.map((request) => request.tier)).toEqual(["plan"]);
-    expect(AGENT_MODEL.plan).toBe("claude-sonnet-5-5");
+    expect(AGENT_MODEL.plan).toBe("claude-opus-5-5");
     expect(agent.requests[0]?.maxTurns).toBeUndefined();
   });
 

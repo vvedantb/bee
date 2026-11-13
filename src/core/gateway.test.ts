@@ -26,7 +26,7 @@ describe("gatewayTier", () => {
 
 describe("guideProviderOptions", () => {
   it("pins Anthropic with only when web search is sent, and keeps the tier", () => {
-    expect(GUIDE_MODEL).toBe("anthropic/claude-haiku-5.5");
+    expect(GUIDE_MODEL).toBe("anthropic/claude-sonnet-5.5");
     expect(GUIDE_PROVIDER).toBe("anthropic");
     expect(guideProviderOptions("default", { web: true })).toEqual({ gateway: { only: ["anthropic"] }, ...ANTHROPIC_NO_THINKING });
     expect(guideProviderOptions("flex", { web: true })).toEqual({ gateway: { serviceTier: "flex", only: ["anthropic"] }, ...ANTHROPIC_NO_THINKING });
@@ -51,8 +51,8 @@ describe("guideProviderOptions", () => {
 });
 
 describe("models", () => {
-  it("keeps Haiku for tips, with thinking off", () => {
-    expect(GUIDE_MODEL).toBe("anthropic/claude-haiku-5.5");
+  it("keeps Sonnet for tips, with thinking off", () => {
+    expect(GUIDE_MODEL).toBe("anthropic/claude-sonnet-5.5");
     expect(guideProviderOptions("default", { web: true }).anthropic).toEqual({ thinking: { type: "disabled" } });
   });
 });
