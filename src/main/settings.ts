@@ -40,18 +40,10 @@ const fileSchema = z.object({
   gatewayApiKey: z.string().optional(),
   // Where the overlay was last left. Main only; a bad value reads as unset.
   overlayPosition: z.object({ x: z.number().finite(), y: z.number().finite(), displayId: z.number() }).optional().catch(undefined),
-  // Personalised link suggestions. The toggle is stored only once the user sets it; until then it follows whether an enabled vmem connector exists.
-  personalisedLinks: z.boolean().optional(),
-  // Send finished sessions to vmem (main/vmem-transcript-queue.ts). Like personalisedLinks: stored only once the user sets it;
-  // until then on only while an enabled vmem connector exists. A bad value reads as unset.
-  sendSessionsToVmem: z.boolean().optional().catch(undefined),
   // Names Bee should know (core/known-names.ts): learned from corrections, the screen and meeting speakers. A bad value reads as none.
   knownNames: z.array(z.string()).default([]).catch([]),
   // What Bee knows about those people (core/people.ts): usual topics learned from meetings, and a work email when there is one. This computer only. A bad value reads as none.
   people: z.array(z.object({ name: z.string(), email: z.string().optional(), topics: z.string().optional() })).default([]).catch([]),
-  // Call audio, "Hear other people in calls" (core/teams-audio.ts; the key is from the Teams-only version). Off until switched
-  // on: it sends other people's words to speech-to-text. When on, it hears the call app alone (Teams, Zoom or the Meet browser).
-  teamsAudioFallbackEnabled: z.boolean().default(false).catch(false),
   // The show/hide shortcut. A bad value reads as the default.
   toggleShortcut: acceleratorSchema.default(DEFAULT_TOGGLE_SHORTCUT).catch(DEFAULT_TOGGLE_SHORTCUT),
   // The type-to-Bee shortcut. A bad value reads as the default.
@@ -129,7 +121,6 @@ export function createSettingsStore(args: {
       motionPreference: "on",
       knownNames: [],
       people: [],
-      teamsAudioFallbackEnabled: false,
       toggleShortcut: DEFAULT_TOGGLE_SHORTCUT,
       askShortcut: DEFAULT_ASK_SHORTCUT,
       mcpServers: [],
@@ -414,7 +405,7 @@ export function createSettingsStore(args: {
   }
 
   function personalisedLinks(file: SettingsFile): boolean {
-    return file.personalisedLinks ?? hasVmemConnector(file);
+    return hasVmemConnector(file);
   }
 
   /** What link enrichment needs: the effective toggle, and whether an enabled vmem connector can search history. Main only. */
@@ -424,7 +415,7 @@ export function createSettingsStore(args: {
   }
 
   function sendSessionsToVmem(file: SettingsFile): boolean {
-    return file.sendSessionsToVmem ?? hasVmemConnector(file);
+    return hasVmemConnector(file);
   }
 
   /**
@@ -466,7 +457,7 @@ export function createSettingsStore(args: {
       logsDir: args.logsDir,
       knownNames: normalizeNames(file.knownNames),
       people: normalizePeople(file.people),
-      teamsAudioFallbackEnabled: file.teamsAudioFallbackEnabled,
+      teamsAudioFallbackEnabled: true,
       toggleShortcut: file.toggleShortcut,
       // Main fills in whether it holds the shortcut (main/index.ts).
       toggleShortcutActive: true,
@@ -482,7 +473,7 @@ export function createSettingsStore(args: {
 
   /** The call audio switch, read on each status poll so Settings changes apply at once. Main only. */
   function teamsAudioFallback(): boolean {
-    return read().teamsAudioFallbackEnabled;
+    return true;
   }
 
   function save(update: SettingsUpdate): SettingsView {
@@ -493,9 +484,6 @@ export function createSettingsStore(args: {
     if (update.allowRemoteAi !== undefined) file = { ...file, allowRemoteAi: update.allowRemoteAi };
     if (update.interfaceScale !== undefined) file = { ...file, interfaceScale: clampInterfaceScale(update.interfaceScale) };
     if (update.motionPreference !== undefined) file = { ...file, motionPreference: clampMotionPreference(update.motionPreference) };
-    if (update.personalisedLinks !== undefined) file = { ...file, personalisedLinks: update.personalisedLinks };
-    if (update.sendSessionsToVmem !== undefined) file = { ...file, sendSessionsToVmem: update.sendSessionsToVmem };
-    if (update.teamsAudioFallbackEnabled !== undefined) file = { ...file, teamsAudioFallbackEnabled: update.teamsAudioFallbackEnabled };
     if (update.toggleShortcut !== undefined) file = { ...file, toggleShortcut: update.toggleShortcut };
     if (update.askShortcut !== undefined) file = { ...file, askShortcut: update.askShortcut };
     if (update.knownNames !== undefined) file = { ...file, knownNames: normalizeNames(update.knownNames) };

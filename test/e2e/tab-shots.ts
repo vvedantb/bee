@@ -10,7 +10,6 @@ import { DEFAULT_ASK_SHORTCUT, DEFAULT_TOGGLE_SHORTCUT } from "../../src/core/sh
 import { BrowseSection } from "../../src/renderer/src/BrowseSection";
 import { ClaudeCodeSection } from "../../src/renderer/src/ClaudeCodeSection";
 import { MeetingSection } from "../../src/renderer/src/MeetingSection";
-import { ClearMeetingNotes } from "../../src/renderer/src/MemoryFields";
 import { MemorySection } from "../../src/renderer/src/MemorySection";
 import { SecretField } from "../../src/renderer/src/SecretField";
 import { ShortcutRow } from "../../src/renderer/src/ShortcutRow";
@@ -59,7 +58,7 @@ function memory(): ReactNode {
     Fragment,
     null,
     createElement(MemorySection, { onLoad: async () => FACTS, onClear: async () => 0 }),
-    section("Notes", muted("Notes folder: ", createElement("code", null, "/Users/sam/Library/Application Support/Bee/notes"), " Open"), createElement(ClearMeetingNotes, { onClear: async () => 0 })),
+    section("Notes", muted("Notes folder: ", createElement("code", null, "/Users/sam/Library/Application Support/Bee/notes"), " Open")),
   );
 }
 
@@ -77,7 +76,6 @@ function settings(): ReactNode {
     createElement("div", { className: "flex flex-col gap-1" }, "Interface size", createElement(PillTabs, { tabs: INTERFACE_SCALES.map((scale) => ({ value: String(scale), label: `${Math.round(scale * 100)}%` })), value: "1" })),
     section("Updates", muted("Version 1.0.0 · Bee is up to date.")),
     muted("Debug logs: ", createElement("code", null, "/Users/sam/Library/Application Support/Bee/logs"), " Open"),
-    muted("Secrets are encrypted by the OS key store."),
   );
 }
 

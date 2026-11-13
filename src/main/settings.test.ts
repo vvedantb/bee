@@ -299,19 +299,7 @@ describe("settings personalised links", () => {
     expect(store.view()).toMatchObject({ personalisedLinks: false, vmemConnected: false });
   });
 
-  it("persists the toggle once set, whatever the connector's state", () => {
-    const store = create();
-    reportVmem(store, store.mcpSave(vmemPreset)[0]?.id as string);
-    store.save({ personalisedLinks: false });
-    expect(create().view().personalisedLinks).toBe(false);
-    expect(JSON.parse(onDisk()).personalisedLinks).toBe(false);
-    store.save({ meetingMode: true });
-    expect(store.view().personalisedLinks).toBe(false);
-    store.save({ personalisedLinks: true });
-    expect(create().linkSettings()).toEqual({ enabled: true, hasVmem: true });
-  });
-
-  it("defaults sending finished sessions on only with an enabled vmem connector, and keeps the user's choice", () => {
+  it("sends finished sessions only with an enabled vmem connector", () => {
     const store = create();
     expect(store.view().sendSessionsToVmem).toBe(false);
     expect(store.transcriptSettings()).toEqual({ enabled: false, config: undefined, listed: false });
@@ -327,14 +315,8 @@ describe("settings personalised links", () => {
     store.mcpSetEnabled({ id, tool: "transcript_submit", enabled: false });
     expect(store.transcriptSettings().listed).toBe(false);
     store.mcpSetEnabled({ id, tool: "transcript_submit", enabled: true });
-    store.save({ sendSessionsToVmem: false });
-    expect(JSON.parse(onDisk()).sendSessionsToVmem).toBe(false);
-    expect(create().view().sendSessionsToVmem).toBe(false);
-    expect(create().transcriptSettings()).toMatchObject({ enabled: false, listed: true });
     store.mcpSetEnabled({ id, enabled: false });
     expect(store.transcriptSettings()).toEqual({ enabled: false, config: undefined, listed: false });
-    store.save({ sendSessionsToVmem: true });
-    expect(store.view().sendSessionsToVmem).toBe(true);
   });
 
   it("stops sending finished sessions when the vmem connector signs out or is removed", () => {
@@ -493,36 +475,11 @@ describe("settings: the meeting window reader is always on", () => {
 });
 
 describe("settings Teams audio fallback", () => {
-  it("is off by default and in the view", () => {
+  it("is always on, whatever an older settings.json says", () => {
+    writeFileSync(join(dir, "settings.json"), JSON.stringify({ meetingMode: true, teamsAudioFallbackEnabled: false }));
     const store = create();
-    expect(store.view().teamsAudioFallbackEnabled).toBe(false);
-    expect(store.teamsAudioFallback()).toBe(false);
-  });
-
-  it("is off when settings.json exists without the key", () => {
-    writeFileSync(join(dir, "settings.json"), JSON.stringify({ meetingMode: true }));
-    expect(create().teamsAudioFallback()).toBe(false);
-  });
-
-  it("round-trips through settings.json and survives unrelated saves", () => {
-    const store = create();
-    expect(store.save({ teamsAudioFallbackEnabled: true }).teamsAudioFallbackEnabled).toBe(true);
-    expect(JSON.parse(readFileSync(join(dir, "settings.json"), "utf8")).teamsAudioFallbackEnabled).toBe(true);
-    store.save({ meetingMode: true });
-    expect(create().teamsAudioFallback()).toBe(true);
-    store.save({ teamsAudioFallbackEnabled: false });
-    expect(create().teamsAudioFallback()).toBe(false);
-  });
-
-  it("reads a bad stored value as the default, off", () => {
-    writeFileSync(join(dir, "settings.json"), JSON.stringify({ teamsAudioFallbackEnabled: "yes" }));
-    expect(create().teamsAudioFallback()).toBe(false);
-  });
-
-  it("rejects a non-boolean update at the IPC schema", async () => {
-    const { settingsUpdateSchema } = await import("../shared/ipc");
-    expect(() => settingsUpdateSchema.parse({ teamsAudioFallbackEnabled: "off" })).toThrow();
-    expect(settingsUpdateSchema.parse({ teamsAudioFallbackEnabled: false })).toEqual({ teamsAudioFallbackEnabled: false });
+    expect(store.view().teamsAudioFallbackEnabled).toBe(true);
+    expect(store.teamsAudioFallback()).toBe(true);
   });
 });
 

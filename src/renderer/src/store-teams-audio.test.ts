@@ -291,10 +291,6 @@ describe("store: Teams audio capture", () => {
     // No sync, so no one is ever covered: the call alone decides.
     expect(store.teamsAudioNow(store.getBeeState())).toBe("listen");
     expect(capture.opened).toBe(1);
-    await store.actions.saveSettings({ teamsAudioFallbackEnabled: false });
-    await vi.advanceTimersByTimeAsync(0);
-    expect(capture.stopped).toBe(1);
-    expect(store.getBeeState().teamsAudio.listening).toBe(false);
   });
 
   it("fails open: a capture that will not open leaves the mic on, and is tried again after 30 s", async () => {

@@ -24,7 +24,6 @@ import { ClaudeCodeSection } from "./ClaudeCodeSection";
 import { BrowseSection } from "./BrowseSection";
 import { MeetingButton } from "./MeetingButton";
 import { MeetingSection } from "./MeetingSection";
-import { ClearMeetingNotes } from "./MemoryFields";
 import { MemorySection } from "./MemorySection";
 import { NotchStatus } from "./NotchStatus";
 import { PANEL_TABS } from "./panel-tabs";
@@ -328,14 +327,13 @@ function MemoryTab({ state, settings }: { state: BeeState; settings: SettingsVie
             Open
           </Button>
         </p>
-        <ClearMeetingNotes onClear={() => actions.clearMeetingMemory()} />
       </section>
     </div>
   );
 }
 
-const STORAGE_LABEL: Record<SettingsView["secretStorage"], string> = {
-  os: "Secrets are encrypted by the OS key store.",
+const STORAGE_LABEL: Record<SettingsView["secretStorage"], string | null> = {
+  os: null,
   weak: "No OS keyring: secrets use weak fallback encryption.",
   memory: "No encryption: secrets stay in memory this session.",
 };
@@ -527,7 +525,6 @@ function SettingsTab({ state, settings }: { state: BeeState; settings: SettingsV
             if (motionPreference) void actions.saveSettings({ motionPreference });
           }}
         />
-        <p className="muted">On ignores the OS reduced-motion setting.</p>
       </div>
 
       <UpdateSection update={update} />
@@ -538,7 +535,7 @@ function SettingsTab({ state, settings }: { state: BeeState; settings: SettingsV
           Open
         </Button>
       </p>
-      <p className="muted">{STORAGE_LABEL[settings.secretStorage]}</p>
+      {STORAGE_LABEL[settings.secretStorage] ? <p className="muted">{STORAGE_LABEL[settings.secretStorage]}</p> : null}
     </div>
   );
 }

@@ -107,14 +107,6 @@ export function MeetingSection({
             checked={settings.meetingMode}
             onCheckedChange={(meetingMode) => onChange({ meetingMode })}
           />
-          <SettingRow
-            id="teams-audio-fallback"
-            label="Hear other people in calls"
-            description="Hears your computer's sound."
-            info="With your mic on, Bee also hears everything your computer plays, so it hears the other people in any call app."
-            checked={audioOn}
-            onCheckedChange={(teamsAudioFallbackEnabled) => onChange({ teamsAudioFallbackEnabled })}
-          />
         </>
       ) : null}
       {audioMessage ? (

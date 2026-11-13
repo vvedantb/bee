@@ -280,10 +280,10 @@ describe("settingsChange", () => {
   };
 
   it("lists the keys sent and what changed, with non-secret values", () => {
-    const after = { ...view, personalisedLinks: true, interfaceScale: 1.25, knownNames: ["Zuzanna"] };
-    expect(settingsChange({ personalisedLinks: true, interfaceScale: 1.25, knownNames: ["Zuzanna"], meetingMode: false }, view, after)).toEqual({
-      keys: ["personalisedLinks", "interfaceScale", "knownNames", "meetingMode"],
-      changed: { personalisedLinks: true, interfaceScale: 1.25, knownNames: ["Zuzanna"] },
+    const after = { ...view, allowRemoteAi: true, interfaceScale: 1.25, knownNames: ["Zuzanna"] };
+    expect(settingsChange({ allowRemoteAi: true, interfaceScale: 1.25, knownNames: ["Zuzanna"], meetingMode: false }, view, after)).toEqual({
+      keys: ["allowRemoteAi", "interfaceScale", "knownNames", "meetingMode"],
+      changed: { allowRemoteAi: true, interfaceScale: 1.25, knownNames: ["Zuzanna"] },
     });
   });
 

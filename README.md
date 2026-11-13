@@ -19,7 +19,7 @@ npm run dist:win
 Download `Bee-x.y.z-arm64.dmg` (Apple Silicon) or `Bee-x.y.z.dmg` (Intel), or the matching `-mac.zip` from [Releases](https://github.com/vvedantb/bee/releases). Open the dmg and drag Bee to Applications. Builds are not signed or notarised yet, so Gatekeeper will warn: right-click Bee, choose **Open**, then confirm.
 
 - **Microphone.** macOS asks the first time Bee starts. If you decline, allow Bee under System Settings → Privacy & Security → Microphone.
-- **Screen Recording.** For two things only. **Live → Meeting → Hear other people in calls** (off by default): macOS counts any app's sound as screen recording; Bee hears the call app alone (Teams, Zoom, or the browser running Google Meet) and never records the screen or other apps, and never asks during a call (see [Call audio](#call-audio)). And a picture of a window when a "Bee, …" request needs one (see [Talk to Bee](#talk-to-bee)): to answer about the front window, or to see an app it is using for you and click in it. The first time, macOS shows its own prompt. **Live** (for call audio) and **Settings** (for pictures of windows) show **Open Screen Recording settings** when Bee does not have it. Without it, Bee uses your mic only and reads windows as text.
+- **Screen Recording.** For two things only. Call audio: macOS counts any app's sound as screen recording; Bee hears the call app alone (Teams, Zoom, or the browser running Google Meet) and never records the screen or other apps, and never asks during a call (see [Call audio](#call-audio)). And a picture of a window when a "Bee, …" request needs one (see [Talk to Bee](#talk-to-bee)): to answer about the front window, or to see an app it is using for you and click in it. The first time, macOS shows its own prompt. **Live** (for call audio) and **Settings** (for pictures of windows) show **Open Screen Recording settings** when Bee does not have it. Without it, Bee uses your mic only and reads windows as text.
 - **Menu bar.** Bee has no Dock icon. The tray icon is a menu bar extra: click it for Show / hide, Open notes folder, Open logs folder and Quit.
 - **Shortcuts.** Two global shortcuts, each with `Cmd` on a Mac and `Ctrl` on Windows and Linux. `Cmd+Shift+Space` shows or hides Bee and never opens the typing box. `Cmd+Option+Space` (`Ctrl+Alt+Space` on Windows and Linux) shows Bee with focus and opens the typing box: type a request ("open Figma", "summarise this") and press Enter, the same as saying it after "Bee". Esc closes the box. Change either in **Settings → Show or hide Bee** and **Settings → Type to Bee**: click Change and press the new keys. Bee saves a shortcut only if it can hold it, and Settings says when another app holds the current one. The two shortcuts cannot be the same.
 - **Notes folder.** `~/Library/Application Support/Bee/notes`.
@@ -116,15 +116,15 @@ When a spoken line or a tip names a website (a URL, `convex.dev`, "convex dot de
 
 1. Open the **Connectors** tab (the panel has four tabs: **Live**, **Connectors**, **Memory** and **Settings**). Bee ships no preset connectors: the tab lists only the servers you add. Click **Add custom**, enter a name and your vmem MCP URL, and save, then click **Connect** on its row. There is no API key: a remote server with authentication "None" signs in with MCP OAuth. Connect opens your system browser to sign in; the browser returns to a one-time server on `127.0.0.1` (random port) and Bee stores the tokens encrypted in the main process. Disconnect removes the server and its tokens. Bee treats a server as vmem only when it reports its name as `vmem` (any case) in the MCP handshake (`serverInfo.name`), not by its display name or URL. Each row shows the icon the server provides (`serverInfo.icons`, the dark-theme icon first), else its website's favicon, else the first letter of its name. To choose your own, fill **Icon URL** (https or `data:image`) in the connector's form. Servers saved before presets were removed keep working as ordinary rows, with their sign-in.
 2. Keep the **Gateway key** set in **Settings**: Jev, which makes the choice, runs through AI Gateway.
-3. Use the **Personalised link suggestions** switch on the **Connectors** tab, under the list. It is on by default when an enabled vmem connector exists, and off otherwise. Once you change it, Bee keeps your choice.
+3. That is all: personalised links are on while an enabled vmem connector exists, and off otherwise. There is no switch.
 
 Without a vmem connector, Jev still scores the plain domain chip, and can remove it when no link helps.
 
 How it works: the cheap detector runs first, and nothing else runs when it finds no site. Bee opens one connection to vmem at app start (when signed in) and after each Connectors change, and reuses it. For each chip, main searches it through Bee's MCP client (`memory_search`, or the closest search tool), once for browsing history and once for bookmarks, for pages on that domain, keeps up to five, and asks Jev (`typesafe-ai/jev`) two things on a 0 to 3 scale: should a link show at all, and which page fits best. A chip shows only when both scores are at least 2 (`LINK_MIN_SCORE` in `src/core/link-rank.ts`). A low "should show" score removes the chip. A missing or invalid answer keeps the plain domain chip.
 
-It fails open. The whole step has a 2 second limit. With the switch off or the Gateway key missing, you keep the plain domain chip. If vmem is not connected, is offline or is slow, Jev still runs on the plain domain (the MCP connection is kept warm, and each search call has a 1 s limit). On any error or timeout you keep the plain domain chip, and Bee logs a debug line (`Bee: personalised links fell back: …`). Each turn is looked up once.
+It fails open. The whole step has a 2 second limit. With no vmem connector or the Gateway key missing, you keep the plain domain chip. If vmem is not connected, is offline or is slow, Jev still runs on the plain domain (the MCP connection is kept warm, and each search call has a 1 s limit). On any error or timeout you keep the plain domain chip, and Bee logs a debug line (`Bee: personalised links fell back: …`). Each turn is looked up once.
 
-**Privacy:** with the switch on, the current line (and the tip text for chips from tips) goes to Jev through AI Gateway, and to your vmem connector when one is enabled. With it off, nothing is sent and plain chips still work. Keys and connector tokens stay in the main process and are encrypted like the Gateway key.
+**Privacy:** with an enabled vmem connector, the current line (and the tip text for chips from tips) goes to Jev through AI Gateway, and to your vmem connector when one is enabled. Without one, nothing is sent and plain chips still work. Keys and connector tokens stay in the main process and are encrypted like the Gateway key.
 
 **Icons** are fetched by the main process, since the window's content policy blocks remote images. Bee tries `/favicon.ico`, then the icon named in the site's home page, then Google's favicon service (`google.com/s2/favicons`, which sees the domain name). Icons are kept as small data URLs in memory and in the `favicons` folder of the user data folder for 7 days. Until an icon loads, or if none does, the chip shows a globe. Loopback addresses (127.0.0.0/8, 0.0.0.0, ::1) and dotless names are never fetched or opened.
 
@@ -207,9 +207,9 @@ Relay environment variables (server side only):
 
 ### Call audio
 
-**Live → Meeting → Hear other people in calls** ("Call audio only.", off by default). With your mic on in a call, Bee hears the call app itself, so other people's words reach the AI and the summary as theirs, not yours. It listens when all of these hold:
+Call audio is always on; there is no switch. With your mic on in a call, Bee hears the call app itself, so other people's words reach the AI and the summary as theirs, not yours. It listens when all of these hold:
 
-- the switch is on, your Bee mic is on, and Bee sees a call in Teams, Zoom or Google Meet (from the call window, or on Windows the built-in Teams detector).
+- your Bee mic is on, and Bee sees a call in Teams, Zoom or Google Meet (from the call window, or on Windows the built-in Teams detector).
 
 Bee hears the app of the call it sees. If you move to a call in another app, Bee stops and starts again on the new app.
 
@@ -217,7 +217,7 @@ What it hears joins your transcript as "Meeting: …" (someone other than you; t
 
 **Echo.** Without headphones, your mic also hears the call through your speakers. A mic phrase that repeats what call audio heard in the last 10 seconds is dropped, so it never counts as yours (and a "Bee, …" from someone else never wakes your Bee). When the mic's copy arrives first, the call-audio phrase replaces it. Phrases match when they share most words (0.6 word overlap).
 
-Bee does not say that it is listening. While a meeting is active, the notch and **Live → Meeting** say "Meeting in progress"; the switch's status line says "Listening to call audio.".
+Bee does not say that it is listening. While a meeting is active, the notch and **Live → Meeting** say "Meeting in progress"; the status line says "Listening to call audio.".
 
 **The call app only, never all system audio.** A small helper program that ships inside Bee captures one app alone (source in `native/teams-audio`). If it cannot keep to that app, it does not start.
 
@@ -280,7 +280,7 @@ The installer registers the `bee` scheme for **Return to Bee**. Social sign-in n
 | --- | --- | --- |
 | AI Gateway API key | Encrypted with Electron `safeStorage` (DPAPI on Windows, Keychain on macOS) | Yes |
 | Connector tokens (Connectors tab) | Encrypted the same way | Yes |
-| Personalised links switch, meeting mode | Plain JSON | Yes |
+| Meeting mode | Plain JSON | Yes |
 
 Settings live in `settings.json` in the Electron user data folder. Secrets never reach the renderer: the UI only sees whether a key is set. A saved key shows as `•••••••• (saved)` with a **Replace** button; the real key is never put in the page.
 

@@ -152,13 +152,10 @@ export const settingsUpdateSchema = z.object({
   allowRemoteAi: z.boolean().optional(),
   interfaceScale: interfaceScaleSchema.optional(),
   motionPreference: motionPreferenceSchema.optional(),
-  personalisedLinks: z.boolean().optional(),
-  sendSessionsToVmem: z.boolean().optional(),
   // Names Bee should know; replaces the saved list (core/known-names.ts KNOWN_NAMES_MAX, NAME_MAX_CHARS).
   knownNames: z.array(z.string().max(200)).max(400).optional(),
   // The details for those names; replaces the saved list (core/people.ts).
   people: z.array(personSchema).max(400).optional(),
-  teamsAudioFallbackEnabled: z.boolean().optional(),
   toggleShortcut: acceleratorSchema.optional(),
   askShortcut: acceleratorSchema.optional(),
 });

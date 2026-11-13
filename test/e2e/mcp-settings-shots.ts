@@ -8,7 +8,7 @@ import "../../src/renderer/src/styles.css";
 import { panelPage, smallButton } from "./panel-shot";
 
 // The app's own switches, as Connectors.tsx puts them under the list.
-const SWITCHES = renderToStaticMarkup(createElement(ConnectorSwitches, { settings: { personalisedLinks: true, sendSessionsToVmem: false, allowRemoteAi: true }, onSave: () => undefined }));
+const SWITCHES = renderToStaticMarkup(createElement(ConnectorSwitches, { settings: { allowRemoteAi: true }, onSave: () => undefined }));
 
 // The globe Favicon.tsx shows until a site icon arrives (the harness has no window.bee to fetch one).
 const GLOBE = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3.6 9h16.8M3.6 15h16.8M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg>`;
