@@ -275,6 +275,28 @@ export function useBee(): BeeState {
   return useSyncExternalStore(subscribe, () => state);
 }
 
+// The mic level changes with every audio frame (about 12 a second), so it lives outside BeeState: a frame redraws the notch's
+// two meters (useMicLevel) and nothing else. In BeeState it redrew the whole app each frame, which made clicks and tabs lag.
+let micLevel = 0;
+const micLevelListeners = new Set<() => void>();
+
+function setMicLevel(level: number): void {
+  const next = Math.round(level * 50) / 50;
+  if (next === micLevel) return;
+  micLevel = next;
+  for (const listener of micLevelListeners) listener();
+}
+
+function subscribeMicLevel(listener: () => void): () => void {
+  micLevelListeners.add(listener);
+  return () => micLevelListeners.delete(listener);
+}
+
+/** How loud the mic is now, 0 to 1 (0 while it is off). */
+export function useMicLevel(): number {
+  return useSyncExternalStore(subscribeMicLevel, () => micLevel);
+}
+
 let latestRun = 0;
 // Phrases heard whose speech-to-text is still running.
 let heardPending = 0;
@@ -1614,6 +1636,7 @@ function addToSession(result: PipelineResult): void {
 
 function setMic(patch: Partial<BeeState["mic"]>): void {
   set({ mic: { ...state.mic, ...patch } });
+  if (!state.mic.on) setMicLevel(0);
 }
 
 function setMcpTest(id: string, test: McpTestState): void {
@@ -1816,7 +1839,7 @@ async function startMic({ transcribe, onFrame }: MicOptions): Promise<void> {
     capture.start((frame) => {
       onFrame?.(frame, capture.sampleRate);
       const level = mic.push(frame);
-      setMic({ level: Math.min(1, level * 4) });
+      setMicLevel(Math.min(1, level * 4));
       hintFrame(level, frame);
       levels(level, frame);
     });
@@ -2407,6 +2430,7 @@ export const actions = {
     stopMic = null;
     stop?.();
     set({ mic: { ...MIC_OFF, error } });
+    setMicLevel(0);
     // Call audio only runs while the mic is on.
     void syncTeamsAudio();
     // Hints are about the mic: they go with it, and the levels heard are forgotten.

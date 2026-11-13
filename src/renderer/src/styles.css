@@ -1172,3 +1172,9 @@ textarea {
 .link-chip > button:first-child:focus-visible {
   color: var(--accent);
 }
+
+/* Scrollbars: thin, in the palette, no track. Chromium follows the standard properties. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--muted) 40%, transparent) transparent;
+}

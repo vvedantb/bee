@@ -42,7 +42,7 @@ import { displayTip, islandClick, mcpErrorNote } from "./island";
 import { NOTCH_LOGO_PX } from "./logo";
 import { focusKeyFieldWhenReady, GATEWAY_KEY_FIELD_ID, statusClick, type StatusClick } from "./island-click";
 import { CONVERSATION_LABEL, NOTCH_BUTTON, NOTCH_UPDATE_BUTTON, logoState, notchLine, workingLabel, type NotchLine } from "./notch";
-import { actions, answerFolded, displayResult, islandOpen, responseOpen, teamsAudioNow, useBee, type BeeState, type ComputerConfirm, type MeetingCard, type UpdateState } from "./store";
+import { actions, answerFolded, displayResult, islandOpen, responseOpen, teamsAudioNow, useBee, useMicLevel, type BeeState, type ComputerConfirm, type MeetingCard, type UpdateState } from "./store";
 import { updateButton } from "./update";
 
 const ICON = { size: 16, stroke: 1.75 };
@@ -211,7 +211,7 @@ function Island({ state }: { state: BeeState }) {
     <>
       <div className={state.busy ? "island thinking" : "island"} style={{ width: state.pillWidth }} {...hover}>
         <header className="notch" ref={watchPill}>
-          <BeeLogo size={NOTCH_LOGO_PX} state={logoState(state)} level={state.mic.level} />
+          <NotchLogo state={logoState(state)} />
           {/* Keyed so each new status fades in. One component either way, so the panel opening or closing does not remount it. */}
           <NotchStatus key={status} status={status} click={click} error={Boolean(state.mic.error)} onOpen={openStatus} />
           {newVersion ? <UpdateButton update={state.update} /> : null}
@@ -234,7 +234,7 @@ function Island({ state }: { state: BeeState }) {
               onClick={() => void actions.toggleMic()}
             >
               {state.mic.on ? <IconMicrophone {...ICON} /> : <IconMicrophoneOff {...ICON} />}
-              <span className="mic-level" style={{ transform: `scaleY(${0.2 + state.mic.level * 0.8})` }} />
+              <MicLevel />
             </Button>
           </Show>
           <Button
@@ -538,6 +538,15 @@ function SettingsTab({ state, settings }: { state: BeeState; settings: SettingsV
       {STORAGE_LABEL[settings.secretStorage] ? <p className="muted">{STORAGE_LABEL[settings.secretStorage]}</p> : null}
     </div>
   );
+}
+
+// The two mic meters read the level themselves (store.ts useMicLevel), so an audio frame redraws them alone.
+function NotchLogo({ state }: { state: ReturnType<typeof logoState> }) {
+  return <BeeLogo size={NOTCH_LOGO_PX} state={state} level={useMicLevel()} />;
+}
+
+function MicLevel() {
+  return <span className="mic-level" style={{ transform: `scaleY(${0.2 + useMicLevel() * 0.8})` }} />;
 }
 
 function Panel({ state }: { state: BeeState }) {
