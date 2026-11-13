@@ -191,3 +191,12 @@ describe("window IPC", () => {
     for (const bad of ["true", 1, null, undefined]) expect(windowInteractiveSchema.safeParse(bad).success).toBe(false);
   });
 });
+
+describe("meeting summary request: a long meeting", () => {
+  it("takes the whole transcript of a long call, and the note it replaces", () => {
+    const transcript = Array.from({ length: 1500 }, (_, index) => `line ${index}`);
+    const parsed = meetingSummaryRequestSchema.parse({ transcript, notesCited: [], tips: [], replaces: "/notes/meeting-2026-11-13-1124.md", sessionToken: "t" });
+    expect(parsed.transcript).toHaveLength(1500);
+    expect(parsed.replaces).toBe("/notes/meeting-2026-11-13-1124.md");
+  });
+});

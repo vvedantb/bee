@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { SEED_NOTES, chunkNotes, type NoteFile, type Snippet } from "../core/notes";
 import { summaryFileName } from "../core/summary";
 
@@ -26,6 +26,16 @@ export function writeMeetingSummaryFile(dir: string, markdown: string, when = ne
   let path = join(dir, `${base}.md`);
   for (let n = 2; existsSync(path); n += 1) path = join(dir, `${base}-${n}.md`);
   writeFileSync(path, markdown, { flag: "wx" });
+  return resolve(path);
+}
+
+/**
+ * Write a meeting summary over an earlier one of the same meeting (it was saved, then carried on after a rejoin). Returns the
+ * absolute path, or null when the path is not an existing meeting note in the notes folder: the caller then writes a new file.
+ */
+export function replaceMeetingSummaryFile(dir: string, path: string, markdown: string): string | null {
+  if (!isNotePath(dir, path) || !/^meeting-[\d-]+\.md$/i.test(basename(path)) || !existsSync(path)) return null;
+  writeFileSync(path, markdown);
   return resolve(path);
 }
 

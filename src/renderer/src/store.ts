@@ -3,7 +3,7 @@ import type { ClaudeCodeUpdate } from "./ClaudeCodeSection";
 import { getToken } from "@clerk/electron/react";
 import { useSyncExternalStore } from "react";
 import { echoesOwnLine } from "../../core/agent-desktop-meeting";
-import { IDLE_AUTO, qualifies, stepAutoMeeting, type AutoEvent, type AutoMeetingState } from "../../core/auto-meeting-detection";
+import { IDLE_AUTO, REJOIN_WINDOW_MS, qualifies, sameMeeting, stepAutoMeeting, type AutoEvent, type AutoMeetingState } from "../../core/auto-meeting-detection";
 import { debugLog, errorData } from "../../core/debug-log";
 import { detectLinks, mergeChips, sourceChips, visibleChips, type LinkChip } from "../../core/link-suggest";
 import { MAX_STEERING_TIPS, isFiller, isNewTurn, isQuestion, mergeTips, recentRestarts, runDelayMs, sameContent, tipCap, tipKey, waitsForRun } from "../../core/steering";
@@ -61,7 +61,7 @@ import { LOGO_DONE_MS } from "./logo";
 import { openMic } from "./mic";
 import { motionReduced } from "./motion";
 import { framePeak, startMicSession, type PhraseLine, type PhraseOutcome } from "./speech";
-import { MEETING_READY_NOTICE, MEETING_START_NOTICE, MEETING_START_NO_MIC_NOTICE, meetingEndNotice, type MeetingEndOutcome } from "./meeting-notices";
+import { MEETING_READY_NOTICE, MEETING_REJOIN_NOTICE, MEETING_START_NOTICE, MEETING_START_NO_MIC_NOTICE, meetingEndNotice, type MeetingEndOutcome } from "./meeting-notices";
 import { openTeamsAudio } from "./teams-audio";
 import { downloadUpdate, installUpdate, updateNow } from "./update";
 import type { Tab } from "./panel-tabs";
@@ -191,6 +191,8 @@ const REDUCED_EXIT_MS = 1;
 const MIC_OFF = { on: false, level: 0 };
 const EMPTY_SESSION: MeetingSession = { lines: [], notesCited: [], tips: [] };
 const SESSION_LIST_MAX = 100;
+// Someone else heard this recently means a call is on, even one automatic detection did not start (wakeRoute inCall).
+const IN_CALL_MS = 120_000;
 // Main throttles its own title and calendar reads, so this poll only asks for the cached view.
 const MEETING_TICK_MS = 5000;
 const AUTO_MEETING_TICK_MS = 2000;
@@ -388,6 +390,12 @@ let autoState: AutoMeetingState = IDLE_AUTO;
 let autoTicking = false;
 let autoOverlayOn = false;
 let meetingNoticeTimer: ReturnType<typeof setTimeout> | undefined;
+// A rejoin (the meeting app crashed, the user came back). lastSaved: the session endMeeting last saved, and its note.
+// rejoinable: the one automatic detection ended; if the same meeting starts again within REJOIN_WINDOW_MS, autoStart puts it
+// back. resumedNote: the note of a session put back that way, which the next save replaces, so the meeting keeps one summary.
+let lastSaved: { session: MeetingSession; meetingId: number | null; path: string } | null = null;
+let rejoinable: { session: MeetingSession; meetingId: number | null; path: string; identity: string | null; endedAt: number } | null = null;
+let resumedNote: string | null = null;
 // The user's Start / Stop click, waiting for the machine's next step. The last signals read stand in if a read fails.
 let autoEvent: AutoEvent | null = null;
 let lastSignals: MeetingSignals | null = null;
@@ -1007,8 +1015,10 @@ function wakeRoute(text: string) {
   const othersSpoke = lastOtherSpeakerAt > lastExchangeAt;
   const recentlyClosed =
     commandRun === null && !conversationOpen && conversationClosedAt > 0 && now - conversationClosedAt < REOPEN_WINDOW_MS;
-  const route = routeLine({ text, source: "mic", armed, conversationOpen, lastBee, participants: participantNames(), othersSpoke, recentlyClosed });
-  return { now, route, armed, conversationOpen, othersSpoke, recentlyClosed };
+  // In a call: automatic detection has a meeting on, or someone else was heard in the last couple of minutes.
+  const inCall = state.meetingActive || (lastOtherSpeakerAt > 0 && now - lastOtherSpeakerAt < IN_CALL_MS);
+  const route = routeLine({ text, source: "mic", armed, conversationOpen, lastBee, participants: participantNames(), othersSpoke, recentlyClosed, inCall });
+  return { now, route, armed, conversationOpen, othersSpoke, recentlyClosed, inCall };
 }
 
 /**
@@ -1018,11 +1028,11 @@ function wakeRoute(text: string) {
  * Returns true when the phrase was taken. Console lines never carry the words; the local debug log does.
  */
 function takeWakeLine(text: string): boolean {
-  const { now, route, armed, conversationOpen, othersSpoke, recentlyClosed } = wakeRoute(text);
+  const { now, route, armed, conversationOpen, othersSpoke, recentlyClosed, inCall } = wakeRoute(text);
   wakeArmedUntil = route.kind === "wake" ? now + WAKE_FOLLOW_MS : 0;
   // The local debug log keeps the words that woke Bee, and the meeting lines that nearly did (a likely miss or false trigger).
   if (route.kind !== "meeting" || NEAR_WAKE.test(text) || conversationOpen || recentlyClosed) {
-    debugLog.info("wake", route.kind === "meeting" ? "near-miss" : route.kind, { text, route, armed, conversationOpen, othersSpoke, recentlyClosed });
+    debugLog.info("wake", route.kind === "meeting" ? "near-miss" : route.kind, { text, route, armed, conversationOpen, othersSpoke, recentlyClosed, inCall });
   }
   if (route.kind === "meeting") {
     // A reply to someone else, or a name from the meeting: the user has turned back to the meeting.
@@ -1034,7 +1044,7 @@ function takeWakeLine(text: string): boolean {
     closeConversation("thanks");
     return true;
   }
-  if (route.kind === "unclear") return followUpCheck(text);
+  if (route.kind === "unclear") return followUpCheck(text, route.command);
   // Only a tap answers a Confirm prompt. "Bee, yes, send it" leaves the prompt as it is, rather than cancelling the task.
   if (route.kind === "command" && state.computer?.confirm && isConfirmWords(route.command)) {
     debugLog.info("wake", "confirm-words-ignored", { command: route.command, confirm: state.computer.confirm.id });
@@ -1056,10 +1066,16 @@ function takeWakeLine(text: string): boolean {
  * The phrase waits for it, then becomes a follow-up or a meeting line. Without the call (older preload) or on any failure it
  * is a meeting line at once. Only reached from the user's own mic.
  */
-function followUpCheck(text: string): boolean {
+function followUpCheck(text: string, wake?: string): boolean {
   const classify = window.bee.classifyFollowUp;
   const bee = lastBee;
-  if (typeof classify !== "function" || !bee) {
+  // A wake check (wake: the words after "Bee", said in a call, that do not read like a request) needs no earlier exchange.
+  // Without the call it runs as before.
+  if (wake !== undefined && typeof classify !== "function") {
+    void runCommand(wake);
+    return true;
+  }
+  if (typeof classify !== "function" || (!bee && wake === undefined)) {
     debugLog.info("wake", "follow-up-unchecked", { reason: bee ? "no classifier" : "no exchange" });
     return false;
   }
@@ -1067,12 +1083,13 @@ function followUpCheck(text: string): boolean {
   const othersQuiet = Date.now() - lastOtherSpeakerAt >= OTHERS_QUIET_MS;
   void (async () => {
     const verdict = await sessionToken()
-      .then((token) => classify({ phrase: text.slice(0, 1000), lastBee: bee, lines, othersQuiet, sessionToken: token }))
+      .then((token) => classify({ phrase: (wake ?? text).slice(0, 1000), lastBee: bee, lines, othersQuiet, ...(wake !== undefined ? { wake: true } : {}), sessionToken: token }))
       .catch(() => null);
-    const forBee = isForBee(verdict) && conversationUntil > 0;
-    debugLog.info("wake", "follow-up-checked", { text, verdict, forBee, othersQuiet });
-    if (forBee) void runCommand(text);
-    else addOwnLine(text, "mic");
+    const forBee = isForBee(verdict) && (wake !== undefined || conversationUntil > 0);
+    debugLog.info("wake", "follow-up-checked", { text, verdict, forBee, othersQuiet, wake: wake !== undefined });
+    // Not for Bee: the words were said to the meeting. The "Bee" speech-to-text heard was never said, so it stays out.
+    if (forBee) void runCommand(wake ?? text);
+    else addOwnLine(wake ?? text, "mic");
   })();
   return true;
 }
@@ -1444,6 +1461,7 @@ async function autoMeetingStep(event: AutoEvent | null): Promise<void> {
   const calendarBoost = state.meeting?.active === true && state.meeting.source === "calendar";
   const autoPhaseBefore = autoState.phase;
   const wasPrompted = autoPhaseBefore === "prompted";
+  const identityBefore = autoState.identity;
   const out = stepAutoMeeting(autoState, {
     signals: { ...(signals ?? { meetingAppPresent: false, inCallTitle: false }), calendarBoost },
     enabled,
@@ -1482,24 +1500,58 @@ async function autoMeetingStep(event: AutoEvent | null): Promise<void> {
     if (out.effect === "prompt") set({ meetingPrompt: "start" });
     else showMeetingNotice(MEETING_READY_NOTICE);
   } else if (out.effect === "start") await autoStart(wasPrompted);
-  else if (out.effect === "stop") await autoStop();
+  else if (out.effect === "stop") await autoStop(identityBefore);
   else if (out.effect === "dismiss") set({ meetingPrompt: null });
 }
 
 async function autoStart(withStopControl: boolean): Promise<void> {
-  debugLog.info("meeting", "auto-start", { mic: state.mic.on, prompted: withStopControl });
+  const rejoined = resumeRejoined();
+  debugLog.info("meeting", "auto-start", { mic: state.mic.on, prompted: withStopControl, rejoined });
   if (!stopMic) await startMic({ transcribe: transcribePhrase });
   // Started from the Start meeting button: it becomes Stop meeting, and the pill already says "Meeting in progress".
   set({ meetingPrompt: withStopControl ? "stop" : null });
   if (!stopMic) showMeetingNotice(MEETING_START_NO_MIC_NOTICE);
+  else if (rejoined) showMeetingNotice(MEETING_REJOIN_NOTICE);
   else if (!withStopControl) showMeetingNotice(MEETING_START_NOTICE);
 }
 
-async function autoStop(): Promise<void> {
+/**
+ * The meeting that just ended has started again (the meeting app crashed, or the user dropped and rejoined): its saved lines,
+ * notes and tips go back into the session, ahead of anything said since, and the next save replaces its note. Not when a
+ * different meeting is known to have begun. Returns true when the session was put back.
+ */
+function resumeRejoined(): boolean {
+  const prior = rejoinable;
+  rejoinable = null;
+  if (!prior || Date.now() - prior.endedAt > REJOIN_WINDOW_MS || !sameMeeting(prior.identity, autoState.identity)) return false;
+  const nowId = state.meeting?.active ? state.meeting.id : null;
+  if (prior.meetingId !== null && nowId !== null && prior.meetingId !== nowId) return false;
+  const now = state.session;
+  set({
+    session: {
+      lines: mergeLines(prior.session.lines, now.lines, SESSION_TRANSCRIPT_MAX),
+      notesCited: mergeUnique(prior.session.notesCited, now.notesCited, SESSION_LIST_MAX),
+      tips: mergeUnique(prior.session.tips, now.tips, SESSION_LIST_MAX, tipKey),
+    },
+  });
+  sessionMeetingId ??= prior.meetingId;
+  resumedNote = prior.path;
+  debugLog.info("meeting", "auto-rejoin", { lines: prior.session.lines.length, awayMs: Date.now() - prior.endedAt, meetingId: sessionMeetingId });
+  return true;
+}
+
+// Read through a call, so the compiler does not assume the null set just before endMeeting still stands after it.
+const savedSession = () => lastSaved;
+
+async function autoStop(identity: string | null): Promise<void> {
   debugLog.info("meeting", "auto-stop", { lines: state.session.lines.length });
   // The Stop button goes at once; the mic goes off with the save, and the one end notice waits for the save to finish.
   set({ meetingPrompt: null });
+  lastSaved = null;
   const outcome = await actions.endMeeting({ auto: true, stopMic: true });
+  // Kept for a rejoin (resumeRejoined). A stop the user asked for, or the length limit, never starts the same meeting again.
+  const saved = savedSession();
+  rejoinable = outcome === "saved" && saved ? { ...saved, identity, endedAt: Date.now() } : null;
   showMeetingNotice(meetingEndNotice(outcome));
 }
 
@@ -2331,6 +2383,9 @@ export const actions = {
     // end (stopMic) turns it off: the meeting is over. It is not retried if it fails.
     if (stopMic && (!options.auto || options.stopMic)) actions.stopMic(null);
     const meetingId = sessionMeetingId;
+    // The session carried on from a saved one (a rejoin): this save replaces that note.
+    const replaces = resumedNote;
+    resumedNote = null;
     // A meeting or call: meeting mode, or a detected meeting that the session belongs to.
     const attributionUnknown = isAttributionUnknown(ended.lines, state.settings?.meetingMode === true || meetingId !== null);
     const counts = sessionLineCounts(ended.lines);
@@ -2351,9 +2406,11 @@ export const actions = {
         tips: ended.tips.map(clampTip),
         ...(meetingId !== null ? { meetingId } : {}),
         ...(attributionUnknown ? { attributionUnknown } : {}),
+        ...(replaces ? { replaces } : {}),
         ...counts,
         sessionToken: await sessionToken(),
       });
+      lastSaved = { session: ended, meetingId, path: result.path };
       setSummary({ saving: false, result });
       noteRecap({ kind: "summary", at: Date.now(), text: result.followUp[0] ?? "Summary saved" });
       followCard = null;
@@ -2372,6 +2429,7 @@ export const actions = {
       return "saved";
     } catch (error) {
       if (!options.auto) sessionMeetingId ??= meetingId;
+      resumedNote ??= replaces;
       const now = state.session;
       set({
         session: {

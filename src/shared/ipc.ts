@@ -254,7 +254,10 @@ export type ConversationEnded = z.infer<typeof conversationEndedSchema>;
 // AI call decides (core/follow-up.ts). Lines are labelled "me:" or "them:".
 export const followUpRequestSchema = z.object({
   phrase: z.string().trim().min(1).max(1000),
-  lastBee: z.object({ request: z.string().max(COMMAND_MAX_CHARS), reply: z.string().max(COMMAND_MAX_CHARS) }),
+  // Null only for a wake check, which needs no earlier exchange.
+  lastBee: z.object({ request: z.string().max(COMMAND_MAX_CHARS), reply: z.string().max(COMMAND_MAX_CHARS) }).nullable(),
+  // A wake check: in a call, the phrase came after "Bee" but does not read like a request (wake-word.ts routeLine inCall).
+  wake: z.boolean().optional(),
   lines: z.array(z.string().max(1000)).max(3),
   // No one else heard for a minute (core/follow-up.ts OTHERS_QUIET_MS): the prompt leans toward Bee.
   othersQuiet: z.boolean(),
@@ -345,8 +348,10 @@ export type BrowseView = z.infer<typeof browseViewSchema>;
 export const browseInstallResultSchema = z.object({ view: browseViewSchema, error: z.string().max(300).nullable() });
 export type BrowseInstallResult = z.infer<typeof browseInstallResultSchema>;
 
-// Lines the renderer keeps for the end-of-meeting summary (store.ts); the pipeline still gets only the last 8.
-export const SESSION_TRANSCRIPT_MAX = 200;
+// Lines the renderer keeps for the end-of-meeting summary (store.ts); the pipeline still gets only the last 8. Sized for the
+// whole of the longest meeting (auto-meeting-detection.ts MAX_MEETING_MS, four hours at about ten lines a minute, with room):
+// at 200 the summary of a long call saw only its last few minutes.
+export const SESSION_TRANSCRIPT_MAX = 4000;
 
 // A plain line (own speech only), or a speaker-labelled one once anyone else is heard (captions, Teams audio).
 export const transcriptLineSchema = z.union([z.string().max(2000), z.object({ speaker: z.string().max(100), text: z.string().max(2000) })]);
@@ -361,6 +366,9 @@ export const meetingSummaryRequestSchema = z.object({
   meetingId: z.number().int().nonnegative().optional(),
   // A meeting or call where only the mic was heard (no Teams audio, no captions): who said what is unknown.
   attributionUnknown: z.boolean().optional(),
+  // The note this summary replaces: the same meeting was saved, then carried on after a rejoin (store.ts rejoinable). Main
+  // overwrites that file only when it is a note in the notes folder.
+  replaces: z.string().max(4000).optional(),
   // Line counts by source, for the log. Never text.
   teamsAudioLines: z.number().int().nonnegative().optional(),
   captionLines: z.number().int().nonnegative().optional(),

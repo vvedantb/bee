@@ -74,7 +74,7 @@ import {
   type RemoteJobNotice,
 } from "../shared/ipc";
 import { assertSignedIn } from "./auth";
-import { isNotePath, loadSnippets, writeMeetingSummaryFile } from "./notes";
+import { isNotePath, loadSnippets, replaceMeetingSummaryFile, writeMeetingSummaryFile } from "./notes";
 import type { BeeHistoryStore } from "./bee-history-store";
 import type { VmemTranscripts } from "./vmem-transcript-queue";
 
@@ -551,7 +551,7 @@ export function registerMeetingIpc(args: { notesDir: string;
     assertSignedIn(request.sessionToken);
     const apiKey = args.gatewayApiKey();
     if (!apiKey) return null;
-    return classifyFollowUp({ model: createGateway(apiKey).languageModel(GUIDE_MODEL), lastBee: request.lastBee, lines: request.lines, phrase: request.phrase, othersQuiet: request.othersQuiet });
+    return classifyFollowUp({ model: createGateway(apiKey).languageModel(GUIDE_MODEL), lastBee: request.lastBee, lines: request.lines, phrase: request.phrase, othersQuiet: request.othersQuiet, wake: request.wake === true });
   });
 
   // "What did I miss?" (core/recap.ts): one small call on the missed meeting lines. Null without a key or on any failure, so
@@ -639,7 +639,7 @@ export function registerMeetingIpc(args: { notesDir: string;
 
   // Without a key (or if Luna fails) a plain summary is still written, so the meeting is never lost.
   ipcMain.handle(IPC.writeMeetingSummary, async (_event, payload): Promise<MeetingSummaryResult> => {
-    const { sessionToken, teamsAudioLines, captionLines, micLines, ...input } = meetingSummaryRequestSchema.parse(payload);
+    const { sessionToken, teamsAudioLines, captionLines, micLines, replaces, ...input } = meetingSummaryRequestSchema.parse(payload);
     assertSignedIn(sessionToken);
     const when = new Date();
     const apiKey = args.gatewayApiKey();
@@ -658,8 +658,10 @@ export function registerMeetingIpc(args: { notesDir: string;
     } catch (error) {
       debugLog.warn("meeting", "people-learn-failed", { error: errorData(error) });
     }
-    const path = writeMeetingSummaryFile(args.notesDir, summary.markdown, when);
-    debugLog.info("meeting", "summary-written", { path, usedLlm: summary.usedLlm, error: summary.error, ms: msSince(started), markdown: summary.markdown });
+    // A meeting that carried on after a rejoin keeps its one note: the fuller summary goes over the earlier one.
+    const replaced = replaces ? replaceMeetingSummaryFile(args.notesDir, replaces, summary.markdown) : null;
+    const path = replaced ?? writeMeetingSummaryFile(args.notesDir, summary.markdown, when);
+    debugLog.info("meeting", "summary-written", { path, replaced: replaced !== null, usedLlm: summary.usedLlm, error: summary.error, ms: msSince(started), markdown: summary.markdown });
     // Structured fields go to meeting memory too (when it is on and the meeting has a name). Failing to save never loses the note.
     try {
       const remembered = args.meeting.remember({ meetingId: input.meetingId, summaryMarkdown: summary.markdown, usedLlm: summary.usedLlm, tips: input.tips, attributionUnknown: input.attributionUnknown });

@@ -13,6 +13,11 @@ export const END_GRACE_MS = 12_000;
 /** The meeting app itself has closed: the call is over, so Bee stops almost at once (one missed reading is not enough). */
 export const END_APP_CLOSED_MS = 3_000;
 /**
+ * A meeting that starts again this soon after it ended is the same one (the meeting app crashed, or the user dropped and
+ * rejoined): the renderer store carries the saved session on, so the meeting keeps one summary.
+ */
+export const REJOIN_WINDOW_MS = 5 * 60_000;
+/**
  * Safety net, not UI: a meeting that runs this long is stopped and saved, even if a window lingers or the OS still reports the
  * mic in use. The same meeting does not start again until the signal has been quiet for END_GRACE_MS or a different one begins.
  */
@@ -70,7 +75,7 @@ export function qualifies(signals: AutoSignals): boolean {
 }
 
 // Two known, different identities are different meetings. An unknown one cannot be told apart, so it counts as the same.
-function sameMeeting(a: string | null, b: string | null): boolean {
+export function sameMeeting(a: string | null, b: string | null): boolean {
   return a === null || b === null || a === b;
 }
 

@@ -169,6 +169,21 @@ export function isReopenCommand(text: string): boolean {
   return words(line) <= REOPEN_WORDS && REOPEN.test(line);
 }
 
+// Words that start a request to Bee but not ordinary talk: the wake word's request starts, the follow-up verbs, and a few more
+// things one asks an assistant to do.
+const REQUEST_VERB =
+  /^(?:(?:so|and|ok|okay|then|now|just|please|hey|hi)[\s,]+)*(?:write|draft|send|reply|create|make|add|set|save|copy|paste|type|run|schedule|book|email|message|note|take|get|list|remember|forget|help|play|pause|mute|unmute|join|leave|download|upload|delete|rename|move|update|fix|i need you|i want you|i'd like you)\b/i;
+
+/**
+ * The words read like a request to an assistant: a request verb or question word at the start, "you", or one of Bee's
+ * connectors. "I don't know if we want that" and "breaking PRs down is much better" do not. Used only in a call (routeLine
+ * inCall), where speech-to-text often writes "Bee" for "but", "be" or a word in another language.
+ */
+export function looksLikeRequest(text: string): boolean {
+  const line = text.replace(/\s+/g, " ").trim();
+  return REQUEST_START.test(line) || FOLLOW_VERB.test(line) || REQUEST_VERB.test(line) || SECOND_PERSON.test(line) || CONNECTOR.test(line);
+}
+
 /**
  * What to do with a new line: a direct request to the AI ("Bee, open Teams", or a follow-up in the conversation window),
  * "Bee, stop" (end the task in progress), "Bee" alone (the request is the next mic phrase, see WAKE_FOLLOW_MS), "thanks" (close
@@ -180,7 +195,9 @@ export type LineRoute =
   | { kind: "stop" }
   | { kind: "wake" }
   | { kind: "close" }
-  | { kind: "unclear" }
+  // command: the words after "Bee" (or after "Bee" alone), said in a call, that do not read like a request. The check decides
+  // whether they run as that request or join the meeting.
+  | { kind: "unclear"; command?: string; reason?: string }
   | { kind: "meeting"; reason?: string };
 
 /**
@@ -190,6 +207,9 @@ export type LineRoute =
  * request was answered moments ago (CONVERSATION_WINDOW_MS), so a phrase without "Bee" can still be for Bee. othersSpoke: someone
  * else spoke since that answer, so a phrase that is not clearly for Bee is a reply to them. recentlyClosed: the window closed
  * moments ago (REOPEN_WINDOW_MS), so a clear desktop request ("open Teams") reopens it; used only while the window is shut.
+ * inCall: the user is in a call with other people. There "Bee, …" is often speech-to-text mishearing ordinary talk, so words
+ * after "Bee" that do not read like a request (looksLikeRequest) are unclear rather than a command, and so is a short answer
+ * to Bee's question that is not a yes or no.
  */
 export function routeLine(args: {
   text: string;
@@ -200,13 +220,18 @@ export function routeLine(args: {
   participants?: readonly string[];
   othersSpoke?: boolean;
   recentlyClosed?: boolean;
+  inCall?: boolean;
 }): LineRoute {
   if (args.source !== "mic") return { kind: "meeting" };
   const command = wakeCommand(args.text);
   if (command === "") return { kind: "wake" };
   const text = args.text.trim();
   const request = command ?? (args.armed && !isFiller(text) ? text : null);
-  if (request !== null) return isStopCommand(request) ? { kind: "stop" } : { kind: "command", command: request };
+  if (request !== null) {
+    if (isStopCommand(request)) return { kind: "stop" };
+    if (args.inCall && !looksLikeRequest(request)) return { kind: "unclear", command: request, reason: command !== null ? "wake-statement" : "armed-statement" };
+    return { kind: "command", command: request };
+  }
   if (!args.conversationOpen) {
     const reopen = args.recentlyClosed && !args.othersSpoke && isReopenCommand(text) && !namesParticipant(text, args.participants);
     return reopen ? { kind: "command", command: text, followUp: true, reason: "reopen" } : { kind: "meeting" };
@@ -219,6 +244,8 @@ export function routeLine(args: {
   // After someone else spoke, "you" or a question may be for them: only a correction, a pointer at Bee's page or one of Bee's
   // connectors still counts.
   const strong = addressed === "correction" || addressed === "connector" || (addressed === "reference" && STRONG_REFERENCE.test(text));
+  // In a call, a few words after Bee's question are as likely the next thing said to the meeting as an answer to Bee.
+  if (args.inCall && addressed === "answer" && !args.othersSpoke && !YES_NO.test(text)) return { kind: "unclear", reason: "short-answer" };
   if (addressed && (!args.othersSpoke || strong)) return { kind: "command", command: text, followUp: true, reason: addressed };
   // Someone else spoke since Bee answered: an unclear phrase is a reply to them.
   if (args.othersSpoke) return { kind: "meeting", reason: "reply-to-others" };

@@ -3,7 +3,8 @@ import { debugLog, errorData, modelName, msSince, onceText } from "./debug-log";
 import { ANTHROPIC_CACHE, guideProviderOptions } from "./gateway";
 import { PEOPLE_SECTION_RULES, splitPeopleSection, type LearnedPerson } from "./people";
 
-const SUMMARY_TIMEOUT_MS = 60_000;
+// Long enough for a whole long meeting (ipc.ts SESSION_TRANSCRIPT_MAX lines).
+const SUMMARY_TIMEOUT_MS = 120_000;
 
 // The model writes these sections; Bee adds the title and the notes and tips it used, so they are always accurate.
 export const SUMMARY_SECTIONS = ["Decisions", "Action items", "Topics"];
@@ -208,7 +209,7 @@ export async function generateMeetingSummary(
     const result = await generateText({
       model: args.model,
       ...summaryRequest(prompt),
-      maxOutputTokens: 2000,
+      maxOutputTokens: 3000,
       maxRetries: 1,
       abortSignal: AbortSignal.timeout(args.timeoutMs ?? SUMMARY_TIMEOUT_MS),
       // Background work: flex, Anthropic first (no web search, so fail-over stays). Flex may not apply on Anthropic.

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AutoSignals } from "../../core/auto-meeting-detection";
-import { CONFIRM_MS, END_APP_CLOSED_MS, END_GRACE_MS, MAX_MEETING_MS } from "../../core/auto-meeting-detection";
+import { CONFIRM_MS, END_APP_CLOSED_MS, END_GRACE_MS, MAX_MEETING_MS, REJOIN_WINDOW_MS } from "../../core/auto-meeting-detection";
 import { LEAVE_DEBOUNCE_MS } from "../../core/meeting-tracker";
 import type { MeetingSummaryRequest, PipelineResult, SettingsView } from "../../shared/ipc";
 import { notchLine } from "./notch";
@@ -664,6 +664,55 @@ describe("store: automatic meeting detection", () => {
       set({ meetingAppPresent: true, inCallTitle: false, titleClass: "chat", micInUseByMeetingApp: false, identity: null });
       await run(TICK * 2);
       expect(events.filter((event) => event.event === "auto-tick").at(-1)?.data).toMatchObject({ titleClass: "chat", phase: "idle", effect: "none", promptShown: false, why: "no-signal" });
+    });
+  });
+
+  // The meeting app crashed mid-call and the user rejoined: one meeting, one note.
+  describe("a rejoin", () => {
+    it("carries the meeting on and replaces its note with one summary of the whole call", async () => {
+      const { saved, notices, run, say, set } = await loadStore();
+      set(CALL);
+      await run(CONFIRM_RUN);
+      await say("We will ship the quote on Friday.");
+      set(APP_OPEN);
+      await run(END_RUN);
+      expect(saved).toHaveLength(1);
+      // Back in the same call a minute later.
+      await run(60_000);
+      set(CALL);
+      await run(TICK * 2);
+      expect(notices.at(-1)).toBe("Meeting rejoined, Bee carries on");
+      await say("Sam owns the follow-up.");
+      set(NONE);
+      await run(END_APP_CLOSED_MS + 3 * TICK);
+      expect(saved).toHaveLength(2);
+      expect(saved[1]?.transcript).toEqual(["We will ship the quote on Friday.", "Sam owns the follow-up."]);
+      expect(saved[1]?.replaces).toBe("/notes/meeting.md");
+    });
+
+    it("keeps a different meeting, or a much later one, apart", async () => {
+      const { saved, run, say, set } = await loadStore();
+      set(CALL);
+      await run(CONFIRM_RUN);
+      await say("We will ship the quote on Friday.");
+      set(APP_OPEN);
+      await run(END_RUN);
+      set({ ...CALL, identity: "design review" });
+      await run(TICK * 2);
+      await say("The new layout is approved.");
+      set(APP_OPEN);
+      await run(END_RUN);
+      expect(saved[1]?.transcript).toEqual(["The new layout is approved."]);
+      expect(saved[1]?.replaces).toBeUndefined();
+      // The same meeting again, but long after it ended.
+      await run(REJOIN_WINDOW_MS + TICK);
+      set({ ...CALL, identity: "design review" });
+      await run(TICK * 2);
+      await say("One more thing.");
+      set(APP_OPEN);
+      await run(END_RUN);
+      expect(saved[2]?.transcript).toEqual(["One more thing."]);
+      expect(saved[2]?.replaces).toBeUndefined();
     });
   });
 });

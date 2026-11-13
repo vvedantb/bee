@@ -209,3 +209,35 @@ describe("routeLine: reopen just after the window closed", () => {
     expect(isReopenCommand("open the Teams app and then the Outlook app and then the calendar please")).toBe(false);
   });
 });
+
+// Heard in a real call: speech-to-text wrote "Bee" at the start of ordinary talk, and each one ran as a request.
+describe("routeLine in a call", () => {
+  const inCall = (text: string, extra: Partial<Parameters<typeof routeLine>[0]> = {}) => routeLine({ text, source: "mic", inCall: true, ...extra });
+
+  it("does not run talk after a misheard Bee as a request: the check decides", () => {
+    for (const said of ["I don't know if, if, if we want to have that", "breaking PRs down is definitely much better", "czyżbyśmy mieli wiz?"]) {
+      expect(inCall(`Bee, ${said}`), said).toEqual({ kind: "unclear", command: said, reason: "wake-statement" });
+    }
+    // "Bee" alone, then ordinary talk.
+    expect(inCall("Eva config startup stop commands and into the .eva folder.", { armed: true })).toMatchObject({ kind: "unclear", reason: "armed-statement" });
+  });
+
+  it("still runs what reads like a request at once", () => {
+    for (const said of ["open Teams", "what's 15% of 18000?", "can you check the build", "draft a reply to Sam", "search vmem for the pricing note"]) {
+      expect(inCall(`Bee, ${said}`), said).toEqual({ kind: "command", command: said });
+    }
+    expect(inCall("Bee, stop")).toEqual({ kind: "stop" });
+    expect(inCall("Bee")).toEqual({ kind: "wake" });
+    expect(inCall("open Teams", { armed: true })).toEqual({ kind: "command", command: "open Teams" });
+  });
+
+  it("outside a call, anything after Bee is still a request", () => {
+    expect(routeLine({ text: "Bee, breaking PRs down is definitely much better", source: "mic" })).toMatchObject({ kind: "command" });
+  });
+
+  it("checks a few words after Bee's question unless they are a yes or no", () => {
+    const lastBee = { request: "set up the dev script", reply: "Which folder should it go in?" };
+    expect(inCall("And no dev script exists.", { conversationOpen: true, lastBee })).toEqual({ kind: "unclear", reason: "short-answer" });
+    expect(inCall("Yes.", { conversationOpen: true, lastBee })).toMatchObject({ kind: "command", reason: "answer" });
+  });
+});
