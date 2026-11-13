@@ -44,7 +44,8 @@ export function parseTeamsTitle(title: string): TeamsTitle | null {
   if (!rest) return null;
   const parts = rest.split("|").map((part) => part.trim()).filter((part) => part.length > 0);
   const name = (parts[0] ?? "").slice(0, MAX_NAME);
-  if (!name || TAB_NAMES.has(name.toLowerCase())) return null;
+  // "Microsoft Teams | Microsoft Teams" (seen while Teams restarts) names no meeting.
+  if (!name || APP_ONLY.test(name) || TAB_NAMES.has(name.toLowerCase())) return null;
   const view = parts.slice(1).some((part) => CHAT_TABS.has(part.toLowerCase())) ? "chat" : "meeting";
   const person = PERSON.exec(name)?.[1]?.trim();
   return { name, view, generic: GENERIC_NAME.test(name), ...(person ? { person } : {}) };

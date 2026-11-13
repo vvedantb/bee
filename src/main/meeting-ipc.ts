@@ -644,10 +644,12 @@ export function registerMeetingIpc(args: { notesDir: string;
     const when = new Date();
     const apiKey = args.gatewayApiKey();
     const started = performance.now();
-    debugLog.info("meeting", "summary-start", { lines: input.transcript.length, notesCited: input.notesCited.length, tips: input.tips.length, meetingId: input.meetingId, hasKey: Boolean(apiKey), teamsAudioLines, captionLines, micLines });
+    // The name Bee detected for this meeting (Teams window title or calendar), so the note says which meeting it was.
+    const subject = args.meeting.subject?.(input.meetingId) ?? null;
+    debugLog.info("meeting", "summary-start", { named: subject !== null, lines: input.transcript.length, notesCited: input.notesCited.length, tips: input.tips.length, meetingId: input.meetingId, hasKey: Boolean(apiKey), teamsAudioLines, captionLines, micLines });
     const summary = apiKey
-      ? await generateMeetingSummary({ ...input, learnPeople: Boolean(args.learnPeople), people: peopleBlock(args.knownNames?.() ?? [], args.people?.() ?? []), model: createGateway(apiKey).languageModel(GUIDE_MODEL), when })
-      : { markdown: buildLocalSummary({ ...input, when }), usedLlm: false, error: NO_GATEWAY_KEY, people: [] };
+      ? await generateMeetingSummary({ ...input, subject, learnPeople: Boolean(args.learnPeople), people: peopleBlock(args.knownNames?.() ?? [], args.people?.() ?? []), model: createGateway(apiKey).languageModel(GUIDE_MODEL), when })
+      : { markdown: buildLocalSummary({ ...input, subject, when }), usedLlm: false, error: NO_GATEWAY_KEY, people: [] };
     // Bee's own memory of people: every speaker the call named, with the topics the notes AI gave for them. "Meeting" is the label
     // for call audio with no name. The log gets counts only, never names.
     try {

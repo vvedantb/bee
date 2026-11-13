@@ -44,6 +44,8 @@ export type TranscriptLine = string | { speaker: string; text: string };
 
 export type SummaryInput = {
   transcript: TranscriptLine[];
+  /** The meeting's detected name ("Daily stand-up"), for the note's title and the AI. */
+  subject?: string | null;
   notesCited?: string[];
   tips?: string[];
   /** A meeting or call heard only through the mic: nobody can be named as speaker or owner. */
@@ -106,7 +108,9 @@ function bullets(lines: string[], empty: string): string {
 export function buildSummaryPrompt(args: SummaryInput): { system: string; prompt: string } {
   const speakers = transcriptSpeakers(args.transcript);
   const header = speakers.length > 0 ? [`Speakers: ${speakers.join(", ")}`, "Transcript (oldest first, \"Speaker: words\"):"] : ["Transcript (oldest first):"];
+  const name = subjectLine(args.subject);
   const prompt = [
+    ...(name ? [`Meeting name: ${name}`] : []),
     ...header,
     bullets(args.transcript.map(lineText), "(empty)"),
     "",
@@ -130,9 +134,20 @@ export function summaryRequest(prompt: { system: string; prompt: string }): { in
   };
 }
 
+/** The meeting name on one line, or "" when none was detected. */
+function subjectLine(subject: string | null | undefined): string {
+  return (subject ?? "").replace(/\s+/g, " ").trim().slice(0, 200);
+}
+
+/** The note's title: the meeting name when Bee detected one, then when it was saved. */
+export function summaryTitle(when: Date, subject?: string | null): string {
+  const name = subjectLine(subject);
+  return name ? `# Meeting summary: ${name} — ${summaryStamp(when)}` : `# Meeting summary — ${summaryStamp(when)}`;
+}
+
 /** Title first, then the given sections, the speakers (if any), then the notes and tips from the session. */
 function assemble(when: Date, body: string, args: SummaryInput): string {
-  const parts = [`# Meeting summary — ${summaryStamp(when)}`, scrubActionItems(body).trim()];
+  const parts = [summaryTitle(when, args.subject), scrubActionItems(body).trim()];
   const speakers = transcriptSpeakers(args.transcript);
   if (speakers.length === 0 && args.attributionUnknown) {
     parts.push(`## Speakers\n${bullets([ATTRIBUTION_UNAVAILABLE], "None.")}`);

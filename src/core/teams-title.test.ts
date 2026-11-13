@@ -9,6 +9,10 @@ describe("parseTeamsTitle", () => {
     expect(parseTeamsTitle("Call with Alice | Microsoft Teams")).toMatchObject({ name: "Call with Alice", person: "Alice" });
   });
 
+  it("reads no meeting name from the app's own name", () => {
+    expect(parseTeamsTitle("Microsoft Teams | Microsoft Teams")).toBeNull();
+  });
+
   it("marks a meeting chat tab as a chat view", () => {
     expect(parseTeamsTitle("Weekly Sync | Chat | Microsoft Teams")).toMatchObject({ name: "Weekly Sync", view: "chat" });
   });

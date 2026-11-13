@@ -82,6 +82,13 @@ describe("parseSummaryMarkdown", () => {
 });
 
 describe("buildLocalSummary", () => {
+  it("names the meeting in the title and tells the AI its name", () => {
+    const markdown = buildLocalSummary({ transcript, notesCited, subject: "Daily stand-up", when });
+    expect(markdown.startsWith("# Meeting summary: Daily stand-up — 2026-09-26 09:05\n")).toBe(true);
+    expect(buildSummaryPrompt({ transcript, subject: "Daily stand-up" }).prompt.startsWith("Meeting name: Daily stand-up\n")).toBe(true);
+    expect(buildSummaryPrompt({ transcript }).prompt).not.toContain("Meeting name:");
+  });
+
   it("keeps every heading and the transcript under Topics", () => {
     const markdown = buildLocalSummary({ transcript, notesCited, tips: ["Offer 10% [n1]"], when });
     expect(markdown.startsWith("# Meeting summary — 2026-09-26 09:05\n")).toBe(true);
