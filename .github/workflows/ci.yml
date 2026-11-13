@@ -7,7 +7,7 @@ on:
 jobs:
   # Fast feedback on Linux: typecheck, test-rule lint and the unit tests. Windows and macOS below also build and package.
   ubuntu:
-    runs-on: ubuntu-latest
+    runs-on: boat
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
