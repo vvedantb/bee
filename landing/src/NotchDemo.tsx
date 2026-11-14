@@ -105,12 +105,8 @@ export function NotchDemo() {
   };
 
   return (
-    <div className="relative mx-auto w-full max-w-[52rem] px-5 pb-16 sm:px-8 sm:pb-20 lg:px-10">
-      <figure
-        ref={stage}
-        className="bee-stage m-0"
-        aria-label="Bee during a call: the notch at the top centre listens, then shows a short tip and opens to two tips and a note"
-      >
+    <div className="w-full pb-8">
+      <figure ref={stage} className="bee-stage m-0">
         <div className="bee-screen" aria-hidden="true">
           <div className="bee-call">
             {Array.from({ length: 6 }, (_, i) => (

@@ -21,10 +21,10 @@ export const navLinks: readonly LandingLink[] = [
 ];
 
 export const hero = {
-  eyebrow: "Meeting overlay for Windows and macOS",
   title: headline,
-  description: "A small notch that listens and shows a short tip.",
-  capabilities: ["Listen", "Notes", "Tips", "Meeting mode"],
+  description: "A small notch that listens and shows a short tip. For Windows and macOS.",
+  visualLabel:
+    "Bee during a call: the notch at the top centre listens, then shows a short tip and opens to two tips and a note",
 } as const;
 
 export const how = {

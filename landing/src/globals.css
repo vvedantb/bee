@@ -19,11 +19,14 @@ body {
   --bee-on-accent: #17140f;
 }
 
-.bee-download {
+/* ProductHero takes no class for its actions, so the hero Download link is matched by its address. */
+.bee-download,
+.bee-hero a[href$="/releases/latest"] {
   background: var(--bee-accent);
   color: var(--bee-on-accent);
 }
-.bee-download:hover {
+.bee-download:hover,
+.bee-hero a[href$="/releases/latest"]:hover {
   background: var(--bee-accent-hover);
   opacity: 1;
 }

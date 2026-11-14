@@ -7,10 +7,11 @@ import {
   LandingPageLayout,
   LandingSection,
   LandingSectionHeading,
+  ProductHero,
 } from "@vvedantb/ui";
 import { BeeWordmark } from "./BeeMark";
 import { NotchDemo } from "./NotchDemo";
-import { LandingCta, LandingHero, LandingNav, LandingReveal, LandingRevealItem } from "./landing-kit";
+import { LandingCta, LandingNav, LandingReveal, LandingRevealItem } from "./landing-kit";
 import { cta, footer, hero, how, more, navLinks, RELEASES_URL, REPO_URL } from "./content";
 
 const github = { href: REPO_URL, label: "Bee on GitHub", icon: <IconBrandGithub size={18} /> };
@@ -52,26 +53,16 @@ export function App() {
         />
       }
       hero={
-        <>
-          <LandingHero
-            eyebrow={hero.eyebrow}
-            title={hero.title}
-            description={hero.description}
-            capabilities={hero.capabilities}
-            actions={
-              <>
-                <DownloadButton />
-                <Button asChild variant="outline">
-                  <a href={REPO_URL}>
-                    <IconBrandGithub size={16} />
-                    GitHub
-                  </a>
-                </Button>
-              </>
-            }
-          />
-          <NotchDemo />
-        </>
+        <ProductHero
+          className="bee-hero"
+          title={hero.title}
+          tagline={hero.description}
+          primaryCta={{ label: "Download", href: RELEASES_URL }}
+          secondaryCta={{ label: "GitHub", href: REPO_URL }}
+          visual={<NotchDemo />}
+          visualLabel={hero.visualLabel}
+          showProductOf={false}
+        />
       }
       footer={
         <LandingFooter
