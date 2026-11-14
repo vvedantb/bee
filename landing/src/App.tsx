@@ -3,15 +3,15 @@ import {
   Button,
   LandingFeatureCard,
   LandingFooter,
-  LandingNavMenu,
   LandingPageLayout,
   LandingSection,
   LandingSectionHeading,
   ProductHero,
+  SiteHeader,
 } from "@vvedantb/ui";
 import { BeeWordmark } from "./BeeMark";
 import { NotchDemo } from "./NotchDemo";
-import { LandingCta, LandingNav, LandingReveal, LandingRevealItem } from "./landing-kit";
+import { LandingCta, LandingReveal, LandingRevealItem } from "./landing-kit";
 import { cta, footer, hero, how, more, navLinks, RELEASES_URL, REPO_URL } from "./content";
 
 const github = { href: REPO_URL, label: "Bee on GitHub", icon: <IconBrandGithub size={18} /> };
@@ -30,7 +30,7 @@ function FeatureGrid({ features }: { features: typeof how.features }) {
 
 function DownloadButton({ size }: { size?: "sm" | "lg" }) {
   return (
-    <Button asChild size={size} className="bee-download">
+    <Button asChild size={size} className={size === "sm" ? "bee-download rounded-full" : "bee-download"}>
       <a href={RELEASES_URL}>
         <IconDownload size={16} />
         Download
@@ -43,13 +43,14 @@ export function App() {
   return (
     <LandingPageLayout
       nav={
-        <LandingNav
+        <SiteHeader
           brand={<BeeWordmark />}
+          homeHref="#top"
           homeLabel="Bee, back to top"
           links={navLinks}
-          github={github}
-          actions={<DownloadButton size="sm" />}
-          menu={<LandingNavMenu links={navLinks} github={{ href: REPO_URL, icon: <IconBrandGithub size={16} /> }} />}
+          githubUrl={REPO_URL}
+          githubLabel="Bee on GitHub"
+          cta={<DownloadButton size="sm" />}
         />
       }
       hero={
