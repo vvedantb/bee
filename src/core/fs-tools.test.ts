@@ -101,27 +101,27 @@ describe("search_files", () => {
 
 describe("read_file", () => {
   it("returns the content, relative or absolute", () => {
-    expect(readFile(roots, { path: "acme.md" })).toContain("Renewal discount is 10%");
-    expect(readFile(roots, { path: "projects/orchard.md" })).toContain("WOBBLEFINCH");
-    expect(readFile(roots, { path: join(extra, "outside.md") })).not.toContain("BLUEHERON");
+    expect(readFile(roots, { path: "acme.md" })).toContain("Renewal discount is 10%"); // allow-source-read: .md fixture in a temp dir, not product source
+    expect(readFile(roots, { path: "projects/orchard.md" })).toContain("WOBBLEFINCH"); // allow-source-read: .md fixture in a temp dir, not product source
+    expect(readFile(roots, { path: join(extra, "outside.md") })).not.toContain("BLUEHERON"); // allow-source-read: .md fixture in a temp dir, not product source
   });
 
   it("refuses oversize and binary files", () => {
-    expect(readFile(roots, { path: "huge.md" })).toContain("larger than");
+    expect(readFile(roots, { path: "huge.md" })).toContain("larger than"); // allow-source-read: .md fixture in a temp dir, not product source
     expect(readFile(roots, { path: "logo.png" })).toContain("Binary");
     expect(readFile(roots, { path: "sneaky.txt" })).toContain("Binary");
   });
 
   it("truncates long text with a note", () => {
     writeFileSync(join(notes, "long.md"), "a".repeat(FS_LIMITS.maxReadChars + 500));
-    const out = readFile(roots, { path: "long.md" });
+    const out = readFile(roots, { path: "long.md" }); // allow-source-read: .md fixture in a temp dir, not product source
     expect(out).toContain("truncated");
     expect(out.length).toBeLessThan(FS_LIMITS.maxReadChars + 100);
   });
 
   it("refuses a folder and a missing file", () => {
     expect(readFile(roots, { path: "projects" })).toMatch(/^Error/);
-    expect(readFile(roots, { path: "missing.md" })).toMatch(/^Error/);
+    expect(readFile(roots, { path: "missing.md" })).toMatch(/^Error/); // allow-source-read: .md fixture in a temp dir, not product source
   });
 });
 
@@ -153,13 +153,13 @@ describe("traversal", () => {
   it("does not match a sibling folder that shares the notes prefix", () => {
     mkdirSync(join(base, "notes-evil"));
     writeFileSync(join(base, "notes-evil", "x.md"), "EVIL");
-    expect(readFile(roots, { path: join(base, "notes-evil", "x.md") })).toMatch(/^Error/);
+    expect(readFile(roots, { path: join(base, "notes-evil", "x.md") })).toMatch(/^Error/); // allow-source-read: .md fixture in a temp dir, not product source
   });
 
   it("keeps mixed separators and extra slashes inside the root", () => {
-    expect(readFile(roots, { path: "projects\\\\orchard.md" })).toContain("WOBBLEFINCH");
-    expect(readFile(roots, { path: "projects//./orchard.md" })).toContain("WOBBLEFINCH");
-    expect(readFile(roots, { path: "projects\\..\\acme.md" })).toContain("Acme");
+    expect(readFile(roots, { path: "projects\\\\orchard.md" })).toContain("WOBBLEFINCH"); // allow-source-read: .md fixture in a temp dir, not product source
+    expect(readFile(roots, { path: "projects//./orchard.md" })).toContain("WOBBLEFINCH"); // allow-source-read: .md fixture in a temp dir, not product source
+    expect(readFile(roots, { path: "projects\\..\\acme.md" })).toContain("Acme"); // allow-source-read: .md fixture in a temp dir, not product source
   });
 
   it("rejects a symlink out of the sandbox, even in the middle of a path", () => {
@@ -169,8 +169,8 @@ describe("traversal", () => {
     } catch {
       return; // Symlinks not permitted on this machine.
     }
-    expect(readFile(roots, { path: "link/key.md" })).toMatch(/^Error/);
-    expect(readFile(roots, { path: "keylink.md" })).toMatch(/^Error/);
+    expect(readFile(roots, { path: "link/key.md" })).toMatch(/^Error/); // allow-source-read: .md fixture in a temp dir, not product source
+    expect(readFile(roots, { path: "keylink.md" })).toMatch(/^Error/); // allow-source-read: .md fixture in a temp dir, not product source
     expect(listDir(roots, {})).not.toContain("link");
     expect(searchFiles(roots, { query: "TOPSECRET" })).toBe("No matches.");
   });
@@ -179,12 +179,12 @@ describe("traversal", () => {
 describe("append_note", () => {
   it("creates a new .md in the notes folder", () => {
     expect(appendNote(roots, { name: "ideas.md", text: "First idea" })).toBe("Saved to ideas.md.");
-    expect(readFileSync(join(notes, "ideas.md"), "utf8")).toBe("First idea\n");
+    expect(readFileSync(join(notes, "ideas.md"), "utf8")).toBe("First idea\n"); // allow-source-read: .md fixture in a temp dir, not product source
   });
 
   it("appends without overwriting", () => {
     appendNote(roots, { name: "acme.md", text: "Follow up Friday" });
-    const text = readFileSync(join(notes, "acme.md"), "utf8");
+    const text = readFileSync(join(notes, "acme.md"), "utf8"); // allow-source-read: .md fixture in a temp dir, not product source
     expect(text.startsWith("# Acme\n\nRenewal discount")).toBe(true);
     expect(text.endsWith("Follow up Friday\n")).toBe(true);
   });
@@ -192,7 +192,7 @@ describe("append_note", () => {
   it("adds a newline before appending to a file that lacks one", () => {
     writeFileSync(join(notes, "bare.md"), "no newline");
     appendNote(roots, { name: "bare.md", text: "more" });
-    expect(readFileSync(join(notes, "bare.md"), "utf8")).toBe("no newline\nmore\n");
+    expect(readFileSync(join(notes, "bare.md"), "utf8")).toBe("no newline\nmore\n"); // allow-source-read: .md fixture in a temp dir, not product source
   });
 
   it("refuses traversal, folders, absolute paths and extra roots", () => {
