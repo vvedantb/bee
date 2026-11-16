@@ -2,7 +2,10 @@ name: CI
 
 on:
   pull_request:
+  # main only. A branch push is covered by its pull request, and a v* tag push is covered by release-windows.yml,
+  # which runs the same tests. A bare `push:` started a second run for each of those.
   push:
+    branches: [main]
 
 jobs:
   # Fast feedback on Linux: typecheck, test-rule lint and the unit tests. Windows and macOS below also build and package.
