@@ -6,6 +6,7 @@ import {
   END_GRACE_MS,
   IDLE_AUTO,
   MAX_MEETING_MS,
+  SWITCH_MS,
   qualifies,
   stepAutoMeeting,
   type AutoEvent,
@@ -43,6 +44,7 @@ const hold = (signals: AutoSignals, from: number, upTo: number): Array<[number, 
 const CONFIRM_S = Math.ceil(CONFIRM_MS / 1000);
 const CALENDAR_S = Math.ceil(CONFIRM_CALENDAR_MS / 1000);
 const GRACE_S = Math.ceil(END_GRACE_MS / 1000);
+const SWITCH_S = Math.ceil(SWITCH_MS / 1000);
 const CLOSED_S = Math.ceil(END_APP_CLOSED_MS / 1000);
 
 describe("thresholds", () => {
@@ -215,6 +217,19 @@ describe("max duration safety net", () => {
     const next = { ...CALL, identity: "standup" };
     const out = run([...steps, ...hold(next, CONFIRM_S + MAX_S + 1, CONFIRM_S + MAX_S + 40)], active);
     expect(out.effects.map((item) => item.effect)).toEqual(["stop", "start"]);
+  });
+
+  it("saves one meeting and starts the next when a different meeting follows with no gap", () => {
+    const next = { ...CALL, identity: "dev standup" };
+    const out = run([...hold(CALL, 0, 600), ...hold(next, 601, 640)]);
+    expect(out.effects).toEqual([{ at: 0, effect: "start" }, { at: 601 + SWITCH_S, effect: "stop" }, { at: 602 + SWITCH_S, effect: "start" }]);
+    expect(out.state.identity).toBe("dev standup");
+  });
+
+  it("keeps one meeting through a short flicker of another name", () => {
+    const other = { ...CALL, identity: "chat" };
+    const out = run([...hold(CALL, 0, 600), ...hold(other, 601, 604), ...hold(CALL, 605, 700)]);
+    expect(out.effects).toEqual([{ at: 0, effect: "start" }]);
   });
 
   it("starts the same meeting again once it has been clearly over", () => {

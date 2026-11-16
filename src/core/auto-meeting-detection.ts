@@ -10,6 +10,8 @@ export const CONFIRM_MS = 3_000;
 export const CONFIRM_CALENDAR_MS = 1_500;
 /** The end condition must hold this long before Bee stops and saves, while the meeting app is still open. Covers a mic drop, a muted call or a pop-out window closing. */
 export const END_GRACE_MS = 12_000;
+/** A different meeting must show this long, mid-meeting, before Bee saves the one it has and starts the next. Skips a title flicker. */
+export const SWITCH_MS = 10_000;
 /** The meeting app itself has closed: the call is over, so Bee stops almost at once (one missed reading is not enough). */
 export const END_APP_CLOSED_MS = 3_000;
 /**
@@ -52,6 +54,8 @@ export type AutoMeetingState = {
   qualSince: number | null;
   /** When the end condition began (active). */
   endSince: number | null;
+  /** When a different meeting first showed during the active one (back-to-back meetings). */
+  switchSince?: number | null;
   /** When the active session started, for MAX_MEETING_MS. */
   startedAt: number | null;
   /** The meeting identity of the session or confirmation. */
@@ -108,7 +112,13 @@ export function stepAutoMeeting(
     if (now - startedAt >= MAX_MEETING_MS) {
       return { state: { ...IDLE_AUTO, suppressed: { identity: identity ?? state.identity }, quietSince: null }, effect: "stop" };
     }
-    if (qualifying) return { state: { ...state, startedAt, endSince: null, identity: identity ?? state.identity }, effect: "none" };
+    // Back-to-back meetings: the call never drops, only its name changes. Save this one; the next tick starts the new one.
+    if (qualifying && !sameMeeting(state.identity, identity)) {
+      const switchSince = state.switchSince ?? now;
+      if (now - switchSince >= SWITCH_MS) return { state: { ...IDLE_AUTO }, effect: "stop" };
+      return { state: { ...state, startedAt, endSince: null, switchSince }, effect: "none" };
+    }
+    if (qualifying) return { state: { ...state, startedAt, endSince: null, switchSince: null, identity: identity ?? state.identity }, effect: "none" };
     const endSince = state.endSince ?? now;
     if (now - endSince >= endGrace) return { state: { ...IDLE_AUTO, quietSince: now }, effect: "stop" };
     return { state: { ...state, startedAt, endSince }, effect: "none" };
