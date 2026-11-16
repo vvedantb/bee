@@ -209,6 +209,8 @@ function createWindow(meetingMode: boolean, scale: number): BrowserWindow {
       sandbox: true,
       contextIsolation: true,
       nodeIntegration: false,
+      // Bee is often hidden. A hidden page's timers drop to one a minute, so meeting detection saw a call up to two minutes late.
+      backgroundThrottling: false,
     },
   });
   applyMeetingMode(window, meetingMode);
