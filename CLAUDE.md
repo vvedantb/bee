@@ -18,3 +18,8 @@ Run `npm run preflight` (typecheck, lint, tests) before you push. CI runs the sa
 ## Commits
 
 Do not add `Co-authored-by: Cursor` trailers to commits.
+
+## UI copy
+- Subtext is the exception, not the default. Most sections, cards and rows show a title only.
+- Add a description only when the user needs it to act and the title, value or badge does not already say it (a price, a limit, a warning).
+- Never repeat the title, the value, a badge or a nearby row. Say each thing once, in plain words.
