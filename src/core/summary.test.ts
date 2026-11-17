@@ -127,7 +127,7 @@ describe("generateMeetingSummary", () => {
     const call = model.doGenerateCalls[0];
     expect(call?.temperature).toBeUndefined();
     expect(call?.topP).toBeUndefined();
-    expect(call?.providerOptions).toEqual({ gateway: { serviceTier: "flex", order: ["anthropic"] }, anthropic: { thinking: { type: "disabled" } } });
+    expect(call?.providerOptions).toEqual({ gateway: { zeroDataRetention: true, serviceTier: "flex", order: ["anthropic"] }, anthropic: { thinking: { type: "disabled" } } });
     // The system goes first with the cache breakpoint; the transcript after it carries none.
     const [system, user] = call?.prompt ?? [];
     expect(system).toEqual({ role: "system", content: SUMMARY_SYSTEM, providerOptions: ANTHROPIC_CACHE });

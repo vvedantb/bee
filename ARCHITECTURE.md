@@ -352,7 +352,7 @@ Bee uses `@clerk/electron` against the vedantb.com Clerk production instance (`s
 
 ## AI calls
 
-All model calls use the Vercel AI SDK (`ai`, `@ai-sdk/gateway`) against Vercel AI Gateway. Every call sends `providerOptions: { gateway: { serviceTier: "flex" } }`. No sampling parameters are sent (no temperature, topP, presencePenalty or frequencyPenalty).
+All model calls use the Vercel AI SDK (`ai`, `@ai-sdk/gateway`) against Vercel AI Gateway. Every call sends `providerOptions: { gateway: { zeroDataRetention: true } }` (zero data retention: the Gateway uses only providers that keep no prompts or outputs, and fails the request otherwise), and background calls add `serviceTier: "flex"`. No sampling parameters are sent (no temperature, topP, presencePenalty or frequencyPenalty).
 
 | Step | Model | API | Timeout | Retries |
 | --- | --- | --- | --- | --- |

@@ -1,4 +1,5 @@
 import { experimental_evaluate, type Experimental_EvaluationModel, type Experimental_EvaluationQuestion } from "ai";
+import { gatewayTier } from "./gateway";
 import type { LinkCandidate, LinkDecision } from "./link-rank";
 
 // Standard tier, not flex: this runs inside a 2 s budget. Asks Jev (Gateway evaluation API, as in jev.ts) whether a link helps and which URL fits. Throws on failure; link-rank fails open.
@@ -58,6 +59,7 @@ export async function decideWithJev(args: {
     questions: request.questions,
     maxRetries: 0,
     abortSignal: args.signal,
+    providerOptions: gatewayTier("default"),
   });
   return parseLinkDecision(args.candidate, result.answers as Record<string, { type: string; score?: number }>);
 }

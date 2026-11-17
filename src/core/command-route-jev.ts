@@ -1,6 +1,7 @@
 import { experimental_evaluate, type Experimental_EvaluationModel, type Experimental_EvaluationQuestion } from "ai";
 import { withTimeout } from "./abort";
 import { debugLog, errorData, modelName, msSince } from "./debug-log";
+import { gatewayTier } from "./gateway";
 
 // Which path a direct request takes, asked of Jev (the Gateway evaluation API, as in jev.ts and link-jev.ts) in one choice
 // question. Only asked when the word rules leave it open (core/direct-command.ts: no quick open, and computer use is there), and
@@ -70,7 +71,7 @@ export async function routeWithJev(args: { model: Experimental_EvaluationModel; 
     const signal = withTimeout(args.signal, args.timeoutMs ?? ROUTE_TIMEOUT_MS);
     // Raced against the signal too, so the budget holds even when a transport does not stop at once.
     const result = await Promise.race([
-      experimental_evaluate({ model: args.model, state: request.state, questions: request.questions, maxRetries: 0, abortSignal: signal }),
+      experimental_evaluate({ model: args.model, state: request.state, questions: request.questions, maxRetries: 0, abortSignal: signal, providerOptions: gatewayTier("default") }),
       whenAborted(signal),
     ]);
     const answer = (result.answers as Record<string, unknown>).route;

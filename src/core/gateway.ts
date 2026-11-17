@@ -25,8 +25,16 @@ export const STT_MODEL = "mistral/voxtral-small-transcribe-3";
 //    providerMetadata.gateway.serviceTier to see what the Gateway applied.
 export type GatewayTier = "flex" | "default" | "ultrafast";
 
-export function gatewayTier(tier: GatewayTier): { gateway?: { serviceTier: string } } {
-  return tier === "default" ? {} : { gateway: { serviceTier: tier } };
+/**
+ * Zero data retention, sent on every Gateway call. The Gateway then routes only to providers that keep no prompts or
+ * outputs, and fails the request (no_zdr_providers_available) instead of using one that does. It needs a paid Gateway
+ * team: a team that is not eligible gets a 403. It does not cover data a provider-run tool sends on (Anthropic web
+ * search), and it does not apply to direct requests to Bee, which do not use the Gateway (core/claude-agent.ts).
+ */
+export const GATEWAY_ZDR = { zeroDataRetention: true } as const;
+
+export function gatewayTier(tier: GatewayTier): { gateway: GatewayRouting } {
+  return { gateway: tier === "default" ? { ...GATEWAY_ZDR } : { ...GATEWAY_ZDR, serviceTier: tier } };
 }
 
 export const FLEX_PROVIDER_OPTIONS = gatewayTier("flex");
@@ -57,7 +65,7 @@ export function guideProviderOptions(
   return { gateway: anthropicRouting(tier, options), ...ANTHROPIC_NO_THINKING };
 }
 
-type GatewayRouting = { serviceTier?: string; only?: string[]; order?: string[] };
+type GatewayRouting = { zeroDataRetention: true; serviceTier?: string; only?: string[]; order?: string[] };
 
 function anthropicRouting(tier: GatewayTier, options: { web: boolean }): GatewayRouting {
   const routing = options.web ? { only: [GUIDE_PROVIDER] } : { order: [GUIDE_PROVIDER] };

@@ -11,16 +11,16 @@ import {
 
 describe("gatewayTier", () => {
   it("sends flex only when asked for it", () => {
-    expect(gatewayTier("flex")).toEqual({ gateway: { serviceTier: "flex" } });
-    expect(FLEX_PROVIDER_OPTIONS).toEqual({ gateway: { serviceTier: "flex" } });
+    expect(gatewayTier("flex")).toEqual({ gateway: { zeroDataRetention: true, serviceTier: "flex" } });
+    expect(FLEX_PROVIDER_OPTIONS).toEqual({ gateway: { zeroDataRetention: true, serviceTier: "flex" } });
   });
 
   it("leaves the tier out for the Gateway default", () => {
-    expect(gatewayTier("default")).toEqual({});
+    expect(gatewayTier("default")).toEqual({ gateway: { zeroDataRetention: true } });
   });
 
   it("can name ultrafast, which no call site uses yet", () => {
-    expect(gatewayTier("ultrafast")).toEqual({ gateway: { serviceTier: "ultrafast" } });
+    expect(gatewayTier("ultrafast")).toEqual({ gateway: { zeroDataRetention: true, serviceTier: "ultrafast" } });
   });
 });
 
@@ -28,13 +28,13 @@ describe("guideProviderOptions", () => {
   it("pins Anthropic with only when web search is sent, and keeps the tier", () => {
     expect(GUIDE_MODEL).toBe("anthropic/claude-sonnet-5.5");
     expect(GUIDE_PROVIDER).toBe("anthropic");
-    expect(guideProviderOptions("default", { web: true })).toEqual({ gateway: { only: ["anthropic"] }, ...ANTHROPIC_NO_THINKING });
-    expect(guideProviderOptions("flex", { web: true })).toEqual({ gateway: { serviceTier: "flex", only: ["anthropic"] }, ...ANTHROPIC_NO_THINKING });
+    expect(guideProviderOptions("default", { web: true })).toEqual({ gateway: { zeroDataRetention: true, only: ["anthropic"] }, ...ANTHROPIC_NO_THINKING });
+    expect(guideProviderOptions("flex", { web: true })).toEqual({ gateway: { zeroDataRetention: true, serviceTier: "flex", only: ["anthropic"] }, ...ANTHROPIC_NO_THINKING });
   });
 
   it("prefers Anthropic with order, keeping fail-over, when no web search is sent", () => {
-    expect(guideProviderOptions("default", { web: false })).toEqual({ gateway: { order: ["anthropic"] }, ...ANTHROPIC_NO_THINKING });
-    expect(guideProviderOptions("flex", { web: false })).toEqual({ gateway: { serviceTier: "flex", order: ["anthropic"] }, ...ANTHROPIC_NO_THINKING });
+    expect(guideProviderOptions("default", { web: false })).toEqual({ gateway: { zeroDataRetention: true, order: ["anthropic"] }, ...ANTHROPIC_NO_THINKING });
+    expect(guideProviderOptions("flex", { web: false })).toEqual({ gateway: { zeroDataRetention: true, serviceTier: "flex", order: ["anthropic"] }, ...ANTHROPIC_NO_THINKING });
   });
 
   it("always turns Anthropic thinking off", () => {

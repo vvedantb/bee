@@ -1518,7 +1518,7 @@ describe("guideWithLuna streaming", () => {
     expect(parts.map((part) => part.providerOptions)).toEqual([ANTHROPIC_CACHE, undefined, undefined]);
     expect(JSON.stringify(parts[2])).toContain("Give at most 3 short tips.");
     // Thinking is off at the call level; the message-level cache markers above stay as they were.
-    expect(model.doStreamCalls[0]?.providerOptions).toEqual({ gateway: { only: ["anthropic"] }, ...NO_THINKING });
+    expect(model.doStreamCalls[0]?.providerOptions).toEqual({ gateway: { zeroDataRetention: true, only: ["anthropic"] }, ...NO_THINKING });
   });
 
   it("keeps web_search for a follow-up question and sends the earlier answer", async () => {
@@ -1817,7 +1817,7 @@ describe("guideWithLuna providers and web search", () => {
       return textChunks("- ok");
     });
     await guideWithLuna({ model, transcript: ["Hi"], notes: [] });
-    expect(JSON.parse(providerOptions)).toEqual({ gateway: { only: ["anthropic"] }, ...NO_THINKING });
+    expect(JSON.parse(providerOptions)).toEqual({ gateway: { zeroDataRetention: true, only: ["anthropic"] }, ...NO_THINKING });
   });
 
   it("retries without web_search when the error names Anthropic's web search tool type", async () => {
@@ -1834,8 +1834,8 @@ describe("guideWithLuna providers and web search", () => {
       expect(seen).toHaveLength(2);
       expect(seen[1]?.tools).not.toContain("web_search");
       // The retry sends no Anthropic-run tool, so the Gateway may fail over again.
-      expect(JSON.parse(seen[0]?.providerOptions ?? "")).toEqual({ gateway: { only: ["anthropic"] }, ...NO_THINKING });
-      expect(JSON.parse(seen[1]?.providerOptions ?? "")).toEqual({ gateway: { order: ["anthropic"] }, ...NO_THINKING });
+      expect(JSON.parse(seen[0]?.providerOptions ?? "")).toEqual({ gateway: { zeroDataRetention: true, only: ["anthropic"] }, ...NO_THINKING });
+      expect(JSON.parse(seen[1]?.providerOptions ?? "")).toEqual({ gateway: { zeroDataRetention: true, order: ["anthropic"] }, ...NO_THINKING });
     } finally {
       warn.mockRestore();
     }

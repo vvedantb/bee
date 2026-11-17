@@ -29,7 +29,7 @@ describe("transcribeSpeech", () => {
     expect(outcome).toEqual({ text: "When does SSO ship?", error: null });
     const call = doGenerate.mock.calls[0]?.[0];
     // Gateway default tier: no serviceTier at all. Flex may queue, and ultrafast may be rejected.
-    expect(call?.providerOptions).toEqual({});
+    expect(call?.providerOptions).toEqual({ gateway: { zeroDataRetention: true } });
     expect(JSON.stringify(call?.providerOptions)).not.toMatch(/flex|ultrafast/);
     expect(call?.audio).toEqual(audio);
   });
@@ -69,9 +69,9 @@ describe("transcribeSpeech", () => {
   it("sends the words to listen for as Mistral's contextBias, and nothing when there are none", async () => {
     const doGenerate = vi.fn<Generate>(async () => result("Bee, message Zuzanna"));
     await transcribeSpeech({ model: model(doGenerate), audio, vocabulary: ["Bee", "Zuzanna Szczepaniak-Moody"] });
-    expect(doGenerate.mock.calls[0]?.[0].providerOptions).toEqual({ mistral: { contextBias: ["Bee", "Zuzanna Szczepaniak-Moody"] } });
+    expect(doGenerate.mock.calls[0]?.[0].providerOptions).toEqual({ gateway: { zeroDataRetention: true }, mistral: { contextBias: ["Bee", "Zuzanna Szczepaniak-Moody"] } });
     await transcribeSpeech({ model: model(doGenerate), audio, vocabulary: [] });
-    expect(doGenerate.mock.calls[1]?.[0].providerOptions).toEqual({});
+    expect(doGenerate.mock.calls[1]?.[0].providerOptions).toEqual({ gateway: { zeroDataRetention: true } });
   });
 });
 
