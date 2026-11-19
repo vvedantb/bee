@@ -66,18 +66,18 @@ export function createClerkOAuthLoopback(options: { openExternal: (url: string) 
       const timer = setTimeout(() => flow.fail(new Error("Sign-in timed out. Try again.")), timeoutMs);
 
       const server = createServer((req, res) => {
-        let url: URL;
+        let reqUrl: URL;
         try {
-          url = new URL(req.url ?? "/", origin);
+          reqUrl = new URL(req.url ?? "/", origin);
         } catch {
-          url = new URL("/", origin);
+          reqUrl = new URL("/", origin);
         }
-        if (req.method !== "GET" || url.pathname !== CLERK_OAUTH_PATH) {
+        if (req.method !== "GET" || reqUrl.pathname !== CLERK_OAUTH_PATH) {
           res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" }).end("Not found");
           return;
         }
         // Clerk returns its result in the query; a fragment never reaches a server, and the client does not read one.
-        const callbackUrl = `${origin}${url.pathname}${url.search}`;
+        const callbackUrl = `${origin}${reqUrl.pathname}${reqUrl.search}`;
         // Stop listening once the page is out. Closing earlier would cut the response short.
         res.once("close", () => server.close());
         res.writeHead(200, PAGE_HEADERS).end(signInPage(signInOutcome(callbackUrl)));

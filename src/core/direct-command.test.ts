@@ -477,7 +477,7 @@ describe("runDirectCommand: Bee's history and no blank replies", () => {
     expect(JSON.stringify(turn)).not.toContain("cacheControl");
     // The quick path with no AI call is kept as a tool call and result too.
     const fast: ModelMessage[][] = [];
-    await run({ command: "open Teams", snippets, gateway: null, actions: fakeActions().actions, onTurn: (turn) => fast.push(turn) });
+    await run({ command: "open Teams", snippets, gateway: null, actions: fakeActions().actions, onTurn: (t) => fast.push(t) });
     expect(fast[0]?.map((message) => message.role)).toEqual(["user", "assistant", "tool", "assistant"]);
     expect(JSON.stringify(fast[0])).toContain("Opened Teams");
   });

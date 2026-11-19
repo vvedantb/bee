@@ -80,7 +80,7 @@ export const mcpHandler = httpAction(
       });
       return verified ? { clerkUserId: verified.clerkUserId, clientName: clientNameFromUserAgent(request.headers.get("user-agent")) } : null;
     },
-    handleRpc: ({ ctx, principal, json, scope }) => dispatcher.handleRpc({ ctx: convexBridge(ctx), principal, json, scope }),
+    handleRpc: ({ ctx, principal, json: rpcJson, scope }) => dispatcher.handleRpc({ ctx: convexBridge(ctx), principal, json: rpcJson, scope }),
   }),
 );
 

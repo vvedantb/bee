@@ -141,8 +141,8 @@ async function loadStore(options: { settings?: Partial<SettingsView>; status?: T
     store.actions.teamsAudioLines([{ id: nextPhrase(), text, final: true }]);
     await vi.advanceTimersByTimeAsync(1000);
   };
-  const said = (store: { getBeeState: () => { session: { lines: Array<{ own: boolean; speakerName: string; text: string }> } } }) =>
-    store.getBeeState().session.lines.map((line) => (line.own ? line.text : `${line.speakerName}: ${line.text}`));
+  const said = (s: { getBeeState: () => { session: { lines: Array<{ own: boolean; speakerName: string; text: string }> } } }) =>
+    s.getBeeState().session.lines.map((line) => (line.own ? line.text : `${line.speakerName}: ${line.text}`));
   // The status poll runs with the meeting tick, every 5 s.
   const poll = () => vi.advanceTimersByTimeAsync(5000);
   return { store, requests, caption, heard, said: () => said(store), poll, audio };

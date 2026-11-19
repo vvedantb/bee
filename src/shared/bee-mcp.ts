@@ -59,6 +59,6 @@ export function parseJob(raw: { id: string; tool: string; input: string; clientN
 }
 
 /** "Request from Claude…": the first step line on Bee's island for a job from another AI. */
-export function remoteRequestLine(clientName: string | null): string {
-  return `Request from ${clientName?.trim() || "another AI"}…`;
+export function remoteRequestLine(client: string | null): string {
+  return `Request from ${client?.trim() || "another AI"}…`;
 }

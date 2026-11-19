@@ -264,7 +264,7 @@ describe("click_at", () => {
   });
 
   it("asks about an unreadable spot with the AI's own effect when it gives one, and when the tree cannot be read at all", async () => {
-    const { look, call, asked, effects } = setup({ reply: (call) => (call.command === "snapshot" ? { ok: false, code: "TIMEOUT", retry: "safe" } : null) });
+    const { look, call, asked, effects } = setup({ reply: (req) => (req.command === "snapshot" ? { ok: false, code: "TIMEOUT", retry: "safe" } : null) });
     await look();
     expect(await call("click_at", { app: "Microsoft Teams", ...pixel(420, 1520), effect: "send" })).toMatch(/^Done/);
     expect(asked).toEqual([{ kind: "send", question: "Send this?", detail: "A spot in ms-teams.exe Bee cannot read" }]);
@@ -311,8 +311,8 @@ describe("right_click, double_click and paste_text", () => {
   it("right-clicks semantically first and once more with real input when refused; double-clicks with real input; both pass the click gate", async () => {
     let first = true;
     const { call, commands, asked } = setup({
-      reply: (call) => {
-        if (call.command !== "right-click" || !first) return null;
+      reply: (req) => {
+        if (req.command !== "right-click" || !first) return null;
         first = false;
         return { ok: false, code: "POLICY_DENIED", retry: "safe" };
       },

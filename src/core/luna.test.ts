@@ -1421,7 +1421,7 @@ describe("guideWithLuna streaming", () => {
       model,
       transcript: ["Score?"],
       notes: [],
-      onActivity: ({ tool, phase }) => events.push(`${phase}:${tool}`),
+      onActivity: ({ tool: t, phase }) => events.push(`${phase}:${t}`),
       onPartial: () => events.push("partial"),
     });
     expect(result.tips).toEqual(["The match ended 2-1 today"]);
@@ -1447,7 +1447,7 @@ describe("guideWithLuna streaming", () => {
       { type: "text-end", id: "t2" },
       finish("stop"),
     ]);
-    const result = await guideWithLuna({ model, transcript: ["News?"], notes: [], onActivity: ({ tool, phase }) => events.push(`${phase}:${tool}`) });
+    const result = await guideWithLuna({ model, transcript: ["News?"], notes: [], onActivity: ({ tool: t, phase }) => events.push(`${phase}:${t}`) });
     expect(result.tips).toEqual(["Today's top story is A"]);
     expect(result.sources).toEqual([
       { title: "Headline A", url: "https://www.bbc.co.uk/news/a" },
@@ -1505,7 +1505,7 @@ describe("guideWithLuna streaming", () => {
       transcript: ["Discount?"],
       notes: [{ id: "x.md#1", title: "Acme", text: "10%" }],
       shown: ["Ask about timing"],
-      onFinish: ({ usage }) => finished.push({ cacheRead: usage.inputTokenDetails.cacheReadTokens, cacheWrite: usage.inputTokenDetails.cacheWriteTokens }),
+      onFinish: ({ usage: u }) => finished.push({ cacheRead: u.inputTokenDetails.cacheReadTokens, cacheWrite: u.inputTokenDetails.cacheWriteTokens }),
     });
     expect(result.error).toBeNull();
     expect(finished).toEqual([{ cacheRead: 4500, cacheWrite: 400 }]);
@@ -1562,7 +1562,7 @@ describe("guideWithLuna with MCP tools", () => {
         notes: [],
         extraTools: mcp.tools,
         connectedServers: mcp.servers,
-        onActivity: ({ tool, phase }) => activity.push(`${phase}:${tool}`),
+        onActivity: ({ tool: t, phase }) => activity.push(`${phase}:${t}`),
       });
       expect(result.error).toBeNull();
       expect(result.tips).toEqual([`Code is ${MOCK_TOKEN}`]);
@@ -1891,7 +1891,7 @@ describe("guideWithLuna with no answer text", () => {
     const debug = vi.spyOn(console, "debug").mockImplementation(() => undefined);
     const finished: number[] = [];
     try {
-      const result = await guideWithLuna({ model, transcript: ["Discount?"], notes: [], onFinish: ({ usage }) => finished.push(usage.outputTokens ?? 0) });
+      const result = await guideWithLuna({ model, transcript: ["Discount?"], notes: [], onFinish: ({ usage: u }) => finished.push(u.outputTokens ?? 0) });
       return { result, finished, logs: debug.mock.calls.map((call) => String(call[0])).filter((line) => line.startsWith("perf luna")) };
     } finally {
       debug.mockRestore();

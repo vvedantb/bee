@@ -1130,8 +1130,8 @@ export function computerTools(deps: ComputerToolDeps) {
     const shownWindow = isRecord(data) && isRecord(data.window) ? str(data.window.id) : "";
     const window = WINDOW_ID_PATTERN.test(shownWindow) ? shownWindow : undefined;
     if (window) windows.add(window);
-    const scope: Scope = { ...where, ...(where.window_id || !window ? {} : { window_id: window }) };
-    for (const ref of kept.keys()) if (!scopes.has(sidOf(ref))) scopes.set(sidOf(ref), scope);
+    const refScope: Scope = { ...where, ...(where.window_id || !window ? {} : { window_id: window }) };
+    for (const ref of kept.keys()) if (!scopes.has(sidOf(ref))) scopes.set(sidOf(ref), refScope);
     currentApp = shown.app ?? where.app ?? currentApp;
     return { ok: true, text: shown.text, kept };
   };
@@ -1307,10 +1307,10 @@ export function computerTools(deps: ComputerToolDeps) {
       const note = focused.ok ? "" : `Bee could not bring ${shortName(app, 30)} to the front first (${focused.message}). `;
       // A Document Recovery dialog takes the keys: refuse before any key is pressed, and never come back Done.
       const open = control.reason() ? null : await withApp(app, (name) => exec("list-windows", scope({ app: name }), READ_MS));
-      const windows = open?.result.ok ? parseWindows(open.result.data) : [];
-      const blocked = windows.find((window) => BLOCKING_DIALOG.test(window.title));
-      if (blocked && (blocked.focused || !windows.some((window) => window.focused && !BLOCKING_DIALOG.test(window.title)))) {
-        debugLog.info("computer", "keyboard-type-blocked", { app, windows: windows.length });
+      const openWindows = open?.result.ok ? parseWindows(open.result.data) : [];
+      const blocked = openWindows.find((window) => BLOCKING_DIALOG.test(window.title));
+      if (blocked && (blocked.focused || !openWindows.some((window) => window.focused && !BLOCKING_DIALOG.test(window.title)))) {
+        debugLog.info("computer", "keyboard-type-blocked", { app, windows: openWindows.length });
         return `Error: a Document Recovery dialog is open and blocks typing into ${shortName(app, 30)}. Nothing was typed. Close or answer the dialog first, then open the document and type again.`;
       }
       const press = (name: string | undefined, key: string) => exec("press", [key, ...scope({ app: name, window_id }), HEADED_FLAG], ACT_MS);
@@ -1695,14 +1695,14 @@ export function computerTools(deps: ComputerToolDeps) {
         if (!focused.ok) return `Bee could not focus that field, so pasted nothing. ${errorLine(focused)}`;
         lastField = refs.get(ref) ?? lastField;
       }
-      const clip: { restored: boolean | null } = { restored: null };
+      const clipState: { restored: boolean | null } = { restored: null };
       const { result, app, note } = await withApp(input.app, async (name) => {
         const pasted = await pasteText(exec, { text, platform: deps.platform, scope: scope({ app: name, window_id: input.window_id }) });
-        clip.restored = pasted.restored;
+        clipState.restored = pasted.restored;
         return pasted.result;
       });
       currentApp = app ?? currentApp;
-      const clipboard = clip.restored === false ? " Bee could not put back what the clipboard held before." : "";
+      const clipboard = clipState.restored === false ? " Bee could not put back what the clipboard held before." : "";
       if (!result.ok) {
         if (ref) lastWrite = { ref, text, failed: true };
         return `${note}${errorLine(result)}${clipboard}`;
@@ -2041,7 +2041,7 @@ export function computerTools(deps: ComputerToolDeps) {
           const app = cleanApp(name);
           if (!app) return "Error: that is not an app name. Check list_apps.";
           if (offLimitsApp(app) || ["finder", "explorer", "file explorer", "dock", "windows explorer"].includes(appKey(app))) return "Error: Bee does not quit that app.";
-          const { result, note } = await withApp(app, (name) => exec("close-app", [name ?? app], ACT_MS));
+          const { result, note } = await withApp(app, (resolvedName) => exec("close-app", [resolvedName ?? app], ACT_MS));
           if (result.ok) lastField = null;
           return `${note}${done(result)}`;
         }),

@@ -8,7 +8,6 @@
     "unicorn/require-module-specifiers": "off",
     "import/no-unassigned-import": ["error", { "allow": ["**/*.css", "**/debug-log-boot"] }],
     "no-console": "off",
-    "no-shadow": "off",
     "no-underscore-dangle": ["error", { "allow": ["_id", "_creationTime", "_meta"] }]
   }
 }

@@ -74,7 +74,7 @@ describe("assertDesktopAction", () => {
   });
 
   it("is a separate list: the read-only check still refuses every action command", () => {
-    for (const command of DESKTOP_ACTION_COMMANDS.filter((command) => !(READ_ONLY_COMMANDS as readonly string[]).includes(command))) {
+    for (const command of DESKTOP_ACTION_COMMANDS.filter((c) => !(READ_ONLY_COMMANDS as readonly string[]).includes(c))) {
       expect(() => assertReadOnly(command, []), command).toThrow(/not allowed/);
     }
   });
@@ -260,7 +260,7 @@ describe("assertComputerUse", () => {
   it("is a separate list: the read-only and desktop action checks still refuse every input command", () => {
     const input = COMPUTER_USE_COMMANDS.filter((command) => !(READ_ONLY_COMMANDS as readonly string[]).includes(command));
     for (const command of input) expect(() => assertReadOnly(command, []), command).toThrow(/not allowed/);
-    for (const command of input.filter((command) => !(DESKTOP_ACTION_COMMANDS as readonly string[]).includes(command))) {
+    for (const command of input.filter((c) => !(DESKTOP_ACTION_COMMANDS as readonly string[]).includes(c))) {
       expect(() => assertDesktopAction(command, []), command).toThrow(/not allowed/);
     }
     expect(COMPUTER_USE_COMMANDS).not.toContain("launch");

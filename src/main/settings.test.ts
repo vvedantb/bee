@@ -343,7 +343,7 @@ describe("settings personalised links", () => {
 });
 
 describe("settings interfaceScale", () => {
-  const onDisk = (value: unknown) => writeFileSync(join(dir, "settings.json"), JSON.stringify({ interfaceScale: value }));
+  const writeScale = (value: unknown) => writeFileSync(join(dir, "settings.json"), JSON.stringify({ interfaceScale: value }));
 
   it("defaults to 100%", () => {
     expect(create().view().interfaceScale).toBe(1);
@@ -366,7 +366,7 @@ describe("settings interfaceScale", () => {
 
   it("reads garbage, unlisted numbers and a missing field as 100%", () => {
     for (const bad of ["1.5", null, 1.3, 0, -1, 99, {}, [1.5]]) {
-      onDisk(bad);
+      writeScale(bad);
       expect(create().view().interfaceScale).toBe(1);
     }
     writeFileSync(join(dir, "settings.json"), JSON.stringify({ meetingMode: true }));
@@ -383,7 +383,7 @@ describe("settings interfaceScale", () => {
 });
 
 describe("settings motionPreference", () => {
-  const onDisk = (value: unknown) => writeFileSync(join(dir, "settings.json"), JSON.stringify({ motionPreference: value }));
+  const writeMotion = (value: unknown) => writeFileSync(join(dir, "settings.json"), JSON.stringify({ motionPreference: value }));
 
   it("defaults to on", () => {
     expect(create().view().motionPreference).toBe("on");
@@ -406,7 +406,7 @@ describe("settings motionPreference", () => {
 
   it("reads garbage and a missing field as on", () => {
     for (const bad of [1, null, true, "reduce", "OFF", {}, ["off"]]) {
-      onDisk(bad);
+      writeMotion(bad);
       expect(create().view().motionPreference).toBe("on");
     }
     writeFileSync(join(dir, "settings.json"), JSON.stringify({ meetingMode: true }));
@@ -461,9 +461,9 @@ describe("settings: no Team settings", () => {
     // Known keys in the same file still load.
     expect(view.autoMeetingDetection).toBe(false);
     store.save({ meetingMode: true });
-    const onDisk = JSON.parse(readFileSync(join(dir, "settings.json"), "utf8"));
-    for (const key of ["team", "inviteCode", "pendingInvite", "relayUrl", "shareMuted"]) expect(onDisk).not.toHaveProperty(key);
-    expect(onDisk.autoMeetingDetection).toBe(false);
+    const saved = JSON.parse(readFileSync(join(dir, "settings.json"), "utf8"));
+    for (const key of ["team", "inviteCode", "pendingInvite", "relayUrl", "shareMuted"]) expect(saved).not.toHaveProperty(key);
+    expect(saved.autoMeetingDetection).toBe(false);
   });
 });
 
