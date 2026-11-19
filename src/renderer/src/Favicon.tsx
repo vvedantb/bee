@@ -6,13 +6,15 @@ const known = new Map<string, string | null>();
 
 /** A site's icon. A globe shows first and when there is none, so chips never wait on it. */
 export function Favicon({ domain }: { domain: string }) {
+  return <FaviconIcon key={domain} domain={domain} />;
+}
+
+// Keyed by domain, so a new domain starts with fresh state read from the cache.
+function FaviconIcon({ domain }: { domain: string }) {
   const [icon, setIcon] = useState<string | null>(known.get(domain) ?? null);
   useEffect(() => {
     let live = true;
-    if (known.has(domain)) {
-      setIcon(known.get(domain) ?? null);
-      return;
-    }
+    if (known.has(domain)) return;
     window.bee
       .getFavicon(domain)
       .catch(() => null)
