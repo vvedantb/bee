@@ -18,7 +18,7 @@ import { redactSecretValues } from "./debug-redact";
 import { debugLog, errorData, msSince } from "./debug-log";
 import type { ToolModelOutput } from "./claude-agent";
 import type { LunaToolActivity } from "./luna";
-import { LOOK_PERMISSION } from "./screen-look";
+import { LOOK_PERMISSION } from "./screen-look-messages";
 
 // The AI's computer tools, for a direct request only ("Bee, send Sam a message in Discord"): never in a meeting tip turn. They
 // follow agent-desktop's own loop: read an app's accessibility tree as a compact snapshot (or find one element), act on one

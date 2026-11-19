@@ -5,6 +5,7 @@ import type { ToolModelOutput } from "./claude-agent";
 import { offLimitsApp } from "./computer-tools";
 import { debugLog, errorData } from "./debug-log";
 import { appKey } from "./desktop-actions";
+import { LOOK_FAILED, LOOK_NO_WINDOW, LOOK_OFF_LIMITS, LOOK_PERMISSION, LOOK_UNAVAILABLE } from "./screen-look-messages";
 
 // look_at_screen: a picture of the front window for a direct request ("Bee, what does this chart show?"), only when the AI asks
 // for it because the window's text is not enough. The picture goes to the user's Claude Code in that request as an image block
@@ -40,12 +41,7 @@ export type ScreenCapture = { platform: LookPlatform; capture: (front: FrontWind
 /** Any agent-desktop runner that may list windows: computer use's, or the read-only one meeting tips use (main/index.ts). */
 export type WindowListRun = (command: "list-windows", args: string[], options?: { timeoutMs?: number }) => Promise<AgentDesktopResult>;
 
-export const LOOK_UNAVAILABLE = "Bee cannot look at the screen on this computer. Answer from the window's text, or say Bee cannot see it.";
-export const LOOK_PERMISSION =
-  "Bee needs Screen Recording to look at the screen. Tell the user in one line to turn on Bee in System Settings > Privacy & Security > Screen Recording (Bee's Settings has a button for it), then ask again.";
-export const LOOK_OFF_LIMITS = "Bee will not take a picture of that window: it never captures Bee itself, password managers, terminals or system settings. Say so in one line.";
-export const LOOK_NO_WINDOW = "Bee cannot tell which window is at the front, so it took no picture.";
-export const LOOK_FAILED = "Bee could not take a picture of the screen just now.";
+export { LOOK_FAILED, LOOK_NO_WINDOW, LOOK_OFF_LIMITS, LOOK_PERMISSION, LOOK_UNAVAILABLE };
 
 /** What execute returns: a picture, or a text for the AI. The picture's bytes reach the model only through toModelOutput. */
 export type LookOutput = { kind: "image"; shot: ScreenShot; window: string } | { kind: "text"; text: string };
