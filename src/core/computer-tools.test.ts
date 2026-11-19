@@ -1695,12 +1695,14 @@ describe("Writer Undo: Typing readback (real agent-desktop 2.6 shapes, soffice.b
     expect(undoTypingLabel("hello")).toBe("Undo: Typing: “hello”");
   });
   it("finds Undo: Typing for the typed text in the real find and snapshot, and not Repeat, other text or a longer text", () => {
-    expect(writerRecordedTyping(find.data!.matches, "hello")).toBe(true);
+    const matches = find.data?.matches;
+    if (!matches) throw new Error("fixture writer-find-hello.json is missing data.matches");
+    expect(writerRecordedTyping(matches, "hello")).toBe(true);
     expect(writerRecordedTyping([slim.tree], "hello")).toBe(true);
-    expect(writerRecordedTyping(find.data!.matches, "Hello")).toBe(true);
-    expect(writerRecordedTyping(find.data!.matches, "hell")).toBe(false);
-    expect(writerRecordedTyping(find.data!.matches, "hello world")).toBe(false);
-    expect(writerRecordedTyping(find.data!.matches, "")).toBe(false);
+    expect(writerRecordedTyping(matches, "Hello")).toBe(true);
+    expect(writerRecordedTyping(matches, "hell")).toBe(false);
+    expect(writerRecordedTyping(matches, "hello world")).toBe(false);
+    expect(writerRecordedTyping(matches, "")).toBe(false);
     const repeat = [{ role: "menuitem", name: "Repeat: Typing: “hello”" }, { role: "button", name: "Undo: Typing: “hello”" }];
     expect(writerRecordedTyping(repeat, "hello")).toBe(false);
     expect(writerRecordedTyping([{ role: "menuitem", name: 'Undo: Typing: "hello"' }], "hello")).toBe(true);

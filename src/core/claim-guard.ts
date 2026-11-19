@@ -471,7 +471,7 @@ export function withoutToolNames(line: string): string {
   // A line that began with a name now begins with plain words: "open_app failed" → "Opening the app failed".
   const startsWithName = /^\s*`?(?:[a-z]+_[a-z_]+|[a-z0-9-]+__|[A-Z]+_[A-Z_]+\b|@s[a-z0-9]+:)/i.test(line);
   const text = plain.replace(/[ \t]+/g, " ").trim();
-  return startsWithName && text.length > 0 ? text[0]!.toUpperCase() + text.slice(1) : text;
+  return startsWithName && text.length > 0 ? text.charAt(0).toUpperCase() + text.slice(1) : text;
 }
 
 /** Tools ran, and none read the calendar: a calendar tool was tried and no calendar read succeeded, or nothing was read at all. */

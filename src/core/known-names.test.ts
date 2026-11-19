@@ -139,7 +139,9 @@ describe("which person, in more kinds of request (PR #80 review)", () => {
       const [first] = nameAmbiguities(request, KNOWN);
       expect(first?.matches, request).toEqual(["Chris Lee", "Krzysztof Nowak"]);
     }
-    expect(whichNameQuestion(nameAmbiguities("find kris", KNOWN)[0]!)).toBe("Which Kris: Chris Lee or Krzysztof Nowak?");
+    const [ambiguity] = nameAmbiguities("find kris", KNOWN);
+    if (!ambiguity) throw new Error("expected an ambiguity for 'find kris'");
+    expect(whichNameQuestion(ambiguity)).toBe("Which Kris: Chris Lee or Krzysztof Nowak?");
   });
 
   it("never asks about an app or an ordinary word", () => {

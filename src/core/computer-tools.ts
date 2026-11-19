@@ -1299,6 +1299,8 @@ export function computerTools(deps: ComputerToolDeps) {
       if ([...text].length > KEYBOARD_TYPE_MAX) return `Error: the keyboard types at most ${KEYBOARD_TYPE_MAX} characters at a time. Nothing was typed.`;
       const keys = keyPresses(text);
       if (!keys) return "Error: the keyboard can type only letters, digits, spaces, commas, full stops, slashes and hyphens. Press other keys, such as return, with press_key. Nothing was typed.";
+      const [firstKey] = keys;
+      if (firstKey === undefined) return "Error: there was no text to type. Nothing was typed.";
       lastWrite = null;
       const focused = await deps.desktop.focusWindow({ app }, control.signal);
       // On Wayland Bee cannot bring a window forward; the headed press still asks agent-desktop to focus it, and refuses if it cannot.
@@ -1312,7 +1314,7 @@ export function computerTools(deps: ComputerToolDeps) {
         return `Error: a Document Recovery dialog is open and blocks typing into ${shortName(app, 30)}. Nothing was typed. Close or answer the dialog first, then open the document and type again.`;
       }
       const press = (name: string | undefined, key: string) => exec("press", [key, ...scope({ app: name, window_id }), HEADED_FLAG], ACT_MS);
-      const first = await withApp(app, (name) => press(name, keys[0]!));
+      const first = await withApp(app, (name) => press(name, firstKey));
       currentApp = first.app ?? currentApp;
       lastField = null;
       let typed = first.result.ok ? 1 : 0;

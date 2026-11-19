@@ -38,7 +38,7 @@ export function mergeNames(known: readonly string[], learned: readonly string[])
   return normalizeNames([...known, ...learned]);
 }
 
-const cap = (word: string) => (word ? word[0]!.toUpperCase() + word.slice(1).toLowerCase() : word);
+const cap = (word: string) => (word ? word.charAt(0).toUpperCase() + word.slice(1).toLowerCase() : word);
 // A word of a person's name: a capital, then letters, apostrophes or hyphens.
 const NAME_WORD = String.raw`\p{Lu}[\p{L}'’-]+`;
 const PERSON = new RegExp(`^${NAME_WORD}(?: ${NAME_WORD}){0,3}$`, "u");
@@ -146,15 +146,22 @@ function voicedKey(word: string): string {
   return `${text.slice(0, 1)}${text.slice(1).replace(/h/g, "").replace(/(.)\1+/g, "$1")}`;
 }
 
+/** Reads a cell the loop bounds guarantee is present; throws if that invariant is ever broken. */
+function cell(row: readonly number[], index: number): number {
+  const value = row[index];
+  if (value === undefined) throw new Error(`edit-distance cell ${index} is out of range`);
+  return value;
+}
+
 /** Edits (insert, delete, change one letter) from a to b. */
 function editDistance(a: string, b: string): number {
   let previous = Array.from({ length: b.length + 1 }, (_, index) => index);
   for (let i = 1; i <= a.length; i += 1) {
     const row = [i];
-    for (let j = 1; j <= b.length; j += 1) row.push(Math.min(previous[j]! + 1, row[j - 1]! + 1, previous[j - 1]! + (a[i - 1] === b[j - 1] ? 0 : 1)));
+    for (let j = 1; j <= b.length; j += 1) row.push(Math.min(cell(previous, j) + 1, cell(row, j - 1) + 1, cell(previous, j - 1) + (a[i - 1] === b[j - 1] ? 0 : 1)));
     previous = row;
   }
-  return previous[b.length]!;
+  return cell(previous, b.length);
 }
 
 /**
@@ -290,8 +297,9 @@ export function spellingSettled(request: string, known: readonly string[]): Reso
   const found: ResolvedName[] = [];
   for (const { word } of nameTokens(request)) {
     const matches = nameMatches(word, known);
-    if (matches.length !== 1 || everyMatch(word, known).length < 2) continue;
-    if (!found.some((item) => item.heard.toLowerCase() === word.toLowerCase())) found.push({ heard: word, name: matches[0]!.name });
+    const only = matches.length === 1 ? matches[0] : undefined;
+    if (!only || everyMatch(word, known).length < 2) continue;
+    if (!found.some((item) => item.heard.toLowerCase() === word.toLowerCase())) found.push({ heard: word, name: only.name });
   }
   return found;
 }
@@ -316,8 +324,9 @@ export function recentChoice(ambiguity: NameAmbiguity, recent: readonly string[]
   });
   for (const text of recent.slice(-RECENT_TEXTS_MAX).reverse()) {
     const named = marks.filter((mark) => mark.terms.some((term) => term.test(text)));
-    if (named.length === 1) return named[0]!.name;
     if (named.length > 1) return null;
+    const [first] = named;
+    if (first) return first.name;
   }
   return null;
 }
