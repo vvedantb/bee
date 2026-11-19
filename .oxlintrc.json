@@ -7,7 +7,7 @@
     "unicorn/no-array-sort": "off",
     "unicorn/no-array-reverse": "off",
     "unicorn/require-module-specifiers": "off",
-    "import/no-unassigned-import": "off",
+    "import/no-unassigned-import": ["error", { "allow": ["**/*.css", "**/debug-log-boot"] }],
     "typescript/no-non-null-assertion": "off",
     "no-console": "off",
     "no-shadow": "off",
