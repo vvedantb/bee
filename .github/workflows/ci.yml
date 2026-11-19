@@ -61,11 +61,15 @@ jobs:
         run: node scripts/check-helper-protocol.mjs native/teams-audio/dist/win32-x64/teams-audio-helper.exe
       - name: Check koffi stays external in built main
         run: node scripts/check-koffi-external.mjs out/main/index.js
+      # Packaging and the two packaged-app checks run on pushes to main only, not on pull requests: they add 43 to 70 s
+      # and a pull request already builds the helper and the bundle above. A packaging break shows on the main run after merge.
       - name: Package Windows (unpacked, unsigned)
+        if: github.event_name == 'push'
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
         run: npx electron-builder --win dir --x64 --publish never
       - name: Check packaged Teams audio helper
+        if: github.event_name == 'push'
         shell: pwsh
         run: |
           $helper = "release/win-unpacked/resources/teams-audio/teams-audio-helper.exe"
@@ -73,6 +77,7 @@ jobs:
           $version = & $helper --version
           if ($LASTEXITCODE -ne 0 -or "$version" -ne "teams-audio-helper protocol=3") { throw "Packaged Teams audio helper --version failed: $version" }
       - name: Check packaged koffi (asarUnpack + win32 binary + AllowSetForegroundWindow bind)
+        if: github.event_name == 'push'
         run: node scripts/check-koffi-windows.mjs release/win-unpacked
 
   # Off: Bee is not used on macOS yet. Before turning this back on, re-record the replay fixtures
