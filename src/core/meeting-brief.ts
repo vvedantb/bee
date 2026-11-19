@@ -45,7 +45,7 @@ export function pastMeetings(args: {
   const subject = normaliseSubject(identity.subject);
   const needed = Math.min(2, new Set(identity.attendees.map(normaliseName).filter((name) => name.length > 0)).size);
   // Newest first. Records are stored oldest first, with equal dates in saved order.
-  const newest = [...records].reverse().sort((a, b) => b.date.localeCompare(a.date));
+  const newest = records.toReversed().sort((a, b) => b.date.localeCompare(a.date));
   const same = newest.filter((record) => record.key === identity.key || (subject.length > 0 && normaliseSubject(record.subject) === subject));
   const sameIds = new Set(same.map((record) => record.id));
   const people = needed === 0 ? [] : newest.filter((record) => !sameIds.has(record.id) && sharedAttendees(identity.attendees, record.attendees) >= needed);

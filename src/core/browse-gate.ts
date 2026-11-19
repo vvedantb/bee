@@ -148,7 +148,7 @@ function receiverSetup(statement: string, earlier: readonly string[]): string {
   if (!receiver || PLAIN_RECEIVERS.has(receiver)) return "";
   const name = receiver.replace(/\$/g, "\\$");
   const assigns = new RegExp(`(?:^|[\\s(,])(?:const|let|var)?\\s*${name}\\s*=(?!=)|\\b(?:const|let|var)\\s+${name}\\s+(?:of|in)\\b`);
-  return [...earlier].reverse().find((item) => assigns.test(item)) ?? "";
+  return earlier.toReversed().find((item) => assigns.test(item)) ?? "";
 }
 
 /** The kind a control's text names, or null. A submit in a search form only searches. */

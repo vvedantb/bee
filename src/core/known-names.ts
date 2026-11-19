@@ -322,7 +322,7 @@ export function recentChoice(ambiguity: NameAmbiguity, recent: readonly string[]
     const terms = [...new Set([name, ...own])].map((term) => new RegExp(`(?<![\\p{L}])${escapeRegExp(term)}(?![\\p{L}])`, "iu"));
     return { name, terms };
   });
-  for (const text of recent.slice(-RECENT_TEXTS_MAX).reverse()) {
+  for (const text of recent.slice(-RECENT_TEXTS_MAX).toReversed()) {
     const named = marks.filter((mark) => mark.terms.some((term) => term.test(text)));
     if (named.length > 1) return null;
     const [first] = named;
@@ -358,14 +358,14 @@ export function remapHeardNames(
     if (to && to !== token.word) changes.push({ from: token.word, to, start: token.start, end: token.end });
   }
   let out = text;
-  for (const change of [...changes].reverse()) out = `${out.slice(0, change.start)}${change.to}${out.slice(change.end)}`;
+  for (const change of changes.toReversed()) out = `${out.slice(0, change.start)}${change.to}${out.slice(change.end)}`;
   return { text: out, changes: changes.map(({ from, to }) => ({ from, to })) };
 }
 
 /** Terms to bias speech-to-text toward (core/transcribe.ts): known names, newest first, then their first names. */
 export const STT_TERMS_MAX = 50;
 export function sttTerms(known: readonly string[]): string[] {
-  const names = normalizeNames(known).reverse();
+  const names = normalizeNames(known).toReversed();
   const firsts = names.map((name) => name.split(" ")[0] ?? "").filter((word) => word.length >= 3);
   const seen = new Set<string>();
   return [...names, ...firsts].filter((term) => (seen.has(term.toLowerCase()) ? false : (seen.add(term.toLowerCase()), true))).slice(0, STT_TERMS_MAX);
@@ -387,7 +387,7 @@ export function whichNameQuestion(ambiguity: NameAmbiguity): string {
  * (resolved): then a line says which person that is.
  */
 export function knownNamesBlock(names: readonly string[], request?: string, resolved: readonly ResolvedName[] = []): string {
-  const list = normalizeNames(names).slice(-PROMPT_NAMES_MAX).reverse();
+  const list = normalizeNames(names).slice(-PROMPT_NAMES_MAX).toReversed();
   if (list.length === 0) return "";
   const block = `Names the user has taught Bee (spell them this way; a misheard name, such as Susannah for Zuzanna, may be one of these; when it could be more than one of them, ask which): ${list.join(", ")}.`;
   const settled = (heard: string) => resolved.some((item) => item.heard.toLowerCase() === heard.toLowerCase());

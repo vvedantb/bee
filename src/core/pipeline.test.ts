@@ -27,7 +27,7 @@ function jevAfter(ms: number, started?: (at: number) => void, finished?: (at: nu
     started?.(performance.now());
     await sleep(ms);
     finished?.(performance.now());
-    return { ranked: [...args.candidates].reverse().map((candidate, index) => ({ candidate, jevScore: 2.5 - index * 0.1 })), source: "jev" as const, error: null };
+    return { ranked: args.candidates.toReversed().map((candidate, index) => ({ candidate, jevScore: 2.5 - index * 0.1 })), source: "jev" as const, error: null };
   }) as never);
 }
 

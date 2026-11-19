@@ -155,7 +155,7 @@ export function isTeamsApp(app) {
 /** The agent-desktop JSON envelope from stdout (the last JSON line if stray lines came first), or null. */
 export function parseEnvelope(stdout) {
   const text = String(stdout).trim();
-  for (const candidate of [text, ...text.split(/\r?\n/).reverse()]) {
+  for (const candidate of [text, ...text.split(/\r?\n/).toReversed()]) {
     if (!candidate.startsWith("{")) continue;
     try {
       const value = JSON.parse(candidate);

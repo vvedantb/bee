@@ -111,7 +111,7 @@ async function startOAuthMcpServer() {
 
 const cleanup: Array<() => void | Promise<void>> = [];
 afterEach(async () => {
-  for (const close of cleanup.splice(0).reverse()) await close();
+  for (const close of cleanup.splice(0).toReversed()) await close();
 });
 
 describe("MCP OAuth end to end", () => {

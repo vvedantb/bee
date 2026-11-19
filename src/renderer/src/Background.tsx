@@ -37,7 +37,7 @@ export function BackgroundSection(props: { jobs: readonly BackgroundJobView[]; o
     <section>
       <h2>Background tasks</h2>
       <ul className="flex flex-col gap-2">
-        {[...props.jobs].reverse().map((job) => (
+        {props.jobs.toReversed().map((job) => (
           <li key={job.id} className="flex items-center gap-2">
             <div className="flex min-w-0 flex-1 flex-col">
               <span className="truncate">{job.title}</span>
