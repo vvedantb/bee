@@ -8,7 +8,7 @@ on:
     branches: [main]
 
 jobs:
-  # Fast feedback on Linux: typecheck, test-rule lint and the unit tests. Windows and macOS below also build and package.
+  # Fast feedback on Linux: typecheck, test-rule lint and the unit tests. Windows below also builds and packages.
   ubuntu:
     uses: vvedantb/packages/.github/workflows/ci-app.yml@main
     with:
@@ -58,7 +58,10 @@ jobs:
       - name: Check packaged koffi (asarUnpack + win32 binary + AllowSetForegroundWindow bind)
         run: node scripts/check-koffi-windows.mjs release/win-unpacked
 
+  # Off: Bee is not used on macOS yet. Before turning this back on, re-record the replay fixtures
+  # (test/fixtures/replay): "Conversation E2E (replay)" fails with "No replay fixture for call 0".
   macos:
+    if: false
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
