@@ -10,6 +10,7 @@ import type { MeetingContext } from "../core/meeting-context";
 import { modelAgent } from "../../test/helpers/model-agent";
 import type { CommandAgent } from "../core/claude-agent";
 import type { ClaudeCode } from "./claude-code";
+import type { BeeHistoryStore } from "./bee-history-store";
 
 // Main's direct request handler (bee:command:run): it checks sign-in itself, runs desktop actions
 // through the runners it was given, and never needs a key for a plain "open". Electron, sign-in and the notes folder are stubbed.
@@ -30,7 +31,6 @@ vi.mock("./notes", () => ({ loadSnippets: () => [], isNotePath: () => false, wri
 const { IPC } = await import("../shared/ipc");
 const { registerMeetingIpc } = await import("./meeting-ipc");
 const { createBeeHistoryStore } = await import("./bee-history-store");
-type BeeHistoryStore = import("./bee-history-store").BeeHistoryStore;
 
 const event = { sender: { isDestroyed: () => false, send: () => undefined } };
 
