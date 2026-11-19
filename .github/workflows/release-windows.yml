@@ -1,21 +1,91 @@
 name: Release
 
+# Three ways in:
+# - A merge to main that changes what the app is built from (the paths below) releases the next patch version.
+# - A pushed v* tag releases that tag, as before.
+# - Manual dispatch releases the given tag, or the next patch version when the tag is left empty. dry_run builds
+#   everything and publishes nothing.
 on:
   push:
     tags:
       - "v*"
+    branches: [main]
+    # Only what goes into the app: its source, the native helper, the packaged resources, the dependencies and the
+    # build settings. Not in the list: tests, docs, landing, relay, convex and .github, so a merge that changes only
+    # those releases nothing. GitHub does not apply this filter to tag pushes.
+    paths:
+      - "src/**"
+      - "!src/**/*.test.ts"
+      - "!src/**/*.test.tsx"
+      - "native/**"
+      - "resources/**"
+      - "package.json"
+      - "package-lock.json"
+      - "electron.vite.config.ts"
+      - "tsconfig.json"
+      - "scripts/build-teams-audio-*"
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag (e.g. v0.1.0)"
-        required: true
-        default: "v0.2.1"
+        description: "Release tag (e.g. v0.1.0). Empty: the next patch version after the highest release."
+        required: false
+        default: ""
+      dry_run:
+        description: "Build and check everything, but publish nothing (no tag, no release)."
+        type: boolean
+        default: false
 
 permissions:
   contents: write
 
+# One release at a time. The version is chosen inside the run, so a queued run sees the release before it.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
+  # Picks the tag. A tag push or a dispatch with a tag uses that tag and leaves package.json alone, as before.
+  # Otherwise: the patch bump of the highest published vX.Y.Z release, and never lower than package.json. The build
+  # jobs write that version into package.json in their workspace; nothing is committed to main.
+  version:
+    runs-on: boat-large
+    outputs:
+      tag: ${{ steps.pick.outputs.tag }}
+      set_version: ${{ steps.pick.outputs.set_version }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: pick
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          GIVEN: ${{ github.ref_type == 'tag' && github.ref_name || github.event.inputs.tag }}
+        run: |
+          set -euo pipefail
+          if [ -n "$GIVEN" ]; then
+            tag="$GIVEN"
+            if [[ "$tag" != v* ]]; then tag="v$tag"; fi
+            echo "tag=$tag" >> "$GITHUB_OUTPUT"
+            echo "set_version=" >> "$GITHUB_OUTPUT"
+            echo "Releasing the given tag $tag"
+            exit 0
+          fi
+          pkg="$(sed -n 's/^  "version": "\([0-9][0-9.]*\)",$/\1/p' package.json | head -n 1)"
+          if [ -z "$pkg" ]; then echo "::error::No version found in package.json"; exit 1; fi
+          tags="$(gh api "repos/$GH_REPO/releases" --paginate -q '.[].tag_name')"
+          last="$(printf '%s\n' "$tags" | sed -n 's/^v\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)$/\1/p' | sort -V | tail -n 1)"
+          if [ -n "$last" ]; then
+            IFS=. read -r major minor patch <<< "$last"
+            bumped="$major.$minor.$((patch + 1))"
+          else
+            bumped="$pkg"
+          fi
+          version="$(printf '%s\n%s\n' "$pkg" "$bumped" | sort -V | tail -n 1)"
+          echo "package.json $pkg, highest release ${last:-none}, releasing v$version"
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+          echo "set_version=$version" >> "$GITHUB_OUTPUT"
+
   windows:
+    needs: version
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -24,7 +94,12 @@ jobs:
           node-version: "22"
           cache: npm
       - run: npm ci
+      - name: Set the release version
+        if: needs.version.outputs.set_version != ''
+        shell: bash
+        run: npm version "${{ needs.version.outputs.set_version }}" --no-git-tag-version --allow-same-version
       # The Teams audio helper (native/teams-audio/windows). Fails the release if it does not compile or answer --version.
+
       - name: Build Teams audio helper
         run: npm run build:teams-audio:win
       - run: npm test
@@ -55,6 +130,7 @@ jobs:
             release/latest*.yml
 
   macos:
+    needs: version
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -63,7 +139,12 @@ jobs:
           node-version: "22"
           cache: npm
       - run: npm ci
+      - name: Set the release version
+        if: needs.version.outputs.set_version != ''
+        shell: bash
+        run: npm version "${{ needs.version.outputs.set_version }}" --no-git-tag-version --allow-same-version
       # The Teams audio helpers (native/teams-audio/macos), arm64 and x64. Fails the release if either does not compile.
+
       - name: Build Teams audio helpers (arm64 + x64)
         run: npm run build:teams-audio:mac
       - run: npm test
@@ -96,8 +177,8 @@ jobs:
             release/latest*.yml
 
   publish:
-    needs: [windows, macos]
-    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+    needs: [version, windows, macos]
+    if: ${{ !inputs.dry_run }}
     runs-on: boat-large
     steps:
       - uses: actions/download-artifact@v4
@@ -109,11 +190,11 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
         run: |
-          TAG="${{ github.event.inputs.tag || github.ref_name }}"
-          if [[ "$TAG" != v* ]]; then TAG="v$TAG"; fi
+          # A new tag is made at the commit this run built. A tag that already exists is left where it is.
+          TAG="${{ needs.version.outputs.tag }}"
           ls dist
           gh release create "$TAG" dist/Bee*.exe dist/Bee*.zip dist/Bee*.dmg dist/*.blockmap dist/latest*.yml \
             --title "Bee $TAG" \
             --notes "Windows installer (NSIS) and portable zip, and macOS dmg and zip (separate Apple Silicon arm64 and Intel x64 builds). Builds are unsigned. Windows SmartScreen may warn. On macOS, Gatekeeper will warn: right-click Bee and choose Open." \
-            --latest || \
+            --target "$GITHUB_SHA" --latest || \
           gh release upload "$TAG" dist/Bee*.exe dist/Bee*.zip dist/Bee*.dmg dist/*.blockmap dist/latest*.yml --clobber
