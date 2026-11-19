@@ -582,7 +582,7 @@ export async function runDirectCommand(args: {
   const handOver = new AbortController();
   let brief: string | undefined;
   // Read-only window tools for questions about the screen, with their own control (no step line, no Stop: they only read).
-  const readControl = computer ? createRunControl({ ...(args.signal ? { signal: args.signal } : {}) }) : null;
+  const readControl = computer ? createRunControl((args.signal ? { signal: args.signal } : {})) : null;
   const readTools =
     computer && readControl
       ? pickTools(

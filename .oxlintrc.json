@@ -1,0 +1,20 @@
+{
+  "extends": ["./node_modules/@vvedantb/config/oxlint/base.json"],
+  "ignorePatterns": ["docs/**", "landing/**"],
+  "rules": {
+    "react/react-in-jsx-scope": "off",
+    "unicorn/consistent-function-scoping": "off",
+    "unicorn/no-array-sort": "off",
+    "unicorn/no-array-reverse": "off",
+    "unicorn/no-array-fill-with-reference-type": "off",
+    "unicorn/require-module-specifiers": "off",
+    "import/no-unassigned-import": "off",
+    "import/no-cycle": "off",
+    "typescript/no-non-null-assertion": "off",
+    "no-console": "off",
+    "no-shadow": "off",
+    "no-unused-vars": "off",
+    "no-underscore-dangle": "off",
+    "no-unmodified-loop-condition": "off"
+  }
+}

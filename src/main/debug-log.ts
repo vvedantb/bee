@@ -156,7 +156,7 @@ export function createDebugLog(options: {
 
   const headerLine = (previous: string | null): string => {
     const text = serialize(
-      line({ level: "info", category: "log", event: "file-opened", data: { part, previous, maxFileBytes, ...(options.header?.() ?? {}) } }),
+      line({ level: "info", category: "log", event: "file-opened", data: { part, previous, maxFileBytes, ...options.header?.() } }),
     );
     return `${text}\n`;
   };

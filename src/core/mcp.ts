@@ -237,7 +237,7 @@ export async function connectMcp(config: McpServerConfig, timeoutMs = MCP_CONNEC
     };
   } catch (error) {
     await close();
-    throw new Error(shortError(error, config));
+    throw new Error(shortError(error, config), { cause: error });
   }
 }
 

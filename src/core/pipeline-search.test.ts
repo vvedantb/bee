@@ -2,11 +2,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BeeGateway } from "./gateway";
 import { rankWithJev } from "./jev";
 import { guideWithLuna } from "./luna";
+import type * as LunaModule from "./luna";
 import { runPipeline } from "./pipeline";
 import { searchLocation } from "./web-search";
 
 vi.mock("./jev", () => ({ rankWithJev: vi.fn() }));
-vi.mock("./luna", async (importOriginal) => ({ ...(await importOriginal<typeof import("./luna")>()), guideWithLuna: vi.fn() }));
+vi.mock("./luna", async (importOriginal) => ({ ...(await importOriginal<typeof LunaModule>()), guideWithLuna: vi.fn() }));
 
 const rank = vi.mocked(rankWithJev);
 const guide = vi.mocked(guideWithLuna);

@@ -41,7 +41,12 @@ const CANCEL_WAIT_MS = 30_000;
 // Dropped from every recorded part: never needed to replay, and may carry ids, routing or bulky encrypted pages.
 const DROPPED_KEYS = new Set(["headers", "request", "rawValue", "gateway", "encryptedContent", "encrypted_content"]);
 
-const json = z.json();
+// z.json() is a lazy recursive union of JSON values. tsrs cannot infer its type back through
+// z.record, so state the type and build the same union by hand (identical at run time).
+type Json = string | number | boolean | null | Json[] | { [key: string]: Json };
+const json: z.ZodType<Json> = z.lazy(() =>
+  z.union([z.string(), z.number(), z.boolean(), z.null(), z.array(json), z.record(z.string(), json)]),
+);
 const metadata = z.record(z.string(), z.record(z.string(), json)).optional();
 const withId = { id: z.string(), providerMetadata: metadata };
 const delta = { ...withId, delta: z.string() };
@@ -110,7 +115,6 @@ const callSchema = z.discriminatedUnion("kind", [
 type ReplayCall = z.output<typeof callSchema>;
 export const fixtureSchema = z.object({ model: z.string(), calls: z.array(callSchema) });
 
-type Json = z.infer<typeof json>;
 type Ending = { end: ReplayCall["end"]; error?: string; promptHash: string };
 // A call as written: parts are plain JSON.
 type RecordedCall = Ending &

@@ -1,6 +1,6 @@
 import { IconTrash } from "@tabler/icons-react";
 import { Button, ConfirmDialog } from "@vvedantb/ui";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { MemoryFactView } from "../../shared/ipc";
 import { MemoryFactList, memoryClearMessage } from "./MemoryFactList";
 import { InfoTip } from "./SettingRow";
@@ -33,8 +33,10 @@ export function MemorySection({
     }
   }
 
+  // refresh re-creates each render (onLoad is an inline prop). Hold the mount-time instance in a ref so the load effect runs once.
+  const refreshRef = useRef(refresh);
   useEffect(() => {
-    void refresh();
+    void refreshRef.current();
     // Once when the Memory tab opens; a clear refreshes it after.
   }, []);
 

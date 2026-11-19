@@ -3,13 +3,14 @@ import { pipelineRequestSchema, pipelineResultSchema } from "../shared/ipc";
 import { GUIDE_MODEL, type BeeGateway } from "./gateway";
 import { rankWithJev } from "./jev";
 import { guideWithLuna, type LunaResult } from "./luna";
+import type * as LunaModule from "./luna";
 import type { McpTools } from "./mcp";
 import { SEED_NOTES, chunkNotes } from "./notes";
 import { runPipeline } from "./pipeline";
 import { SCREEN_PICTURE_MS, type ScreenGlance } from "./screen-context";
 
 vi.mock("./jev", () => ({ rankWithJev: vi.fn() }));
-vi.mock("./luna", async (importOriginal) => ({ ...(await importOriginal<typeof import("./luna")>()), guideWithLuna: vi.fn() }));
+vi.mock("./luna", async (importOriginal) => ({ ...(await importOriginal<typeof LunaModule>()), guideWithLuna: vi.fn() }));
 
 const rank = vi.mocked(rankWithJev);
 const guide = vi.mocked(guideWithLuna);
