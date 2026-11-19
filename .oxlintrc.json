@@ -14,7 +14,6 @@
     "no-console": "off",
     "no-shadow": "off",
     "no-unused-vars": "off",
-    "no-underscore-dangle": "off",
-    "no-unmodified-loop-condition": "off"
+    "no-underscore-dangle": "off"
   }
 }

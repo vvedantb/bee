@@ -409,6 +409,8 @@ export function claudeSession(options: { executable: string; cwd: string; store:
     let wake: (() => void) | null = null;
     let ended = false;
     async function* input(): AsyncGenerator<SDKUserMessage> {
+      // `ended` is flipped by session.end() through this closure; the loop parks on the wake promise until then.
+      // oxlint-disable-next-line no-unmodified-loop-condition
       while (!ended) {
         const next = queue.shift();
         if (next) yield next;

@@ -449,6 +449,8 @@ export function formatSnapshot(
       lines.push(line);
       size += line.length + 1;
     }
+    // `cut` is set true inside the recursive walk() call below once the size budget is hit; the rule cannot follow that.
+    // oxlint-disable-next-line no-unmodified-loop-condition
     for (let index = 0; index < children.length && !cut; index += 1) {
       walk(children[index], line ? depth + 1 : depth, { parent: raw, grand: place.parent, siblings: children, index, ancestors });
     }
