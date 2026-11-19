@@ -39,7 +39,7 @@ jobs:
       - if: steps.modules.outputs.cache-hit != 'true'
         run: npm ci
       - name: Save node_modules
-        if: steps.modules.outputs.cache-hit != 'true'
+        if: github.event_name == 'push' && steps.modules.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: node_modules
