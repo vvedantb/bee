@@ -14,7 +14,7 @@ export function memoryDateLabel(updated: string): string {
 
 /** Facts come oldest first from main; the list shows the newest first. */
 export function newestFirst(facts: readonly MemoryFactView[]): MemoryFactView[] {
-  return [...facts].reverse();
+  return facts.toReversed();
 }
 
 export function memoryClearMessage(count: number): string {

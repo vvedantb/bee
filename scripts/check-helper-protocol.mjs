@@ -13,12 +13,12 @@ const platform = process.env.BEE_HELPER_PROTOCOL_PLATFORM || process.platform;
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 /** Expected `--protocol` fields for a platform, from the TypeScript exports. */
-export function expectedFor(platform, ts) {
+export function expectedFor(targetPlatform, ts) {
   const base = { protocol: ts.TEAMS_AUDIO_PROTOCOL, sampleRate: ts.HELPER_SAMPLE_RATE, exit: { ...ts.HELPER_EXIT } };
   // Protocol 3: no target app. Windows hears the default playback device's loopback; macOS every app but Bee.
-  if (platform === "win32") return { ...base, capture: { source: "system", device: "default-render-loopback" } };
-  if (platform === "darwin") return { ...base, beeBundleId: ts.BEE_BUNDLE_ID, capture: { source: "system", contentFilter: "excluding-bee" } };
-  throw new Error(`No helper on platform ${platform}`);
+  if (targetPlatform === "win32") return { ...base, capture: { source: "system", device: "default-render-loopback" } };
+  if (targetPlatform === "darwin") return { ...base, beeBundleId: ts.BEE_BUNDLE_ID, capture: { source: "system", contentFilter: "excluding-bee" } };
+  throw new Error(`No helper on platform ${targetPlatform}`);
 }
 
 /** Field-by-field differences, as "path: expected X, got Y" lines. Only expected fields are compared. */

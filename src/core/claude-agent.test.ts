@@ -13,8 +13,8 @@ import { BROWSE_DECLINED, BROWSE_NO_CONFIRM } from "./browse-gate";
 
 const SEND = "await page.getByRole('button', { name: 'Send' }).click()";
 
-function preToolUse(tool: string, code: string, id = "toolu_1"): HookInput {
-  return { hook_event_name: "PreToolUse", session_id: "s", transcript_path: "/t", cwd: "/c", tool_name: tool, tool_input: { code }, tool_use_id: id };
+function preToolUse(toolName: string, code: string, id = "toolu_1"): HookInput {
+  return { hook_event_name: "PreToolUse", session_id: "s", transcript_path: "/t", cwd: "/c", tool_name: toolName, tool_input: { code }, tool_use_id: id };
 }
 
 async function runHook(input: HookInput, request: { confirm?: (request: ConfirmRequest, signal: AbortSignal) => Promise<boolean>; onConfirmed?: (id: string, kind: IrreversibleKind) => void } | null) {

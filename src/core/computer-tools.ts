@@ -18,7 +18,7 @@ import { redactSecretValues } from "./debug-redact";
 import { debugLog, errorData, msSince } from "./debug-log";
 import type { ToolModelOutput } from "./claude-agent";
 import type { LunaToolActivity } from "./luna";
-import { LOOK_PERMISSION } from "./screen-look";
+import { LOOK_PERMISSION } from "./screen-look-messages";
 
 // The AI's computer tools, for a direct request only ("Bee, send Sam a message in Discord"): never in a meeting tip turn. They
 // follow agent-desktop's own loop: read an app's accessibility tree as a compact snapshot (or find one element), act on one
@@ -449,6 +449,8 @@ export function formatSnapshot(
       lines.push(line);
       size += line.length + 1;
     }
+    // `cut` is set true inside the recursive walk() call below once the size budget is hit; the rule cannot follow that.
+    // oxlint-disable-next-line no-unmodified-loop-condition
     for (let index = 0; index < children.length && !cut; index += 1) {
       walk(children[index], line ? depth + 1 : depth, { parent: raw, grand: place.parent, siblings: children, index, ancestors });
     }
@@ -1128,8 +1130,8 @@ export function computerTools(deps: ComputerToolDeps) {
     const shownWindow = isRecord(data) && isRecord(data.window) ? str(data.window.id) : "";
     const window = WINDOW_ID_PATTERN.test(shownWindow) ? shownWindow : undefined;
     if (window) windows.add(window);
-    const scope: Scope = { ...where, ...(where.window_id || !window ? {} : { window_id: window }) };
-    for (const ref of kept.keys()) if (!scopes.has(sidOf(ref))) scopes.set(sidOf(ref), scope);
+    const refScope: Scope = { ...where, ...(where.window_id || !window ? {} : { window_id: window }) };
+    for (const ref of kept.keys()) if (!scopes.has(sidOf(ref))) scopes.set(sidOf(ref), refScope);
     currentApp = shown.app ?? where.app ?? currentApp;
     return { ok: true, text: shown.text, kept };
   };
@@ -1297,20 +1299,22 @@ export function computerTools(deps: ComputerToolDeps) {
       if ([...text].length > KEYBOARD_TYPE_MAX) return `Error: the keyboard types at most ${KEYBOARD_TYPE_MAX} characters at a time. Nothing was typed.`;
       const keys = keyPresses(text);
       if (!keys) return "Error: the keyboard can type only letters, digits, spaces, commas, full stops, slashes and hyphens. Press other keys, such as return, with press_key. Nothing was typed.";
+      const [firstKey] = keys;
+      if (firstKey === undefined) return "Error: there was no text to type. Nothing was typed.";
       lastWrite = null;
       const focused = await deps.desktop.focusWindow({ app }, control.signal);
       // On Wayland Bee cannot bring a window forward; the headed press still asks agent-desktop to focus it, and refuses if it cannot.
       const note = focused.ok ? "" : `Bee could not bring ${shortName(app, 30)} to the front first (${focused.message}). `;
       // A Document Recovery dialog takes the keys: refuse before any key is pressed, and never come back Done.
       const open = control.reason() ? null : await withApp(app, (name) => exec("list-windows", scope({ app: name }), READ_MS));
-      const windows = open?.result.ok ? parseWindows(open.result.data) : [];
-      const blocked = windows.find((window) => BLOCKING_DIALOG.test(window.title));
-      if (blocked && (blocked.focused || !windows.some((window) => window.focused && !BLOCKING_DIALOG.test(window.title)))) {
-        debugLog.info("computer", "keyboard-type-blocked", { app, windows: windows.length });
+      const openWindows = open?.result.ok ? parseWindows(open.result.data) : [];
+      const blocked = openWindows.find((window) => BLOCKING_DIALOG.test(window.title));
+      if (blocked && (blocked.focused || !openWindows.some((window) => window.focused && !BLOCKING_DIALOG.test(window.title)))) {
+        debugLog.info("computer", "keyboard-type-blocked", { app, windows: openWindows.length });
         return `Error: a Document Recovery dialog is open and blocks typing into ${shortName(app, 30)}. Nothing was typed. Close or answer the dialog first, then open the document and type again.`;
       }
       const press = (name: string | undefined, key: string) => exec("press", [key, ...scope({ app: name, window_id }), HEADED_FLAG], ACT_MS);
-      const first = await withApp(app, (name) => press(name, keys[0]!));
+      const first = await withApp(app, (name) => press(name, firstKey));
       currentApp = first.app ?? currentApp;
       lastField = null;
       let typed = first.result.ok ? 1 : 0;
@@ -1379,7 +1383,7 @@ export function computerTools(deps: ComputerToolDeps) {
           gate: gateFor("set-value", ref, { effect, text: value }),
           refuse: refuseRef("set-value", ref),
         };
-  const focusAction = ({ ref, physical }: { ref: string; physical?: boolean | undefined }): Action => ({
+  const focusAction = ({ ref }: { ref: string; physical?: boolean | undefined }): Action => ({
     name: "focus",
     label: label(ref, "Selecting", "Selecting a field…"),
     // agent-desktop never moves focus without --headed ("no focus change" headless), so a focus is always headed.
@@ -1691,14 +1695,14 @@ export function computerTools(deps: ComputerToolDeps) {
         if (!focused.ok) return `Bee could not focus that field, so pasted nothing. ${errorLine(focused)}`;
         lastField = refs.get(ref) ?? lastField;
       }
-      const clip: { restored: boolean | null } = { restored: null };
+      const clipState: { restored: boolean | null } = { restored: null };
       const { result, app, note } = await withApp(input.app, async (name) => {
         const pasted = await pasteText(exec, { text, platform: deps.platform, scope: scope({ app: name, window_id: input.window_id }) });
-        clip.restored = pasted.restored;
+        clipState.restored = pasted.restored;
         return pasted.result;
       });
       currentApp = app ?? currentApp;
-      const clipboard = clip.restored === false ? " Bee could not put back what the clipboard held before." : "";
+      const clipboard = clipState.restored === false ? " Bee could not put back what the clipboard held before." : "";
       if (!result.ok) {
         if (ref) lastWrite = { ref, text, failed: true };
         return `${note}${errorLine(result)}${clipboard}`;
@@ -2037,7 +2041,7 @@ export function computerTools(deps: ComputerToolDeps) {
           const app = cleanApp(name);
           if (!app) return "Error: that is not an app name. Check list_apps.";
           if (offLimitsApp(app) || ["finder", "explorer", "file explorer", "dock", "windows explorer"].includes(appKey(app))) return "Error: Bee does not quit that app.";
-          const { result, note } = await withApp(app, (name) => exec("close-app", [name ?? app], ACT_MS));
+          const { result, note } = await withApp(app, (resolvedName) => exec("close-app", [resolvedName ?? app], ACT_MS));
           if (result.ok) lastField = null;
           return `${note}${done(result)}`;
         }),

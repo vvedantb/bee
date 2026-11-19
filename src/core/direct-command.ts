@@ -478,9 +478,9 @@ export async function runDirectCommand(args: {
   const summarise: Summarise | undefined = gateway ? (messages, signal) => historySummariser(gateway.languageModel(GUIDE_MODEL))(messages, signal) : undefined;
   debugLog.info("ai", "command-route", { command, route, history: history.length, computer: Boolean(args.computer), desktop: Boolean(args.actions), wantsComputer: wantsComputerUse(command) });
   if (route.kind !== "ai" && args.actions) {
-    const tool = FAST_TOOL[route.kind];
+    const fastTool = FAST_TOOL[route.kind];
     const actions = args.actions;
-    args.onActivity?.({ tool, phase: "start" });
+    args.onActivity?.({ tool: fastTool, phase: "start" });
     let result: DesktopActionResult;
     try {
       result = await (route.kind === "open-url" ? actions.openUrl(route.url) : route.kind === "open-app" ? actions.openApp(route.name) : actions.focusWindow({ app: route.name }));
@@ -488,15 +488,15 @@ export async function runDirectCommand(args: {
       debugLog.warn("desktop", "action-failed", { route, error: errorData(error) });
       result = { ok: false, message: "That desktop action failed" };
     } finally {
-      args.onActivity?.({ tool, phase: "end" });
+      args.onActivity?.({ tool: fastTool, phase: "end" });
     }
     debugLog.info("desktop", "fast-action", { route, result });
     // The quick action as a real tool call and result, like the AI's own, so the next request sees what was done.
     const toolCallId = `bee_fast_${Date.now().toString(36)}`;
     const input = route.kind === "open-url" ? { url: route.url } : route.kind === "open-app" ? { name: route.name } : { app: route.name };
     record([
-      { role: "assistant", content: [{ type: "tool-call", toolCallId, toolName: tool, input }] },
-      { role: "tool", content: [{ type: "tool-result", toolCallId, toolName: tool, output: { type: "text", value: result.message } }] },
+      { role: "assistant", content: [{ type: "tool-call", toolCallId, toolName: fastTool, input }] },
+      { role: "tool", content: [{ type: "tool-result", toolCallId, toolName: fastTool, output: { type: "text", value: result.message } }] },
       assistantMessage(result.message),
     ]);
     console.debug(`perf command fast ${route.kind} ok=${result.ok ? 1 : 0}`);

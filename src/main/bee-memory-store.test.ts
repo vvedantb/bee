@@ -57,7 +57,7 @@ describe("Bee's memory on disk", () => {
     expect(JSON.parse(readFileSync(store.path, "utf8"))).toEqual({ version: 1, facts: [] });
     expect(createBeeMemoryStore({ userDataDir }).facts()).toEqual([]);
     expect(readFileSync(join(userDataDir, "bee-history.json"), "utf8")).toBe("history");
-    expect(readdirSync(userDataDir).sort()).toEqual(["bee-history.json", MEMORY_DIR]);
+    expect(readdirSync(userDataDir).toSorted()).toEqual(["bee-history.json", MEMORY_DIR]);
     expect(store.clear()).toBe(0);
   });
 

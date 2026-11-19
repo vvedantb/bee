@@ -206,7 +206,7 @@ describe("revokeMcpOAuth", () => {
     await expect(revokeMcpOAuth({ url: MCP_URL, state, fetch: fetchFn })).resolves.toBe(true);
     const posts = calls.filter((call) => call.method === "POST").map((call) => new URLSearchParams(call.body));
     // Both revocations are sent concurrently, so arrival order is not pinned.
-    expect(posts.map((body) => [body.get("token"), body.get("token_type_hint"), body.get("client_id")]).sort()).toEqual([
+    expect(posts.map((body) => [body.get("token"), body.get("token_type_hint"), body.get("client_id")]).toSorted()).toEqual([
       ["AT", "access_token", "client-1"],
       ["RT", "refresh_token", "client-1"],
     ]);
@@ -453,7 +453,7 @@ describe("pinned behaviour", () => {
     // One of the two succeeded.
     await expect(revokeMcpOAuth({ url: MCP_URL, state: withSecret, fetch: fetchFn })).resolves.toBe(true);
     // Both revocations are sent concurrently, so arrival order is not pinned.
-    expect([...requests].sort((left, right) => left.body.localeCompare(right.body))).toEqual([
+    expect(requests.toSorted((left, right) => left.body.localeCompare(right.body))).toEqual([
       { url: `${AS}/revoke`, method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: "token=AT&token_type_hint=access_token&client_id=client-1&client_secret=shh", signal: true },
       { url: `${AS}/revoke`, method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: "token=RT&token_type_hint=refresh_token&client_id=client-1&client_secret=shh", signal: true },
     ]);

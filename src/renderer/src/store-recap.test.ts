@@ -9,7 +9,6 @@ import {
   type SettingsView,
   type UserReturned,
 } from "../../shared/ipc";
-import type { SessionLine } from "../../core/session-lines";
 import type { startMicSession } from "./speech";
 
 // Phrase ids for lines the stubbed mic session hands over (core/speech.ts PhraseLine).

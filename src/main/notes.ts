@@ -14,7 +14,7 @@ export function ensureNotesDir(dir: string): void {
 export function loadSnippets(dir: string): Snippet[] {
   const files: NoteFile[] = readdirSync(dir)
     .filter((name) => name.toLowerCase().endsWith(".md"))
-    .sort()
+    .toSorted()
     .map((name) => ({ name, content: readFileSync(join(dir, name), "utf8") }));
   return chunkNotes(files);
 }

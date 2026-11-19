@@ -77,6 +77,8 @@ export async function runPillFlicker(args: { preload: string; page: string; toke
   const started = performance.now();
   let capturing = true;
   const capture = (async () => {
+    // `capturing` is set false below after the toggles; this async loop awaits capturePage() each pass until then.
+    // oxlint-disable-next-line no-unmodified-loop-condition
     while (capturing) {
       const bounds = win.getBounds();
       const image = await win.webContents.capturePage();

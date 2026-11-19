@@ -283,7 +283,7 @@ export function summaryText(messages: readonly ModelMessage[], max = SUMMARY_MAX
   const lines = transcriptLines(messages);
   const kept: string[] = [];
   let used = 0;
-  for (const line of [...lines].reverse()) {
+  for (const line of lines.toReversed()) {
     if (used + line.length + 1 > max && kept.length > 0) break;
     kept.unshift(line.length > max ? `${line.slice(0, max - 1)}…` : line);
     used += line.length + 1;

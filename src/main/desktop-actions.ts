@@ -141,7 +141,7 @@ export function findShortcut(app: AppTarget, shortcuts: readonly { name: string;
   }
   const prefixed = usable
     .filter((shortcut) => names.some((name) => name.length >= 3 && shortcut.name.toLowerCase().startsWith(`${name} `)))
-    .sort((a, b) => a.name.length - b.name.length);
+    .toSorted((a, b) => a.name.length - b.name.length);
   return prefixed[0]?.path ?? null;
 }
 

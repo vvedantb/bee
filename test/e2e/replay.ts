@@ -126,7 +126,7 @@ const message = (error: unknown) => (error instanceof Error ? error.message : St
 
 /** The fixture files in a folder (none if it does not exist). */
 export function fixtureFiles(dir: string): string[] {
-  return existsSync(dir) ? readdirSync(dir).filter((name) => name.endsWith(".json")).sort() : [];
+  return existsSync(dir) ? readdirSync(dir).filter((name) => name.endsWith(".json")).toSorted() : [];
 }
 
 /** A JSON copy of the value without DROPPED_KEYS. */
@@ -188,7 +188,7 @@ function createRecorder(dir: string) {
         if (saved) return;
         saved = true;
         const candidate = new Map(entry.calls).set(index, { index, ...call });
-        const text = `${JSON.stringify({ model: modelId, calls: [...candidate.values()].sort((a, b) => a.index - b.index) }, null, 2)}\n`;
+        const text = `${JSON.stringify({ model: modelId, calls: [...candidate.values()].toSorted((a, b) => a.index - b.index) }, null, 2)}\n`;
         if (hasSecret(text)) return recordError({ model: modelId, call: index, error: "key-like text; not written" });
         entry.calls.set(index, { index, ...call });
         writeFileSync(join(dir, fileName(modelId)), text);

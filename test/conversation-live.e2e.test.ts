@@ -238,9 +238,9 @@ describe.skipIf(mode !== "replay" && !process.env.BEE_AI_GATEWAY_API_KEY?.trim()
     if (!process.env.BEE_E2E_SHOTS_DIR) return;
     console.log(`Screenshots:\n${files.join("\n")}`);
     for (const n of [2, 4]) expect(turn(n).shotError, `turn ${n} full-text shot`).toBeNull();
-    expect(files.map((file) => file.split(/[\\/]/).pop()).sort()).toEqual([...SHOTS, STATE_SHOT].map((name) => `${name}.png`).sort());
+    expect(files.map((f) => f.split(/[\\/]/).pop()).toSorted()).toEqual([...SHOTS, STATE_SHOT].map((name) => `${name}.png`).toSorted());
     expect(report.turns.filter((item) => item.stateShot !== null).map((item) => item.turn), "working-state shot in turn 1 or 2").toHaveLength(1);
-    for (const file of files) expect(readFileSync(file).subarray(0, 8).toString("hex")).toBe(PNG_MAGIC);
+    for (const f of files) expect(readFileSync(f).subarray(0, 8).toString("hex")).toBe(PNG_MAGIC);
     for (const n of [2, 4]) expect(turn(n).checks.fullTextAtTop, `turn ${n} full text opens and stays at the top`).toBe(true);
   });
 });

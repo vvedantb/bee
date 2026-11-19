@@ -5,7 +5,7 @@ import { statusClick } from "./island-click";
 import { NotchStatus } from "./NotchStatus";
 
 // The UI package does not load under node; a stub Button is enough to compare element types.
-vi.mock("@vvedantb/ui", () => ({ Button: function Button() {} }));
+vi.mock("@vvedantb/ui", () => ({ Button: function ButtonStub() {} }));
 
 type Props = { title?: string; tabIndex?: number; "aria-disabled"?: boolean; onClick?: () => void; children?: unknown };
 

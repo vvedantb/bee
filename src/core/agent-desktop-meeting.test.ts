@@ -292,7 +292,7 @@ describe("drillTargets", () => {
   const skeleton = (children: unknown[]) => ({ tree: { role: "window", name: "Acme renewal | Microsoft Teams", children } });
 
   it("drills roster and captions regions first, then the largest containers, in tree order and up to the cap", () => {
-    const data = skeleton([
+    const input = skeleton([
       cut("@s1:e1", "toolbar", "Meeting controls", 8),
       { role: "group", children: [cut("@s1:e2", "group", "Video gallery", 30), cut("@s1:e3", "group", "Live captions", 4)] },
       cut("@s1:e4", "group", "Participants", 3),
@@ -301,8 +301,8 @@ describe("drillTargets", () => {
       { role: "group", ref_id: "@s1:e7" },
       cut("@s1:e8", "group", "Turn on live captions", 2),
     ]);
-    expect(drillTargets(data)).toEqual(["@s1:e2", "@s1:e3", "@s1:e4", "@s1:e5"]);
-    expect(drillTargets(data, 2)).toEqual(["@s1:e3", "@s1:e4"]);
+    expect(drillTargets(input)).toEqual(["@s1:e2", "@s1:e3", "@s1:e4", "@s1:e5"]);
+    expect(drillTargets(input, 2)).toEqual(["@s1:e3", "@s1:e4"]);
     expect(drillTargets({ tree: { role: "window", children: [] } })).toEqual([]);
     expect(drillTargets(null)).toEqual([]);
   });

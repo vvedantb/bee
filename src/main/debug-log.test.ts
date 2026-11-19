@@ -30,7 +30,7 @@ afterEach(async () => {
   rmSync(root, { recursive: true, force: true });
 });
 
-const files = () => (existsSync(dir) ? readdirSync(dir).filter((name) => name.endsWith(".jsonl")).sort() : []);
+const files = () => (existsSync(dir) ? readdirSync(dir).filter((name) => name.endsWith(".jsonl")).toSorted() : []);
 const readLines = (name: string): DebugLine[] =>
   readFileSync(join(dir, name), "utf8")
     .split("\n")
@@ -203,7 +203,7 @@ describe("createDebugLog file rollover: old files are always kept", () => {
     await log.flush();
 
     expect(readFileSync(join(dir, taken), "utf8")).toBe(existing);
-    expect(files()).toEqual([taken, debugLogFileName(when, SESSION, 2)].sort());
+    expect(files()).toEqual([taken, debugLogFileName(when, SESSION, 2)].toSorted());
   });
 
   it("a new session never touches an older session's files", async () => {

@@ -111,7 +111,7 @@ export function createTranscriptQueue(deps: {
     // Newest kept first, until the count or byte cap.
     const kept: QueueItem[] = [];
     let bytes = 0;
-    for (const item of [...fresh].sort((a, b) => b.createdAt - a.createdAt)) {
+    for (const item of fresh.toSorted((a, b) => b.createdAt - a.createdAt)) {
       bytes += Buffer.byteLength(item.transcript, "utf8");
       if (kept.length >= QUEUE_MAX_ITEMS || bytes > QUEUE_MAX_BYTES) {
         debugLog.warn("vmem", "transcript-queue-full", { id: item.id, kind: item.kind });
@@ -120,7 +120,7 @@ export function createTranscriptQueue(deps: {
       kept.push(item);
     }
     const sent = file.sent.filter((entry) => at - entry.at <= SENT_MAX_AGE_MS).slice(-SENT_MAX);
-    return { pending: kept.sort((a, b) => a.createdAt - b.createdAt), sent };
+    return { pending: kept.toSorted((a, b) => a.createdAt - b.createdAt), sent };
   }
 
   function schedule(file: QueueFile): void {

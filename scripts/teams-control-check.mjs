@@ -155,7 +155,7 @@ export function isTeamsApp(app) {
 /** The agent-desktop JSON envelope from stdout (the last JSON line if stray lines came first), or null. */
 export function parseEnvelope(stdout) {
   const text = String(stdout).trim();
-  for (const candidate of [text, ...text.split(/\r?\n/).reverse()]) {
+  for (const candidate of [text, ...text.split(/\r?\n/).toReversed()]) {
     if (!candidate.startsWith("{")) continue;
     try {
       const value = JSON.parse(candidate);
@@ -200,7 +200,7 @@ export function pickWindow(windows) {
   const usable = windows.filter((w) => w && w.id && w.accessible !== false);
   const pool = usable.filter((w) => !titleClass(w.title).startsWith("meeting"));
   const list = pool.length > 0 ? pool : usable;
-  return [...list].sort((a, b) => Number(Boolean(b.is_focused)) - Number(Boolean(a.is_focused)) || area(b) - area(a))[0] ?? null;
+  return list.toSorted((a, b) => Number(Boolean(b.is_focused)) - Number(Boolean(a.is_focused)) || area(b) - area(a))[0] ?? null;
 }
 
 /** The process ids from pid up to the root, from rows of { ProcessId, ParentProcessId }. */
@@ -434,7 +434,7 @@ export async function main(argv = process.argv.slice(2)) {
   // 2. Teams process
   const findTeams = (apps) => {
     if (options.app) return apps.filter((app) => String(app.name).toLowerCase() === options.app.toLowerCase());
-    return apps.filter(isTeamsApp).sort((a, b) => Number(b.presentation === "foreground") - Number(a.presentation === "foreground"));
+    return apps.filter(isTeamsApp).toSorted((a, b) => Number(b.presentation === "foreground") - Number(a.presentation === "foreground"));
   };
   const listApps = async () => {
     const r = await ad(["list-apps"]);
@@ -525,7 +525,7 @@ export async function main(argv = process.argv.slice(2)) {
       const r = await ad(["snapshot", ...target(), ...extra, "--timeout-ms", cliTimeout]);
       if (!r.ok) return fromResult(r);
       const stats = treeStats(r.data?.tree);
-      const top = Object.entries(stats.roles).sort((a, b) => b[1] - a[1]).slice(0, 12).map(([role, n]) => `${role}:${n}`).join(",");
+      const top = Object.entries(stats.roles).toSorted((a, b) => b[1] - a[1]).slice(0, 12).map(([role, n]) => `${role}:${n}`).join(",");
       const flags = `complete=${r.data?.complete !== false}${r.data?.identity_unproven ? " identity_unproven" : ""}`;
       return {
         status: "PASS",

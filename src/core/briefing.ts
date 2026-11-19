@@ -50,7 +50,7 @@ export function dueBriefing(args: {
   const upcoming = args.events
     .map((event) => ({ event, startMs: Date.parse(event.start) }))
     .filter(({ startMs }) => startMs > args.now && startMs - args.now <= BRIEFING_LEAD_MS)
-    .sort((a, b) => a.startMs - b.startMs);
+    .toSorted((a, b) => a.startMs - b.startMs);
   for (const { event, startMs } of upcoming) {
     const key = `${event.subject}@${event.start}`;
     const attendees = [...event.required, ...event.optional].filter((name) => plainName(name).length > 0);

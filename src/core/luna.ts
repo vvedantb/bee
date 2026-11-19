@@ -551,7 +551,7 @@ function takeCitations(tip: string): { text: string; names: string[] } {
     return "";
   };
   // Last "per" first, so earlier indices stay valid; each name goes to the front, so names keep the text's order.
-  const unPer = [...tip.matchAll(PER)].reverse().reduce((out, match) => {
+  const unPer = [...tip.matchAll(PER)].toReversed().reduce((out, match) => {
     const from = match.index + match[0].length;
     const stop = out.slice(from).search(/[.!?;]+(?=\s|$)/);
     const rest = out.slice(from, stop < 0 ? out.length : from + stop);

@@ -143,7 +143,7 @@ describe("Claude Agent SDK: Bee, …", () => {
     const desktopCode = createClaudeCode({ sessionDir: mkdtempSync(join(tmpdir(), "bee-claude-desktop-")) });
     const desktopAgent = await desktopCode.agent();
     if ("error" in desktopAgent) throw new Error(desktopAgent.error);
-    const agent = desktopAgent.agent;
+    const beeAgent = desktopAgent.agent;
     const commands: string[] = [];
     const computer: ComputerHost = {
       platform: "mac",
@@ -159,7 +159,7 @@ describe("Claude Agent SDK: Bee, …", () => {
       },
       confirm: async () => false,
     };
-    const r = await runDirectCommand({ command: "can you see what I'm working on?", snippets: [], agent: agent, gateway: null, actions: { openApp: async () => ({ ok: true, message: "" }), focusWindow: async () => ({ ok: true, message: "" }), openUrl: async () => ({ ok: true, message: "" }) }, computer });
+    const r = await runDirectCommand({ command: "can you see what I'm working on?", snippets: [], agent: beeAgent, gateway: null, actions: { openApp: async () => ({ ok: true, message: "" }), focusWindow: async () => ({ ok: true, message: "" }), openUrl: async () => ({ ok: true, message: "" }) }, computer });
     process.stdout.write(`PROBE ${JSON.stringify({ commands, tips: r.tips, err: r.guideError })}\n`);
     expect(commands.some((c) => c.startsWith("snapshot") && c.includes("Cursor"))).toBe(true);
     expect(commands.every((c) => /^(list-windows|list-apps|snapshot|find|get|is)\b/.test(c))).toBe(true);

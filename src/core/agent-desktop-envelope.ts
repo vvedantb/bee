@@ -367,7 +367,7 @@ export function safeMessage(raw: unknown): string | undefined {
 /** The envelope in stdout. One JSON document is expected; failing that, the last line that parses. */
 export function parseEnvelope(stdout: string): AgentDesktopResult {
   const text = stdout.trim();
-  const candidates = [text, ...text.split(/\r?\n/).reverse()];
+  const candidates = [text, ...text.split(/\r?\n/).toReversed()];
   for (const candidate of candidates) {
     if (!candidate.startsWith("{")) continue;
     let json: unknown;

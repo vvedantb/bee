@@ -516,10 +516,10 @@ export function createSettingsStore(args: {
     const real = learned.filter((person) => isPerson(person.name));
     if (real.length === 0) return;
     const file = read();
-    const knownNames = mergeNames(file.knownNames, real.map((person) => person.name));
-    const people = learnedPeople(file.people ?? [], real);
-    if (JSON.stringify([knownNames, people]) === JSON.stringify([file.knownNames, file.people ?? []])) return;
-    write({ ...file, knownNames, people });
+    const mergedNames = mergeNames(file.knownNames, real.map((person) => person.name));
+    const mergedPeople = learnedPeople(file.people ?? [], real);
+    if (JSON.stringify([mergedNames, mergedPeople]) === JSON.stringify([file.knownNames, file.people ?? []])) return;
+    write({ ...file, knownNames: mergedNames, people: mergedPeople });
   }
 
   function overlayPosition(): SavedPosition | undefined {

@@ -12,7 +12,7 @@ const VOCABULARY_MAX = 100;
 /** The words the model should listen for: Bee's terms, then the user's known names, newest first, with no repeats (any case). */
 export function sttVocabulary(knownNames: readonly string[]): string[] {
   const seen = new Set<string>();
-  return [...STT_TERMS, ...[...knownNames].reverse()].filter((word) => !seen.has(word.toLowerCase()) && seen.add(word.toLowerCase())).slice(0, VOCABULARY_MAX);
+  return [...STT_TERMS, ...knownNames.toReversed()].filter((word) => !seen.has(word.toLowerCase()) && seen.add(word.toLowerCase())).slice(0, VOCABULARY_MAX);
 }
 
 export type TranscribeOutcome = { text: string | null; error: string | null };

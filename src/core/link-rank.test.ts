@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { LINK_MIN_SCORE, applyDecision, buildCandidate, canPersonalise, chipLabel, createLinkEnricher, type EnrichDeps, type HistoryHit, type LinkDecision } from "./link-rank";
+import { LINK_MIN_SCORE, applyDecision, buildCandidate, canPersonalise, chipLabel, createLinkEnricher, type HistoryHit, type LinkDecision } from "./link-rank";
 import type { LinkChip } from "./link-suggest";
 
 const vercel: LinkChip = { id: "vercel.com", domain: "vercel.com", url: "https://vercel.com/", label: "vercel.com" };

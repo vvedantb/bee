@@ -28,7 +28,7 @@ describe("lunaTools extra (MCP)", () => {
   const ping = tool({ description: "ping", inputSchema: z.object({}), execute: async () => "pong" });
 
   it("adds namespaced extra tools with or without a notes folder", () => {
-    expect(Object.keys(lunaTools({ extra: { vmem__ping: ping } })).sort()).toEqual(["vmem__ping", "web_search"]);
+    expect(Object.keys(lunaTools({ extra: { vmem__ping: ping } })).toSorted()).toEqual(["vmem__ping", "web_search"]);
     expect(Object.keys(lunaTools({ notesDir: "/notes", extra: { vmem__ping: ping } }))).toHaveLength(6);
   });
 

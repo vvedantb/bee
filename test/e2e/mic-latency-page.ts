@@ -62,14 +62,14 @@ function trackRuns(): void {
 }
 
 /** The run's first text is the first of its tips that it did not keep from the screen. */
-function sawTips(run: Run | undefined, tips: string[]): void {
+function sawTips(entry: Run | undefined, tips: string[]): void {
   for (const tip of tips) seenTips.add(tip);
-  if (!run || run.firstTextMs !== null) return;
-  const kept = new Set(run.kept.map(tipKey));
+  if (!entry || entry.firstTextMs !== null) return;
+  const kept = new Set(entry.kept.map(tipKey));
   const own = tips.filter((tip) => !kept.has(tipKey(tip)));
   if (own.length === 0) return;
-  run.firstTextMs = now();
-  run.firstText = own;
+  entry.firstTextMs = now();
+  entry.firstText = own;
 }
 
 async function until(done: () => boolean, what: string): Promise<void> {

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { debugLog, setDebugSink } from "../../core/debug-log";
+import { setDebugSink } from "../../core/debug-log";
 import { DEBUG_BATCH_MAX, debugLogEventSchema, type DebugLogBatch } from "../../shared/ipc";
 import { RENDERER_FLUSH_MS, createRendererDebugSink, logSignIn, logStateChanges, uiSnapshot, userTag } from "./debug-log";
 import type { BeeState } from "./store";
