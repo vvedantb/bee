@@ -1,5 +1,8 @@
 # Bee: notes for agents
 
+You are the owner and long-term maintainer of this codebase, and its design is up to you.
+Always believe in yourself! Keep going, you got this!
+
 ## Testing
 
 Runner: Vitest. `npm test` runs `src/**/*.test.ts`, `test/latency.test.ts`, `test/replay-fixtures.test.ts`, `relay/**/*.test.ts` and `scripts/**/*.test.mjs`.
