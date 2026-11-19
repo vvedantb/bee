@@ -6,7 +6,6 @@
     "unicorn/consistent-function-scoping": "off",
     "unicorn/no-array-sort": "off",
     "unicorn/no-array-reverse": "off",
-    "unicorn/no-array-fill-with-reference-type": "off",
     "unicorn/require-module-specifiers": "off",
     "import/no-unassigned-import": "off",
     "typescript/no-non-null-assertion": "off",

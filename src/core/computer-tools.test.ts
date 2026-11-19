@@ -1470,8 +1470,8 @@ describe("computerTools: act runs a short batch in one step", () => {
     expect(calls.map((item) => item.command)).toEqual(["snapshot"]);
     type Schema = { safeParse: (value: unknown) => { success: boolean } };
     const schema = tools.act.inputSchema as unknown as Schema;
-    expect(schema.safeParse({ actions: Array(ACT_MAX).fill(fill) }).success).toBe(true);
-    expect(schema.safeParse({ actions: Array(ACT_MAX + 1).fill(fill) }).success).toBe(false);
+    expect(schema.safeParse({ actions: Array.from({ length: ACT_MAX }, () => fill) }).success).toBe(true);
+    expect(schema.safeParse({ actions: Array.from({ length: ACT_MAX + 1 }, () => fill) }).success).toBe(false);
     expect(schema.safeParse({ actions: [{ do: "open_app", name: "Terminal" }] }).success).toBe(false);
     control.dispose();
   });

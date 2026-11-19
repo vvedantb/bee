@@ -149,8 +149,8 @@ describe("debug log IPC", () => {
 
   it("caps a batch at DEBUG_BATCH_MAX events and needs at least one", () => {
     const one = { ts: 1, level: "info", category: "ui", event: "x" };
-    expect(debugLogBatchSchema.safeParse({ events: Array(DEBUG_BATCH_MAX).fill(one) }).success).toBe(true);
-    expect(debugLogBatchSchema.safeParse({ events: Array(DEBUG_BATCH_MAX + 1).fill(one) }).success).toBe(false);
+    expect(debugLogBatchSchema.safeParse({ events: Array.from({ length: DEBUG_BATCH_MAX }, () => one) }).success).toBe(true);
+    expect(debugLogBatchSchema.safeParse({ events: Array.from({ length: DEBUG_BATCH_MAX + 1 }, () => one) }).success).toBe(false);
     expect(debugLogBatchSchema.safeParse({ events: [] }).success).toBe(false);
   });
 });
