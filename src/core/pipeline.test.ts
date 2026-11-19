@@ -60,7 +60,7 @@ describe("runPipeline", () => {
     guide.mockResolvedValue(lunaOk());
     const result = await runPipeline({ transcript, snippets, gateway, loadMcpTools: async () => mcpTools() });
     const { timingsMs } = pipelineResultSchema.parse(result);
-    expect(Object.keys(timingsMs).sort()).toEqual(["guide", "lunaFirstToken", "lunaTotal", "mcp", "rank", "retrieve"]);
+    expect(Object.keys(timingsMs).toSorted()).toEqual(["guide", "lunaFirstToken", "lunaTotal", "mcp", "rank", "retrieve"]);
     for (const key of ["guide", "mcp", "rank", "retrieve", "lunaTotal"] as const) {
       expect(Number.isFinite(timingsMs[key])).toBe(true);
       expect(timingsMs[key]).toBeGreaterThanOrEqual(0);
@@ -162,7 +162,7 @@ describe("runPipeline", () => {
     expect(sent.length).toBeGreaterThan(0);
     expect(sent.length).toBeLessThanOrEqual(3);
     // Luna's notes are in retrieval order, and the panel's cites name exactly those.
-    expect(result.notes.filter((note) => note.cite !== null).map((note) => note.id).sort()).toEqual(sent.map((note) => note.id).sort());
+    expect(result.notes.filter((note) => note.cite !== null).map((note) => note.id).toSorted()).toEqual(sent.map((note) => note.id).toSorted());
     sent.forEach((note, index) => expect(result.notes.find((item) => item.id === note.id)?.cite).toBe(`n${index + 1}`));
     // Jev reversed the candidates; the panel list follows Jev.
     expect(result.notes.map((note) => note.id)).not.toEqual(sent.map((note) => note.id));

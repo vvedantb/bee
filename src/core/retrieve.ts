@@ -84,7 +84,7 @@ export function retrieve(query: string, snippets: Snippet[], limit = 5, boost = 
       return { snippet, score: score > 0 && boostTerms.length > 0 ? score + BOOST_WEIGHT * bm25(boostTerms, counts, length) : score };
     })
     .filter((result) => result.score > 0)
-    .sort((a, b) => b.score - a.score)
+    .toSorted((a, b) => b.score - a.score)
     .slice(0, limit);
 }
 

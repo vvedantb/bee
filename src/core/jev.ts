@@ -80,7 +80,7 @@ export function parseJevRanking<T>(
   });
   const scoredCount = withScores.filter((item) => item.jevScore !== null).length;
   const ranked = withScores
-    .sort((a, b) => {
+    .toSorted((a, b) => {
       if (a.jevScore === null || b.jevScore === null) {
         if (a.jevScore === b.jevScore) return a.index - b.index;
         return a.jevScore === null ? 1 : -1;

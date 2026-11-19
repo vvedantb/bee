@@ -189,7 +189,7 @@ export function toolRouter() {
   const server = new McpServer({ name: SERVER, version: "1.0.0" }, { capabilities: { tools: { listChanged: true } } });
   server.server.setRequestHandler(ListToolsRequestSchema, async () => {
     const tools = await Promise.all([...current].map(async ([name, tool]) => ({ name, description: tool.description, inputSchema: { type: "object" as const, ...(await tool.schema.jsonSchema) }, _meta: ALWAYS_LOAD })));
-    listedNames = [...current.keys()].sort().join(",");
+    listedNames = [...current.keys()].toSorted().join(",");
     relisted?.();
     relisted = null;
     return { tools };
@@ -214,7 +214,7 @@ export function toolRouter() {
     use: async (tools: ToolSet, requestSignal: AbortSignal) => {
       current = new Map(Object.entries(tools).flatMap(([name, item]) => (item.execute ? [[name, { execute: item.execute, toModelOutput: item.toModelOutput, schema: asSchema(item.inputSchema), description: typeof item.description === "string" ? item.description : name }] as const] : [])));
       signal = requestSignal;
-      const names = [...current.keys()].sort().join(",");
+      const names = [...current.keys()].toSorted().join(",");
       if (listedNames === null || names === listedNames || !server.isConnected()) return;
       // Claude Code lists the tools again a moment after the notice: wait for it (up to RELIST_MS), or the request would run
       // with the last request's tools.

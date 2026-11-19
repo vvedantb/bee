@@ -277,7 +277,7 @@ const digest = (value: string | undefined): string => (value ? createHash("sha25
  * Secrets are hashed, never stored. OAuth tokens are not part of it (sign-in invalidates the pool explicitly).
  */
 export function mcpConfigHash(config: McpServerConfig): string {
-  const env = Object.entries(config.env ?? {}).sort(([a], [b]) => a.localeCompare(b)).map(([key, value]) => [key, digest(value)]);
+  const env = Object.entries(config.env ?? {}).toSorted(([a], [b]) => a.localeCompare(b)).map(([key, value]) => [key, digest(value)]);
   const parts = [config.transport, config.url ?? "", config.command ?? "", config.args ?? [], config.auth.type, config.auth.headerName ?? "", digest(config.secret), env, Boolean(config.oauthSignedIn)];
   return createHash("sha256").update(JSON.stringify(parts)).digest("hex");
 }

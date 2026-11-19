@@ -157,7 +157,7 @@ describe("MCP OAuth end to end", () => {
 
     // Revoke: both tokens are revoked concurrently, so arrival order is not pinned; the server then refuses the old access token.
     await expect(revokeMcpOAuth({ url: server.url, state: stored })).resolves.toBe(true);
-    expect([...server.revoked].sort()).toEqual([
+    expect(server.revoked.toSorted()).toEqual([
       ["access-2", "access_token", "client-e2e"],
       ["refresh-2", "refresh_token", "client-e2e"],
     ]);

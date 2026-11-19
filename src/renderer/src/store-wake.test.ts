@@ -225,7 +225,7 @@ describe("store: Bee wake word", () => {
     expect(commands).toEqual([]);
     expect(pipeline.length).toBeGreaterThan(0);
     // All four are meeting lines.
-    expect(state().session.lines.map((line) => line.text).sort()).toEqual([
+    expect(state().session.lines.map((line) => line.text).toSorted()).toEqual([
       "Bee open Teams",
       "Bee, pull up the Q3 roadmap deck",
       "Bee, what is on the agenda today?",

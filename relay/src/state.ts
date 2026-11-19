@@ -135,14 +135,14 @@ export function createRelayState(storage: RelayStorage, now: () => number = Date
 
   function teamView(team: TeamRecord): Team {
     const members = Object.entries(team.members)
-      .sort((a, b) => a[1].joinedAt - b[1].joinedAt)
+      .toSorted((a, b) => a[1].joinedAt - b[1].joinedAt)
       .map(([userId, member]) => ({ userId, displayName: member.displayName }));
     return { id: team.id, name: team.name, inviteCode: team.inviteCode, createdBy: team.createdBy, members };
   }
 
   function roomView(team: TeamRecord, room: RoomRecord): Room {
     const members: Member[] = Object.entries(room.members)
-      .sort((a, b) => a[1].joinedAt - b[1].joinedAt)
+      .toSorted((a, b) => a[1].joinedAt - b[1].joinedAt)
       .map(([userId]) => ({ userId, displayName: nameOf(team, userId) }));
     return {
       id: room.id,

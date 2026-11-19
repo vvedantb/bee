@@ -52,7 +52,7 @@ describe("retrieve", () => {
     const results = retrieve("acme discount support sso salary", snippets, 3);
     expect(results).toHaveLength(3);
     const scores = results.map((result) => result.score);
-    expect([...scores].sort((a, b) => b - a)).toEqual(scores);
+    expect(scores.toSorted((a, b) => b - a)).toEqual(scores);
   });
 });
 

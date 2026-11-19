@@ -78,7 +78,7 @@ export function matchMeeting(args: { title: TeamsTitle | null; events: readonly 
   const scored = overlapping
     .map((event) => ({ event, score: title && !title.generic ? titleSimilarity(title.name, event.subject) : 0 }))
     // A better fit first; equal fits: the nearest start to now.
-    .sort((a, b) => b.score - a.score || Math.abs(Date.parse(a.event.start) - nowMs) - Math.abs(Date.parse(b.event.start) - nowMs));
+    .toSorted((a, b) => b.score - a.score || Math.abs(Date.parse(a.event.start) - nowMs) - Math.abs(Date.parse(b.event.start) - nowMs));
   const best = scored[0];
   if (best && best.score >= TITLE_MATCH_MIN) return fromEvent(best.event);
   if (best && (scored.length === 1 || !title || title.generic || best.score > 0)) return fromEvent(best.event);

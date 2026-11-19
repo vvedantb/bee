@@ -822,7 +822,7 @@ describe("computerTools: agent-desktop 1.1 snapshots and refs", () => {
 
   it("keeps the tool surface small: read checks states, an empty set_value clears, set_state ticks and expands, scroll without a direction brings a ref into view", async () => {
     const { call, calls, tools, steps } = setup();
-    expect(Object.keys(tools).sort()).toEqual([...COMPUTER_TOOL_NAMES].sort());
+    expect(Object.keys(tools).toSorted()).toEqual(COMPUTER_TOOL_NAMES.toSorted());
     expect(COMPUTER_TOOL_NAMES).toHaveLength(26);
     await call("snapshot", { app: "Discord" });
     await call("read", { ref: "@s1abc:e1" });

@@ -104,7 +104,7 @@ export function detectMeetings(args: { windows: readonly AdWindow[]; apps?: read
     }
   }
   // The focused call first, so it is the one Bee reads.
-  return found.sort((a, b) => Number(b.focused) - Number(a.focused));
+  return found.toSorted((a, b) => Number(b.focused) - Number(a.focused));
 }
 
 /** The meeting windows as the sync controller and meeting context know them: one candidate per distinct meeting. */
@@ -295,9 +295,9 @@ export function drillTargets(data: unknown, max = DRILLS_MAX): string[] {
   };
   if (typeof data === "object" && data !== null) visit((data as Record<string, unknown>).tree, 0);
   return found
-    .sort((a, b) => Number(b.region) - Number(a.region) || b.count - a.count || a.order - b.order)
+    .toSorted((a, b) => Number(b.region) - Number(a.region) || b.count - a.count || a.order - b.order)
     .slice(0, max)
-    .sort((a, b) => a.order - b.order)
+    .toSorted((a, b) => a.order - b.order)
     .map((target) => target.ref);
 }
 
@@ -366,7 +366,7 @@ export function captionStep(memory: CaptionMemory, lines: readonly CaptionLine[]
   keyed.forEach(({ line, key }, index) => {
     const settled = index < keyed.length - 1 || key === memory.lastKey;
     if (!settled || seen.some((entry) => entry.key === key || entry.key.startsWith(`${key} `))) return;
-    const grown = seen.filter((entry) => key.startsWith(`${entry.key} `)).sort((a, b) => b.key.length - a.key.length)[0];
+    const grown = seen.filter((entry) => key.startsWith(`${entry.key} `)).toSorted((a, b) => b.key.length - a.key.length)[0];
     let text = line.text.trim();
     if (grown) {
       text = dropWords(text, grown.key.split(" ").length);

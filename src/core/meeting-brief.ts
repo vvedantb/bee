@@ -45,7 +45,7 @@ export function pastMeetings(args: {
   const subject = normaliseSubject(identity.subject);
   const needed = Math.min(2, new Set(identity.attendees.map(normaliseName).filter((name) => name.length > 0)).size);
   // Newest first. Records are stored oldest first, with equal dates in saved order.
-  const newest = records.toReversed().sort((a, b) => b.date.localeCompare(a.date));
+  const newest = records.toReversed().toSorted((a, b) => b.date.localeCompare(a.date));
   const same = newest.filter((record) => record.key === identity.key || (subject.length > 0 && normaliseSubject(record.subject) === subject));
   const sameIds = new Set(same.map((record) => record.id));
   const people = needed === 0 ? [] : newest.filter((record) => !sameIds.has(record.id) && sharedAttendees(identity.attendees, record.attendees) >= needed);
@@ -63,7 +63,7 @@ export function agendaKeywords(agenda: string, count = 5): string[] {
   for (const word of agenda.toLowerCase().match(/[a-z][a-z0-9-]{3,}/g) ?? []) {
     if (!STOP.has(word)) freq.set(word, (freq.get(word) ?? 0) + 1);
   }
-  return [...freq.entries()].sort((a, b) => b[1] - a[1] || b[0].length - a[0].length).slice(0, count).map(([word]) => word);
+  return [...freq.entries()].toSorted((a, b) => b[1] - a[1] || b[0].length - a[0].length).slice(0, count).map(([word]) => word);
 }
 
 /** One search string for connected tools: the title, then up to three attendee names, then agenda keywords. At most 240 characters. */

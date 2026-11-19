@@ -39,7 +39,7 @@ export function parseJsonLoose(raw: string): unknown {
   }
   // Whichever bracket opens first wins, so an array of objects is not read as its first object.
   const spans = ([["{", "}"], ["[", "]"]] as const).map(([open, close]) => ({ start: trimmed.indexOf(open), end: trimmed.lastIndexOf(close) }));
-  for (const { start, end } of spans.filter((span) => span.start !== -1 && span.end > span.start).sort((a, b) => a.start - b.start)) {
+  for (const { start, end } of spans.filter((span) => span.start !== -1 && span.end > span.start).toSorted((a, b) => a.start - b.start)) {
     try {
       return JSON.parse(trimmed.slice(start, end + 1));
     } catch {

@@ -4,7 +4,6 @@
   "rules": {
     "react/react-in-jsx-scope": "off",
     "unicorn/consistent-function-scoping": "off",
-    "unicorn/no-array-sort": "off",
     "unicorn/require-module-specifiers": "off",
     "import/no-unassigned-import": ["error", { "allow": ["**/*.css", "**/debug-log-boot"] }],
     "no-console": "off",

@@ -30,7 +30,7 @@ const options = { toolCallId: "call-1", messages: [], context: {} };
 describe("desktopTools", () => {
   it("has open_app, focus_window and open_url only: nothing that clicks, types, sends or closes", () => {
     const tools = desktopTools(fakeActions().actions);
-    expect(Object.keys(tools).sort()).toEqual([...DESKTOP_TOOL_NAMES].sort());
+    expect(Object.keys(tools).toSorted()).toEqual(DESKTOP_TOOL_NAMES.toSorted());
   });
 
   it("runs each action through its runner and reports the line shown to the user", async () => {

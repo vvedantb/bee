@@ -34,7 +34,7 @@ describe("connect and list", () => {
     const server = await mock();
     const result = await testMcpServer(http("vmem", server.url));
     expect(result).toMatchObject({ ok: true });
-    expect(result.ok && result.tools.map((tool) => tool.name).sort()).toEqual(["boom", "echo", "wobble"]);
+    expect(result.ok && result.tools.map((tool) => tool.name).toSorted()).toEqual(["boom", "echo", "wobble"]);
   });
 
   it("returns what the server reported in initialize: name, website and the best icon for a dark UI", async () => {
@@ -69,7 +69,7 @@ describe("loadMcpTools", () => {
     const server = await mock();
     const mcp = await loadMcpTools([http("vmem", server.url)]);
     cleanup.push(mcp.close);
-    expect(Object.keys(mcp.tools).sort()).toEqual(["vmem__boom", "vmem__echo", "vmem__wobble"]);
+    expect(Object.keys(mcp.tools).toSorted()).toEqual(["vmem__boom", "vmem__echo", "vmem__wobble"]);
     expect(await run(mcp.tools, "vmem__echo", { text: "hi" })).toBe("echo: hi");
     expect(await run(mcp.tools, "vmem__wobble", {})).toContain(MOCK_TOKEN);
   });
@@ -125,8 +125,8 @@ describe("loadMcpTools", () => {
       { connectTimeoutMs: 600 },
     );
     cleanup.push(mcp.close);
-    expect(Object.keys(mcp.tools).sort()).toEqual(["good__boom", "good__echo", "good__wobble"]);
-    expect(mcp.errors.map((item) => item.server).sort()).toEqual(["dead", "hang"]);
+    expect(Object.keys(mcp.tools).toSorted()).toEqual(["good__boom", "good__echo", "good__wobble"]);
+    expect(mcp.errors.map((item) => item.server).toSorted()).toEqual(["dead", "hang"]);
     expect(Date.now() - started).toBeLessThan(5000);
   });
 
@@ -134,7 +134,7 @@ describe("loadMcpTools", () => {
     const server = await mock();
     const mcp = await loadMcpTools([http("Eva", server.url), http("vmem", server.url, { disabledTools: ["boom"] }), http("dead", "http://127.0.0.1:1/mcp")], { connectTimeoutMs: 2000 });
     cleanup.push(mcp.close);
-    expect(Object.keys(mcp.tools).sort()).toEqual(["eva__boom", "eva__echo", "eva__wobble", "vmem__echo", "vmem__wobble"]);
+    expect(Object.keys(mcp.tools).toSorted()).toEqual(["eva__boom", "eva__echo", "eva__wobble", "vmem__echo", "vmem__wobble"]);
     expect(mcp.servers).toEqual([
       { name: "Eva", prefix: "eva", toolCount: 3 },
       { name: "vmem", prefix: "vmem", toolCount: 2 },
@@ -172,7 +172,7 @@ describe("stdio", () => {
       auth: { type: "none" },
     };
     const mcp = await loadMcpTools([config], { connectTimeoutMs: 15_000 });
-    expect(Object.keys(mcp.tools).sort()).toEqual(["local__echo", "local__env_value"]);
+    expect(Object.keys(mcp.tools).toSorted()).toEqual(["local__echo", "local__env_value"]);
     expect(await run(mcp.tools, "local__env_value", {})).toBe("value: from-env");
     await mcp.close();
   });
@@ -254,12 +254,12 @@ describe("tool list cache and lazy connection", () => {
     const pool = createMcpPool({ connect });
     const config = http("vmem", "https://example.com/mcp");
     const first = await loadMcpTools([config], { pool });
-    expect(Object.keys(first.tools).sort()).toEqual(["vmem__echo", "vmem__wobble"]);
+    expect(Object.keys(first.tools).toSorted()).toEqual(["vmem__echo", "vmem__wobble"]);
     expect(connect).toHaveBeenCalledTimes(1);
     await pool.closeAll();
     // A later turn that calls nothing never reconnects.
     const second = await loadMcpTools([config], { pool });
-    expect(Object.keys(second.tools).sort()).toEqual(["vmem__echo", "vmem__wobble"]);
+    expect(Object.keys(second.tools).toSorted()).toEqual(["vmem__echo", "vmem__wobble"]);
     expect(connect).toHaveBeenCalledTimes(1);
   });
 
@@ -332,7 +332,7 @@ describe("tool list cache and lazy connection", () => {
     const echo = entry.tools.find((item) => item.name === "echo");
     expect(JSON.stringify(echo?.inputSchema)).not.toMatch(/propertyNames|\$schema/);
     expect(echo?.inputSchema).toMatchObject({ type: "object", properties: { text: { type: "string" } } });
-    expect(Object.keys(entry).sort()).toEqual(["configHash", "fetchedAt", "serverInfo", "tools"]);
+    expect(Object.keys(entry).toSorted()).toEqual(["configHash", "fetchedAt", "serverInfo", "tools"]);
     expect(JSON.stringify(entry)).not.toMatch(/s3cret-token-VALUE|env-VALUE-123/);
     await pool.closeAll();
   });
@@ -467,7 +467,7 @@ describe("tool list cache and lazy connection", () => {
     cleanup.push(() => pool.closeAll());
     const config = http("vmem", server.url);
     const outcome = await testMcpServer(config, undefined, pool);
-    expect(outcome.ok && outcome.tools.map((tool) => tool.name).sort()).toEqual(["boom", "echo", "wobble"]);
+    expect(outcome.ok && outcome.tools.map((tool) => tool.name).toSorted()).toEqual(["boom", "echo", "wobble"]);
     const first = await loadMcpTools([config], { pool });
     expect(await run(first.tools, "vmem__echo", { text: "hi" })).toBe("echo: hi");
     await first.close();
@@ -501,7 +501,7 @@ describe("vmem tool allowlist", () => {
     for (const config of [http("vmem", "https://example.com/mcp", { serverInfoName: "vmem" }), http("Memory", "https://example.com/mcp", { serverInfoName: "VMEM" })]) {
       const mcp = await loadMcpTools([config], { pool: listing(["memory_search", "files_get", "list_tables", "delete_everything", "admin_tool_1"]) });
       const prefix = mcpSlug(config.name).toLowerCase();
-      expect(Object.keys(mcp.tools).sort()).toEqual([`${prefix}__files_get`, `${prefix}__memory_search`]);
+      expect(Object.keys(mcp.tools).toSorted()).toEqual([`${prefix}__files_get`, `${prefix}__memory_search`]);
       expect(mcp.servers).toEqual([{ name: config.name, prefix, toolCount: 2 }]);
     }
   });
