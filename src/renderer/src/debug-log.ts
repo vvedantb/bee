@@ -1,4 +1,4 @@
-import { debugLog, errorData, setDebugSink, teeConsole, type DebugData, type DebugEvent, type DebugLevel, type DebugSink } from "../../core/debug-log";
+import { debugLog, errorData, setDebugSink, teeConsole, type DebugData, type DebugEvent, type DebugSink } from "../../core/debug-log";
 import { redactDebugData } from "../../core/debug-redact";
 import { DEBUG_BATCH_MAX, type DebugLogBatch, type DebugLogEvent } from "../../shared/ipc";
 import type { BeeState } from "./store";

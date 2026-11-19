@@ -647,7 +647,7 @@ describe("runDirectCommand: Jev routing, the fast pass and Bee's memory", () => 
   it("falls back to the word rules when Jev is slow, fails or names an open it cannot resolve", async () => {
     for (const jev of [() => new Promise(() => undefined), () => Promise.reject(new Error("down")), async () => choice("open_app")]) {
       const { gateway } = gatewayWith({ jev, command: [{ text: "Opened the chat with Sam." }] });
-      const { computer, commands } = host();
+      const { computer } = host();
       const started = performance.now();
       const result = await run({ command: "send Sam a message in Discord", snippets, gateway, actions: fakeActions().actions, computer });
       expect(result.tips).toEqual(["Opened the chat with Sam."]);

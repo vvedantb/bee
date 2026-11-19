@@ -1381,7 +1381,7 @@ export function computerTools(deps: ComputerToolDeps) {
           gate: gateFor("set-value", ref, { effect, text: value }),
           refuse: refuseRef("set-value", ref),
         };
-  const focusAction = ({ ref, physical }: { ref: string; physical?: boolean | undefined }): Action => ({
+  const focusAction = ({ ref }: { ref: string; physical?: boolean | undefined }): Action => ({
     name: "focus",
     label: label(ref, "Selecting", "Selecting a field…"),
     // agent-desktop never moves focus without --headed ("no focus change" headless), so a focus is always headed.

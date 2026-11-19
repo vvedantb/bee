@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import type { CalendarReader } from "../core/calendar";
 import type { BriefingView } from "../shared/ipc";
 import { createBriefingWatcher } from "./briefing-watcher";

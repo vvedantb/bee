@@ -202,7 +202,6 @@ describe("runComputerUse", () => {
 describe("runComputerUse: snapshots and refs only", () => {
   const TEAMS = "Microsoft Teams";
   const done: AgentDesktopResult = { ok: true, data: { disposition: { delivery: "delivered_verified" } } };
-  const INTERNAL: AgentDesktopResult = { ok: false, code: "INTERNAL", message: "Accessibility deadline exhausted before IPC", retry: "safe" };
   const prompted = (turns: Turn[]) => {
     const prompts: ModelMessage[][] = [];
     let calls = 0;

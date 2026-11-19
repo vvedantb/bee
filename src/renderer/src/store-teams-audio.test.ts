@@ -297,7 +297,7 @@ describe("store: Teams audio capture", () => {
     capture.open = async () => {
       throw new Error("no handler");
     };
-    const { store, poll, audio } = await loadStore();
+    const { store, poll } = await loadStore();
     await store.actions.toggleMic();
     await poll();
     await poll();
