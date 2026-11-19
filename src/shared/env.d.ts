@@ -14,3 +14,6 @@ declare module "*?inline" {
   const dataUrl: string;
   export default dataUrl;
 }
+
+// Vite bundles CSS side-effect imports (`import "./styles.css"`); they carry no TypeScript types.
+declare module "*.css";

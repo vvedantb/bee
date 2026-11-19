@@ -12,7 +12,7 @@
     "start": "electron-vite preview",
     "build": "npm run typecheck && electron-vite build",
     "check:asar": "vvedantb-check-asar list --default-asar release/mac-arm64/Bee.app/Contents/Resources/app.asar --default-asar release/mac/Bee.app/Contents/Resources/app.asar --scan out/main --scan out/preload --require electron-store",
-    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "typecheck": "tsrs --noEmit -p tsconfig.json",
     "test": "vitest run",
     "check:helper-protocol": "node scripts/check-helper-protocol.mjs",
     "check:teams": "node scripts/teams-control-check.mjs",
@@ -81,6 +81,7 @@
     "tailwind-merge": "^2.6.1",
     "tailwindcss": "^4.3.3",
     "tailwindcss-animate": "^1.0.7",
+    "tsrs": "7.1.0-beta.tsrs2",
     "typescript": "~5.9",
     "vite": "^7.3.6",
     "vitest": "^5.0.2"
