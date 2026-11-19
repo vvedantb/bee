@@ -27,8 +27,23 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-          cache: npm
-      - run: npm ci
+      # node_modules is restored whole when package-lock.json has not changed, which skips npm ci. Only a push to
+      # main saves it, so a pull request reads the copy that main made and never writes one. A changed lockfile
+      # misses and runs npm ci as before.
+      - name: Restore node_modules (saved by main)
+        id: modules
+        uses: actions/cache/restore@v4
+        with:
+          path: node_modules
+          key: modules-${{ runner.os }}-${{ runner.arch }}-node22-${{ hashFiles('package-lock.json') }}
+      - if: steps.modules.outputs.cache-hit != 'true'
+        run: npm ci
+      - name: Save node_modules
+        if: steps.modules.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: node_modules
+          key: ${{ steps.modules.outputs.cache-primary-key }}
       # The four commands below do not depend on each other, so they run at once on the 4-core runner instead of one
       # after another. Each command's log is printed in its own group after all four end, and the step fails if any
       # command failed. The helper build fails the job if the helper does not compile; the checks that follow confirm
