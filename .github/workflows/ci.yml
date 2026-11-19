@@ -13,7 +13,7 @@ jobs:
     uses: vvedantb/packages/.github/workflows/ci-app.yml@main
     with:
       package_manager: npm
-      runs_on: boat
+      runs_on: boat-large
       commands: |
         npm run typecheck
         npm run lint
