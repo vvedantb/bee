@@ -29,9 +29,29 @@ jobs:
           node-version: "22"
           cache: npm
       - run: npm ci
-      # Fails the job if the helper does not compile or does not answer --version (which never opens audio).
-      - name: Build Teams audio helper
-        run: npm run build:teams-audio:win
+      # The four commands below do not depend on each other, so they run at once on the 4-core runner instead of one
+      # after another. Each command's log is printed in its own group after all four end, and the step fails if any
+      # command failed. The helper build fails the job if the helper does not compile; the checks that follow confirm
+      # the helper exists and answers --version (which never opens audio).
+      - name: Helper build, typecheck, tests and bundle (parallel)
+        shell: bash
+        run: |
+          dir="$RUNNER_TEMP/parallel"; mkdir -p "$dir"
+          cmds=("npm run build:teams-audio:win" "npm run typecheck" "npm test" "npx electron-vite build")
+          for i in "${!cmds[@]}"; do
+            ( s=$SECONDS; rc=0; bash -e -o pipefail -c "${cmds[$i]}" > "$dir/$i.log" 2>&1 || rc=$?; echo "$rc $((SECONDS - s))" > "$dir/$i.res" ) &
+          done
+          wait
+          failed=0
+          for i in "${!cmds[@]}"; do
+            rc=1; sec=0
+            [ -f "$dir/$i.res" ] && read -r rc sec < "$dir/$i.res"
+            echo "::group::${cmds[$i]} (${sec}s, exit $rc)"
+            cat "$dir/$i.log"
+            echo "::endgroup::"
+            if [ "$rc" != "0" ]; then echo "::error::Failed: ${cmds[$i]}"; failed=1; fi
+          done
+          exit $failed
       - name: Check Teams audio helper
         shell: pwsh
         run: |
@@ -39,9 +59,6 @@ jobs:
           if (-not (Test-Path $helper)) { throw "Teams audio helper missing: $helper" }
       - name: Check Teams audio helper protocol
         run: node scripts/check-helper-protocol.mjs native/teams-audio/dist/win32-x64/teams-audio-helper.exe
-      - run: npm run typecheck
-      - run: npm test
-      - run: npx electron-vite build
       - name: Check koffi stays external in built main
         run: node scripts/check-koffi-external.mjs out/main/index.js
       - name: Package Windows (unpacked, unsigned)
