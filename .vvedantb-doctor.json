@@ -1,0 +1,5 @@
+{
+  "ciCommands": {
+    "npm test -- $VV_TEST_CHANGED ${VV_TEST_CHANGED:+--passWithNoTests}": "Runs the Vitest suite, narrowed to the tests a pull request diff can reach ($VV_TEST_CHANGED = --changed=origin/<base> from affected_tests). The variable is empty on pushes to main and on any config, fixture, delete or rename change, so those run the full suite. --passWithNoTests lets a narrowed run that selects no tests pass; a full run that finds no tests still fails."
+  }
+}
