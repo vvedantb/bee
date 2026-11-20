@@ -1,3 +1,4 @@
+// (demo: source-only change to show the affected-tests narrowing; not for merge)
 // Names Bee should know: people and chats the user cares about, spelled the way the user spells them. A local list that
 // Bee keeps by itself, in its settings file; no screen shows or edits it. Bee learns a spelling the user gives ("It's Z U Z A N N
 // A"), chat names it reads on screen during computer use ("Chat | Zuzanna Szczepaniak-Moody | …" in Teams), a correction the user
