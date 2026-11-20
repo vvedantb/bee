@@ -14,10 +14,25 @@ jobs:
     with:
       package_manager: npm
       runs_on: boat-large
+      # typecheck, lint and tests do not depend on each other, so run them at once in the one Check job (one install).
+      # keep_going defaults to true, which parallel requires. max_parallel measured on this PR; see the PR body.
+      parallel: true
+      max_parallel: 2
+      # On a pull request whose diff is only added or modified source files, narrow the Vitest run to the tests the
+      # diff can reach (VV_TEST_CHANGED = --changed=origin/<base>). Pushes to main, any config/fixture/delete/rename
+      # change and a non-source file all run the full suite. Needs the full history to find the merge base.
+      affected_tests: true
+      fetch_depth: 0
+      # Fixtures are read from disk, not imported, so Vitest's module graph cannot see them: force a full run on any
+      # change under test/fixtures. package.json, lockfiles, config and .github are already full-run by default.
+      full_run_paths: |
+        ^test/fixtures/
+      # npm test is `vitest run`; -- forwards the scope to it. Only a narrowed run may select zero tests and pass;
+      # a full run that finds no tests still fails.
       commands: |
         npm run typecheck
         npm run lint
-        npm test
+        npm test -- $VV_TEST_CHANGED ${VV_TEST_CHANGED:+--passWithNoTests}
   # Catches Windows-only test failures (path separators, POSIX mode bits) on PRs, not only in the release run. Also builds the
   # Teams audio helper (native/teams-audio/windows) and checks the unpacked app carries it.
   windows:
