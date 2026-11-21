@@ -45,10 +45,11 @@ concurrency:
 
 jobs:
   # Picks the tag. A tag push or a dispatch with a tag uses that tag and leaves package.json alone, as before.
-  # Otherwise: the patch bump of the highest published vX.Y.Z release, and never lower than package.json. The build
-  # jobs write that version into package.json in their workspace; nothing is committed to main.
+  # Otherwise: the patch bump of the latest published vX.Y.Z release, and never lower than package.json. The build
+  # jobs write that version into package.json in their workspace; nothing is committed to main. One API call reads the
+  # latest release only; it does not page through all of them.
   version:
-    runs-on: boat-large
+    runs-on: ubuntu-latest
     outputs:
       tag: ${{ steps.pick.outputs.tag }}
       set_version: ${{ steps.pick.outputs.set_version }}
@@ -71,7 +72,14 @@ jobs:
           fi
           pkg="$(sed -n 's/^  "version": "\([0-9][0-9.]*\)",$/\1/p' package.json | head -n 1)"
           if [ -z "$pkg" ]; then echo "::error::No version found in package.json"; exit 1; fi
-          tags="$(gh api "repos/$GH_REPO/releases" --paginate -q '.[].tag_name')"
+          # 404 means no release yet. Any other failure stops the run rather than guessing a version.
+          if out="$(gh api "repos/$GH_REPO/releases/latest" -q .tag_name 2>&1)"; then
+            tags="$out"
+          elif printf '%s' "$out" | grep -q 'HTTP 404'; then
+            tags=""
+          else
+            echo "::error::Could not read the latest release: $out"; exit 1
+          fi
           last="$(printf '%s\n' "$tags" | sed -n 's/^v\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)$/\1/p' | sort -V | tail -n 1)"
           if [ -n "$last" ]; then
             IFS=. read -r major minor patch <<< "$last"
@@ -80,7 +88,7 @@ jobs:
             bumped="$pkg"
           fi
           version="$(printf '%s\n%s\n' "$pkg" "$bumped" | sort -V | tail -n 1)"
-          echo "package.json $pkg, highest release ${last:-none}, releasing v$version"
+          echo "package.json $pkg, latest release ${last:-none}, releasing v$version"
           echo "tag=v$version" >> "$GITHUB_OUTPUT"
           echo "set_version=$version" >> "$GITHUB_OUTPUT"
 
@@ -92,21 +100,54 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-          cache: npm
-      - run: npm ci
+      # node_modules is restored whole when package-lock.json has not changed, which skips npm ci. A miss runs npm ci
+      # and saves the result, so the next release reads it (as in ci.yml, but release runs save too).
+      - name: Restore node_modules
+        id: modules
+        uses: actions/cache/restore@v4
+        with:
+          path: node_modules
+          key: modules-${{ runner.os }}-${{ runner.arch }}-node22-${{ hashFiles('package-lock.json') }}
+      - if: steps.modules.outputs.cache-hit != 'true'
+        run: npm ci
+      - name: Save node_modules
+        if: steps.modules.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: node_modules
+          key: ${{ steps.modules.outputs.cache-primary-key }}
       - name: Set the release version
         if: needs.version.outputs.set_version != ''
         shell: bash
         run: npm version "${{ needs.version.outputs.set_version }}" --no-git-tag-version --allow-same-version
-      # The Teams audio helper (native/teams-audio/windows). Fails the release if it does not compile or answer --version.
-
-      - name: Build Teams audio helper
-        run: npm run build:teams-audio:win
-      - run: npm test
-      - run: npm run build
+      # The Teams audio helper (native/teams-audio/windows) fails the release if it does not compile or answer --version.
+      # The helper build, the tests and the Vite bundle do not depend on each other, so they run at once. Each log is
+      # printed in its own group after all end, and the step fails if any failed. Tests are skipped on a merge to main:
+      # ci.yml ran them on the same commit. Tag pushes and dispatches still run them.
+      - name: Helper build, tests and bundle (parallel)
+        shell: bash
         env:
           # Repository variable with the deployed relay URL (relay/README.md). Unset: Teams mode is off.
           MAIN_VITE_BEE_RELAY_URL: ${{ vars.BEE_RELAY_URL }}
+          SKIP_TESTS: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'true' || '' }}
+        run: |
+          dir="$RUNNER_TEMP/parallel"; mkdir -p "$dir"
+          cmds=("npm run build:teams-audio:win" "npm run build")
+          if [ -z "$SKIP_TESTS" ]; then cmds+=("npm test"); else echo "Skipping npm test: merge to main, CI ran it."; fi
+          for i in "${!cmds[@]}"; do
+            ( s=$SECONDS; rc=0; bash -e -o pipefail -c "${cmds[$i]}" > "$dir/$i.log" 2>&1 || rc=$?; echo "$rc $((SECONDS - s))" > "$dir/$i.res" ) &
+          done
+          wait
+          failed=0
+          for i in "${!cmds[@]}"; do
+            rc=1; sec=0
+            [ -f "$dir/$i.res" ] && read -r rc sec < "$dir/$i.res"
+            echo "::group::${cmds[$i]} (${sec}s, exit $rc)"
+            cat "$dir/$i.log"
+            echo "::endgroup::"
+            if [ "$rc" != "0" ]; then echo "::error::Failed: ${cmds[$i]}"; failed=1; fi
+          done
+          exit $failed
       - name: Build Windows installer + zip
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
@@ -137,20 +178,53 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-          cache: npm
-      - run: npm ci
+      # node_modules is restored whole when package-lock.json has not changed, which skips npm ci. A miss runs npm ci
+      # and saves the result, so the next release reads it (as in ci.yml, but release runs save too).
+      - name: Restore node_modules
+        id: modules
+        uses: actions/cache/restore@v4
+        with:
+          path: node_modules
+          key: modules-${{ runner.os }}-${{ runner.arch }}-node22-${{ hashFiles('package-lock.json') }}
+      - if: steps.modules.outputs.cache-hit != 'true'
+        run: npm ci
+      - name: Save node_modules
+        if: steps.modules.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: node_modules
+          key: ${{ steps.modules.outputs.cache-primary-key }}
       - name: Set the release version
         if: needs.version.outputs.set_version != ''
         shell: bash
         run: npm version "${{ needs.version.outputs.set_version }}" --no-git-tag-version --allow-same-version
-      # The Teams audio helpers (native/teams-audio/macos), arm64 and x64. Fails the release if either does not compile.
-
-      - name: Build Teams audio helpers (arm64 + x64)
-        run: npm run build:teams-audio:mac
-      - run: npm test
-      - run: npm run build
+      # The Teams audio helpers (native/teams-audio/macos), arm64 and x64, fail the release if either does not compile.
+      # The helper build, the tests and the Vite bundle do not depend on each other, so they run at once. Each log is
+      # printed in its own group after all end, and the step fails if any failed. Tests are skipped on a merge to main:
+      # ci.yml ran them on the same commit. Tag pushes and dispatches still run them.
+      - name: Helper build, tests and bundle (parallel)
+        shell: bash
         env:
           MAIN_VITE_BEE_RELAY_URL: ${{ vars.BEE_RELAY_URL }}
+          SKIP_TESTS: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'true' || '' }}
+        run: |
+          dir="$RUNNER_TEMP/parallel"; mkdir -p "$dir"
+          cmds=("npm run build:teams-audio:mac" "npm run build")
+          if [ -z "$SKIP_TESTS" ]; then cmds+=("npm test"); else echo "Skipping npm test: merge to main, CI ran it."; fi
+          for i in "${!cmds[@]}"; do
+            ( s=$SECONDS; rc=0; bash -e -o pipefail -c "${cmds[$i]}" > "$dir/$i.log" 2>&1 || rc=$?; echo "$rc $((SECONDS - s))" > "$dir/$i.res" ) &
+          done
+          wait
+          failed=0
+          for i in "${!cmds[@]}"; do
+            rc=1; sec=0
+            [ -f "$dir/$i.res" ] && read -r rc sec < "$dir/$i.res"
+            echo "::group::${cmds[$i]} (${sec}s, exit $rc)"
+            cat "$dir/$i.log"
+            echo "::endgroup::"
+            if [ "$rc" != "0" ]; then echo "::error::Failed: ${cmds[$i]}"; failed=1; fi
+          done
+          exit $failed
       - name: Build macOS dmg + zip
         env:
           # Unsigned by default. Set CSC_LINK, CSC_KEY_PASSWORD and the Apple notarisation secrets to sign.
@@ -179,7 +253,7 @@ jobs:
   publish:
     needs: [version, windows, macos]
     if: ${{ !inputs.dry_run }}
-    runs-on: boat-large
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
         with:
