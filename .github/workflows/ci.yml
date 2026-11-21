@@ -13,9 +13,10 @@ jobs:
     uses: vvedantb/packages/.github/workflows/ci-app.yml@main
     with:
       package_manager: npm
-      runs_on: boat-large
+      runs_on: ubuntu-latest
       # typecheck, lint and tests do not depend on each other, so run them at once in the one Check job (one install).
-      # keep_going defaults to true, which parallel requires. max_parallel measured on this PR; see the PR body.
+      # keep_going defaults to true, which parallel requires. max_parallel: 2 was measured on 8-core boat-large (PR #153).
+      # ubuntu-latest has 4 vCPUs, so vitest.config.ts caps Vitest at 2 workers.
       parallel: true
       max_parallel: 2
       # On a pull request whose diff is only added or modified source files, narrow the Vitest run to the tests the
