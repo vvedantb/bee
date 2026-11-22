@@ -9,7 +9,7 @@ import type { FollowUpVerdict } from "./wake-word";
 // The addressee check's one model call (main only). Haiku through the Gateway key Bee already uses, thinking off.
 
 /** The call's budget: the phrase waits on it. */
-export const ADDRESSEE_TIMEOUT_MS = 2000;
+export const ADDRESSEE_TIMEOUT_MS = 3000;
 
 export const ADDRESSEE_SYSTEM = [
   "You decide who the user is talking to. The user is on a call with other people and has an assistant, Bee, on their computer. Bee just answered the user.",
