@@ -1,0 +1,18 @@
+{
+  "lastBee": { "request": "Open the Acme budget page", "reply": "Opened the Acme budget page. Say if you want the Q3 tab too." },
+  "participants": ["Priya Shah", "Tom Reed"],
+  "cases": [
+    { "id": "follow-up-reference", "phrase": "the Q3 tab please", "lines": ["me: Bee open the Acme budget page"], "prefilter": "run", "model": { "addressed": "bee", "confidence": 0.9 }, "decision": "bee" },
+    { "id": "follow-up-you", "phrase": "can you zoom in a bit", "lines": [], "prefilter": "run", "model": { "addressed": "bee", "confidence": 0.85 }, "decision": "bee" },
+    { "id": "follow-up-correction", "phrase": "no the other one", "lines": [], "prefilter": "run", "model": { "addressed": "bee", "confidence": 0.8 }, "decision": "bee" },
+    { "id": "answer-to-offer", "phrase": "yes the Q3 one", "lines": [], "prefilter": "run", "model": { "addressed": "bee", "confidence": 0.9 }, "decision": "bee" },
+    { "id": "bee-unsure", "phrase": "hmm that looks off", "lines": [], "prefilter": "run", "model": { "addressed": "bee", "confidence": 0.55 }, "decision": "meeting" },
+    { "id": "model-says-meeting", "phrase": "can you all see my screen", "lines": ["me: sharing now"], "prefilter": "run", "model": { "addressed": "meeting", "confidence": 0.9 }, "decision": "meeting" },
+    { "id": "names-participant", "phrase": "Priya, what do you think about the Q3 numbers", "lines": [], "prefilter": "skip", "reason": "names-participant", "decision": "skipped" },
+    { "id": "filler", "phrase": "um uh", "lines": [], "prefilter": "skip", "reason": "filler", "decision": "skipped" },
+    { "id": "long-statement", "phrase": "I think the plan for the second half of the year is look at how the budget lines up against the hiring plan and then decide", "lines": [], "prefilter": "skip", "reason": "long-statement", "decision": "skipped" },
+    { "id": "back-to-call", "phrase": "we should move on to the roadmap", "lines": ["them: that covers the budget"], "prefilter": "skip", "reason": "reply-to-others", "decision": "skipped" },
+    { "id": "weak-you-after-them", "phrase": "do you have the slides", "lines": ["them: ok next item"], "prefilter": "skip", "reason": "reply-to-others", "decision": "skipped" },
+    { "id": "model-fails", "phrase": "can you zoom in a bit", "lines": [], "prefilter": "run", "model": null, "decision": "meeting" }
+  ]
+}

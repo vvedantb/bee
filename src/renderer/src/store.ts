@@ -4,6 +4,7 @@ import { getToken } from "@clerk/electron/react";
 import { useSyncExternalStore } from "react";
 import { echoesOwnLine } from "../../core/agent-desktop-meeting";
 import { IDLE_AUTO, REJOIN_WINDOW_MS, qualifies, sameMeeting, stepAutoMeeting, type AutoEvent, type AutoMeetingState } from "../../core/auto-meeting-detection";
+import { decideAddressee } from "../../core/addressee-check";
 import { debugLog, errorData } from "../../core/debug-log";
 import { detectLinks, mergeChips, sourceChips, visibleChips, type LinkChip } from "../../core/link-suggest";
 import { MAX_STEERING_TIPS, isFiller, isNewTurn, isQuestion, mergeTips, recentRestarts, runDelayMs, sameContent, tipCap, tipKey, waitsForRun } from "../../core/steering";
@@ -1082,14 +1083,29 @@ function followUpCheck(text: string, wake?: string): boolean {
   const lines = state.session.lines.slice(-3).map((line) => `${line.own ? "me" : "them"}: ${line.text}`);
   const othersQuiet = Date.now() - lastOtherSpeakerAt >= OTHERS_QUIET_MS;
   void (async () => {
-    const verdict = await sessionToken()
-      .then((token) => classify({ phrase: (wake ?? text).slice(0, 1000), lastBee: bee, lines, othersQuiet, ...(wake !== undefined ? { wake: true } : {}), sessionToken: token }))
-      .catch(() => null);
-    const forBee = isForBee(verdict) && (wake !== undefined || conversationUntil > 0);
-    debugLog.info("wake", "follow-up-checked", { text, verdict, forBee, othersQuiet, wake: wake !== undefined });
-    // Not for Bee: the words were said to the meeting. The "Bee" speech-to-text heard was never said, so it stays out.
-    if (forBee) void runCommand(wake ?? text);
-    else addOwnLine(wake ?? text, "mic");
+    if (wake !== undefined) {
+      // The wake check keeps its own call and prompt.
+      const verdict = await sessionToken()
+        .then((token) => classify({ phrase: wake.slice(0, 1000), lastBee: bee, lines, othersQuiet, wake: true, sessionToken: token }))
+        .catch(() => null);
+      debugLog.info("wake", "follow-up-checked", { text, verdict, forBee: isForBee(verdict), othersQuiet, wake: true });
+      // Not for Bee: the words were said to the meeting. The "Bee" speech-to-text heard was never said, so it stays out.
+      if (isForBee(verdict)) void runCommand(wake);
+      else addOwnLine(wake, "mic");
+      return;
+    }
+    // A follow-up in the window: the addressee check (core/addressee-check.ts). A free prefilter first, then one Haiku call, at
+    // the saved threshold. Off, skipped, failed or below the threshold: a meeting line.
+    const decision = await decideAddressee({
+      input: { phrase: text.slice(0, 1000), lastBee: bee, lines, participants: participantNames(), conversationOpen: conversationUntil > 0, othersQuiet },
+      enabled: state.settings?.addresseeCheckEnabled !== false,
+      threshold: state.settings?.addresseeCheckThreshold,
+      classify: (input) =>
+        sessionToken().then((token) => classify({ phrase: input.phrase, lastBee: input.lastBee, lines: [...input.lines], othersQuiet: input.othersQuiet, sessionToken: token })),
+    });
+    // The window may have closed while the call ran.
+    if (decision.decision === "bee" && conversationUntil > 0) void runCommand(text);
+    else addOwnLine(text, "mic");
   })();
   return true;
 }

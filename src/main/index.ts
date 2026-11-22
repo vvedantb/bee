@@ -607,6 +607,7 @@ if (clerk.isPrimaryInstance) {
       meetingWindow,
       meetingSignals: createMeetingSignals({ reader: meetingWindow, titles: teamsTitles }),
       gatewayApiKey: settings.gatewayApiKey,
+      addresseeCheckEnabled: settings.addresseeCheck,
       claudeCode,
       browse,
       briefings: briefings.get,

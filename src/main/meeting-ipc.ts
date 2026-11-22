@@ -26,11 +26,12 @@ import type { JobResult, RemoteJob } from "../shared/bee-mcp";
 import type { ScreenCapture } from "../core/screen-look";
 import type { ScreenGlance } from "../core/screen-context";
 import type { ComputerVision } from "../core/computer-vision";
+import { askAddresseeModel } from "../core/addressee-model";
 import { classifyFollowUp } from "../core/follow-up";
 import { summariseRecap } from "../core/recap";
 import { loadMcpTools, type McpPool, type McpServerConfig } from "../core/mcp";
 import type { MeetingContext } from "../core/meeting-context";
-import { GUIDE_MODEL, NO_GATEWAY_KEY, STT_MODEL, createBeeGateway, type BeeGateway } from "../core/gateway";
+import { ADDRESSEE_MODEL, GUIDE_MODEL, NO_GATEWAY_KEY, STT_MODEL, createBeeGateway, type BeeGateway } from "../core/gateway";
 import { runPipeline } from "../core/pipeline";
 import { searchLocation } from "../core/web-search";
 import { conversationTranscript, meetingTranscript } from "../core/session-transcript";
@@ -105,6 +106,8 @@ export function registerMeetingIpc(args: { notesDir: string;
   meetingSignals?: { read: () => Promise<AutoSignals> };
   meetingWindow?: { read: () => Promise<unknown>; context: () => MeetingWindowContext | null; status: () => MeetingWindowStatus };
   gatewayApiKey: () => string | undefined;
+  /** The addressee check switch (Settings), read on each call. Absent: on, like the default. */
+  addresseeCheckEnabled?: () => boolean;
   /** The user's Claude Code (main/claude-code.ts), which "Bee, …" requests run on. Absent: only quick opens work. */
   claudeCode?: ClaudeCode;
   /** OpenCode Browse (main/browse.ts): its Settings status and installer. Absent: Settings shows it missing. */
@@ -551,6 +554,12 @@ export function registerMeetingIpc(args: { notesDir: string;
     assertSignedIn(request.sessionToken);
     const apiKey = args.gatewayApiKey();
     if (!apiKey) return null;
+    // A follow-up in the window (no wake): the addressee check, on Haiku. Off: no model, the phrase stays a meeting line. The
+    // wake check below keeps its own model and prompt.
+    if (request.wake !== true) {
+      if (args.addresseeCheckEnabled?.() === false || !request.lastBee) return null;
+      return askAddresseeModel({ model: createGateway(apiKey).languageModel(ADDRESSEE_MODEL), input: { phrase: request.phrase, lastBee: request.lastBee, lines: request.lines, othersQuiet: request.othersQuiet } });
+    }
     return classifyFollowUp({ model: createGateway(apiKey).languageModel(GUIDE_MODEL), lastBee: request.lastBee, lines: request.lines, phrase: request.phrase, othersQuiet: request.othersQuiet, wake: request.wake === true });
   });
 

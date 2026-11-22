@@ -1,5 +1,6 @@
 import { IconExternalLink } from "@tabler/icons-react";
-import { Button } from "@vvedantb/ui";
+import { Button, PillTabs } from "@vvedantb/ui";
+import { ADDRESSEE_THRESHOLD_DEFAULT } from "../../core/addressee-settings";
 import type { MeetingWindowStatus, SettingsUpdate, SettingsView } from "../../shared/ipc";
 import { MEETING_IN_PROGRESS } from "./meeting-notices";
 import { SettingRow } from "./SettingRow";
@@ -9,7 +10,11 @@ import { teamsAudioMessage, teamsAudioNeedsScreenRecording, type TeamsAudioView 
 // Live → Meeting: the meeting's status and its switches. Presentational: it takes the saved switches and callbacks, so the
 // screenshot page can render it without the store or Electron.
 
-export type MeetingSettings = Pick<SettingsView, "autoMeetingDetection" | "meetingMode" | "teamsAudioFallbackEnabled">;
+export type MeetingSettings = Pick<SettingsView, "autoMeetingDetection" | "addresseeCheckEnabled" | "addresseeCheckThreshold" | "meetingMode" | "teamsAudioFallbackEnabled">;
+
+// Threshold choices for the addressee check. A higher bar means Bee acts less often.
+const ADDRESSEE_THRESHOLDS = [0.6, 0.7, 0.8, 0.9] as const;
+const ADDRESSEE_THRESHOLD_LABEL: Record<(typeof ADDRESSEE_THRESHOLDS)[number], string> = { 0.6: "Looser", 0.7: "Default", 0.8: "Stricter", 0.9: "Strictest" };
 
 const APP_NAME: Record<NonNullable<MeetingWindowStatus["app"]>, string> = { teams: "Teams", zoom: "Zoom", meet: "Google Meet" };
 
@@ -99,6 +104,26 @@ export function MeetingSection({
             checked={settings.autoMeetingDetection}
             onCheckedChange={(autoMeetingDetection) => onChange({ autoMeetingDetection })}
           />
+          <SettingRow
+            id="addressee-check"
+            label="Check who I am talking to"
+            info="In a call, Bee checks phrases without “Bee” that may be for it. Saying “Bee” always works. Unsure or failed checks stay quiet."
+            checked={settings.addresseeCheckEnabled}
+            onCheckedChange={(addresseeCheckEnabled) => onChange({ addresseeCheckEnabled })}
+          />
+          {settings.addresseeCheckEnabled ? (
+            <div className="flex flex-col gap-1">
+              Strictness
+              <PillTabs
+                tabs={ADDRESSEE_THRESHOLDS.map((value) => ({ value: String(value), label: ADDRESSEE_THRESHOLD_LABEL[value] }))}
+                value={String(ADDRESSEE_THRESHOLDS.find((value) => value === settings.addresseeCheckThreshold) ?? ADDRESSEE_THRESHOLD_DEFAULT)}
+                onValueChange={(value) => {
+                  const addresseeCheckThreshold = ADDRESSEE_THRESHOLDS.find((item) => String(item) === value);
+                  if (addresseeCheckThreshold) onChange({ addresseeCheckThreshold });
+                }}
+              />
+            </div>
+          ) : null}
           <SettingRow
             id="meeting-mode"
             label="Meeting mode"

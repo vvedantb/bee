@@ -266,6 +266,8 @@ describe("settingsChange", () => {
     meetingMode: false,
     autoMeetingDetection: false,
     allowRemoteAi: false,
+    addresseeCheckEnabled: true,
+    addresseeCheckThreshold: 0.7,
     interfaceScale: 1,
     motionPreference: "on",
     secretStorage: "os",
