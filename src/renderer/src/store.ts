@@ -1063,8 +1063,9 @@ function takeWakeLine(text: string): boolean {
 }
 
 /**
- * An unclear phrase in the conversation window: one small AI call (main, core/follow-up.ts) decides whether it is for Bee.
- * The phrase waits for it, then becomes a follow-up or a meeting line. Without the call (older preload) or on any failure it
+ * An unclear phrase in the conversation window: one small AI call decides whether it is for Bee. A wake-statement check
+ * (wake set) still uses the follow-up classifier (core/follow-up.ts); an unclear follow-up uses the addressee check
+ * (core/addressee-check.ts, model call in main). The phrase waits for it, then becomes a follow-up or a meeting line. Without the call (older preload) or on any failure it
  * is a meeting line at once. Only reached from the user's own mic.
  */
 function followUpCheck(text: string, wake?: string): boolean {

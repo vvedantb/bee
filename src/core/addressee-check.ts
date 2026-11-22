@@ -60,7 +60,7 @@ export function prefilterAddressee(input: AddresseeInput): Prefilter {
 
 export type AddresseeDecision = {
   decision: "bee" | "meeting" | "skipped";
-  /** Why: the prefilter's reason, "disabled", "model-failed", "below-threshold", or "model". */
+  /** Why: the prefilter's reason, "disabled", "model-failed", "model-meeting" (the model said meeting), "below-threshold" (bee under the threshold), or "model". */
   reason: string;
   prefilter: Prefilter | null;
   /** The model's confidence that the phrase is for Bee, null when it did not run or failed. */
@@ -109,5 +109,5 @@ export async function decideAddressee(args: {
   // The score is the confidence that the phrase is for Bee: a "meeting" verdict at 0.9 is 0.1 for Bee.
   const score = verdict.addressed === "bee" ? verdict.confidence : 1 - verdict.confidence;
   const forBee = verdict.addressed === "bee" && verdict.confidence >= threshold;
-  return finish({ decision: forBee ? "bee" : "meeting", reason: forBee ? "model" : "below-threshold", prefilter, score: Math.round(score * 100) / 100 });
+  return finish({ decision: forBee ? "bee" : "meeting", reason: forBee ? "model" : verdict.addressed === "meeting" ? "model-meeting" : "below-threshold", prefilter, score: Math.round(score * 100) / 100 });
 }

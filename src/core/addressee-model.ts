@@ -18,12 +18,15 @@ export const ADDRESSEE_SYSTEM = [
 ].join("\n");
 
 /** The user message: Bee's last exchange, the last three labelled lines, and the phrase. Nothing else leaves the computer. */
-export function addresseePrompt(input: Pick<AddresseeInput, "phrase" | "lastBee" | "lines">): string {
+export function addresseePrompt(input: Pick<AddresseeInput, "phrase" | "lastBee" | "lines" | "othersQuiet">): string {
   return [
     input.lastBee ? `The user asked Bee: ${clip(input.lastBee.request)}` : "Bee has not answered yet.",
     input.lastBee ? `Bee answered: ${clip(input.lastBee.reply) || "(nothing)"}` : "",
     "Last lines (me: the user, them: anyone else):",
     ...(input.lines.length > 0 ? input.lines.slice(-3).map((line) => `- ${clip(line)}`) : ["- (none)"]),
+    input.othersQuiet
+      ? "No one else has spoken in the last minute: when unsure, lean toward Bee."
+      : "Someone else spoke in the last minute: when unsure, lean toward the meeting.",
     `New phrase from the user: ${clip(input.phrase)}`,
   ]
     .filter(Boolean)
