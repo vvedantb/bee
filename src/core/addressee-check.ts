@@ -25,14 +25,18 @@ export type AddresseeInput = {
   lines: readonly string[];
   participants?: readonly string[];
   conversationOpen?: boolean;
-  /** No one else heard for OTHERS_QUIET_MS. */
+  /** No one else heard for OTHERS_QUIET_MS. This only leans the prompt. */
   othersQuiet: boolean;
+  /**
+   * Someone else spoke after Bee's last exchange (lastOtherSpeakerAt > lastExchangeAt). Not the same as othersQuiet, and not
+   * the last session line: session lines never hold Bee's own command or answer. Omitted reads as false.
+   */
+  othersSpoke?: boolean;
 };
 
 export type Prefilter = { runModel: boolean; reason: string };
 
 const wordCount = (text: string) => text.split(/\s+/).filter(Boolean).length;
-const lastWasThem = (lines: readonly string[]) => lines.at(-1)?.startsWith("them:") === true;
 
 /**
  * Free, synchronous: does the phrase need the model? Skips what is clearly not for Bee: no recent Bee exchange or no open
@@ -51,7 +55,7 @@ export function prefilterAddressee(input: AddresseeInput): Prefilter {
   if (!assistantStyle && wordCount(phrase) > ADDRESSEE_MAX_WORDS) return { runModel: false, reason: "long-statement" };
   // Someone else just spoke: "you" or a bare question is as likely meant for them. Only a strong pointer at Bee counts.
   const strong = addressed === "correction" || addressed === "connector" || addressed === "reference";
-  if (lastWasThem(input.lines) && !strong && addressed !== "answer") return { runModel: false, reason: "reply-to-others" };
+  if (input.othersSpoke === true && !strong && addressed !== "answer") return { runModel: false, reason: "reply-to-others" };
   if (addressed) return { runModel: true, reason: addressed };
   if (assistantStyle) return { runModel: true, reason: "request-style" };
   // Unclear, but Bee just spoke: let the model decide.

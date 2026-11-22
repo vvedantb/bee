@@ -5,7 +5,7 @@ import { ADDRESSEE_CHECK_DEFAULT, ADDRESSEE_THRESHOLD_DEFAULT, clampAddresseeThr
 import { debugLog } from "./debug-log";
 import type { FollowUpVerdict } from "./wake-word";
 
-type Phrase = { phrase: string; lines: readonly string[] };
+type Phrase = { phrase: string; lines: readonly string[]; othersSpoke?: boolean };
 const FOLLOW_UP: Phrase = { phrase: "the Q3 tab please", lines: [] };
 
 const input = (item: Phrase): AddresseeInput => ({
@@ -15,6 +15,7 @@ const input = (item: Phrase): AddresseeInput => ({
   participants: fixture.participants,
   conversationOpen: true,
   othersQuiet: true,
+  othersSpoke: item.othersSpoke ?? false,
 });
 
 describe("addressee check settings", () => {

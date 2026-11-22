@@ -1098,7 +1098,7 @@ function followUpCheck(text: string, wake?: string): boolean {
     // A follow-up in the window: the addressee check (core/addressee-check.ts). A free prefilter first, then one Haiku call, at
     // the saved threshold. Off, skipped, failed or below the threshold: a meeting line.
     const decision = await decideAddressee({
-      input: { phrase: text.slice(0, 1000), lastBee: bee, lines, participants: participantNames(), conversationOpen: conversationUntil > 0, othersQuiet },
+      input: { phrase: text.slice(0, 1000), lastBee: bee, lines, participants: participantNames(), conversationOpen: conversationUntil > 0, othersQuiet, othersSpoke: lastOtherSpeakerAt > lastExchangeAt },
       enabled: state.settings?.addresseeCheckEnabled !== false,
       threshold: state.settings?.addresseeCheckThreshold,
       classify: (input) =>
