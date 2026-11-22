@@ -41,6 +41,8 @@ const SETTINGS: SettingsView = {
   meetingMode: false,
   autoMeetingDetection: true,
   allowRemoteAi: false,
+  addresseeCheckEnabled: true,
+  addresseeCheckThreshold: 0.7,
   interfaceScale: 1,
   motionPreference: "on",
   secretStorage: "os",

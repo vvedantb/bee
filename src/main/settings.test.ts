@@ -584,3 +584,14 @@ describe("settings: automatic meeting detection", () => {
     expect(store.save({ autoMeetingDetection: true }).autoMeetingDetection).toBe(true);
   });
 });
+
+describe("settings: addressee check", () => {
+  it("is on at 0.7 by default, keeps the user's choice, and clamps a bad threshold", () => {
+    expect(create().view()).toMatchObject({ addresseeCheckEnabled: true, addresseeCheckThreshold: 0.7 });
+    writeFileSync(join(dir, "settings.json"), JSON.stringify({ addresseeCheckEnabled: "maybe", addresseeCheckThreshold: 7 }));
+    expect(create().view()).toMatchObject({ addresseeCheckEnabled: true, addresseeCheckThreshold: 0.95 });
+    create().save({ addresseeCheckEnabled: false, addresseeCheckThreshold: 0.8 });
+    expect(create().addresseeCheck()).toBe(false);
+    expect(create().view()).toMatchObject({ addresseeCheckEnabled: false, addresseeCheckThreshold: 0.8 });
+  });
+});

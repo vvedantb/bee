@@ -1,3 +1,4 @@
+import { ADDRESSEE_THRESHOLD_MAX, ADDRESSEE_THRESHOLD_MIN } from "../core/addressee-settings";
 import { acceleratorSchema } from "../core/shortcut";
 import { z } from "zod";
 import { DEBUG_LEVELS } from "../core/debug-log";
@@ -125,6 +126,10 @@ export const settingsViewSchema = z.object({
   autoMeetingDetection: z.boolean(),
   // "Let other AIs use Bee": the Bee MCP server's jobs (core/remote-loop.ts). On by default; off stops the loop and presence.
   allowRemoteAi: z.boolean(),
+  // Addressee check (core/addressee-check.ts): in a call, a phrase without "Bee" that is not clearly for Bee gets one short AI
+  // check. On by default; off sends such phrases to the meeting. Below the threshold or on failure Bee stays quiet.
+  addresseeCheckEnabled: z.boolean(),
+  addresseeCheckThreshold: z.number().min(ADDRESSEE_THRESHOLD_MIN).max(ADDRESSEE_THRESHOLD_MAX),
   // Zoom factor for the whole overlay, always an allowed value.
   interfaceScale: interfaceScaleSchema,
   motionPreference: motionPreferenceSchema,
@@ -155,6 +160,8 @@ export const settingsUpdateSchema = z.object({
   meetingMode: z.boolean().optional(),
   autoMeetingDetection: z.boolean().optional(),
   allowRemoteAi: z.boolean().optional(),
+  addresseeCheckEnabled: z.boolean().optional(),
+  addresseeCheckThreshold: z.number().min(ADDRESSEE_THRESHOLD_MIN).max(ADDRESSEE_THRESHOLD_MAX).optional(),
   interfaceScale: interfaceScaleSchema.optional(),
   motionPreference: motionPreferenceSchema.optional(),
   // Names Bee should know; replaces the saved list (core/known-names.ts KNOWN_NAMES_MAX, NAME_MAX_CHARS).

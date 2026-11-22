@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
+import { ADDRESSEE_CHECK_DEFAULT, ADDRESSEE_THRESHOLD_DEFAULT, clampAddresseeThreshold } from "../core/addressee-settings";
 import { clampInterfaceScale, type SavedPosition } from "../core/interface-scale";
 import { clampMotionPreference } from "../core/motion-preference";
 import { isPerson, mergeNames, normalizeNames } from "../core/known-names";
@@ -33,6 +34,9 @@ const fileSchema = z.object({
   autoMeetingDetection: z.boolean().default(true),
   // "Let other AIs use Bee" (core/remote-loop.ts): on until the user turns it off. A bad value reads as on.
   allowRemoteAi: z.boolean().default(true).catch(true),
+  // Addressee check (core/addressee-check.ts): on until the user turns it off. A bad value reads as the default.
+  addresseeCheckEnabled: z.boolean().default(ADDRESSEE_CHECK_DEFAULT).catch(ADDRESSEE_CHECK_DEFAULT),
+  addresseeCheckThreshold: z.unknown().optional().transform(clampAddresseeThreshold),
   // Interface size factor. Anything unlisted reads as 1 (100%).
   interfaceScale: z.unknown().optional().transform(clampInterfaceScale),
   // Animations: system, on or off. Anything else reads as on.
@@ -117,6 +121,8 @@ export function createSettingsStore(args: {
       meetingMode: false,
       autoMeetingDetection: true,
       allowRemoteAi: true,
+      addresseeCheckEnabled: ADDRESSEE_CHECK_DEFAULT,
+      addresseeCheckThreshold: ADDRESSEE_THRESHOLD_DEFAULT,
       interfaceScale: 1,
       motionPreference: "on",
       knownNames: [],
@@ -450,6 +456,8 @@ export function createSettingsStore(args: {
       meetingMode: file.meetingMode,
       autoMeetingDetection: file.autoMeetingDetection,
       allowRemoteAi: file.allowRemoteAi,
+      addresseeCheckEnabled: file.addresseeCheckEnabled,
+      addresseeCheckThreshold: file.addresseeCheckThreshold,
       interfaceScale: file.interfaceScale,
       motionPreference: file.motionPreference,
       secretStorage: storageMode(),
@@ -471,6 +479,11 @@ export function createSettingsStore(args: {
     return read().allowRemoteAi;
   }
 
+  /** The addressee check switch, read on each follow-up check so Settings changes apply at once. Main only. */
+  function addresseeCheck(): boolean {
+    return read().addresseeCheckEnabled;
+  }
+
   /** The call audio switch, read on each status poll so Settings changes apply at once. Main only. */
   function teamsAudioFallback(): boolean {
     return true;
@@ -482,6 +495,8 @@ export function createSettingsStore(args: {
     if (update.meetingMode !== undefined) file = { ...file, meetingMode: update.meetingMode };
     if (update.autoMeetingDetection !== undefined) file = { ...file, autoMeetingDetection: update.autoMeetingDetection };
     if (update.allowRemoteAi !== undefined) file = { ...file, allowRemoteAi: update.allowRemoteAi };
+    if (update.addresseeCheckEnabled !== undefined) file = { ...file, addresseeCheckEnabled: update.addresseeCheckEnabled };
+    if (update.addresseeCheckThreshold !== undefined) file = { ...file, addresseeCheckThreshold: clampAddresseeThreshold(update.addresseeCheckThreshold) };
     if (update.interfaceScale !== undefined) file = { ...file, interfaceScale: clampInterfaceScale(update.interfaceScale) };
     if (update.motionPreference !== undefined) file = { ...file, motionPreference: clampMotionPreference(update.motionPreference) };
     if (update.toggleShortcut !== undefined) file = { ...file, toggleShortcut: update.toggleShortcut };
@@ -530,5 +545,5 @@ export function createSettingsStore(args: {
     write({ ...read(), overlayPosition: position });
   }
 
-  return { view, save, allowRemoteAi, teamsAudioFallback, overlayPosition, saveOverlayPosition, gatewayApiKey, savedGatewayApiKey, linkSettings, vmemConfig, transcriptSettings, knownNames, people, learnNames, learnPeople, mcpList, mcpSave, mcpRemove, mcpSignOut, mcpSetEnabled, mcpRecordTools, mcpConfigs, mcpSignedOut, mcpConfig, mcpOAuthStorage };
+  return { view, save, allowRemoteAi, addresseeCheck, teamsAudioFallback, overlayPosition, saveOverlayPosition, gatewayApiKey, savedGatewayApiKey, linkSettings, vmemConfig, transcriptSettings, knownNames, people, learnNames, learnPeople, mcpList, mcpSave, mcpRemove, mcpSignOut, mcpSetEnabled, mcpRecordTools, mcpConfigs, mcpSignedOut, mcpConfig, mcpOAuthStorage };
 }

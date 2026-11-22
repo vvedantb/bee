@@ -42,7 +42,7 @@ function live(teamsAudioFallbackEnabled: boolean): ReactNode {
     createElement(MeetingSection, {
       summary: { saving: false, result: null, error: null },
       active: true,
-      settings: { autoMeetingDetection: true, meetingMode: true, teamsAudioFallbackEnabled },
+      settings: { autoMeetingDetection: true, addresseeCheckEnabled: true, addresseeCheckThreshold: 0.7, meetingMode: true, teamsAudioFallbackEnabled },
       onChange: nothing,
       onOpenSummary: nothing,
       reader: { state: "needs-permission", app: null, captions: false },

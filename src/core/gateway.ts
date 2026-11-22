@@ -10,6 +10,9 @@ export const GUIDE_MODEL = "anthropic/claude-sonnet-5.5";
 // (Opus 5.5, fast pass Sonnet 5.5), for compacting Bee's history (core/bee-history.ts).
 export const COMMAND_CONTEXT_TOKENS = 1_000_000;
 export const GUIDE_CONTEXT_TOKENS = 1_000_000;
+// The addressee check (core/addressee-check.ts): one short call per unclear phrase in a call. The cheapest Anthropic chat model on
+// the Gateway, so it uses the same provider and key as GUIDE_MODEL; thinking off (guideProviderOptions).
+export const ADDRESSEE_MODEL = "anthropic/claude-haiku-5.5";
 export const JEV_MODEL = "typesafe-ai/jev";
 // Speech-to-text. Voxtral Small takes a list of words to listen for (core/transcribe.ts sttVocabulary), which fixes most misheard
 // names. Picked on a 30-clip name-heavy benchmark (06 Nov 2026): 1.8% word errors with Bee's terms as hints, against 7.5% for

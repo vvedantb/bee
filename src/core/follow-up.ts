@@ -14,7 +14,7 @@ import type { FollowUpVerdict } from "./wake-word";
 export const FOLLOW_UP_TIMEOUT_MS = 2500;
 const TEXT_MAX = 300;
 
-const clip = (text: string) => {
+export const clip = (text: string) => {
   const line = text.replace(/\s+/g, " ").trim();
   return line.length > TEXT_MAX ? `${line.slice(0, TEXT_MAX - 1).trimEnd()}…` : line;
 };
