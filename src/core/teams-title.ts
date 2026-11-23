@@ -36,10 +36,13 @@ export function isTeamsWindowTitle(title: string): boolean {
   return APP_ONLY.test(cleaned) || (APP_SUFFIX.test(cleaned) && cleaned.replace(APP_SUFFIX, "").trim().length > 0);
 }
 
-/** The meeting name in one Teams window title, or null for tabs, the bare app title and empty titles. */
+/**
+ * The meeting name in one Teams window title, or null for tabs, the bare app title, empty titles and the pre-join screen
+ * ("Meeting join | …" names the screen, not the meeting, and would stick as the meeting's name).
+ */
 export function parseTeamsTitle(title: string): TeamsTitle | null {
   const cleaned = title.replace(/[‎‏]/g, "").trim();
-  if (isTeamsChromeTitle(cleaned)) return null;
+  if (isTeamsChromeTitle(cleaned) || isTeamsPreJoinTitle(cleaned)) return null;
   const rest = cleaned.replace(APP_SUFFIX, "").trim();
   if (!rest) return null;
   const parts = rest.split("|").map((part) => part.trim()).filter((part) => part.length > 0);

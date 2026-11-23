@@ -121,6 +121,15 @@ describe("meeting context detection", () => {
     expect(t.context.brief()).toContain("Acme asked for 20% off");
   });
 
+  it("never names a meeting after the Teams pre-join screen, and takes the real name once joined", async () => {
+    const t = setup({ calendar: { ok: true, events: [] } });
+    t.titles.rows = [{ image: "ms-teams.exe", title: "Meeting join | PD | Microsoft Teams" }];
+    expect((await t.run(15)).subject).toBeNull();
+    t.titles.rows = [{ image: "ms-teams.exe", title: "Daily stand-up | Microsoft Teams" }];
+    t.clock.now += 31_000;
+    expect(await t.context.tick()).toMatchObject({ subject: "Daily stand-up", id: 1 });
+  });
+
   it("switches meetings only after a different one is read twice in a row", async () => {
     const t = setup({ calendar: { ok: true, events: [] } });
     await t.run(15);
