@@ -85,6 +85,9 @@ export const IPC = {
   // "What did I miss?" (core/recap.ts): the AI's short take on the missed meeting lines, and main → renderer when the user is back.
   recapSummary: "bee:recap:summary",
   userReturned: "bee:presence:returned",
+  // Main → renderer: Bee is quitting, save the open meeting. The renderer answers (send) once it has saved, or had nothing to save.
+  saveBeforeQuit: "bee:app:save-before-quit",
+  savedBeforeQuit: "bee:app:saved-before-quit",
   // Bee MCP server (core/remote-loop.ts): main asks the renderer for a Clerk session token and the renderer answers (send); main
   // tells the renderer a job from another AI came, and the renderer runs it with a run id so the island shows it.
   remoteTokenRequest: "bee:remote:token-request",

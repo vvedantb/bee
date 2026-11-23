@@ -83,6 +83,8 @@ import type { VmemTranscripts } from "./vmem-transcript-queue";
 export type RunRemoteJob = (job: RemoteJob, notify: (notice: RemoteJobNotice) => boolean) => Promise<Omit<JobResult, "id">>;
 
 // Results for the asking AI when Bee cannot run its job now.
+/** A meeting saved while signed out: its note is the plain summary. */
+export const SIGNED_OUT_SUMMARY = "Signed out: saved without AI. Sign in to Bee for full notes.";
 export const REMOTE_NO_COMPUTER = "Bee can't control apps on this computer.";
 export const REMOTE_BUSY = "Bee is busy with another task on the user's computer. Try again in a minute.";
 export const REMOTE_NOT_SHOWN = "Bee is running but could not show the request on screen. The user may need to sign in to Bee.";
@@ -646,11 +648,21 @@ export function registerMeetingIpc(args: { notesDir: string;
     runs.get(String(runId))?.abort();
   });
 
-  // Without a key (or if Luna fails) a plain summary is still written, so the meeting is never lost.
+  // Without a key (or if Luna fails) a plain summary is still written, so the meeting is never lost. Signed out (the session
+  // ended mid-meeting, or Bee is quitting signed out) the plain summary is written too, and nothing else: no AI, no memory, no vmem.
   ipcMain.handle(IPC.writeMeetingSummary, async (_event, payload): Promise<MeetingSummaryResult> => {
     const { sessionToken, teamsAudioLines, captionLines, micLines, replaces, ...input } = meetingSummaryRequestSchema.parse(payload);
-    assertSignedIn(sessionToken);
     const when = new Date();
+    try {
+      assertSignedIn(sessionToken);
+    } catch {
+      const subject = args.meeting.subject?.(input.meetingId) ?? null;
+      const markdown = buildLocalSummary({ ...input, subject, when });
+      const replaced = replaces ? replaceMeetingSummaryFile(args.notesDir, replaces, markdown) : null;
+      const path = replaced ?? writeMeetingSummaryFile(args.notesDir, markdown, when);
+      debugLog.info("meeting", "summary-written", { path, replaced: replaced !== null, usedLlm: false, error: SIGNED_OUT_SUMMARY, signedOut: true, lines: input.transcript.length });
+      return { path, usedLlm: false, error: SIGNED_OUT_SUMMARY, followUp: [] };
+    }
     const apiKey = args.gatewayApiKey();
     const started = performance.now();
     // The name Bee detected for this meeting (Teams window title or calendar), so the note says which meeting it was.

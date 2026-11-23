@@ -2425,7 +2425,8 @@ export const actions = {
         ...(attributionUnknown ? { attributionUnknown } : {}),
         ...(replaces ? { replaces } : {}),
         ...counts,
-        sessionToken: await sessionToken(),
+        // Signed out mid-meeting: main still writes a plain note, so the meeting is never lost.
+        sessionToken: (await getToken().catch(() => null)) ?? "",
       });
       lastSaved = { session: ended, meetingId, path: result.path };
       setSummary({ saving: false, result });
@@ -2553,6 +2554,12 @@ setInterval(() => {
 setInterval(() => void autoMeetingTick(), AUTO_MEETING_TICK_MS);
 // Live captions from the experimental meeting window reader. Test stubs of window.bee may leave it out.
 window.bee.meetingWindow?.onCaptions(({ lines }) => actions.captionLines(lines));
+// Bee is quitting: a save already under way finishes, then the open meeting is saved. Test stubs of window.bee may leave it out.
+window.bee.onSaveBeforeQuit?.(async () => {
+  while (state.summary.saving) await new Promise((resolve) => setTimeout(resolve, 100));
+  debugLog.info("meeting", "quit-save", { lines: state.session.lines.length });
+  await actions.endMeeting({ auto: true, stopMic: true });
+});
 // The user is back after a while away. Test stubs of window.bee may leave it out.
 window.bee.onUserReturned?.(({ since }) => actions.userReturned(since));
 // Bee MCP server (main/remote-ai.ts): main's loop asks for a fresh session token, and hands over jobs from other AIs to show and
