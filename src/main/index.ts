@@ -1,6 +1,7 @@
 import { createClerkBridge } from "@clerk/electron";
 import { storage } from "@clerk/electron/storage";
 import { BrowserWindow, Menu, Tray, app, globalShortcut, ipcMain, nativeImage, powerMonitor, screen, session, shell, systemPreferences } from "electron";
+import { holdQuitForSave } from "./quit-save";
 import { randomUUID } from "node:crypto";
 import { release } from "node:os";
 import { join, resolve } from "node:path";
@@ -634,6 +635,17 @@ if (clerk.isPrimaryInstance) {
     const sendToOverlay = (channel: string, payload: unknown): void => {
       if (win && !win.isDestroyed()) win.webContents.send(channel, payload);
     };
+    // Quitting with a meeting open saves it first (bounded), so a quit never loses the meeting's note.
+    holdQuitForSave({
+      app,
+      save: () =>
+        new Promise<void>((done) => {
+          if (!win || win.isDestroyed()) return done();
+          ipcMain.once(IPC.savedBeforeQuit, () => done());
+          win.webContents.send(IPC.saveBeforeQuit);
+        }),
+      onDone: (outcome, ms) => debugLog.info("app", "quit-save", { outcome, ms }),
+    });
     // "What did I miss?" (core/recap.ts): the user is away after AWAY_MS with no keyboard or mouse input, a locked screen or
     // sleep. When they come back, the renderer shows a recap card if there is something to recap. Times only, never content.
     const away = createAwayTracker();

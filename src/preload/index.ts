@@ -285,6 +285,19 @@ const api = {
   stopBackground: async (id: string) => {
     z.void().parse(await ipcRenderer.invoke(IPC.stopBackground, id));
   },
+  /** Bee is quitting: save the open meeting, then main quits (main/quit-save.ts). Answers even when the save fails. */
+  onSaveBeforeQuit: (save: () => Promise<unknown>): (() => void) => {
+    const handler = () => {
+      void Promise.resolve()
+        .then(save)
+        .catch(() => undefined)
+        .then(() => ipcRenderer.send(IPC.savedBeforeQuit));
+    };
+    ipcRenderer.on(IPC.saveBeforeQuit, handler);
+    return () => {
+      ipcRenderer.removeListener(IPC.saveBeforeQuit, handler);
+    };
+  },
   /** A briefing a couple of minutes before a meeting (core/briefing.ts). */
   onBriefing: (listener: (view: BriefingView) => void): (() => void) => {
     const handler = (_event: unknown, payload: unknown) => {

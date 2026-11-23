@@ -70,6 +70,13 @@ describe("main: finished sessions to vmem", () => {
     expect(sent[0]?.transcript).toContain("- Offer 10% off.");
   });
 
+  it("still writes a plain note when signed out, and sends nothing to vmem", async () => {
+    const { summary, sent } = setup();
+    const result = await summary({ transcript: ["Hello"], notesCited: [], tips: [], sessionToken: "" });
+    expect(result).toMatchObject({ path: "/notes/meeting.md", usedLlm: false, error: expect.stringMatching(/signed out/i) });
+    expect(sent).toEqual([]);
+  });
+
   it("queues nothing when the summary could not be written", async () => {
     notes.fail = true;
     const { summary, sent } = setup();
