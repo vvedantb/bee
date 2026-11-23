@@ -12,11 +12,13 @@ Rules:
 - **Default: do not add a test.** Add one only when it guards behaviour that can break and that nothing else covers.
 - **A test must call real code.** Import the function or module, give it input, assert on the output or the effect.
 - **Never read or regex source files in tests.** No `readFileSync` on `.ts`, `.tsx`, `.css`, `.html`, `.cpp` or `.swift`, and no `?raw` imports. Fixtures, temp dirs, `package.json`, WAVs and PNGs are fine. `npm run lint` enforces this (`vvedantb-check-no-source-text` from `@vvedantb/config`).
-- **A regression test must fail on the old code and must run in CI.** Check that it fails with the fix reverted. Keep it in a suite that `npm test` runs.
+- **A regression test must fail on the old code and must run in `npm test`.** Check that it fails with the fix reverted. Keep it in a suite that `npm test` runs.
 
 ## Before a PR
 
-Run `npm run preflight` (typecheck, lint, tests) before you push. CI runs the same checks on Ubuntu, plus Windows and macOS builds.
+Before every push, run `npm run preflight` (typecheck, lint, tests: what the Husky pre-push hook runs) and fix any failures. Never skip the hook with `--no-verify`.
+
+There is no PR CI. The Windows release workflow (`.github/workflows/release-windows.yml`) typechecks, builds and runs `npm test` as gates before it publishes.
 
 ## Commits
 
