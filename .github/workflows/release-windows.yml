@@ -101,7 +101,7 @@ jobs:
         with:
           node-version: "22"
       # node_modules is restored whole when package-lock.json has not changed, which skips npm ci. A miss runs npm ci
-      # and saves the result, so the next release reads it (as in ci.yml, but release runs save too).
+      # and saves the result, so the next release reads it.
       - name: Restore node_modules
         id: modules
         uses: actions/cache/restore@v4
@@ -122,18 +122,16 @@ jobs:
         run: npm version "${{ needs.version.outputs.set_version }}" --no-git-tag-version --allow-same-version
       # The Teams audio helper (native/teams-audio/windows) fails the release if it does not compile or answer --version.
       # The helper build, the tests and the Vite bundle do not depend on each other, so they run at once. Each log is
-      # printed in its own group after all end, and the step fails if any failed. Tests are skipped on a merge to main:
-      # ci.yml ran them on the same commit. Tag pushes and dispatches still run them.
+      # printed in its own group after all end, and the step fails if any failed. There is no PR CI, so these are the
+      # gates for every release, including merges to main. `npm run build` runs the typecheck.
       - name: Helper build, tests and bundle (parallel)
         shell: bash
         env:
           # Repository variable with the deployed relay URL (relay/README.md). Unset: Teams mode is off.
           MAIN_VITE_BEE_RELAY_URL: ${{ vars.BEE_RELAY_URL }}
-          SKIP_TESTS: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'true' || '' }}
         run: |
           dir="$RUNNER_TEMP/parallel"; mkdir -p "$dir"
-          cmds=("npm run build:teams-audio:win" "npm run build")
-          if [ -z "$SKIP_TESTS" ]; then cmds+=("npm test"); else echo "Skipping npm test: merge to main, CI ran it."; fi
+          cmds=("npm run build:teams-audio:win" "npm run build" "npm test")
           for i in "${!cmds[@]}"; do
             ( s=$SECONDS; rc=0; bash -e -o pipefail -c "${cmds[$i]}" > "$dir/$i.log" 2>&1 || rc=$?; echo "$rc $((SECONDS - s))" > "$dir/$i.res" ) &
           done
@@ -170,88 +168,8 @@ jobs:
             release/*.blockmap
             release/latest*.yml
 
-  macos:
-    needs: version
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-      # node_modules is restored whole when package-lock.json has not changed, which skips npm ci. A miss runs npm ci
-      # and saves the result, so the next release reads it (as in ci.yml, but release runs save too).
-      - name: Restore node_modules
-        id: modules
-        uses: actions/cache/restore@v4
-        with:
-          path: node_modules
-          key: modules-${{ runner.os }}-${{ runner.arch }}-node22-${{ hashFiles('package-lock.json') }}
-      - if: steps.modules.outputs.cache-hit != 'true'
-        run: npm ci
-      - name: Save node_modules
-        if: steps.modules.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: node_modules
-          key: ${{ steps.modules.outputs.cache-primary-key }}
-      - name: Set the release version
-        if: needs.version.outputs.set_version != ''
-        shell: bash
-        run: npm version "${{ needs.version.outputs.set_version }}" --no-git-tag-version --allow-same-version
-      # The Teams audio helpers (native/teams-audio/macos), arm64 and x64, fail the release if either does not compile.
-      # The helper build, the tests and the Vite bundle do not depend on each other, so they run at once. Each log is
-      # printed in its own group after all end, and the step fails if any failed. Tests are skipped on a merge to main:
-      # ci.yml ran them on the same commit. Tag pushes and dispatches still run them.
-      - name: Helper build, tests and bundle (parallel)
-        shell: bash
-        env:
-          MAIN_VITE_BEE_RELAY_URL: ${{ vars.BEE_RELAY_URL }}
-          SKIP_TESTS: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'true' || '' }}
-        run: |
-          dir="$RUNNER_TEMP/parallel"; mkdir -p "$dir"
-          cmds=("npm run build:teams-audio:mac" "npm run build")
-          if [ -z "$SKIP_TESTS" ]; then cmds+=("npm test"); else echo "Skipping npm test: merge to main, CI ran it."; fi
-          for i in "${!cmds[@]}"; do
-            ( s=$SECONDS; rc=0; bash -e -o pipefail -c "${cmds[$i]}" > "$dir/$i.log" 2>&1 || rc=$?; echo "$rc $((SECONDS - s))" > "$dir/$i.res" ) &
-          done
-          wait
-          failed=0
-          for i in "${!cmds[@]}"; do
-            rc=1; sec=0
-            [ -f "$dir/$i.res" ] && read -r rc sec < "$dir/$i.res"
-            echo "::group::${cmds[$i]} (${sec}s, exit $rc)"
-            cat "$dir/$i.log"
-            echo "::endgroup::"
-            if [ "$rc" != "0" ]; then echo "::error::Failed: ${cmds[$i]}"; failed=1; fi
-          done
-          exit $failed
-      - name: Build macOS dmg + zip
-        env:
-          # Unsigned by default. Set CSC_LINK, CSC_KEY_PASSWORD and the Apple notarisation secrets to sign.
-          CSC_IDENTITY_AUTO_DISCOVERY: "false"
-        run: npx electron-builder --mac dmg zip --arm64 --x64 --publish never
-      - name: Check packaged Teams audio helpers
-        run: |
-          check() {
-            helper="$1/Contents/Resources/teams-audio/teams-audio-helper"
-            test -f "$helper" || { echo "Teams audio helper not packaged: $helper"; exit 1; }
-            arch="$(lipo -archs "$helper")"
-            [ "$arch" = "$2" ] || { echo "$helper is $arch, expected $2"; exit 1; }
-          }
-          check release/mac-arm64/Bee.app arm64
-          check release/mac/Bee.app x86_64
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: bee-macos
-          path: |
-            release/*.dmg
-            release/*.zip
-            release/*.blockmap
-            release/latest*.yml
-
   publish:
-    needs: [version, windows, macos]
+    needs: [version, windows]
     if: ${{ !inputs.dry_run }}
     runs-on: ubuntu-latest
     steps:
@@ -267,8 +185,8 @@ jobs:
           # A new tag is made at the commit this run built. A tag that already exists is left where it is.
           TAG="${{ needs.version.outputs.tag }}"
           ls dist
-          gh release create "$TAG" dist/Bee*.exe dist/Bee*.zip dist/Bee*.dmg dist/*.blockmap dist/latest*.yml \
+          gh release create "$TAG" dist/Bee*.exe dist/Bee*.zip dist/*.blockmap dist/latest*.yml \
             --title "Bee $TAG" \
-            --notes "Windows installer (NSIS) and portable zip, and macOS dmg and zip (separate Apple Silicon arm64 and Intel x64 builds). Builds are unsigned. Windows SmartScreen may warn. On macOS, Gatekeeper will warn: right-click Bee and choose Open." \
+            --notes "Windows installer (NSIS) and portable zip. The build is unsigned, so Windows SmartScreen may warn." \
             --target "$GITHUB_SHA" --latest || \
-          gh release upload "$TAG" dist/Bee*.exe dist/Bee*.zip dist/Bee*.dmg dist/*.blockmap dist/latest*.yml --clobber
+          gh release upload "$TAG" dist/Bee*.exe dist/Bee*.zip dist/*.blockmap dist/latest*.yml --clobber
